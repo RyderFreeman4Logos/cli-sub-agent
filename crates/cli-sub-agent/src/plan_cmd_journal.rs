@@ -2,16 +2,18 @@
 //!
 //! Split out of `plan_cmd` to keep that module within the per-file token
 //! budget. These primitives persist `csa plan run` progress to a JSON journal
-//! under `.csa/state/plan/`, decide whether an interrupted run may resume, and
-//! capture a lightweight git fingerprint so a resume is only attempted when the
-//! repository state still matches. Symbols are re-exported from `plan_cmd`
-//! (`crate::plan_cmd`) so existing callers, the daemon dispatch, and the
-//! in-module test submodules keep their original paths.
+//! under `.csa/state/plan/`, decide whether an explicit resume may continue,
+//! and capture a lightweight git fingerprint for audit. Symbols are re-exported
+//! from `plan_cmd` (`crate::plan_cmd`) so existing callers, the daemon
+//! dispatch, and the in-module test submodules keep their original paths.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -20,6 +22,10 @@ use weave::compiler::ExecutionPlan;
 pub(crate) const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 1;
 pub(crate) const PLAN_PIPELINE_SOURCE_DIRECT: &str = "direct-plan-run";
 pub(crate) const PLAN_PIPELINE_SOURCE_CLI_ALIAS: &str = "cli-alias";
+const ACTIVE_PLAN_JOURNAL_WARNING: &str = "dev2merge: journal is actively in use by another plan run; use --resume to continue or wait for it to complete";
+
+static ACTIVE_PLAN_JOURNAL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, PlanJournalFileLock>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlanRunPipelineSource {
@@ -99,6 +105,84 @@ pub(crate) struct RepoFingerprint {
     pub(crate) dirty: Option<bool>,
 }
 
+struct PlanJournalFileLock {
+    file: File,
+}
+
+impl Drop for PlanJournalFileLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns a valid fd for the locked journal file.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn active_plan_journal_locks() -> &'static Mutex<HashMap<PathBuf, PlanJournalFileLock>> {
+    ACTIVE_PLAN_JOURNAL_LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ensure_active_plan_journal_lock(path: &Path) -> Result<()> {
+    let lock_path = path.to_path_buf();
+    let mut locks = active_plan_journal_locks()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plan journal lock registry is poisoned"))?;
+    if locks.contains_key(&lock_path) {
+        return Ok(());
+    }
+
+    let lock = try_acquire_plan_journal_file_lock(path, true)?
+        .ok_or_else(|| anyhow::anyhow!(ACTIVE_PLAN_JOURNAL_WARNING))?;
+    locks.insert(lock_path, lock);
+    Ok(())
+}
+
+fn release_active_plan_journal_lock(path: &Path) -> Result<()> {
+    let mut locks = active_plan_journal_locks()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plan journal lock registry is poisoned"))?;
+    locks.remove(path);
+    Ok(())
+}
+
+fn try_acquire_plan_journal_file_lock(
+    path: &Path,
+    create: bool,
+) -> Result<Option<PlanJournalFileLock>> {
+    let file = OpenOptions::new()
+        .create(create)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .with_context(|| format!("Failed to open plan journal lock: {}", path.display()))?;
+
+    if try_flock_plan_journal_file(&file)? {
+        return Ok(Some(PlanJournalFileLock { file }));
+    }
+
+    Ok(None)
+}
+
+fn try_flock_plan_journal_file(file: &File) -> Result<bool> {
+    // SAFETY: `file` owns a valid fd and `LOCK_EX | LOCK_NB` is a standard
+    // non-blocking advisory exclusive lock request.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(true);
+    }
+
+    let err = std::io::Error::last_os_error();
+    if matches!(
+        err.raw_os_error(),
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+    ) {
+        return Ok(false);
+    }
+
+    Err(err.into())
+}
+
 pub(crate) fn normalize_path(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -141,9 +225,15 @@ pub(crate) fn persist_plan_journal(path: &Path, journal: &PlanRunJournal) -> Res
             )
         })?;
     }
+    if journal.status == "running" {
+        ensure_active_plan_journal_lock(path)?;
+    }
     let encoded = serde_json::to_vec_pretty(journal).context("Failed to encode plan journal")?;
     std::fs::write(path, encoded)
         .with_context(|| format!("Failed to write plan journal: {}", path.display()))?;
+    if journal.status != "running" {
+        release_active_plan_journal_lock(path)?;
+    }
     Ok(())
 }
 
@@ -190,7 +280,6 @@ pub(crate) fn load_plan_resume_context(
     workflow_path: &Path,
     journal_path: &Path,
     cli_vars: &HashMap<String, String>,
-    repo_fingerprint: &RepoFingerprint,
     explicit_resume: bool,
 ) -> Result<PlanResumeContext> {
     let mut initial_vars = cli_vars.clone();
@@ -202,6 +291,20 @@ pub(crate) fn load_plan_resume_context(
             resumed: false,
         });
     }
+    let _fresh_journal_lock = if explicit_resume {
+        None
+    } else {
+        match try_acquire_plan_journal_file_lock(journal_path, false)? {
+            Some(lock) => Some(lock),
+            None => {
+                warn!(
+                    path = %journal_path.display(),
+                    ACTIVE_PLAN_JOURNAL_WARNING
+                );
+                bail!(ACTIVE_PLAN_JOURNAL_WARNING);
+            }
+        }
+    };
 
     let bytes = std::fs::read(journal_path)
         .with_context(|| format!("Failed to read plan journal: {}", journal_path.display()))?;
@@ -225,13 +328,7 @@ pub(crate) fn load_plan_resume_context(
 
     let same_workflow = journal.workflow_name == plan.name
         && journal.workflow_path == normalize_path(workflow_path);
-    let status_prevents_resume = matches!(
-        journal.status.as_str(),
-        "completed" | "awaiting-user" | "manual-handoff"
-    );
-    if !same_workflow
-        || status_prevents_resume && !(explicit_resume && journal.status == "manual-handoff")
-    {
+    if !same_workflow {
         return Ok(PlanResumeContext {
             initial_vars,
             completed_steps: HashSet::new(),
@@ -241,35 +338,37 @@ pub(crate) fn load_plan_resume_context(
     }
 
     if !explicit_resume {
-        let fingerprint_matches = match (
-            journal.repo_head.as_ref(),
-            journal.repo_dirty,
-            repo_fingerprint.head.as_ref(),
-            repo_fingerprint.dirty,
-        ) {
-            (Some(saved_head), Some(saved_dirty), Some(current_head), Some(current_dirty)) => {
-                saved_head == current_head && saved_dirty == current_dirty
-            }
-            _ => false,
-        };
-        if !fingerprint_matches {
-            warn!(
-                path = %journal_path.display(),
-                "Ignoring plan journal because repository state changed (or fingerprint unavailable)"
-            );
-            return Ok(PlanResumeContext {
-                initial_vars,
-                completed_steps: HashSet::new(),
-                pipeline_source: None,
-                resumed: false,
-            });
-        }
-    } else {
-        info!(
+        warn!(
             path = %journal_path.display(),
-            "Explicit --resume: bypassing repository fingerprint check"
+            "dev2merge: clearing stale journal from previous run (use --resume to continue)"
         );
+        std::fs::remove_file(journal_path).with_context(|| {
+            format!(
+                "Failed to clear stale plan journal: {}",
+                journal_path.display()
+            )
+        })?;
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            pipeline_source: None,
+            resumed: false,
+        });
     }
+
+    let status_prevents_resume = matches!(journal.status.as_str(), "completed" | "awaiting-user");
+    if status_prevents_resume {
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            pipeline_source: None,
+            resumed: false,
+        });
+    }
+    info!(
+        path = %journal_path.display(),
+        "Explicit --resume: bypassing repository fingerprint check"
+    );
 
     let pipeline_source = journal.pipeline_source.clone();
     for (key, value) in journal.vars {

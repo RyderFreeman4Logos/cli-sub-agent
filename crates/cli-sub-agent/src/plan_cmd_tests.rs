@@ -1,9 +1,47 @@
 use super::*;
 use crate::plan_cmd::plan_cmd_steps::step_readonly_project_root;
 use std::collections::{HashMap, HashSet};
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use weave::compiler::{FailAction, PlanStep, VariableDecl, plan_from_toml};
 use weave::parser::WorkspaceAccess;
+
+struct HeldJournalLock {
+    file: std::fs::File,
+}
+
+impl Drop for HeldJournalLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.file` owns a valid fd for the journal file locked by
+        // `hold_plan_journal_lock`.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn write_plan_journal_without_lock(path: &Path, journal: &PlanRunJournal) {
+    let encoded = serde_json::to_vec_pretty(journal).unwrap();
+    std::fs::write(path, encoded).unwrap();
+}
+
+fn hold_plan_journal_lock(path: &Path) -> HeldJournalLock {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: `file` owns a valid fd and `LOCK_EX | LOCK_NB` is the
+    // non-blocking advisory lock mode used by the production journal guard.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        panic!(
+            "test setup should acquire journal lock: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    HeldJournalLock { file }
+}
 
 #[test]
 fn safe_plan_name_normalizes_non_alphanumeric_characters() {
@@ -71,7 +109,7 @@ fn plan_journal_defaults_pipeline_source_for_legacy_json() {
 }
 
 #[test]
-fn load_plan_resume_context_reads_running_journal() {
+fn load_plan_resume_context_reads_running_journal_with_explicit_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let workflow_path = tmp.path().join("workflow.toml");
     std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
@@ -102,22 +140,11 @@ fn load_plan_resume_context_reads_running_journal() {
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
     };
-    persist_plan_journal(&journal_path, &journal).unwrap();
+    write_plan_journal_without_lock(&journal_path, &journal);
 
     let cli_vars = HashMap::from([("FEATURE".to_string(), "from-cli".to_string())]);
-    let repo_fingerprint = RepoFingerprint {
-        head: Some("abc123".to_string()),
-        dirty: Some(false),
-    };
-    let ctx = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &cli_vars,
-        &repo_fingerprint,
-        false,
-    )
-    .unwrap();
+    let ctx =
+        load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_vars, true).unwrap();
 
     assert!(ctx.resumed);
     assert!(ctx.completed_steps.contains(&1));
@@ -164,19 +191,8 @@ fn load_plan_resume_context_preserves_cli_alias_pipeline_source() {
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
-    let repo_fingerprint = RepoFingerprint {
-        head: Some("different-head".to_string()),
-        dirty: Some(true),
-    };
-    let ctx = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &HashMap::new(),
-        &repo_fingerprint,
-        true,
-    )
-    .unwrap();
+    let ctx = load_plan_resume_context(&plan, &workflow_path, &journal_path, &HashMap::new(), true)
+        .unwrap();
 
     assert!(ctx.resumed);
     assert_eq!(
@@ -186,7 +202,7 @@ fn load_plan_resume_context_preserves_cli_alias_pipeline_source() {
 }
 
 #[test]
-fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
+fn load_plan_resume_context_clears_stale_running_journal_without_explicit_resume() {
     let tmp = tempfile::tempdir().unwrap();
     let workflow_path = tmp.path().join("workflow.toml");
     std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
@@ -211,26 +227,77 @@ fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
     };
-    persist_plan_journal(&journal_path, &journal).unwrap();
+    write_plan_journal_without_lock(&journal_path, &journal);
 
-    let cli_vars = HashMap::new();
-    let repo_fingerprint = RepoFingerprint {
-        head: Some("def456".to_string()),
-        dirty: Some(false),
-    };
-    let ctx = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &cli_vars,
-        &repo_fingerprint,
-        false,
-    )
-    .unwrap();
+    let ctx =
+        load_plan_resume_context(&plan, &workflow_path, &journal_path, &HashMap::new(), false)
+            .unwrap();
 
     assert!(!ctx.resumed);
     assert!(ctx.completed_steps.is_empty());
     assert!(!ctx.initial_vars.contains_key("STEP_1_OUTPUT"));
+    assert!(
+        !journal_path.exists(),
+        "fresh plan runs must clear stale journals unless --resume is explicit"
+    );
+}
+
+#[test]
+fn load_plan_resume_context_refuses_locked_running_journal_without_explicit_resume() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        pipeline_source: default_plan_pipeline_source(),
+        status: "running".into(),
+        vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
+        completed_steps: vec![],
+        last_error: None,
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
+    };
+    write_plan_journal_without_lock(&journal_path, &journal);
+    let _held_lock = hold_plan_journal_lock(&journal_path);
+
+    let err = match load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &HashMap::new(),
+        false,
+    ) {
+        Ok(_) => panic!("fresh plan runs must refuse active running journals"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains(
+            "dev2merge: journal is actively in use by another plan run; use --resume to continue or wait for it to complete"
+        ),
+        "unexpected error: {err}"
+    );
+    assert!(
+        journal_path.exists(),
+        "fresh plan run must not delete an actively locked journal"
+    );
+    let persisted: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(
+        persisted.vars.get("STEP_1_OUTPUT").map(String::as_str),
+        Some("cached")
+    );
 }
 
 #[test]
@@ -261,33 +328,22 @@ fn load_plan_resume_context_requires_explicit_resume_for_manual_handoff() {
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
-    let repo_fingerprint = RepoFingerprint {
-        head: Some("abc123".to_string()),
-        dirty: Some(false),
-    };
-    let implicit = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &HashMap::new(),
-        &repo_fingerprint,
-        false,
-    )
-    .unwrap();
+    let implicit =
+        load_plan_resume_context(&plan, &workflow_path, &journal_path, &HashMap::new(), false)
+            .unwrap();
     assert!(
         !implicit.resumed,
         "manual handoff must not auto-resume without explicit --resume"
     );
+    assert!(
+        !journal_path.exists(),
+        "fresh plan runs must clear manual-handoff journals unless --resume is explicit"
+    );
 
-    let explicit = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &HashMap::new(),
-        &repo_fingerprint,
-        true,
-    )
-    .unwrap();
+    persist_plan_journal(&journal_path, &journal).unwrap();
+    let explicit =
+        load_plan_resume_context(&plan, &workflow_path, &journal_path, &HashMap::new(), true)
+            .unwrap();
     assert!(
         explicit.resumed,
         "manual handoff should resume when explicitly requested"
@@ -322,19 +378,8 @@ fn load_plan_resume_context_rejects_awaiting_user_journal_even_with_explicit_res
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
-    let repo_fingerprint = RepoFingerprint {
-        head: Some("abc123".to_string()),
-        dirty: Some(false),
-    };
-    let ctx = load_plan_resume_context(
-        &plan,
-        &workflow_path,
-        &journal_path,
-        &HashMap::new(),
-        &repo_fingerprint,
-        true,
-    )
-    .unwrap();
+    let ctx = load_plan_resume_context(&plan, &workflow_path, &journal_path, &HashMap::new(), true)
+        .unwrap();
     assert!(
         !ctx.resumed,
         "awaiting-user journals must force a fresh rerun after remediation"
