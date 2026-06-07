@@ -569,5 +569,8 @@ pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
 #[path = "review_cmd_output_fix_reuse_tests.rs"]
 mod fix_reuse_tests;
 #[cfg(test)]
+#[path = "review_cmd_output_terminal_error_reason_tests.rs"]
+mod terminal_error_reason_tests;
+#[cfg(test)]
 #[path = "review_cmd_output_tests.rs"]
 mod tests;

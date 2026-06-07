@@ -73,24 +73,23 @@ pub(in crate::review_cmd) fn terminal_tool_error_reason(raw_output: &str) -> Opt
 
     for line in raw_output.lines() {
         let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
         if !(line.starts_with('{') && line.ends_with('}')) {
             current_segment_started = false;
-            terminal_error_reason = None;
             continue;
         }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             current_segment_started = false;
-            terminal_error_reason = None;
             continue;
         };
         let Some(event_type) = value.get("type").and_then(serde_json::Value::as_str) else {
             current_segment_started = false;
-            terminal_error_reason = None;
             continue;
         };
         if !STREAM_EVENT_TYPES.contains(&event_type) {
             current_segment_started = false;
-            terminal_error_reason = None;
             continue;
         }
         if STREAM_START_EVENT_TYPES.contains(&event_type) {
@@ -108,13 +107,14 @@ pub(in crate::review_cmd) fn terminal_tool_error_reason(raw_output: &str) -> Opt
                 terminal_error_reason = Some(json_error_summary(&value));
                 current_segment_started = false;
             }
-            "result" | "turn.completed" | "turn.failed" => {
+            "result" | "turn.completed" => {
                 terminal_error_reason = None;
                 current_segment_started = false;
             }
-            _ => {
-                terminal_error_reason = None;
+            "turn.failed" => {
+                current_segment_started = false;
             }
+            _ => {}
         }
     }
 
