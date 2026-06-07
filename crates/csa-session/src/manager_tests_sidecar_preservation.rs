@@ -21,13 +21,7 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -78,6 +72,8 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         events_count: 1,
         artifacts: vec![],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -169,6 +165,8 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -200,10 +198,6 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
 
     let clear_result = crate::result::SessionResult {
         fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
         manager_fields: Default::default(),
         ..populated_result
     };
@@ -246,6 +240,8 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),
@@ -273,10 +269,6 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
 
     let clear_result = crate::result::SessionResult {
         fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
         manager_fields: Default::default(),
         ..populated_result
     };

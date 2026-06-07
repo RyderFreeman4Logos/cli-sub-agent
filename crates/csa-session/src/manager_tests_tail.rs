@@ -43,13 +43,7 @@ fn test_save_and_load_result() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: vec![crate::result::SessionArtifact::new("output/result.txt")],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(td.path(), &state.meta_session_id, &result, crate::SaveOptions::default())
         .unwrap();
@@ -60,6 +54,63 @@ fn test_save_and_load_result() {
     assert_eq!(loaded.exit_code, 0);
     assert_eq!(loaded.tool, "codex");
     assert_eq!(loaded.artifacts.len(), 1);
+}
+
+#[test]
+fn test_save_result_with_signal_metadata_writes_kill_hint_and_last_item() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let mut result = crate::result::SessionResult {
+        post_exec_gate: None,
+        status: "signal".to_string(),
+        exit_code: 143,
+        summary: "Execution interrupted by SIGTERM".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: chrono::Utc::now(),
+        completed_at: chrono::Utc::now(),
+        events_count: 0,
+        artifacts: Vec::new(),
+        ..Default::default()
+    };
+
+    save_result_with_signal_metadata_in(
+        td.path(),
+        &state.meta_session_id,
+        &mut result,
+        crate::SaveOptions::default(),
+        crate::SignalResultMetadata {
+            kill_hint: "memory_pressure",
+            last_item: Some("running tests"),
+        },
+    )
+    .unwrap();
+
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
+    assert!(persisted.contains("kill_hint = \"memory_pressure\""));
+    assert!(persisted.contains("last_item = \"running tests\""));
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.status, "signal");
+    assert_eq!(loaded.exit_code, 143);
+    assert_eq!(loaded.kill_hint.as_deref(), Some("memory_pressure"));
+    assert_eq!(loaded.last_item.as_deref(), Some("running tests"));
+
+    save_result_in(
+        td.path(),
+        &state.meta_session_id,
+        &loaded,
+        crate::SaveOptions::default(),
+    )
+    .unwrap();
+    let resaved = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
+    assert!(resaved.contains("kill_hint = \"memory_pressure\""));
+    assert!(resaved.contains("last_item = \"running tests\""));
 }
 
 #[cfg(unix)]
@@ -99,13 +150,7 @@ fn test_save_session_and_result_preserve_legacy_symlink_root() {
         completed_at: chrono::Utc::now(),
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     let canonical_project = project.canonicalize().unwrap();
     let mut loaded = load_session(&canonical_project, &state.meta_session_id).unwrap();
@@ -165,13 +210,7 @@ name = "gemini-cli"
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -236,13 +275,7 @@ artifacts = [1, 2]
         completed_at: now,
         events_count: 1,
         artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -302,13 +335,7 @@ name = "gemini-cli"
         completed_at: now,
         events_count: 1,
         artifacts: vec![],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -331,13 +358,7 @@ name = "gemini-cli"
         completed_at: now,
         events_count: 2,
         artifacts: vec![],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -396,13 +417,7 @@ done = false
         completed_at: now,
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     let err = save_result_in(
         td.path(),
@@ -433,13 +448,7 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         completed_at: now,
         events_count: 7,
         artifacts: vec![crate::result::SessionArtifact::new("output/old-artifact.txt")],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
     save_result_in(
         td.path(),
@@ -462,14 +471,27 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         completed_at: now,
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+        ..Default::default()
     };
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let result_path = session_dir.join("result.toml");
+    let mut persisted = toml::from_str::<toml::Value>(
+        &std::fs::read_to_string(&result_path).unwrap(),
+    )
+    .unwrap();
+    let table = persisted
+        .as_table_mut()
+        .expect("saved result should be a TOML table");
+    table.insert(
+        "kill_hint".to_string(),
+        toml::Value::String("memory_pressure".to_string()),
+    );
+    table.insert(
+        "last_item".to_string(),
+        toml::Value::String("old work".to_string()),
+    );
+    std::fs::write(&result_path, toml::to_string_pretty(&persisted).unwrap()).unwrap();
+
     save_result_in(
         td.path(),
         &state.meta_session_id,
@@ -478,16 +500,19 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
     )
     .unwrap();
 
-    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
     let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
     assert!(!persisted.contains("events_count"));
     assert!(!persisted.contains("artifacts"));
+    assert!(!persisted.contains("kill_hint"));
+    assert!(!persisted.contains("last_item"));
 
     let loaded = load_result_in(td.path(), &state.meta_session_id)
         .unwrap()
         .unwrap();
     assert_eq!(loaded.events_count, 0);
     assert!(loaded.artifacts.is_empty());
+    assert!(loaded.kill_hint.is_none());
+    assert!(loaded.last_item.is_none());
 }
 
 #[test]

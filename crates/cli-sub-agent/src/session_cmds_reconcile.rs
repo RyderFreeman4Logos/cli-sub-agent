@@ -421,13 +421,7 @@ where
         completed_at: now,
         events_count: 0,
         artifacts,
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     #[rustfmt::skip]
     let result_contents = toml::to_string_pretty(&fallback).map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
@@ -562,7 +556,7 @@ where
         completed_at,
     );
     #[rustfmt::skip]
-    let result_contents = toml::to_string_pretty(&result).map_err(|err| anyhow!("Failed to serialize daemon completion result for {session_id}: {err}"))?;
+    let result_contents = crate::session_kill_diagnostics::signal_toml(&result, &session, session_id, packet.exit_code).context("serialize result")?;
     match persist_new_result_file(result_path, &result_contents, before_write)? {
         SyntheticResultPersistOutcome::AlreadyExists => {
             let retired = retire_if_dead_with_result_impl(

@@ -11,12 +11,11 @@ use tracing::{info, warn};
 use csa_config::{GlobalConfig, MemoryBackend, ProjectConfig};
 use csa_executor::{CODEX_EXEC_INITIAL_STALL_REASON, Executor};
 use csa_hooks::{HookEvent, run_hooks_for_event};
-#[cfg(test)]
-use csa_session::load_result;
 use csa_session::{
-    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, save_result,
-    save_session,
+    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, save_session,
 };
+#[cfg(test)]
+use csa_session::{load_result, save_result};
 
 use crate::memory_capture;
 use crate::pipeline_handoff::write_handoff_artifact;
@@ -176,12 +175,10 @@ pub(crate) async fn process_execution_result(
         events_count: ctx.events_count,
         artifacts: ctx.transcript_artifacts.clone(),
         peak_memory_mb: result.peak_memory_mb,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
         ctx.project_root,
@@ -407,7 +404,14 @@ pub(crate) async fn process_execution_result(
         result,
     );
     audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result);
-    if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
+    if let Err(e) = crate::session_kill_diagnostics::save_result_with_signal_diagnostic(
+        ctx.project_root,
+        session,
+        ctx.executor.tool_name(),
+        &mut session_result,
+        result.terminal_reason.as_deref(),
+        Some(&mut result.stderr_output),
+    ) {
         warn!("Failed to save session result: {}", e);
     }
     // Best-effort cooldown marker (ctx already holds session_dir)

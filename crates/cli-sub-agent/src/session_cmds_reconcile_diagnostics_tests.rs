@@ -162,7 +162,17 @@ fn daemon_completion_packet_present_finalizes_dead_active_session() {
         .expect("daemon completion result");
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 137);
-    assert!(result.summary.contains("daemon completion recorded"));
+    assert!(
+        result.summary.contains("daemon completion recorded")
+            || result.summary.starts_with("CSA diagnostic:"),
+        "unexpected daemon completion summary: {}",
+        result.summary
+    );
+    let raw_result = fs::read_to_string(session_dir.join("result.toml")).unwrap();
+    assert!(
+        raw_result.contains("kill_hint = "),
+        "daemon completion result should include signal kill_hint: {raw_result}"
+    );
     let persisted = load_session(project, &session_id).unwrap();
     assert_eq!(
         persisted.termination_reason.as_deref(),

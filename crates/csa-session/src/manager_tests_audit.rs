@@ -16,6 +16,8 @@ fn test_save_result_persists_manager_fields_sidecar() {
         events_count: 0,
         artifacts: vec![],
         peak_memory_mb: None,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
         gate_timeout: false,
         warnings: Vec::new(),

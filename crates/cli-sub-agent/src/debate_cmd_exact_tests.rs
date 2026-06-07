@@ -81,13 +81,7 @@ fn setup_unrelated_debate_session(
                 SessionArtifact::new("output/debate-verdict.json"),
                 SessionArtifact::new("output/debate-transcript.md"),
             ],
-            peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -132,13 +126,7 @@ fn seed_debate_result(
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -646,13 +634,7 @@ fn debate_nonzero_with_explicit_verdict_is_reclassified_success() {
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-        gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -730,13 +712,7 @@ fn debate_finalize_persists_categorized_fallback_chain_for_multi_skip() {
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -840,13 +816,7 @@ fn debate_finalize_persists_build_time_exclusions_without_runtime_failures() {
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();
@@ -932,13 +902,7 @@ fn debate_finalize_non_success_omits_after_final_disabled_tier_spec() {
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
-            peak_memory_mb: None,
-            fallback_chain: None,
-            gate_timeout: false,
-            warnings: Vec::new(),
-            raw_process_exit_code: None,
-            uncommitted_changes: None,
-            manager_fields: Default::default(),
+            ..Default::default()
         },
     )
     .unwrap();

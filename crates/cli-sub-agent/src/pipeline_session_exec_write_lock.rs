@@ -339,6 +339,8 @@ mod tests {
                 events_count: 0,
                 artifacts: Vec::new(),
                 peak_memory_mb: None,
+                kill_hint: None,
+                last_item: None,
                 fallback_chain: None,
                 gate_timeout: false,
                 warnings: Vec::new(),

@@ -131,12 +131,10 @@ pub(super) fn maybe_synthesize_missing_review_result(
         events_count: 0,
         artifacts: Vec::new(),
         peak_memory_mb,
+        kill_hint: None,
+        last_item: None,
         fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
 
     if let Err(save_err) = save_result(project_root, &session_id, &fallback_result) {

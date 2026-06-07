@@ -43,14 +43,15 @@ use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_bas
 use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
-    SaveOptions, SessionResultView, clear_manager_sidecar, contract_result_path,
-    legacy_user_result_path, list_artifacts, load_result, load_result_view,
+    SaveOptions, SessionResultView, SignalResultMetadata, clear_manager_sidecar,
+    contract_result_path, legacy_user_result_path, list_artifacts, load_result, load_result_view,
     redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
-    save_result_with_options,
+    save_result_with_options, save_result_with_signal_metadata,
 };
 #[cfg(test)]
 pub(crate) use manager_result::{
     list_artifacts_in, load_result_in, load_result_view_in, save_result_in,
+    save_result_with_signal_metadata_in,
 };
 pub use manager_vcs::detect_git_head;
 use manager_vcs::{detect_change_id, detect_current_branch, detect_git_status_porcelain};

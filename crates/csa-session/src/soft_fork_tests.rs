@@ -25,13 +25,7 @@ fn test_soft_fork_full_parent_session() {
         completed_at: now,
         events_count: 0,
         artifacts: vec![SessionArtifact::new("output/diff.patch")],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     let result_toml = toml::to_string_pretty(&result).unwrap();
     std::fs::write(session_dir.join(RESULT_FILE_NAME), &result_toml).unwrap();
@@ -78,13 +72,7 @@ fn test_soft_fork_truncation_on_large_summary() {
         completed_at: now,
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     std::fs::write(
         session_dir.join(RESULT_FILE_NAME),
@@ -145,13 +133,7 @@ fn test_soft_fork_result_only_no_output() {
         completed_at: now,
         events_count: 0,
         artifacts: vec![],
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     std::fs::write(
         session_dir.join(RESULT_FILE_NAME),

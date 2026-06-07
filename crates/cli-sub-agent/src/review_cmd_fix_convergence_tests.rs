@@ -118,14 +118,7 @@ fn seed_session_result(project_root: &Path, session_id: &str, summary: &str) {
         completed_at: now,
         events_count: 0,
         artifacts: Vec::new(),
-        peak_memory_mb: None,
-        fallback_chain: None,
-        gate_timeout: false,
-        warnings: Vec::new(),
-        raw_process_exit_code: None,
-        uncommitted_changes: None,
-        post_exec_gate: None,
-        manager_fields: Default::default(),
+        ..Default::default()
     };
     csa_session::save_result(project_root, session_id, &result).expect("save result.toml");
 }
