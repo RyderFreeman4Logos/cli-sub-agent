@@ -75,10 +75,13 @@ pub(crate) use crate::plan_cmd_journal::{
     default_plan_pipeline_source, normalize_path, safe_plan_name,
 };
 
-/// Workflow variable injected by `csa plan run --issue <N>`. The dev2merge
-/// pattern (and any other pattern describing a unit of work) consumes this as
-/// the feature/issue description fed into planning.
+/// Workflow variable containing the fetched issue body from
+/// `csa plan run --issue <N>`.
 pub(crate) const FEATURE_INPUT_VAR: &str = "FEATURE_INPUT";
+
+/// Workflow variable containing the numeric issue number from
+/// `csa plan run --issue <N>`.
+pub(crate) const ISSUE_NUMBER_VAR: &str = "ISSUE_NUMBER";
 
 fn detect_effective_repo(project_root: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -531,6 +534,10 @@ mod tests;
 #[cfg(test)]
 #[path = "plan_cmd_tests_tail.rs"]
 mod tests_tail;
+
+#[cfg(test)]
+#[path = "plan_cmd_tests_issue.rs"]
+mod tests_issue;
 
 #[cfg(test)]
 #[path = "plan_cmd_tests_manual_handoff.rs"]
