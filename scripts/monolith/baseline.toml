@@ -732,18 +732,18 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "patterns/dev2merge/PATTERN.md"
 kind = "doc"
-baseline_tokens = 10711
-baseline_lines = 771
+baseline_tokens = 10897
+baseline_lines = 787
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662); no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662) and language-aware version bump for non-Rust repos (#1658); no-growth ratchet"
 
 [[files]]
 path = "patterns/dev2merge/workflow.toml"
 kind = "config"
-baseline_tokens = 10392
-baseline_lines = 858
+baseline_tokens = 10578
+baseline_lines = 874
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662); no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662) and language-aware version bump for non-Rust repos (#1658); no-growth ratchet"
 
 [[files]]
 path = "patterns/mktd/PATTERN.md"
