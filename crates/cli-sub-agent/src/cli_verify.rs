@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};

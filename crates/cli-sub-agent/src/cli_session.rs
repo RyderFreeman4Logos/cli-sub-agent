@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 //! CLI subcommands for the `csa session` command group.
 
 use std::path::PathBuf;

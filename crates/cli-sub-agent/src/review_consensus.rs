@@ -1,5 +1,6 @@
-use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
-use crate::review_prior_rounds::{PRIOR_ROUNDS_SECTION_HEADING, REVIEW_FINDINGS_TOML_INSTRUCTION};
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
+use super::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
+use super::review_prior_rounds::{PRIOR_ROUNDS_SECTION_HEADING, REVIEW_FINDINGS_TOML_INSTRUCTION};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
@@ -48,13 +49,13 @@ fn reviewer_tool_binary_available(tool_name: &str, config: Option<&ProjectConfig
     }
 
     if tool_name == "codex" {
-        let transport = crate::run_helpers::resolved_codex_transport(config);
+        let transport = super::run_helpers::resolved_codex_transport(config);
         if matches!(transport, CodexTransport::Acp) && !CodexRuntimeMetadata::acp_compiled_in() {
             return false;
         }
     }
 
-    let Some(binary_name) = crate::run_helpers::resolved_tool_binary_name(tool_name, config) else {
+    let Some(binary_name) = super::run_helpers::resolved_tool_binary_name(tool_name, config) else {
         return false;
     };
 
@@ -172,10 +173,10 @@ When spec/contract context is provided, use rule_id values: \
 Reviewer tool hint: {}.",
         tool.as_str()
     );
-    crate::review_design_anchor::append_design_anchor(&mut prompt);
+    super::review_design_anchor::append_design_anchor(&mut prompt);
     if !prompt.contains("## Review iteration context")
         && let Some(branch) =
-            crate::review_design_anchor::resolve_current_branch_via_vcs(project_root)
+            super::review_design_anchor::resolve_current_branch_via_vcs(project_root)
         && let Some(iteration_context) = review_iteration::render_review_iteration_context(
             project_root,
             &branch,

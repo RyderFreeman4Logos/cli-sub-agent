@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 #[derive(clap::Args)]
 pub struct ArchArgs {
     /// Architecture analysis description

@@ -1,6 +1,6 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
+use super::super::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use super::*;
-use crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE;
-use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
@@ -843,7 +843,6 @@ fn parse_review_decision_four_values() {
 fn parse_review_decision_fail_takes_priority() {
     use csa_core::types::ReviewDecision;
 
-    // When both FAIL and PASS tokens present, FAIL wins
     assert_eq!(
         parse_review_decision("PASS but also HAS_ISSUES", 0),
         ReviewDecision::Fail
@@ -854,7 +853,6 @@ fn parse_review_decision_fail_takes_priority() {
 fn parse_review_decision_exit_code_fallback() {
     use csa_core::types::ReviewDecision;
 
-    // No verdict token: fail closed unless the review explicitly says it is clean.
     assert_eq!(
         parse_review_decision("no verdict here", 0),
         ReviewDecision::Fail

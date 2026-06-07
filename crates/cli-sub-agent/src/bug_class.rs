@@ -1,3 +1,4 @@
+// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -131,8 +132,7 @@ impl BugClassCandidate {
                     file_path: finding.file.clone(),
                     line_range: finding.line.map(|line| (line, line)),
                     code_snippet: None,
-                    // Finding currently carries only the issue summary, so reuse it as the
-                    // best available fix note until review artifacts expose structured remediation.
+                    // Review artifacts expose no structured remediation yet; reuse the summary.
                     fix_description: finding.summary.clone(),
                 };
                 let key = CandidateKey {
@@ -168,12 +168,10 @@ impl BugClassCandidate {
     }
 }
 
-/// Load persisted review artifacts for the given project from CSA session storage.
+/// Load review artifacts from `{state_root}/{project_key}/sessions/{session_id}`.
 ///
-/// Session artifacts are read from `{state_root}/{project_key}/sessions/{session_id}`.
-/// Consolidated review output takes precedence; single-reviewer artifacts are used
-/// as a fallback for older or non-consolidated sessions. Missing artifacts are
-/// skipped silently so partially-populated session directories do not abort mining.
+/// Consolidated output wins; missing artifacts are skipped so partial session
+/// directories do not abort mining.
 pub(crate) fn load_review_artifacts_for_project(
     project_path: &Path,
 ) -> Result<Vec<ReviewArtifact>> {
