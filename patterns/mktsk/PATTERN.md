@@ -21,7 +21,8 @@ Choose exactly one mode:
 
 Read the TODO plan file from mktd output or a user-provided path. Extract all
 unchecked checklist items (`- [ ]`) with:
-- executor tag (`[Sub:developer]`, `[Skill:commit]`, `[CSA:tool]`, or `[Main]`)
+- executor tag (`[Sub:developer]`, `[Skill:commit]`, `[CSA:tier-*]`, `[CSA:<tool>]`, or `[Main]`)
+- optional `Implementation override: csa run ...` directive
 - task description
 - `DONE WHEN:` condition
 
@@ -69,6 +70,7 @@ Each TODO task MUST include:
 - stable item id
 - source TODO line reference
 - executor tag
+- optional `Implementation override: csa run ...` directive
 - concrete action
 - mechanically verifiable `DONE WHEN`
 
@@ -104,7 +106,10 @@ Treat each task as an atomic transaction:
 4. Persist checkpoint before next item.
 
 Dispatch policy by executor tag:
-- `[CSA:tool]`: run `csa run` with the item objective and `DONE WHEN`.
+- Priority: `Implementation override:` > `[CSA:tier-*]` > `[CSA:<tool>]` > default.
+- `Implementation override: csa run ...`: run the exact `csa run` command from the TODO directive with the item objective and `DONE WHEN`; it wins over any executor tag. Example: `Implementation override: csa run --tier tier-4-critical --tool claude-code` dispatches `csa run --tier tier-4-critical --tool claude-code`.
+- `[CSA:tier-*]`: run `csa run --tier <tier-name>` with the item objective and `DONE WHEN`.
+- `[CSA:<tool>]`: run `csa run --tool <tool-name>` with the item objective and `DONE WHEN`.
 - `[Sub:developer]`: execute directly as implementation work in current session.
 - `[Skill:xxx]`: invoke the corresponding skill directly.
 - `[Main]` or no tag: execute directly in current session.

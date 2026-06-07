@@ -108,6 +108,59 @@ fn dev2merge_forwards_impl_executor_overrides_to_mktd() {
 }
 
 #[test]
+fn mktsk_consumes_impl_executor_tier_and_override_contract() {
+    let workflow_path = workspace_root().join("patterns/mktsk/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let execute_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Execute Checklist Serially")
+        .expect("missing mktsk execution step");
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/mktsk/PATTERN.md"))
+        .expect("read mktsk pattern");
+
+    for required in [
+        "optional Implementation override directive",
+        "Priority: Implementation override > [CSA:tier-*] > [CSA:<tool>] > default",
+        "Implementation override: csa run ... => run that exact csa run command; it wins over any executor tag",
+        "[CSA:tier-*] => csa run --tier <tier-name>",
+        "[CSA:<tool>] => csa run --tool <tool-name>",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "mktsk workflow must consume implementation override dispatch contract: {required}"
+        );
+    }
+
+    for required in [
+        "optional `Implementation override: csa run ...` directive",
+        "Priority: `Implementation override:` > `[CSA:tier-*]` > `[CSA:<tool>]` > default.",
+        "`[CSA:tier-*]`: run `csa run --tier <tier-name>`",
+        "`[CSA:<tool>]`: run `csa run --tool <tool-name>`",
+        "`Implementation override: csa run --tier tier-4-critical --tool claude-code` dispatches `csa run --tier tier-4-critical --tool claude-code`.",
+    ] {
+        assert!(
+            pattern.contains(required),
+            "mktsk PATTERN.md must document implementation override dispatch contract: {required}"
+        );
+    }
+
+    assert!(
+        execute_step
+            .prompt
+            .contains("[CSA:tier-4-critical] => csa run --tier tier-4-critical"),
+        "`[CSA:tier-4-critical]` tasks must dispatch as `csa run --tier tier-4-critical`"
+    );
+    assert!(
+        execute_step.prompt.contains(
+            "Implementation override: csa run --tier tier-4-critical --tool claude-code => run csa run --tier tier-4-critical --tool claude-code"
+        ),
+        "`Implementation override: csa run --tier tier-4-critical --tool claude-code` must dispatch that exact command"
+    );
+}
+
+#[test]
 fn mktd_light_mode_skips_recon_dimensions() {
     let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
