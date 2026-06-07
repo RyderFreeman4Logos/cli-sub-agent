@@ -31,10 +31,14 @@ pub(super) fn classify_review_failover_reason(
         });
     }
 
+    let stdout_with_summary = format!(
+        "{}\n{}",
+        execution.execution.summary, execution.execution.output
+    );
     classify_next_model_failure_with_elapsed(
         tool.as_str(),
         &execution.execution.stderr_output,
-        &execution.execution.output,
+        &stdout_with_summary,
         execution.execution.exit_code,
         model_spec,
         attempt_elapsed,

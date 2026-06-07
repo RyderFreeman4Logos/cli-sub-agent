@@ -67,6 +67,62 @@ pub(in crate::review_cmd) fn extract_review_text(raw_output: &str) -> Option<Str
     transcript_messages.pop()
 }
 
+pub(in crate::review_cmd) fn terminal_tool_error_reason(raw_output: &str) -> Option<String> {
+    for line in raw_output.lines().rev() {
+        let line = line.trim();
+        if !(line.starts_with('{') && line.ends_with('}')) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("result") if claude_result_is_error(&value) => {
+                return Some(json_error_summary(&value));
+            }
+            Some("result") => return None,
+            Some("turn.failed") => return Some(json_error_summary(&value)),
+            Some("turn.completed") => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn claude_result_is_error(value: &serde_json::Value) -> bool {
+    value
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        || value
+            .get("subtype")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|subtype| subtype.starts_with("error"))
+}
+
+fn json_error_summary(value: &serde_json::Value) -> String {
+    for pointer in [
+        "/error/message",
+        "/message",
+        "/result",
+        "/subtype",
+        "/error",
+    ] {
+        let Some(field) = value.pointer(pointer) else {
+            continue;
+        };
+        if let Some(text) = field.as_str()
+            && !text.trim().is_empty()
+        {
+            return text.trim().chars().take(240).collect();
+        }
+        if field.is_object() || field.is_array() {
+            return field.to_string().chars().take(240).collect();
+        }
+    }
+    "stream terminal error".to_string()
+}
+
 /// Minimal stream-event view used to detect turn completion without depending on the shape
 /// of unrelated event payloads. Reading only `type` (serde ignores all other fields) keeps
 /// detection robust against schema drift in `result`/`item`/`usage` bodies.

@@ -11,6 +11,25 @@ pub(crate) struct ResolvedReviewSelection {
     pub(crate) tier_preference_order: Vec<String>,
 }
 
+fn force_resolve_review_tool_from_tier(
+    tier: &str,
+    config: &ProjectConfig,
+    tool: ToolName,
+) -> Option<crate::run_helpers::TierToolResolution> {
+    let tier_config = config.tiers.get(tier)?;
+    tier_config.models.iter().find_map(|model_spec| {
+        let parts: Vec<&str> = model_spec.splitn(4, '/').collect();
+        if parts.len() == 4 && parts[0] == tool.as_str() {
+            Some(crate::run_helpers::TierToolResolution {
+                tool,
+                model_spec: model_spec.clone(),
+            })
+        } else {
+            None
+        }
+    })
+}
+
 pub(crate) fn validate_review_direct_tool_tier_restriction(
     direct_tool_requested: bool,
     project_config: Option<&ProjectConfig>,
@@ -101,13 +120,28 @@ pub(crate) fn resolve_review_selection(
             && let Some(cfg) = project_config
         {
             let tier_preference_order = vec![tool.as_str().to_string()];
-            let resolution = crate::run_helpers::resolve_preferred_tool_from_tier(
-                tier,
-                cfg,
-                parent_tool,
-                &tier_preference_order,
-                &[],
-            )?;
+            let resolution = if force_override_user_config {
+                force_resolve_review_tool_from_tier(tier, cfg, tool).map_or_else(
+                    || {
+                        crate::run_helpers::resolve_preferred_tool_from_tier(
+                            tier,
+                            cfg,
+                            parent_tool,
+                            &tier_preference_order,
+                            &[],
+                        )
+                    },
+                    Ok,
+                )?
+            } else {
+                crate::run_helpers::resolve_preferred_tool_from_tier(
+                    tier,
+                    cfg,
+                    parent_tool,
+                    &tier_preference_order,
+                    &[],
+                )?
+            };
             return Ok(ResolvedReviewSelection {
                 tool: resolution.tool,
                 model_spec: Some(resolution.model_spec),
