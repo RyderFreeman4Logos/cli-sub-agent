@@ -38,6 +38,12 @@ name = "HEAD_SHA"
 [[workflow.variables]]
 name = "HOME"
 [[workflow.variables]]
+name = "IMPL_TIER"
+default = ""
+[[workflow.variables]]
+name = "IMPL_TOOL"
+default = ""
+[[workflow.variables]]
 name = "ISSUE_NUMBER"
 [[workflow.variables]]
 name = "LATEST_TS"
@@ -374,6 +380,8 @@ MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode tr
   --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
   --var TIER="${TIER:-}" \
   --var PLAN_TIER="${MKTD_PLAN_TIER}" \
+  --var IMPL_TIER="${IMPL_TIER:-}" \
+  --var IMPL_TOOL="${IMPL_TOOL:-}" \
   --var INTENSITY="${MKTD_INTENSITY}" 2>&1)"
 MKTD_EXIT=$?
 set -e
@@ -441,14 +449,10 @@ id = 8
 title = "Execute Plan with mktsk"
 tool = "manual"
 prompt = """
-Invoke the mktsk skill directly (NOT via `csa run`). mktsk MUST run in the
-main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
-
-Pass the TODO timestamp: `${MKTD_TODO_TIMESTAMP}`
-Set env: `CSA_SKIP_PUBLISH=true` (dev2merge handles publish in Steps 12-13).
-
-mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
-item serially: implement → quality gates → review → commit → next."""
+Run mktsk in main context with TODO `${MKTD_TODO_TIMESTAMP}` and
+`CSA_SKIP_PUBLISH=true`; impl `${IMPL_TIER}`/`${IMPL_TOOL}`.
+`[CSA:<value>]` impl tasks use `csa run`; `Implementation override: csa run ...`
+wins, else tier-*→`--tier`, other→`--tool`."""
 on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH}))"
 

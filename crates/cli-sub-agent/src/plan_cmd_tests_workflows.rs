@@ -55,6 +55,59 @@ fn dev2merge_workflow_marks_mktsk_step_manual() {
 }
 
 #[test]
+fn dev2merge_forwards_impl_executor_overrides_to_mktd() {
+    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    for name in ["IMPL_TIER", "IMPL_TOOL"] {
+        let variable = plan
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap_or_else(|| panic!("dev2merge must declare {name}"));
+        assert_eq!(
+            variable.default.as_deref(),
+            Some(""),
+            "{name} must default to empty so callers keep existing behavior unless they opt in"
+        );
+    }
+
+    let plan_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Plan with mktd")
+        .expect("missing dev2merge plan step");
+    for required in [
+        r#"--var IMPL_TIER="${IMPL_TIER:-}""#,
+        r#"--var IMPL_TOOL="${IMPL_TOOL:-}""#,
+    ] {
+        assert!(
+            plan_step.prompt.contains(required),
+            "Step 7 must forward implementation override to mktd: {required}"
+        );
+    }
+
+    let mktsk_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Execute Plan with mktsk")
+        .expect("missing dev2merge mktsk step");
+    for required in [
+        "impl `${IMPL_TIER}`/`${IMPL_TOOL}`",
+        "`[CSA:<value>]` impl tasks use `csa run`",
+        "tier-*→`--tier`",
+        "other→`--tool`",
+        "Implementation override: csa run ...",
+    ] {
+        assert!(
+            mktsk_step.prompt.contains(required),
+            "Step 8 must tell mktsk how to honor implementation override tags: {required}"
+        );
+    }
+}
+
+#[test]
 fn mktd_light_mode_skips_recon_dimensions() {
     let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
@@ -82,6 +135,83 @@ fn mktd_light_mode_skips_recon_dimensions() {
         4,
         "PATTERN.md must stay synced with workflow RECON conditions"
     );
+}
+
+#[test]
+fn mktd_generates_impl_executor_tags_from_overrides() {
+    let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    for name in ["IMPL_TIER", "IMPL_TOOL"] {
+        let variable = plan
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap_or_else(|| panic!("mktd must declare {name}"));
+        assert_eq!(
+            variable.default.as_deref(),
+            Some(""),
+            "{name} must default to empty so non-dev2merge callers keep existing executor tags"
+        );
+    }
+    for name in ["IMPL_EXECUTOR_TAG", "IMPL_EXECUTOR_DIRECTIVE"] {
+        assert!(
+            plan.variables.iter().any(|variable| variable.name == name),
+            "mktd must declare generated variable {name}"
+        );
+    }
+
+    let language_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Phase 1.5 — Language Detection")
+        .expect("missing mktd language step");
+    for required in [
+        "[CSA:${IMPL_TIER}]",
+        "[CSA:${IMPL_TOOL}]",
+        "[Sub:developer]",
+        "CSA_VAR:IMPL_EXECUTOR_TAG=${IMPL_EXECUTOR_TAG}",
+        "Implementation override: csa run",
+        "--tier ${IMPL_TIER}",
+        "--tool ${IMPL_TOOL}",
+    ] {
+        assert!(
+            language_step.prompt.contains(required),
+            "mktd Step 1.5 must compute implementation executor overrides: {required}"
+        );
+    }
+
+    let draft_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Phase 2 — DRAFT TODO")
+        .expect("missing mktd draft step");
+    for required in [
+        "Pre-assign: [Main], ${IMPL_EXECUTOR_TAG}, [Skill:commit], [CSA:tool].",
+        "Use `${IMPL_EXECUTOR_TAG}` for implementation tasks;",
+        "include that line in each such task",
+    ] {
+        assert!(
+            draft_step.prompt.contains(required),
+            "mktd draft prompt must require override-aware implementation task tags: {required}"
+        );
+    }
+
+    let pattern = std::fs::read_to_string(workspace_root().join("patterns/mktd/PATTERN.md"))
+        .expect("read mktd pattern");
+    for required in [
+        "IMPL_TIER",
+        "IMPL_TOOL",
+        "IMPL_EXECUTOR_TAG",
+        "IMPL_EXECUTOR_DIRECTIVE",
+        "Use `${IMPL_EXECUTOR_TAG}` for implementation tasks;",
+    ] {
+        assert!(
+            pattern.contains(required),
+            "PATTERN.md must stay synced with mktd implementation override workflow contract: {required}"
+        );
+    }
 }
 
 #[test]

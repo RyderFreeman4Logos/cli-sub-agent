@@ -15,15 +15,17 @@ Pipeline: Already-Resolved Check → Branch Validation → FAST_PATH Detection �
 mktsk N*(implement → commit) → Self-Review Gate → Pre-PR Cumulative Review → Push →
 Pre-PR Verdict Check → PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
 
-**CRITICAL PIPELINE INVARIANT**: PR creation (Step 14) and pr-bot (Step 15) are
-**two separate hard gates**. Creating a PR does NOT complete the pipeline. You
-MUST run pr-bot (Step 15) after PR creation. NEVER skip Step 15. NEVER merge
-the PR manually or via raw `gh pr merge`. The pr-bot workflow handles the merge.
-If an explicitly approved emergency path requires a manual merge after a
-recorded pr-bot pass, use `csa merge <PR_NUMBER>` so the local pr-bot gate
-still executes.
-Agents that stop after Step 14 leave the PR unmerged — this is a known failure
-mode that this invariant exists to prevent.
+**CRITICAL PIPELINE INVARIANT**: Step 14 PR creation and Step 15 pr-bot are
+separate hard gates. Creating a PR is not completion: run pr-bot after PR
+creation, never skip Step 15, and never raw `gh pr merge`. If an approved
+emergency requires manual merge after a recorded pr-bot pass, use
+`csa merge <PR_NUMBER>` so the local gate still runs. Stopping after Step 14
+leaves the PR unmerged.
+
+### Implementation Executor Override
+
+`IMPL_TIER`/`IMPL_TOOL` default empty (`[Sub:developer]`); set them so mktd
+emits `[CSA:<tier-or-tool>]` plus Step 8 `csa run` override flags.
 
 ### ABSOLUTE PROHIBITIONS
 
@@ -318,6 +320,8 @@ MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode tr
   --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
   --var TIER="${TIER:-}" \
   --var PLAN_TIER="${MKTD_PLAN_TIER}" \
+  --var IMPL_TIER="${IMPL_TIER:-}" \
+  --var IMPL_TOOL="${IMPL_TOOL:-}" \
   --var INTENSITY="${MKTD_INTENSITY}" 2>&1)"
 MKTD_EXIT=$?
 set -e
@@ -383,14 +387,10 @@ echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 OnFail: abort
 Tool: manual (main agent action)
 
-Invoke the mktsk skill directly (NOT via `csa run`). mktsk MUST run in the
-main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
-
-Pass the TODO timestamp: `${MKTD_TODO_TIMESTAMP}`
-Set env: `CSA_SKIP_PUBLISH=true` (dev2merge handles publish in Steps 12-13).
-
-mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
-item serially: implement → quality gates → review → commit → next.
+Run mktsk in main context with TODO `${MKTD_TODO_TIMESTAMP}` and
+`CSA_SKIP_PUBLISH=true`; impl `${IMPL_TIER}`/`${IMPL_TOOL}`.
+`[CSA:<value>]` impl tasks use `csa run`; `Implementation override: csa run ...`
+wins, else tier-*→`--tier`, other→`--tool`.
 
 ## Step 9: Ensure Version Bumped
 Tool: bash
