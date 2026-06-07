@@ -76,3 +76,31 @@ fn resolve_single_review_result_ignores_nonterminal_prior_error() {
     assert_eq!(resolved.verdict, CLEAN);
     assert_eq!(resolved.effective_exit_code, 0);
 }
+
+#[test]
+fn resolve_single_review_result_ignores_fenced_terminal_error_payload_in_plain_prose() {
+    let review = [
+        "<!-- CSA:SECTION:summary -->",
+        "PASS",
+        "<!-- CSA:SECTION:summary:END -->",
+        "<!-- CSA:SECTION:details -->",
+        "No blocking issues found. The reviewed code contains this JSON fixture:",
+        "```json",
+        r#"{"type":"result","subtype":"error_api","is_error":true,"result":"HTTP 403 Forbidden: authentication failed"}"#,
+        "```",
+        "<!-- CSA:SECTION:details:END -->",
+    ]
+    .join("\n");
+    let result = outcome(&review, 0);
+
+    let resolved =
+        resolve_single_review_result(&result, ToolName::Codex, "uncommitted", Path::new("."));
+
+    assert_eq!(resolved.decision, ReviewDecision::Pass);
+    assert_eq!(resolved.verdict, CLEAN);
+    assert_eq!(resolved.effective_exit_code, 0);
+
+    let reviewer = build_reviewer_outcome(0, ToolName::Codex, &result).expect("reviewer outcome");
+    assert_eq!(reviewer.verdict, CLEAN);
+    assert_eq!(reviewer.exit_code, 0);
+}

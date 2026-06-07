@@ -68,25 +68,57 @@ pub(in crate::review_cmd) fn extract_review_text(raw_output: &str) -> Option<Str
 }
 
 pub(in crate::review_cmd) fn terminal_tool_error_reason(raw_output: &str) -> Option<String> {
-    for line in raw_output.lines().rev() {
+    let mut current_segment_started = false;
+    let mut terminal_error_reason = None;
+
+    for line in raw_output.lines() {
         let line = line.trim();
         if !(line.starts_with('{') && line.ends_with('}')) {
+            current_segment_started = false;
+            terminal_error_reason = None;
             continue;
         }
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            current_segment_started = false;
+            terminal_error_reason = None;
             continue;
         };
-        match value.get("type").and_then(serde_json::Value::as_str) {
-            Some("result") if claude_result_is_error(&value) => {
-                return Some(json_error_summary(&value));
+        let Some(event_type) = value.get("type").and_then(serde_json::Value::as_str) else {
+            current_segment_started = false;
+            terminal_error_reason = None;
+            continue;
+        };
+        if !STREAM_EVENT_TYPES.contains(&event_type) {
+            current_segment_started = false;
+            terminal_error_reason = None;
+            continue;
+        }
+        if STREAM_START_EVENT_TYPES.contains(&event_type) {
+            current_segment_started = true;
+            terminal_error_reason = None;
+            continue;
+        }
+
+        match event_type {
+            "result" if current_segment_started && claude_result_is_error(&value) => {
+                terminal_error_reason = Some(json_error_summary(&value));
+                current_segment_started = false;
             }
-            Some("result") => return None,
-            Some("turn.failed") => return Some(json_error_summary(&value)),
-            Some("turn.completed") => return None,
-            _ => {}
+            "turn.failed" if current_segment_started => {
+                terminal_error_reason = Some(json_error_summary(&value));
+                current_segment_started = false;
+            }
+            "result" | "turn.completed" | "turn.failed" => {
+                terminal_error_reason = None;
+                current_segment_started = false;
+            }
+            _ => {
+                terminal_error_reason = None;
+            }
         }
     }
-    None
+
+    terminal_error_reason
 }
 
 fn claude_result_is_error(value: &serde_json::Value) -> bool {
@@ -137,6 +169,10 @@ struct StreamEventType {
 /// `{"type":"turn.completed",...}`. Their presence proves the turn ran to completion,
 /// independent of the verdict it reached.
 const STREAM_TERMINAL_EVENT_TYPES: &[&str] = &["result", "turn.completed"];
+
+/// Events that prove a contiguous JSON object segment is a tool transport stream rather
+/// than reviewer prose quoting a JSON fixture.
+const STREAM_START_EVENT_TYPES: &[&str] = &["system", "thread.started", "turn.started"];
 
 /// Event types that positively identify a JSON streaming transcript (claude-code / codex).
 /// Used to keep [`stream_started_without_terminal_event`] from misclassifying non-streaming
