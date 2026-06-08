@@ -26,24 +26,35 @@ pub(super) struct SelectionResolutionCtx<'a> {
     pub(super) effective_tier: Option<&'a str>,
     pub(super) selection_tool: Option<ToolName>,
     pub(super) direct_tool_requested: bool,
+    pub(super) session_fix: Option<&'a SessionFixTool>,
     pub(super) review_description: &'a str,
+}
+
+pub(super) struct SelectionToolResolution {
+    pub(super) selection_tool: Option<ToolName>,
+    pub(super) direct_tool_requested: bool,
+    pub(super) session_fix: Option<SessionFixTool>,
 }
 
 pub(super) fn resolve_selection_tool(
     args: &ReviewArgs,
     project_root: &Path,
     args_tool: Option<ToolName>,
-) -> Result<(Option<ToolName>, bool)> {
+) -> Result<SelectionToolResolution> {
     let session_fix = resolve_session_fix_tool(args, project_root)?;
     validate_session_fix_explicit_tool(args, session_fix.as_ref())?;
     let selection_tool = args_tool.or_else(|| session_fix.as_ref().and_then(|fix| fix.tool));
-    Ok((selection_tool, args_tool.is_some()))
+    Ok(SelectionToolResolution {
+        selection_tool,
+        direct_tool_requested: args_tool.is_some(),
+        session_fix,
+    })
 }
 
 pub(super) fn resolve_selection_or_persist_error(
     ctx: SelectionResolutionCtx<'_>,
 ) -> Result<ResolvedReviewSelection> {
-    match super::resolve::resolve_review_selection(
+    let resolved = match super::resolve::resolve_review_selection(
         ctx.selection_tool,
         ctx.args.model_spec.as_deref(),
         ctx.project_config,
@@ -55,21 +66,47 @@ pub(super) fn resolve_selection_or_persist_error(
         ctx.args.force_ignore_tier_setting,
         ctx.direct_tool_requested,
     ) {
-        Ok(resolved) => Ok(resolved),
-        Err(err) => Err(crate::session_guard::persist_pre_exec_error_result(
-            crate::session_guard::PreExecErrorCtx {
-                project_root: ctx.project_root,
-                session_id: super::prior_rounds::review_pre_exec_session_id(ctx.args),
-                description: Some(ctx.review_description),
-                parent: None,
-                tool_name: super::prior_rounds::explicit_review_tool(ctx.args)
-                    .map(|tool| tool.as_str()),
-                task_type: Some("review"),
-                tier_name: ctx.effective_tier,
-                error: err,
-            },
-        )),
+        Ok(resolved) => resolved,
+        Err(err) => return Err(persist_selection_error(&ctx, err)),
+    };
+    validate_session_fix_resolved_tool(ctx.session_fix, resolved.tool)
+        .map_err(|err| persist_selection_error(&ctx, err))?;
+    Ok(resolved)
+}
+
+fn persist_selection_error(ctx: &SelectionResolutionCtx<'_>, err: anyhow::Error) -> anyhow::Error {
+    crate::session_guard::persist_pre_exec_error_result(crate::session_guard::PreExecErrorCtx {
+        project_root: ctx.project_root,
+        session_id: super::prior_rounds::review_pre_exec_session_id(ctx.args),
+        description: Some(ctx.review_description),
+        parent: None,
+        tool_name: super::prior_rounds::explicit_review_tool(ctx.args).map(|tool| tool.as_str()),
+        task_type: Some("review"),
+        tier_name: ctx.effective_tier,
+        error: err,
+    })
+}
+
+fn validate_session_fix_resolved_tool(
+    session_fix: Option<&SessionFixTool>,
+    resolved_tool: ToolName,
+) -> Result<()> {
+    let Some(session_fix) = session_fix else {
+        return Ok(());
+    };
+    let Some(session_tool) = session_fix.tool else {
+        return Ok(());
+    };
+    if resolved_tool != session_tool {
+        anyhow::bail!(
+            "`csa review --session {} --fix` must use the original review tool '{}'; \
+             tier/model routing resolved '{}'.",
+            session_fix.session_id,
+            session_tool,
+            resolved_tool
+        );
     }
+    Ok(())
 }
 
 pub(super) fn resolve_session_fix_tool(
@@ -187,6 +224,7 @@ pub(super) fn resolve_session_fix_selection(
         args.force_ignore_tier_setting,
         args_tool.is_some(),
     )?;
+    validate_session_fix_resolved_tool(Some(&session_fix), resolved.tool)?;
 
     csa_session::resolve_resume_session(
         project_root,

@@ -126,8 +126,7 @@ pub(crate) async fn handle_review(
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
-    let (selection_tool, direct_tool_requested) =
-        session_fix::resolve_selection_tool(&args, &project_root, args_tool)?;
+    let selection = session_fix::resolve_selection_tool(&args, &project_root, args_tool)?;
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
@@ -141,7 +140,7 @@ pub(crate) async fn handle_review(
         inherited_trusted_pin,
     })?;
     validate_review_direct_tool_tier_restriction(
-        direct_tool_requested,
+        selection.direct_tool_requested,
         config.as_ref(),
         effective_tier.as_deref(),
         args.force_override_user_config,
@@ -224,7 +223,10 @@ pub(crate) async fn handle_review(
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), direct_tool_requested);
+    crate::run_helpers::warn_if_tier_without_tool(
+        args.tier.as_deref(),
+        selection.direct_tool_requested,
+    );
     let resolved_selection =
         session_fix::resolve_selection_or_persist_error(session_fix::SelectionResolutionCtx {
             args: &args,
@@ -233,8 +235,9 @@ pub(crate) async fn handle_review(
             parent_tool: parent_tool.as_deref(),
             project_root: &project_root,
             effective_tier: effective_tier.as_deref(),
-            selection_tool,
-            direct_tool_requested,
+            selection_tool: selection.selection_tool,
+            direct_tool_requested: selection.direct_tool_requested,
+            session_fix: selection.session_fix.as_ref(),
             review_description: &review_description,
         })?;
     let tool = resolved_selection.tool;

@@ -1,4 +1,7 @@
-use super::{resolve_session_fix_selection, validate_session_fix_before_daemon};
+use super::{
+    SelectionResolutionCtx, resolve_selection_or_persist_error, resolve_selection_tool,
+    resolve_session_fix_selection, validate_session_fix_before_daemon,
+};
 use crate::cli::{Cli, Commands, ReviewArgs, validate_review_args};
 use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -130,6 +133,25 @@ fn review_config_with_quality_tier() -> ProjectConfig {
     config
 }
 
+fn review_config_with_gemini_only_quality_tier() -> ProjectConfig {
+    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    config.tiers.insert(
+        "quality".to_string(),
+        csa_config::config::TierConfig {
+            description: "Test quality tier".to_string(),
+            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    config.review = Some(ReviewConfig {
+        tier: Some("quality".to_string()),
+        ..Default::default()
+    });
+    config
+}
+
 fn parse_session_fix_args(project_root: &Path, session_id: &str, extra: &[&str]) -> ReviewArgs {
     let cd = project_root.display().to_string();
     let mut argv = vec![
@@ -178,6 +200,101 @@ fn review_session_fix_skips_non_concrete_metadata_and_uses_result_tool() {
     .expect("session fix selection should use concrete result tool");
 
     assert_eq!(resolved_tool, Some(ToolName::Codex));
+}
+
+#[test]
+fn review_session_fix_rejects_tier_fallback_when_recorded_result_tool_missing_from_tier() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    let config = review_config_with_gemini_only_quality_tier();
+    write_review_project_config(project_dir.path(), &config);
+    let source = csa_session::create_session(project_dir.path(), Some("failed review"), None, None)
+        .expect("source session should be created");
+    write_session_metadata(
+        project_dir.path(),
+        &source.meta_session_id,
+        "unknown",
+        false,
+    );
+    write_session_result(project_dir.path(), &source.meta_session_id, "codex");
+    let args = parse_session_fix_args(project_dir.path(), &source.meta_session_id, &[]);
+
+    let err = resolve_session_fix_selection(
+        &args,
+        project_dir.path(),
+        Some(&config),
+        &GlobalConfig::default(),
+        Some("claude-code"),
+    )
+    .expect_err("recorded tool missing from tier must not fall back to another tool");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("must use the original review tool 'codex'"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("tier/model routing resolved 'gemini-cli'"),
+        "unexpected error: {msg}"
+    );
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "pre-daemon validation must not create a child session"
+    );
+}
+
+#[test]
+fn review_session_fix_runtime_resolution_rejects_tier_fallback_to_non_recorded_tool() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    let config = review_config_with_gemini_only_quality_tier();
+    let global_config = GlobalConfig::default();
+    let source = csa_session::create_session(project_dir.path(), Some("failed review"), None, None)
+        .expect("source session should be created");
+    write_session_metadata(
+        project_dir.path(),
+        &source.meta_session_id,
+        "unknown",
+        false,
+    );
+    write_session_result(project_dir.path(), &source.meta_session_id, "codex");
+    let args = parse_session_fix_args(project_dir.path(), &source.meta_session_id, &[]);
+    let selection = resolve_selection_tool(&args, project_dir.path(), None)
+        .expect("session fix selection tool should resolve");
+
+    let err = resolve_selection_or_persist_error(SelectionResolutionCtx {
+        args: &args,
+        project_config: Some(&config),
+        global_config: &global_config,
+        parent_tool: Some("claude-code"),
+        project_root: project_dir.path(),
+        effective_tier: Some("quality"),
+        selection_tool: selection.selection_tool,
+        direct_tool_requested: selection.direct_tool_requested,
+        session_fix: selection.session_fix.as_ref(),
+        review_description: "review: src/lib.rs",
+    })
+    .expect_err("runtime selection must enforce recorded session tool after tier routing");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("must use the original review tool 'codex'"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("tier/model routing resolved 'gemini-cli'"),
+        "unexpected error: {msg}"
+    );
 }
 
 #[test]
