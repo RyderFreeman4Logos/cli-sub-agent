@@ -39,6 +39,17 @@ fn current_branch(project_root: &Path) -> String {
     run_git(project_root, &["branch", "--show-current"]).expect("branch should resolve")
 }
 
+fn write_plan_journal(project_root: &Path, content: &str) {
+    let journal_path = project_root.join(".csa/state/plan/pr-bot.journal.json");
+    std::fs::create_dir_all(
+        journal_path
+            .parent()
+            .expect("journal path should have parent"),
+    )
+    .expect("plan state dir should be created");
+    std::fs::write(journal_path, content).expect("plan journal should be written");
+}
+
 #[test]
 fn persisted_failure_output_redacts_step_secrets() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
@@ -93,6 +104,96 @@ fn persisted_failure_output_redacts_step_secrets() {
             "client secret leaked: {rendered}"
         );
     }
+}
+
+#[test]
+fn recovery_ignores_untracked_plan_journal_after_snapshot() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, false);
+    run_test_git(&project_root, &["switch", "-c", "fix/recovery"]);
+    let snapshot = PlanFailureRecoverySnapshot::capture(&project_root);
+
+    run_test_git(&project_root, &["switch", "main"]);
+    write_plan_journal(&project_root, r#"{"status":"running"}"#);
+
+    let report = snapshot.recover_after_failure(&project_root);
+
+    assert_eq!(report.status.as_str(), "restored");
+    assert_eq!(current_branch(&project_root), "fix/recovery");
+    assert!(
+        report
+            .final_status
+            .iter()
+            .all(|line| !line.contains(".csa/")),
+        "CSA plan state should not appear as remaining recovery dirt: {report:?}"
+    );
+}
+
+#[test]
+fn recovery_ignores_tracked_plan_journal_change_after_snapshot() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, false);
+    write_plan_journal(&project_root, r#"{"status":"running"}"#);
+    run_test_git(
+        &project_root,
+        &["add", ".csa/state/plan/pr-bot.journal.json"],
+    );
+    run_test_git(&project_root, &["commit", "-m", "track plan journal"]);
+    run_test_git(&project_root, &["switch", "-c", "fix/recovery"]);
+    let snapshot = PlanFailureRecoverySnapshot::capture(&project_root);
+
+    run_test_git(&project_root, &["switch", "main"]);
+    write_plan_journal(&project_root, r#"{"status":"failed"}"#);
+
+    let report = snapshot.recover_after_failure(&project_root);
+
+    assert_eq!(report.status.as_str(), "restored");
+    assert_eq!(current_branch(&project_root), "fix/recovery");
+    assert!(
+        std::fs::read_to_string(project_root.join(".csa/state/plan/pr-bot.journal.json"))
+            .expect("plan journal should remain readable")
+            .contains("failed"),
+        "recovery must not discard tracked CSA plan journal content"
+    );
+    assert!(
+        report
+            .final_status
+            .iter()
+            .all(|line| !line.contains(".csa/")),
+        "tracked CSA plan journal changes should not appear as remaining recovery dirt: {report:?}"
+    );
+}
+
+#[test]
+fn recovery_preserves_unknown_csa_file_after_snapshot() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, false);
+    run_test_git(&project_root, &["switch", "-c", "fix/recovery"]);
+    let snapshot = PlanFailureRecoverySnapshot::capture(&project_root);
+
+    run_test_git(&project_root, &["switch", "main"]);
+    std::fs::create_dir_all(project_root.join(".csa")).expect("CSA dir should be created");
+    std::fs::write(project_root.join(".csa/config.toml"), "tool = 'codex'\n")
+        .expect("CSA config should be written");
+
+    let report = snapshot.recover_after_failure(&project_root);
+
+    assert_eq!(report.status.as_str(), "manual-required");
+    assert_eq!(
+        current_branch(&project_root),
+        "main",
+        "unknown .csa files must still block automatic checkout recovery"
+    );
+    assert!(
+        report
+            .messages
+            .iter()
+            .any(|message| message.contains(".csa/config.toml")),
+        "manual report should surface unknown .csa dirt: {report:?}"
+    );
 }
 
 #[test]

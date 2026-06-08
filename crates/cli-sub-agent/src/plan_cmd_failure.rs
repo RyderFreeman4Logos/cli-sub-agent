@@ -9,6 +9,7 @@ use super::StepResult;
 
 const PR_BOT_WORKFLOW_NAME: &str = "pr-bot";
 const WEAVE_LOCK: &str = "weave.lock";
+const CSA_PLAN_STATE_PREFIX: &str = ".csa/state/plan/";
 
 #[derive(Debug, Clone)]
 pub(crate) struct FailedPlanStep {
@@ -250,7 +251,7 @@ impl PlanFailureRecoverySnapshot {
                 };
             }
         };
-        let initial_status = match git_status_lines(project_root) {
+        let initial_status = match git_recovery_status_lines(project_root) {
             Ok(value) => Some(value),
             Err(error) => {
                 return Self {
@@ -309,7 +310,7 @@ impl PlanFailureRecoverySnapshot {
         }
 
         let mut actions = Vec::new();
-        let status_before_cleanup = match git_status_lines(project_root) {
+        let status_before_cleanup = match git_recovery_status_lines(project_root) {
             Ok(lines) => lines,
             Err(error) => {
                 return PlanFailureRecoveryReport::manual(
@@ -369,7 +370,7 @@ impl PlanFailureRecoverySnapshot {
             }
         }
 
-        let final_status = git_status_lines(project_root).unwrap_or_else(|error| {
+        let final_status = git_recovery_status_lines(project_root).unwrap_or_else(|error| {
             vec![format!(
                 "failed to inspect final status after recovery: {error}"
             )]
@@ -563,13 +564,24 @@ fn current_checkout_ref(project_root: &Path) -> Result<CheckoutRef> {
 fn git_status_lines(project_root: &Path) -> Result<Vec<String>> {
     let status = run_git(
         project_root,
-        &["status", "--porcelain=v1", "--untracked-files=normal"],
+        &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
     Ok(status
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(ToOwned::to_owned)
         .collect())
+}
+
+fn git_recovery_status_lines(project_root: &Path) -> Result<Vec<String>> {
+    Ok(git_status_lines(project_root)?
+        .into_iter()
+        .filter(|line| !is_csa_plan_state_status(line))
+        .collect())
+}
+
+fn is_csa_plan_state_status(line: &str) -> bool {
+    porcelain_path(line).is_some_and(|path| path.starts_with(CSA_PLAN_STATE_PREFIX))
 }
 
 fn only_weave_lock_dirty(status_lines: &[String]) -> bool {
