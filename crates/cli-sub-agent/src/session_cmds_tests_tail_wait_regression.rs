@@ -207,6 +207,21 @@ fn handle_session_wait_ignores_tier_failover_superseded_result_while_liveness_pr
         "fallback codex review is being scheduled\n",
     )
     .unwrap();
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 1\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+    let pending_result = load_result(project, &session_id)
+        .unwrap()
+        .expect("superseded result should exist");
+    assert!(
+        crate::session_tier_failover::is_pending_tier_failover_handoff(
+            &session_dir,
+            &pending_result
+        ),
+        "same state must make session result report pending tier fallback"
+    );
 
     let mut emitted_completion = false;
     let exit_code = handle_session_wait_with_hooks(
@@ -239,5 +254,87 @@ fn handle_session_wait_ignores_tier_failover_superseded_result_while_liveness_pr
     assert!(
         !emitted_completion,
         "superseded intermediate attempts must not emit terminal wait completion while fallback is live"
+    );
+}
+
+#[test]
+fn handle_session_wait_does_not_terminalize_gemini_failure_during_tier_fallback_handoff() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-tier-failover-gemini-400-live"),
+        None,
+        Some("gemini-cli"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let mut session_state = load_session(project, &session_id).unwrap();
+    session_state.task_context = TaskContext {
+        task_type: Some("reviewer_sub_session".to_string()),
+        tier_name: Some("tier-4-critical".to_string()),
+    };
+    save_session(&session_state).unwrap();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "status: 400".to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("failure", 1)
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 1\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        session_dir.join("stderr.log"),
+        "fallback codex review is being scheduled\n",
+    )
+    .unwrap();
+
+    let mut emitted_completion = false;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |_sid: &str, _status: &str, _exit_code, _synthetic, _mirror_to_stdout| {
+            emitted_completion = true;
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        exit_code, 0,
+        "Gemini failure must stay nonterminal while tier fallback handoff is live"
+    );
+    assert!(
+        !emitted_completion,
+        "pending fallback handoff must not emit terminal wait completion"
     );
 }

@@ -5,12 +5,14 @@ use anyhow::Result;
 
 use super::super::session_has_terminal_process;
 
-fn suppress_pending_tier_failover_result(
+pub(super) fn suppress_pending_tier_failover_result(
     session_id: &str,
     session_dir: &Path,
     result: csa_session::SessionResult,
 ) -> Option<csa_session::SessionResult> {
-    if crate::session_tier_failover::is_pending_tier_failover_handoff(session_dir, &result) {
+    if crate::session_tier_failover::is_pending_tier_failover_handoff(session_dir, &result)
+        || is_probable_pending_tier_failover_failure(session_dir, &result)
+    {
         tracing::debug!(
             session_id,
             status = %result.status,
@@ -20,6 +22,36 @@ fn suppress_pending_tier_failover_result(
     } else {
         Some(result)
     }
+}
+
+fn is_probable_pending_tier_failover_failure(
+    session_dir: &Path,
+    result: &csa_session::SessionResult,
+) -> bool {
+    result.status == "failure"
+        && result.exit_code != 0
+        && result.tool == "gemini-cli"
+        && result.summary.to_ascii_lowercase().contains("status: 400")
+        && session_has_review_tier_context(session_dir)
+        && tier_failover_handoff_has_liveness(session_dir)
+}
+
+fn session_has_review_tier_context(session_dir: &Path) -> bool {
+    let state_path = session_dir.join("state.toml");
+    let Ok(contents) = fs::read_to_string(state_path) else {
+        return false;
+    };
+    let Ok(session) = toml::from_str::<csa_session::MetaSessionState>(&contents) else {
+        return false;
+    };
+    session.task_context.task_type.as_deref() == Some("reviewer_sub_session")
+        && session.task_context.tier_name.is_some()
+}
+
+fn tier_failover_handoff_has_liveness(session_dir: &Path) -> bool {
+    csa_process::ToolLiveness::has_live_process(session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+        || csa_process::ToolLiveness::is_alive(session_dir)
 }
 
 fn load_completed_daemon_result(
@@ -99,7 +131,10 @@ fn load_completed_daemon_result_adaptive(
     }
 }
 
-fn load_output_result_fallback(session_dir: &Path) -> Result<Option<csa_session::SessionResult>> {
+fn load_output_result_fallback(
+    session_id: &str,
+    session_dir: &Path,
+) -> Result<Option<csa_session::SessionResult>> {
     let output_result_path = session_dir
         .join("output")
         .join(csa_session::result::RESULT_FILE_NAME);
@@ -114,7 +149,11 @@ fn load_output_result_fallback(session_dir: &Path) -> Result<Option<csa_session:
 
     let contents = fs::read_to_string(&output_result_path)?;
     let result: csa_session::SessionResult = toml::from_str(&contents)?;
-    Ok(Some(result))
+    Ok(suppress_pending_tier_failover_result(
+        session_id,
+        session_dir,
+        result,
+    ))
 }
 
 pub(super) fn load_completed_daemon_result_with_fallback(
@@ -133,7 +172,7 @@ pub(super) fn load_completed_daemon_result_with_fallback(
     }
 
     if !session_has_terminal_process(session_dir)
-        && let Some(output_result) = load_output_result_fallback(session_dir)?
+        && let Some(output_result) = load_output_result_fallback(session_id, session_dir)?
     {
         tracing::info!(
             session_id,
