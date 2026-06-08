@@ -52,6 +52,14 @@ fn classify_distinguishes_quota_rate_limit_transport_and_error() {
         FailoverSkipKind::TransportError
     );
     assert_eq!(
+        FailoverSkipKind::classify("gemini_cli_crash"),
+        FailoverSkipKind::TransportError
+    );
+    assert_eq!(
+        FailoverSkipKind::classify("gemini_runtime_home_unavailable"),
+        FailoverSkipKind::TransportError
+    );
+    assert_eq!(
         FailoverSkipKind::classify("model returned a malformed verdict"),
         FailoverSkipKind::AttemptedAndErrored
     );
