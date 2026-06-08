@@ -23,6 +23,18 @@ pub(super) fn check_resources_before_spawn(
             .unwrap_or(default_resources.min_free_memory_mb),
     });
     let projected_spawn_mb = spawn_memory_projection_mb(config, executor.tool_name());
+    if let Err(err) =
+        crate::resource_admission::persist_spawn_memory_projection(session, projected_spawn_mb)
+    {
+        return Err(persist_pipeline_pre_exec_failure(
+            project_root,
+            session,
+            executor.tool_name(),
+            err.context("Failed to persist pre-spawn memory projection"),
+            cleanup_guard,
+            None,
+        ));
+    }
     let admission =
         build_spawn_memory_admission(project_root, &session.meta_session_id, projected_spawn_mb);
 

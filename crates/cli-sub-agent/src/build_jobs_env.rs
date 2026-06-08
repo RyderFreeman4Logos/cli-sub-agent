@@ -57,9 +57,47 @@ pub(crate) fn apply_build_jobs_env_with_host(
     inherited_env: impl Fn(&str) -> Option<String>,
     host_memory: Option<BuildJobsHostMemory>,
 ) {
-    if let Some(updates) = build_jobs_env_with_host(build_jobs, inherited_env, host_memory) {
-        extra_env.get_or_insert_with(HashMap::new).extend(updates);
+    if let Some(build_jobs) = build_jobs {
+        let value = build_jobs.to_string();
+        extra_env
+            .get_or_insert_with(HashMap::new)
+            .extend(HashMap::from([
+                (CARGO_BUILD_JOBS_ENV.to_string(), value.clone()),
+                (NEXTEST_TEST_THREADS_ENV.to_string(), value),
+            ]));
+        return;
     }
+
+    let auto_jobs = host_memory.and_then(auto_build_jobs_cap);
+    apply_build_jobs_env_key(extra_env, CARGO_BUILD_JOBS_ENV, &inherited_env, auto_jobs);
+    apply_build_jobs_env_key(
+        extra_env,
+        NEXTEST_TEST_THREADS_ENV,
+        &inherited_env,
+        auto_jobs,
+    );
+}
+
+fn apply_build_jobs_env_key(
+    extra_env: &mut Option<HashMap<String, String>>,
+    key: &str,
+    inherited_env: impl Fn(&str) -> Option<String>,
+    auto_jobs: Option<u32>,
+) {
+    if let Some(value) = inherited_env(key) {
+        extra_env
+            .get_or_insert_with(HashMap::new)
+            .insert(key.to_string(), value);
+        return;
+    }
+
+    let Some(auto_jobs) = auto_jobs else { return };
+    if extra_env.as_ref().is_some_and(|env| env.contains_key(key)) {
+        return;
+    }
+    extra_env
+        .get_or_insert_with(HashMap::new)
+        .insert(key.to_string(), auto_jobs.to_string());
 }
 
 pub(crate) fn build_jobs_env_with_host(
@@ -263,6 +301,59 @@ mod tests {
             }),
         )
         .expect("mixed env");
+
+        assert_eq!(env.get(CARGO_BUILD_JOBS_ENV).map(String::as_str), Some("6"));
+        assert_eq!(
+            env.get(NEXTEST_TEST_THREADS_ENV).map(String::as_str),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn auto_build_jobs_does_not_overwrite_existing_extra_env() {
+        let mut env = Some(HashMap::from([(
+            CARGO_BUILD_JOBS_ENV.to_string(),
+            "7".to_string(),
+        )]));
+
+        apply_build_jobs_env_with_host(
+            &mut env,
+            None,
+            |_| None,
+            Some(BuildJobsHostMemory {
+                available_mb: 18_000,
+                free_mb: 900,
+            }),
+        );
+        let env = env.expect("existing config env should remain present");
+
+        assert_eq!(env.get(CARGO_BUILD_JOBS_ENV).map(String::as_str), Some("7"));
+        assert_eq!(
+            env.get(NEXTEST_TEST_THREADS_ENV).map(String::as_str),
+            Some("2")
+        );
+    }
+
+    #[test]
+    fn inherited_env_overrides_existing_extra_env() {
+        let mut env = Some(HashMap::from([(
+            CARGO_BUILD_JOBS_ENV.to_string(),
+            "7".to_string(),
+        )]));
+
+        apply_build_jobs_env_with_host(
+            &mut env,
+            None,
+            |key| match key {
+                CARGO_BUILD_JOBS_ENV => Some("6".to_string()),
+                _ => None,
+            },
+            Some(BuildJobsHostMemory {
+                available_mb: 18_000,
+                free_mb: 900,
+            }),
+        );
+        let env = env.expect("env should remain present");
 
         assert_eq!(env.get(CARGO_BUILD_JOBS_ENV).map(String::as_str), Some("6"));
         assert_eq!(

@@ -488,10 +488,10 @@ fn should_skip_balloon_prewarm(available_memory_mb: u64, active_session_count: u
 pub(crate) fn record_sandbox_telemetry(
     execute_options: &ExecuteOptions,
     session: &mut MetaSessionState,
-) {
-    if execute_options.sandbox.is_none() || session.sandbox_info.is_some() {
-        return;
-    }
+) -> bool {
+    let Some(sandbox_context) = execute_options.sandbox.as_ref() else {
+        return false;
+    };
 
     let capability = csa_resource::detect_resource_capability();
     let mode = match capability {
@@ -499,32 +499,28 @@ pub(crate) fn record_sandbox_telemetry(
         csa_resource::ResourceCapability::Setrlimit => "rlimit",
         csa_resource::ResourceCapability::None => "none",
     };
-    let memory: Option<u64> = execute_options
-        .sandbox
-        .as_ref()
-        .and_then(|ctx| ctx.isolation_plan.memory_max_mb);
+    let memory: Option<u64> = sandbox_context.isolation_plan.memory_max_mb;
 
     // Capture filesystem isolation mode from the isolation plan.
-    let fs_mode = execute_options
-        .sandbox
-        .as_ref()
-        .map(|ctx| match ctx.isolation_plan.filesystem {
-            csa_resource::FilesystemCapability::Bwrap => "bwrap".to_string(),
-            csa_resource::FilesystemCapability::Landlock => "landlock".to_string(),
-            csa_resource::FilesystemCapability::None => "none".to_string(),
-        });
+    let fs_mode = Some(match sandbox_context.isolation_plan.filesystem {
+        csa_resource::FilesystemCapability::Bwrap => "bwrap".to_string(),
+        csa_resource::FilesystemCapability::Landlock => "landlock".to_string(),
+        csa_resource::FilesystemCapability::None => "none".to_string(),
+    });
 
-    let readonly = execute_options
-        .sandbox
-        .as_ref()
-        .map(|ctx| ctx.isolation_plan.readonly_project_root);
+    let readonly = Some(sandbox_context.isolation_plan.readonly_project_root);
 
-    session.sandbox_info = Some(csa_session::SandboxInfo {
+    let sandbox_info = csa_session::SandboxInfo {
         mode: mode.to_string(),
         memory_max_mb: memory,
         filesystem_mode: fs_mode.clone(),
         readonly_project_root: readonly,
-    });
+    };
+    if session.sandbox_info.as_ref() == Some(&sandbox_info) {
+        return false;
+    }
+
+    session.sandbox_info = Some(sandbox_info);
 
     info!(
         session = %session.meta_session_id,
@@ -533,6 +529,7 @@ pub(crate) fn record_sandbox_telemetry(
         filesystem_mode = ?fs_mode,
         "Sandbox telemetry recorded in session state"
     );
+    true
 }
 
 pub(crate) fn filesystem_sandbox_active(sandbox_info: Option<&csa_session::SandboxInfo>) -> bool {

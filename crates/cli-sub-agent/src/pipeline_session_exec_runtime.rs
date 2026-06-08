@@ -350,7 +350,15 @@ pub(super) async fn prepare_session_runtime(
     if let Some(pre_session_hook) = input.pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);
     }
-    crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session);
+    if crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session)
+        && let Err(err) = csa_session::save_session(session)
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to persist sandbox telemetry"
+        );
+    }
     crate::pipeline_sandbox::maybe_inflate_balloon(
         input.tool.as_str(),
         input.project_root,
