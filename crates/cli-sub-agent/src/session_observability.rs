@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use csa_session::{SessionArtifact, SessionResult};
+use csa_session::{ReviewVerdictArtifact, SessionArtifact, SessionResult};
 use tracing::debug;
 
 const SUMMARY_MAX_CHARS: usize = 200;
@@ -56,6 +56,9 @@ pub(crate) fn refresh_and_repair_result_from_dir(
         result.events_count = events_count;
         changed = true;
     }
+    if sync_review_verdict_exit_code(session_dir, &mut result)? {
+        changed = true;
+    }
 
     if changed {
         // Write repaired result back (best-effort for cross-project sessions).
@@ -87,12 +90,43 @@ pub(crate) fn enrich_result_from_session_dir(
         changed = true;
     }
 
+    if sync_review_verdict_exit_code(session_dir, result)? {
+        changed = true;
+    }
+
     let artifact_names = csa_session::list_artifacts(project_root, session_id)?;
     if merge_artifacts(&mut result.artifacts, artifact_names) {
         changed = true;
     }
 
     Ok(changed)
+}
+
+fn sync_review_verdict_exit_code(session_dir: &Path, result: &mut SessionResult) -> Result<bool> {
+    let Some(exit_code) = read_review_verdict_exit_code(session_dir)? else {
+        return Ok(false);
+    };
+    let status = SessionResult::status_from_exit_code(exit_code);
+    if result.exit_code == exit_code && result.status == status {
+        return Ok(false);
+    }
+
+    result.exit_code = exit_code;
+    result.status = status;
+    Ok(true)
+}
+
+fn read_review_verdict_exit_code(session_dir: &Path) -> Result<Option<i32>> {
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    if !verdict_path.is_file() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&verdict_path)?;
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)?;
+    Ok(Some(
+        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision),
+    ))
 }
 
 pub(crate) fn build_missing_result_diagnostic(
