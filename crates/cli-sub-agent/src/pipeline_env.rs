@@ -4,6 +4,10 @@ use std::path::Path;
 use csa_config::ProjectConfig;
 use tracing::info;
 
+pub(crate) const CSA_GIT_PUSH_ALLOWED_ENV: &str = csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY;
+pub(crate) const CSA_RUN_GIT_PUSH_AUTHORIZED_ENV: &str =
+    csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY;
+
 /// Resolve effective cooldown seconds from config or default.
 pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
@@ -11,21 +15,33 @@ pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
         .unwrap_or(csa_config::DEFAULT_COOLDOWN_SECS)
 }
 
-pub(crate) fn build_merged_env(
-    extra_env: Option<&HashMap<String, String>>,
-    config: Option<&ProjectConfig>,
-    global_config: Option<&csa_config::GlobalConfig>,
-    tool_name: &str,
-    current_depth: u32,
-    pattern_internal: bool,
-    sa_mode: bool,
-) -> HashMap<String, String> {
+pub(crate) struct MergedEnvRequest<'a> {
+    pub(crate) extra_env: Option<&'a HashMap<String, String>>,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) global_config: Option<&'a csa_config::GlobalConfig>,
+    pub(crate) tool_name: &'a str,
+    pub(crate) current_depth: u32,
+    pub(crate) pattern_internal: bool,
+    pub(crate) allow_git_push: bool,
+}
+
+pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String, String> {
+    let MergedEnvRequest {
+        extra_env,
+        config,
+        global_config,
+        tool_name,
+        current_depth,
+        pattern_internal,
+        allow_git_push,
+    } = request;
     let suppress = config
         .map(|c| c.should_suppress_notify(tool_name))
         .unwrap_or(true);
 
     let mut merged_env = extra_env.cloned().unwrap_or_default();
     csa_core::env::scrub_subtree_contract_env_map(&mut merged_env);
+    csa_core::env::strip_git_push_authorization_keys(&mut merged_env);
     if !merged_env.contains_key("PATH")
         && let Some(path) = std::env::var_os("PATH")
     {
@@ -81,10 +97,8 @@ pub(crate) fn build_merged_env(
             "1".to_string(),
         );
     }
-    if sa_mode {
-        merged_env.insert("CSA_GIT_PUSH_ALLOWED".to_string(), "true".to_string());
-    } else {
-        merged_env.remove("CSA_GIT_PUSH_ALLOWED");
+    if allow_git_push {
+        merged_env.insert(CSA_GIT_PUSH_ALLOWED_ENV.to_string(), "true".to_string());
     }
 
     merged_env

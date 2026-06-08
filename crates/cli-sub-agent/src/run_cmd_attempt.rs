@@ -250,6 +250,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             prompt_text: request.prompt_text,
             failover_context_addendum: failover_context_addendum.as_deref(),
             fork_call: request.fork_call,
+            allow_git_push: request.allow_git_push,
             config: request.config,
             startup_env: request.startup_env,
         });
@@ -295,6 +296,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         project_root: request.project_root,
                         extra_env: extra_env.as_ref(),
                         subtree_pin: subtree_pin.as_ref(),
+                        allow_git_push: request.allow_git_push,
                         stream_mode: request.stream_mode,
                         idle_timeout_seconds: request.idle_timeout_seconds,
                         initial_response_timeout_seconds,
@@ -316,6 +318,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.config,
                     extra_env.as_ref(),
                     subtree_pin.as_ref(),
+                    request.allow_git_push,
                     request.resolved_tier_name,
                     request.context_load_options,
                     request.stream_mode,
@@ -345,6 +348,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 project_root: request.project_root,
                 extra_env: extra_env.as_ref(),
                 subtree_pin: subtree_pin.as_ref(),
+                allow_git_push: request.allow_git_push,
                 stream_mode: request.stream_mode,
                 idle_timeout_seconds: request.idle_timeout_seconds,
                 initial_response_timeout_seconds,
@@ -364,6 +368,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 request.config,
                 extra_env.as_ref(),
                 subtree_pin.as_ref(),
+                request.allow_git_push,
                 request.resolved_tier_name,
                 request.context_load_options,
                 request.stream_mode,
@@ -550,6 +555,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     })))
 }
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_git_push_tests.rs"]
+mod git_push_tests;
 #[cfg(test)]
 #[path = "run_cmd_attempt_http_failover_tests.rs"]
 mod http_failover_tests;

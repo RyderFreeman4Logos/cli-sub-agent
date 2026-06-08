@@ -264,7 +264,6 @@ fn test_acp_build_env_propagates_extra_env() {
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
-
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
@@ -279,15 +278,14 @@ fn test_acp_build_env_propagates_extra_env() {
 
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-    let env = transport.build_env(&session, Some(&extra), None);
+    let env = transport.build_env(&session, Some(&extra), None, false);
     assert_eq!(
         env.get("CSA_SUPPRESS_NOTIFY"),
         Some(&"1".to_string()),
         "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
     );
 
-    // Without extra_env, suppress_notify should NOT be present.
-    let env_no_extra = transport.build_env(&session, None, None);
+    let env_no_extra = transport.build_env(&session, None, None, false);
     assert_eq!(
         env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
         None,
@@ -320,7 +318,6 @@ fn test_acp_build_env_includes_csa_session_dir() {
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
-
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
@@ -333,7 +330,7 @@ fn test_acp_build_env_includes_csa_session_dir() {
         identity_version: 1,
     };
 
-    let env = transport.build_env(&session, None, None);
+    let env = transport.build_env(&session, None, None, false);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present in env");
@@ -405,7 +402,7 @@ fn test_acp_build_env_reserved_session_paths_override_extra_env() {
         "/tmp/fake-session/result.toml".to_string(),
     );
 
-    let env = transport.build_env(&session, Some(&extra), None);
+    let env = transport.build_env(&session, Some(&extra), None, false);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present");
@@ -683,6 +680,7 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
             std::path::Path::new("/tmp"),
             Some(&env),
             None,
+            false,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(None),
@@ -697,7 +695,7 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
         result.execution.output
     );
     let models = read_model_log(&model_log_path);
-    // Phase 1: original model (OAuth), Phase 2: original model (API key), Phase 3: flash (API key)
+    // OAuth original, API-key original, API-key flash.
     assert_eq!(
         models,
         vec![
@@ -733,6 +731,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         sandbox: None,
         thinking_budget: None,
         subtree_pin: None,
+        allow_git_push: false,
     };
 
     let result = transport

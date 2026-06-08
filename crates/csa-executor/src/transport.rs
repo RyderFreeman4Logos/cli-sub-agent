@@ -246,7 +246,12 @@ impl AcpTransport {
         acp_args: &[String],
         resume_session_id: Option<&str>,
     ) -> Result<TransportResult> {
-        let mut env = self.build_env(session, extra_env, options.subtree_pin.as_ref());
+        let mut env = self.build_env(
+            session,
+            extra_env,
+            options.subtree_pin.as_ref(),
+            options.allow_git_push,
+        );
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
         let mut acp_command = self.acp_command.clone();

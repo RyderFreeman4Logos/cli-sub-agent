@@ -70,6 +70,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // `extra_env`. The executor applies it after env merges strip pin keys.
     // `None` means CSA did not pin; never source this from request/config env.
     subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     task_type: Option<&str>,
     tier_name: Option<&str>,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
@@ -213,6 +214,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             config,
             extra_env,
             subtree_pin,
+            allow_git_push,
             task_type,
             context_load_options,
             stream_mode,

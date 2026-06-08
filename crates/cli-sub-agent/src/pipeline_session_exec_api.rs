@@ -128,6 +128,7 @@ pub(crate) async fn execute_with_session_and_meta(
         config,
         extra_env,
         subtree_pin,
+        false,
         task_type,
         tier_name,
         context_load_options,

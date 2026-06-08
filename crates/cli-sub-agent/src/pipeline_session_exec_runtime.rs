@@ -38,6 +38,7 @@ pub(super) struct SessionRuntimeInput<'a> {
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) extra_env: Option<&'a HashMap<String, String>>,
     pub(super) subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
+    pub(super) allow_git_push: bool,
     pub(super) task_type: Option<&'a str>,
     pub(super) context_load_options: Option<&'a csa_executor::ContextLoadOptions>,
     pub(super) stream_mode: csa_process::StreamMode,
@@ -216,15 +217,16 @@ pub(super) async fn prepare_session_runtime(
             ..Default::default()
         }
     });
-    let mut merged_env = crate::pipeline_env::build_merged_env(
-        input.extra_env,
-        input.config,
-        input.global_config,
-        input.executor.tool_name(),
-        input.startup_env.current_depth(),
-        input.startup_env.pattern_internal(),
-        sa_mode,
-    );
+    let mut merged_env =
+        crate::pipeline_env::build_merged_env(crate::pipeline_env::MergedEnvRequest {
+            extra_env: input.extra_env,
+            config: input.config,
+            global_config: input.global_config,
+            tool_name: input.executor.tool_name(),
+            current_depth: input.startup_env.current_depth(),
+            pattern_internal: input.startup_env.pattern_internal(),
+            allow_git_push: input.allow_git_push,
+        });
     crate::pipeline_env::apply_task_target_dir_guards(
         input.task_type,
         input.executor.tool_name(),
@@ -338,7 +340,9 @@ pub(super) async fn prepare_session_runtime(
         input.cli_no_hook_bypass_scan,
         input.config.map(|cfg| cfg.resources.hook_bypass_scan),
     );
-    execute_options = execute_options.with_subtree_pin(input.subtree_pin.cloned());
+    execute_options = execute_options
+        .with_subtree_pin(input.subtree_pin.cloned())
+        .with_git_push_allowed(input.allow_git_push);
     apply_transport_failover_overrides(
         &mut execute_options,
         (!merged_env.is_empty()).then_some(&merged_env),

@@ -21,6 +21,11 @@ pub(crate) const STRIPPED_ENV_VARS: &[&str] = &[
     // tool would silently skip pre-commit hooks, violating AGENTS.md rule 029.
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
+    // Git-push authorization is CSA-owned. ACP child processes may only
+    // receive CSA_GIT_PUSH_ALLOWED from the typed executor decision, never from
+    // ambient parent env.
+    csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY,
+    csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY,
     // The startup subtree contract is scrubbed through csa_core::env so the
     // contract key list has one source of truth (#1750).
 ];

@@ -276,6 +276,12 @@ fn propagate_explicit_envs(
     }
 }
 
+fn scrub_git_push_authorization_env(target: &mut Command) {
+    for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+        target.env_remove(key);
+    }
+}
+
 fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
     let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
     let tool_args: Vec<String> = cmd
@@ -289,6 +295,7 @@ fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
     {
         let mut wrapped = Command::from(bwrap_cmd);
         csa_core::env::scrub_subtree_contract_env_tokio(&mut wrapped);
+        scrub_git_push_authorization_env(&mut wrapped);
         propagate_explicit_envs(&mut wrapped, &explicit_envs(&cmd));
         if let Some(dir) = cmd.as_std().get_current_dir() {
             wrapped.current_dir(dir);
@@ -372,6 +379,7 @@ fn build_cgroup_scope_command(
 
     let mut tokio_cmd = Command::from(scope_cmd);
     csa_core::env::scrub_subtree_contract_env_tokio(&mut tokio_cmd);
+    scrub_git_push_authorization_env(&mut tokio_cmd);
     tokio_cmd.arg(original_cmd.as_std().get_program());
     tokio_cmd.args(original_cmd.as_std().get_args());
 
@@ -436,6 +444,41 @@ mod tests {
     }
 
     #[test]
+    fn bwrap_wrapper_scrubs_ambient_git_push_authorization_env() {
+        let original = Command::new("/usr/bin/tool");
+        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+        let env = recorded_env(&wrapped);
+
+        for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+            assert_eq!(
+                env.get(*key),
+                Some(&None),
+                "bwrap wrapper must env_remove ambient git-push authorization key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn bwrap_wrapper_preserves_explicit_typed_git_push_authorization() {
+        let mut original = Command::new("/usr/bin/tool");
+        original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
+
+        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+        let env = recorded_env(&wrapped);
+
+        assert_eq!(
+            env.get(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY),
+            Some(&Some("true".to_string())),
+            "explicit typed git-push authorization must survive bwrap wrapping"
+        );
+        assert_eq!(
+            env.get(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY),
+            Some(&None),
+            "internal git-push marker must remain stripped"
+        );
+    }
+
+    #[test]
     fn cgroup_wrapper_scrubs_ambient_then_preserves_explicit_fresh_env() {
         let mut original = Command::new("/usr/bin/tool");
         original
@@ -473,5 +516,37 @@ mod tests {
                 "cgroup wrapper must env_remove ambient subtree-contract key {key}"
             );
         }
+        for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+            assert_eq!(
+                env.get(*key),
+                Some(&None),
+                "cgroup wrapper must env_remove ambient git-push authorization key {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn cgroup_wrapper_preserves_explicit_typed_git_push_authorization() {
+        let mut original = Command::new("/usr/bin/tool");
+        original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
+        let config = csa_resource::cgroup::SandboxConfig {
+            memory_max_mb: 1024,
+            memory_swap_max_mb: None,
+            pids_max: Some(64),
+        };
+
+        let wrapped = build_cgroup_scope_command(&original, "codex", "01KTEST", &config);
+        let env = recorded_env(&wrapped);
+
+        assert_eq!(
+            env.get(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY),
+            Some(&Some("true".to_string())),
+            "explicit typed git-push authorization must survive cgroup wrapping"
+        );
+        assert_eq!(
+            env.get(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY),
+            Some(&None),
+            "internal git-push marker must remain stripped"
+        );
     }
 }

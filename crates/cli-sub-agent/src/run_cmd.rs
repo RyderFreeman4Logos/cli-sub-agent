@@ -164,6 +164,7 @@ impl SubagentRunConfig {
             false,
             false,
             false,
+            false,
             Vec::new(),
             Vec::new(),
             self.startup_env,

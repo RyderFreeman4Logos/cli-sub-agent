@@ -131,15 +131,11 @@ impl ClaudeCodeCliTransport {
         session: Option<&MetaSessionState>,
         resume_session_id: Option<&str>,
         extra_env: Option<&HashMap<String, String>>,
-        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        trust: CommandTrustOptions<'_>,
     ) -> Command {
+        let (subtree_pin, allow_git_push) = trust;
         let mut cmd = Command::new(self.executor.executable_name());
         cmd.current_dir(work_dir);
-        // Mirror the env-stripping rule used by both the legacy CLI path and
-        // the ACP path so a CSA-spawned `claude` does not trip its own
-        // recursion guard or inherit lefthook bypass markers. The startup
-        // subtree contract is scrubbed through csa_core so a generic env map
-        // can never set it; only the fresh session env and trusted pin below may.
         for var in CLI_TRANSPORT_STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
@@ -158,12 +154,14 @@ impl ClaudeCodeCliTransport {
         if let Some(session) = session {
             inject_cli_session_env(&mut cmd, session);
         }
-        // #1741: apply CSA's trusted subtree pin LAST (after the generic merge,
-        // which stripped the pin keys) — the only writer of the pin keys here.
+        // #1741: apply CSA's trusted subtree pin after generic env merge.
         if let Some(pin) = subtree_pin {
             for (key, value) in pin.pin_env_entries() {
                 cmd.env(key, value);
             }
+        }
+        if allow_git_push {
+            cmd.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
         }
         for arg in Self::build_argv(&self.executor, prompt, resume_session_id) {
             cmd.arg(arg);
@@ -181,7 +179,7 @@ impl ClaudeCodeCliTransport {
             request.session,
             request.resume_session_id,
             request.extra_env,
-            request.subtree_pin,
+            (request.subtree_pin, request.allow_git_push),
         );
         // Mirror `LegacyTransport::execute_single_attempt` (transport.rs L313):
         // route every spawn through `spawn_tool_sandboxed` so cgroup/bwrap/
@@ -229,6 +227,8 @@ impl ClaudeCodeCliTransport {
     }
 }
 
+type CommandTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool);
+
 /// Single-attempt execution request for [`ClaudeCodeCliTransport::execute_once`].
 ///
 /// Grouping the parameters into a struct keeps the call sites readable (the
@@ -241,6 +241,7 @@ struct ExecuteOnceRequest<'a> {
     resume_session_id: Option<&'a str>,
     extra_env: Option<&'a HashMap<String, String>>,
     subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     initial_response_timeout: ResolvedTimeout,
@@ -300,6 +301,7 @@ impl Transport for ClaudeCodeCliTransport {
             resume_session_id,
             extra_env,
             subtree_pin: options.subtree_pin.as_ref(),
+            allow_git_push: options.allow_git_push,
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
             initial_response_timeout: options.initial_response_timeout,
@@ -316,6 +318,7 @@ impl Transport for ClaudeCodeCliTransport {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -327,6 +330,7 @@ impl Transport for ClaudeCodeCliTransport {
             resume_session_id: None,
             extra_env,
             subtree_pin,
+            allow_git_push,
             stream_mode,
             idle_timeout_seconds,
             initial_response_timeout,
@@ -412,20 +416,16 @@ fn claude_model_args(executor: &Executor) -> Vec<String> {
     out
 }
 
-/// Environment variable strip list for the CLI transport.
-///
-/// Identical to `Executor::STRIPPED_ENV_VARS`; replicated here because that
-/// constant is `pub(crate)` to `csa-executor::executor` and we don't want a
-/// cross-module dependency for two strings.  Out of scope for Phase 3 but
-/// flagged for Phase 5: consolidate into a single workspace-level list. The
-/// startup subtree contract is scrubbed through `csa_core::env` so the key list
-/// has one source of truth (#1750).
+/// Env strip list for the CLI transport. Mirrors `Executor::STRIPPED_ENV_VARS`;
+/// startup subtree keys are scrubbed through `csa_core::env` (#1750).
 const CLI_TRANSPORT_STRIPPED_ENV_VARS: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
     "CSA_DAEMON_SESSION_DIR",
+    csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY,
+    csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY,
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
 ];
 

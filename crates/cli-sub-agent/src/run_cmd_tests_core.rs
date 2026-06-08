@@ -434,6 +434,25 @@ fn test_cli_no_hook_bypass_scan_flag_parses() {
 }
 
 #[test]
+fn test_cli_allow_git_push_flag_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--allow-git-push", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { allow_git_push, .. } => {
+            assert!(allow_git_push);
+        }
+        _ => panic!("expected Run command"),
+    }
+
+    let cli_default = try_parse_cli(&["csa", "run", "prompt"]).unwrap();
+    match cli_default.command {
+        crate::cli::Commands::Run { allow_git_push, .. } => {
+            assert!(!allow_git_push);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
 fn test_cli_no_preflight_flag_parses() {
     let cli = try_parse_cli(&["csa", "run", "--no-preflight", "prompt"]).unwrap();
     match cli.command {

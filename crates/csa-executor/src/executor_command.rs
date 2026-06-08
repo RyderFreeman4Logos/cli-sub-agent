@@ -36,6 +36,25 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
     ) -> (Command, Option<Vec<u8>>) {
+        self.build_command_with_git_push_allowed(
+            prompt,
+            tool_state,
+            session,
+            extra_env,
+            subtree_pin,
+            false,
+        )
+    }
+
+    pub(crate) fn build_command_with_git_push_allowed(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
+    ) -> (Command, Option<Vec<u8>>) {
         // Prepend CSA identity preamble for claude-code (#1397).
         let preamble_buf;
         let prompt = match self {
@@ -58,6 +77,7 @@ impl Executor {
         // merge (which stripped the pin keys). This is the only writer of the
         // pin keys, so user/request/config env can never spoof a pin.
         executor_env::apply_subtree_pin(&mut cmd, subtree_pin);
+        executor_env::apply_git_push_authorization(&mut cmd, allow_git_push);
         executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(Path::new(&session.project_path)));
@@ -83,12 +103,30 @@ impl Executor {
     /// `subtree_pin` carries CSA's authoritative subtree model pin (#1741) and
     /// is applied LAST (after the generic `extra_env` merge, which strips the
     /// pin keys) so it is the sole, unforgeable writer of those keys.
+    #[cfg(test)]
     pub(crate) fn build_execute_in_command(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+    ) -> (Command, Option<Vec<u8>>) {
+        self.build_execute_in_command_with_git_push_allowed(
+            prompt,
+            work_dir,
+            extra_env,
+            subtree_pin,
+            false,
+        )
+    }
+
+    pub(crate) fn build_execute_in_command_with_git_push_allowed(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
     ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
@@ -106,6 +144,7 @@ impl Executor {
         // #1741: apply CSA's trusted subtree pin LAST (after the generic merge,
         // which stripped the pin keys) — the only writer of the pin keys.
         executor_env::apply_subtree_pin(&mut cmd, subtree_pin);
+        executor_env::apply_git_push_authorization(&mut cmd, allow_git_push);
         executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(work_dir));

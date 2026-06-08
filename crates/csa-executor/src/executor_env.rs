@@ -17,6 +17,8 @@ pub const STRIPPED_ENV_VARS: &[&str] = &[
     "LEFTHOOK",
     "LEFTHOOK_SKIP",
     "CSA_DAEMON_SESSION_DIR",
+    csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY,
+    csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY,
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
 ];
 
@@ -33,6 +35,20 @@ pub(crate) fn apply_subtree_pin(cmd: &mut Command, pin: Option<&csa_core::env::S
         for (key, value) in pin.pin_env_entries() {
             cmd.env(key, value);
         }
+    }
+}
+
+/// Apply CSA's explicit `git push` authorization to a child command.
+///
+/// Generic env maps and inherited process env are never trusted for this
+/// authorization. Call after generic env injection so the typed decision is the
+/// final writer of the leaf-tool contract key.
+pub(crate) fn apply_git_push_authorization(cmd: &mut Command, allow_git_push: bool) {
+    for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    if allow_git_push {
+        cmd.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
     }
 }
 

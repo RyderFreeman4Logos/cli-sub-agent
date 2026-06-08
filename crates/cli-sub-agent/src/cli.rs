@@ -240,6 +240,10 @@ pub enum Commands {
         #[arg(long)]
         require_commit: bool,
 
+        /// Permit git push.
+        #[arg(long)]
+        allow_git_push: bool,
+
         /// Path to agent-spec file (.spec or .toml) for contract-based verification
         #[arg(long, value_name = "PATH", value_parser = parse_spec_path_arg)]
         spec: Option<String>,

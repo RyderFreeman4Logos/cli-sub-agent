@@ -256,6 +256,14 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
         csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
         "99".to_string(),
     );
+    env_overrides.insert(
+        csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY.to_string(),
+        "true".to_string(),
+    );
+    env_overrides.insert(
+        csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY.to_string(),
+        "true".to_string(),
+    );
     let plan = IsolationPlan {
         resource: ResourceCapability::None,
         filesystem: FilesystemCapability::Bwrap,
@@ -286,6 +294,14 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
                 .windows(3)
                 .any(|window| window[0] == "--setenv" && window[1] == *key),
             "bwrap --setenv must not pass subtree-contract key {key}; args: {args:?}"
+        );
+    }
+    for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+        assert!(
+            !args
+                .windows(3)
+                .any(|window| window[0] == "--setenv" && window[1] == *key),
+            "bwrap --setenv must not pass git-push authorization key {key}; args: {args:?}"
         );
     }
 }
