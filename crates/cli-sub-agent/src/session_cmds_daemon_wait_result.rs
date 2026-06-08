@@ -10,9 +10,7 @@ pub(super) fn suppress_pending_tier_failover_result(
     session_dir: &Path,
     result: csa_session::SessionResult,
 ) -> Option<csa_session::SessionResult> {
-    if crate::session_tier_failover::is_pending_tier_failover_handoff(session_dir, &result)
-        || is_probable_pending_tier_failover_failure(session_dir, &result)
-    {
+    if crate::session_tier_failover::is_pending_tier_failover_handoff(session_dir, &result) {
         tracing::debug!(
             session_id,
             status = %result.status,
@@ -22,36 +20,6 @@ pub(super) fn suppress_pending_tier_failover_result(
     } else {
         Some(result)
     }
-}
-
-fn is_probable_pending_tier_failover_failure(
-    session_dir: &Path,
-    result: &csa_session::SessionResult,
-) -> bool {
-    result.status == "failure"
-        && result.exit_code != 0
-        && result.tool == "gemini-cli"
-        && result.summary.to_ascii_lowercase().contains("status: 400")
-        && session_has_review_tier_context(session_dir)
-        && tier_failover_handoff_has_liveness(session_dir)
-}
-
-fn session_has_review_tier_context(session_dir: &Path) -> bool {
-    let state_path = session_dir.join("state.toml");
-    let Ok(contents) = fs::read_to_string(state_path) else {
-        return false;
-    };
-    let Ok(session) = toml::from_str::<csa_session::MetaSessionState>(&contents) else {
-        return false;
-    };
-    session.task_context.task_type.as_deref() == Some("reviewer_sub_session")
-        && session.task_context.tier_name.is_some()
-}
-
-fn tier_failover_handoff_has_liveness(session_dir: &Path) -> bool {
-    csa_process::ToolLiveness::has_live_process(session_dir)
-        || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
-        || csa_process::ToolLiveness::is_alive(session_dir)
 }
 
 fn load_completed_daemon_result(

@@ -258,7 +258,7 @@ fn handle_session_wait_ignores_tier_failover_superseded_result_while_liveness_pr
 }
 
 #[test]
-fn handle_session_wait_does_not_terminalize_gemini_failure_during_tier_fallback_handoff() {
+fn handle_session_wait_terminalizes_last_candidate_gemini_failure() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -282,18 +282,14 @@ fn handle_session_wait_does_not_terminalize_gemini_failure_during_tier_fallback_
     };
     save_session(&session_state).unwrap();
     let session_dir = get_session_dir(project, &session_id).unwrap();
-    save_result(
-        project,
-        &session_id,
-        &SessionResult {
-            status: "failure".to_string(),
-            exit_code: 1,
-            summary: "status: 400".to_string(),
-            tool: "gemini-cli".to_string(),
-            ..make_result("failure", 1)
-        },
-    )
-    .unwrap();
+    let terminal_result = SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "status: 400".to_string(),
+        tool: "gemini-cli".to_string(),
+        ..make_result("failure", 1)
+    };
+    save_result(project, &session_id, &terminal_result).unwrap();
     std::fs::write(
         session_dir.join("daemon-completion.toml"),
         "exit_code = 1\nstatus = \"failure\"\n",
@@ -305,7 +301,7 @@ fn handle_session_wait_does_not_terminalize_gemini_failure_during_tier_fallback_
     )
     .unwrap();
 
-    let mut emitted_completion = false;
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
     let exit_code = handle_session_wait_with_hooks(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
@@ -323,18 +319,19 @@ fn handle_session_wait_does_not_terminalize_gemini_failure_during_tier_fallback_
                 synthetic: false,
             })
         },
-        |_sid: &str, _status: &str, _exit_code, _synthetic, _mirror_to_stdout| {
-            emitted_completion = true;
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
         },
     )
     .unwrap();
 
     assert_eq!(
-        exit_code, 0,
-        "Gemini failure must stay nonterminal while tier fallback handoff is live"
+        exit_code, 1,
+        "last-candidate Gemini failure must return the terminal result exit code"
     );
-    assert!(
-        !emitted_completion,
-        "pending fallback handoff must not emit terminal wait completion"
+    assert_eq!(
+        emitted_completion,
+        Some((session_id, "failure".to_string(), 1, false)),
+        "last-candidate Gemini failure must emit terminal wait completion"
     );
 }
