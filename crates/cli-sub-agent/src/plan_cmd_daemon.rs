@@ -11,9 +11,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
-use csa_session::{
-    MetaSessionState, PhaseEvent, SessionArtifact, SessionResult, save_result, save_session,
-};
+use csa_session::{SessionResult, save_result};
 use tracing::warn;
 
 use crate::cli::PlanCommands;
@@ -27,6 +25,12 @@ use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
 const PLAN_PIPELINE_SOURCE_ENV: &str = "CSA_PLAN_PIPELINE_SOURCE";
+
+#[path = "plan_cmd_daemon_session.rs"]
+mod daemon_session;
+use daemon_session::{
+    describe_plan_run, mark_session_as_plan, persist_placeholder_plan_session, retire_plan_session,
+};
 
 pub(crate) struct PlanRunDispatchInput {
     pub foreground: bool,
@@ -353,10 +357,27 @@ pub(crate) async fn handle_plan_run_daemon_child(
     let completed_at = Utc::now();
     let exit_code = if result.is_ok() { 0 } else { 1 };
     let status = SessionResult::status_from_exit_code(exit_code);
+    let failure_report = plan_cmd::plan_cmd_failure::report_from_error(result.as_ref().err());
+    if let Some(report) = &failure_report
+        && let Err(err) = plan_cmd::plan_cmd_failure::persist_report_for_session(
+            &project_root,
+            session_id,
+            report,
+        )
+    {
+        warn!(
+            session_id = %session_id,
+            error = %err,
+            "Failed to write plan failure structured output",
+        );
+    }
     let summary = match &result {
         Ok(()) => format!("plan complete: {workflow_label}"),
         Err(err) => {
-            let mut text = format!("plan failed: {workflow_label}: {err}");
+            let mut text = failure_report
+                .as_ref()
+                .map(|report| report.summary_line(&workflow_label))
+                .unwrap_or_else(|| format!("plan failed: {workflow_label}: {err}"));
             text.truncate(
                 text.char_indices()
                     .nth(200)
@@ -379,7 +400,10 @@ pub(crate) async fn handle_plan_run_daemon_child(
         started_at,
         completed_at,
         events_count: 0,
-        artifacts: vec![SessionArtifact::new(workflow_label.clone())],
+        artifacts: plan_cmd::plan_cmd_failure::session_artifacts(
+            &workflow_label,
+            failure_report.as_ref(),
+        ),
         ..Default::default()
     };
     if let Err(save_err) = save_result(&project_root, session_id, &session_result) {
@@ -477,88 +501,6 @@ fn establish_foreground_plan_session(
         startup_env,
         minted_session_id: Some(session_id),
     })
-}
-
-fn describe_plan_run(args: &PlanRunArgs) -> String {
-    if let Some(name) = &args.pattern {
-        format!("plan: {name}")
-    } else if let Some(file) = &args.file {
-        format!("plan: {file}")
-    } else if let Some(resume) = &args.resume {
-        format!("plan: --resume {resume}")
-    } else {
-        "plan: (unknown workflow)".to_string()
-    }
-}
-
-fn persist_placeholder_plan_session(
-    project_root: &Path,
-    session_dir: &Path,
-    session_id: &str,
-    description: &str,
-) -> Result<()> {
-    let mut state = csa_session::create_session_with_daemon_env(
-        project_root,
-        Some(description),
-        None,
-        None,
-        Some(session_id),
-        Some(session_dir),
-        Some(project_root),
-    )?;
-    anyhow::ensure!(
-        state.meta_session_id == session_id,
-        "daemon placeholder session id mismatch: requested {session_id}, persisted {}",
-        state.meta_session_id
-    );
-    state.task_context.task_type = Some(PLAN_TASK_TYPE.to_string());
-    if let Err(err) = save_session(&state) {
-        warn!(
-            session_id = %session_id,
-            error = %err,
-            "Failed to persist task_type=plan on placeholder session",
-        );
-    }
-    Ok(())
-}
-
-fn mark_session_as_plan(project_root: &Path, session_id: &str, description: &str) -> Result<()> {
-    let mut session = csa_session::load_session(project_root, session_id)?;
-    let mut changed = false;
-    if session.task_context.task_type.as_deref() != Some(PLAN_TASK_TYPE) {
-        session.task_context.task_type = Some(PLAN_TASK_TYPE.to_string());
-        changed = true;
-    }
-    if session
-        .description
-        .as_deref()
-        .map(str::is_empty)
-        .unwrap_or(true)
-    {
-        session.description = Some(description.to_string());
-        changed = true;
-    }
-    if changed {
-        save_session(&session)?;
-    }
-    Ok(())
-}
-
-fn retire_plan_session(project_root: &Path, session_id: &str) -> Result<()> {
-    let mut session: MetaSessionState = csa_session::load_session(project_root, session_id)?;
-    session.last_accessed = Utc::now();
-    if session.phase != csa_session::SessionPhase::Retired
-        && session.apply_phase_event(PhaseEvent::Retired).is_err()
-    {
-        // From Available the transition is also valid; log and continue if unexpected.
-        warn!(
-            session_id = %session_id,
-            current_phase = ?session.phase,
-            "Could not transition plan session to Retired",
-        );
-    }
-    save_session(&session)?;
-    Ok(())
 }
 
 /// Input snapshot for [`decide_needs_foreground`]. Bundling these into a
