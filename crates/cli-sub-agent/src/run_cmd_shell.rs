@@ -253,18 +253,78 @@ fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
 }
 
 fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
-    let idx = skip_command_prefix_tokens(tokens, 0);
-    if idx + 2 >= tokens.len() {
+    let mut idx = skip_command_prefix_tokens(tokens, 0);
+    if idx >= tokens.len() {
         return None;
     }
     if !is_shell_token(tokens[idx].as_str()) {
         return None;
     }
-    let shell_flag = tokens[idx + 1].as_str();
-    if !shell_flag.starts_with('-') || !shell_flag.contains('c') {
-        return None;
+    idx += 1;
+
+    while idx < tokens.len() {
+        let shell_flag = tokens[idx].as_str();
+        if shell_flag == "--" || !is_shell_option_token(shell_flag) {
+            return None;
+        }
+        if shell_option_enables_c_payload(shell_flag) {
+            return (idx + 1 < tokens.len()).then_some(&tokens[idx + 1..]);
+        }
+
+        idx += 1;
+        if shell_option_consumes_value(shell_flag) && idx < tokens.len() {
+            idx += 1;
+        }
     }
-    Some(&tokens[idx + 2..])
+
+    None
+}
+
+fn is_shell_option_token(token: &str) -> bool {
+    token.len() > 1 && (token.starts_with('-') || token.starts_with('+'))
+}
+
+fn shell_option_enables_c_payload(token: &str) -> bool {
+    if token == "-c" || token == "--command" {
+        return true;
+    }
+    if !token.starts_with('-') || token.starts_with("--") {
+        return false;
+    }
+
+    for flag in token[1..].chars() {
+        if flag == 'c' {
+            return true;
+        }
+        if shell_short_option_consumes_value(flag) {
+            return false;
+        }
+    }
+
+    false
+}
+
+fn shell_option_consumes_value(token: &str) -> bool {
+    if token.starts_with("--") {
+        return shell_long_option_consumes_value(token) && !token.contains('=');
+    }
+
+    let mut chars = token[1..].chars().peekable();
+    while let Some(flag) = chars.next() {
+        if shell_short_option_consumes_value(flag) {
+            return chars.peek().is_none();
+        }
+    }
+
+    false
+}
+
+fn shell_short_option_consumes_value(flag: char) -> bool {
+    matches!(flag, 'o' | 'O')
+}
+
+fn shell_long_option_consumes_value(token: &str) -> bool {
+    matches!(token, "--init-file" | "--rcfile" | "--emulate")
 }
 
 fn locate_git_hook_relevant_command(tokens: &[String]) -> Option<(usize, usize)> {
