@@ -22,6 +22,7 @@ pub(super) struct AttemptPromptRequest<'a> {
     pub(super) prompt_text: &'a str,
     pub(super) failover_context_addendum: Option<&'a str>,
     pub(super) fork_call: bool,
+    pub(super) allow_git_push: bool,
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) startup_env: &'a StartupSubtreeEnv,
 }
@@ -37,6 +38,21 @@ pub(super) fn build_attempt_prompt(request: AttemptPromptRequest<'_>) -> Attempt
         request.tool_name,
         ExecutionEnvOptions::from_no_failover(request.no_failover),
     );
+    if let Some(env) = extra_env.as_mut() {
+        env.remove(crate::pipeline_env::CSA_GIT_PUSH_ALLOWED_ENV);
+        env.remove(crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV);
+    }
+    if request.allow_git_push {
+        let env = extra_env.get_or_insert_with(HashMap::new);
+        env.insert(
+            crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV.to_string(),
+            "true".to_string(),
+        );
+        env.insert(
+            crate::pipeline_env::CSA_GIT_PUSH_ALLOWED_ENV.to_string(),
+            "true".to_string(),
+        );
+    }
     crate::build_jobs_env::apply_build_jobs_env(&mut extra_env, request.build_jobs);
     crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
 
@@ -79,6 +95,11 @@ pub(super) fn build_attempt_prompt(request: AttemptPromptRequest<'_>) -> Attempt
         && let Some(instructions) = structured_output_instructions_for_fork_call(true)
     {
         effective_prompt.push_str(instructions);
+    }
+    if !request.allow_git_push {
+        effective_prompt = format!(
+            "<git-push-guard>\nDo not run `git push` or otherwise publish commits from this `csa run` session. The caller did not pass `--allow-git-push`; leave any push to the explicit push gate.\n</git-push-guard>\n\n{effective_prompt}"
+        );
     }
     if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard(
         request.config,

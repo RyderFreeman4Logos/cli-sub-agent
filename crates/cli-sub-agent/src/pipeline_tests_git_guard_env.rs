@@ -67,10 +67,30 @@ fn build_merged_env_propagates_pattern_internal_marker_to_leaf_tool() {
 }
 
 #[test]
-fn build_merged_env_allows_git_push_only_for_sa_mode() {
+fn build_merged_env_denies_git_push_for_sa_mode_without_explicit_authorization() {
     let cfg = test_config();
-    let allowed = crate::pipeline_env::build_merged_env(
+    let denied = crate::pipeline_env::build_merged_env(
         None,
+        Some(&cfg),
+        None,
+        "claude-code",
+        0,
+        false,
+        true,
+    );
+
+    assert!(!denied.contains_key("CSA_GIT_PUSH_ALLOWED"));
+}
+
+#[test]
+fn build_merged_env_allows_git_push_with_explicit_authorization() {
+    let cfg = test_config();
+    let extra_env = HashMap::from([(
+        crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV.to_string(),
+        "true".to_string(),
+    )]);
+    let allowed = crate::pipeline_env::build_merged_env(
+        Some(&extra_env),
         Some(&cfg),
         None,
         "claude-code",
@@ -82,6 +102,10 @@ fn build_merged_env_allows_git_push_only_for_sa_mode() {
     assert_eq!(
         allowed.get("CSA_GIT_PUSH_ALLOWED").map(String::as_str),
         Some("true")
+    );
+    assert!(
+        !allowed.contains_key(crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV),
+        "internal authorization marker must not leak to tool env"
     );
 }
 

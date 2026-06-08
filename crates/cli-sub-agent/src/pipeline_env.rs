@@ -4,6 +4,9 @@ use std::path::Path;
 use csa_config::ProjectConfig;
 use tracing::info;
 
+pub(crate) const CSA_GIT_PUSH_ALLOWED_ENV: &str = "CSA_GIT_PUSH_ALLOWED";
+pub(crate) const CSA_RUN_GIT_PUSH_AUTHORIZED_ENV: &str = "CSA_RUN_GIT_PUSH_AUTHORIZED";
+
 /// Resolve effective cooldown seconds from config or default.
 pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
@@ -18,7 +21,7 @@ pub(crate) fn build_merged_env(
     tool_name: &str,
     current_depth: u32,
     pattern_internal: bool,
-    sa_mode: bool,
+    _sa_mode: bool,
 ) -> HashMap<String, String> {
     let suppress = config
         .map(|c| c.should_suppress_notify(tool_name))
@@ -81,10 +84,13 @@ pub(crate) fn build_merged_env(
             "1".to_string(),
         );
     }
-    if sa_mode {
-        merged_env.insert("CSA_GIT_PUSH_ALLOWED".to_string(), "true".to_string());
+    let run_authorized_git_push = merged_env
+        .remove(CSA_RUN_GIT_PUSH_AUTHORIZED_ENV)
+        .is_some_and(|value| value == "true");
+    if run_authorized_git_push {
+        merged_env.insert(CSA_GIT_PUSH_ALLOWED_ENV.to_string(), "true".to_string());
     } else {
-        merged_env.remove("CSA_GIT_PUSH_ALLOWED");
+        merged_env.remove(CSA_GIT_PUSH_ALLOWED_ENV);
     }
 
     merged_env

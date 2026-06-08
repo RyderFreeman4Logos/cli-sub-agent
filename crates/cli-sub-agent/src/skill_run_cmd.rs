@@ -102,6 +102,7 @@ pub(crate) async fn handle_skill_run(
         no_preflight: false,
         no_post_exec_gate: false,
         require_commit: false,
+        allow_git_push: false,
         extra_writable: vec![],
         extra_readable: vec![],
         startup_env,

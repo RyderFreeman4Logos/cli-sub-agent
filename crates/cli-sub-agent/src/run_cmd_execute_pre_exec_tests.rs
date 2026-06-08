@@ -123,6 +123,7 @@ async fn run_preflight_fixture(project_root: &Path, no_preflight: bool) -> anyho
         no_preflight,
         false,
         false,
+        false,
         Vec::new(),
         Vec::new(),
         crate::startup_env::StartupSubtreeEnv::default(),
@@ -186,6 +187,7 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
         false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // no_hook_bypass_scan (#1824)
+        false,
         false,
         false,
         false,
@@ -320,6 +322,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         true,
         false,
         false,
+        false,
         Vec::new(),
         Vec::new(),
         crate::startup_env::StartupSubtreeEnv::default(),
@@ -398,6 +401,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // no_hook_bypass_scan (#1824)
+        false,
         false,
         false,
         false,

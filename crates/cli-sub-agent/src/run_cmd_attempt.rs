@@ -250,6 +250,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             prompt_text: request.prompt_text,
             failover_context_addendum: failover_context_addendum.as_deref(),
             fork_call: request.fork_call,
+            allow_git_push: request.allow_git_push,
             config: request.config,
             startup_env: request.startup_env,
         });
@@ -550,6 +551,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     })))
 }
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_git_push_tests.rs"]
+mod git_push_tests;
 #[cfg(test)]
 #[path = "run_cmd_attempt_http_failover_tests.rs"]
 mod http_failover_tests;
