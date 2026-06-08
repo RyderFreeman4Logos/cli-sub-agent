@@ -43,28 +43,27 @@ pub(crate) fn persist_spawn_memory_projection(
 }
 
 fn update_spawn_memory_projection(session: &mut MetaSessionState, projected_spawn_mb: u64) -> bool {
-    let projected = Some(projected_spawn_mb);
-    match session.sandbox_info.as_mut() {
-        Some(info) if info.memory_max_mb == projected => {
-            session.last_accessed = Utc::now();
-            true
-        }
-        Some(info) => {
-            info.memory_max_mb = projected;
-            session.last_accessed = Utc::now();
-            true
-        }
-        None => {
-            session.sandbox_info = Some(SandboxInfo {
-                mode: PRE_SPAWN_ADMISSION_MODE.to_string(),
-                memory_max_mb: projected,
-                filesystem_mode: None,
-                readonly_project_root: None,
-            });
-            session.last_accessed = Utc::now();
-            true
-        }
+    session.sandbox_info = Some(SandboxInfo {
+        mode: PRE_SPAWN_ADMISSION_MODE.to_string(),
+        memory_max_mb: Some(projected_spawn_mb),
+        filesystem_mode: None,
+        readonly_project_root: None,
+    });
+    session.last_accessed = Utc::now();
+    true
+}
+
+pub(crate) fn clear_spawn_memory_projection(session: &mut MetaSessionState) -> bool {
+    if session
+        .sandbox_info
+        .as_ref()
+        .is_none_or(|info| info.mode != PRE_SPAWN_ADMISSION_MODE)
+    {
+        return false;
     }
+
+    session.sandbox_info = None;
+    true
 }
 
 pub(crate) fn build_spawn_memory_admission(
@@ -167,6 +166,14 @@ fn recent_pending_projection_mb(
     now: DateTime<Utc>,
     sandbox_projection: Option<u64>,
 ) -> u64 {
+    if session
+        .sandbox_info
+        .as_ref()
+        .is_none_or(|sandbox| sandbox.mode != PRE_SPAWN_ADMISSION_MODE)
+    {
+        return 0;
+    }
+
     let age = now.signed_duration_since(session.last_accessed);
     if age <= TimeDelta::seconds(RECENT_ACTIVE_FALLBACK_WINDOW_SECS) {
         sandbox_projection.unwrap_or(RECENT_ACTIVE_FALLBACK_PROJECTION_MB)
@@ -236,6 +243,25 @@ mod tests {
         }
     }
 
+    fn admission_session(
+        id: &str,
+        last_accessed: DateTime<Utc>,
+        memory_max_mb: Option<u64>,
+    ) -> MetaSessionState {
+        MetaSessionState {
+            meta_session_id: id.to_string(),
+            phase: SessionPhase::Active,
+            last_accessed,
+            sandbox_info: Some(SandboxInfo {
+                mode: PRE_SPAWN_ADMISSION_MODE.to_string(),
+                memory_max_mb,
+                filesystem_mode: None,
+                readonly_project_root: None,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn spawn_projection_uses_configured_tool_limit() {
         let cfg: ProjectConfig =
@@ -275,7 +301,7 @@ mod tests {
     #[test]
     fn active_memory_adds_recent_pending_sandbox_projection_without_rss() {
         let now = Utc::now();
-        let sessions = vec![active_session(
+        let sessions = vec![admission_session(
             "pending",
             now - TimeDelta::minutes(2),
             Some(12_288),
@@ -291,13 +317,11 @@ mod tests {
     #[test]
     fn active_memory_uses_fallback_for_recent_pending_without_sandbox_projection() {
         let now = Utc::now();
-        let sessions = vec![MetaSessionState {
-            meta_session_id: "pending".to_string(),
-            phase: SessionPhase::Active,
-            last_accessed: now - TimeDelta::minutes(2),
-            sandbox_info: None,
-            ..Default::default()
-        }];
+        let sessions = vec![admission_session(
+            "pending",
+            now - TimeDelta::minutes(2),
+            None,
+        )];
 
         let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
 
@@ -307,20 +331,29 @@ mod tests {
     }
 
     #[test]
+    fn active_memory_ignores_recent_runtime_session_without_live_signal() {
+        let now = Utc::now();
+        let sessions = vec![active_session(
+            "completed",
+            now - TimeDelta::minutes(2),
+            Some(12_288),
+        )];
+
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
+
+        assert_eq!(memory.active_count, 0);
+        assert_eq!(memory.sampled_count, 0);
+        assert_eq!(memory.projected_mb, 0);
+    }
+
+    #[test]
     fn active_memory_ignores_old_pending_session_without_live_signal() {
         let now = Utc::now();
-        let sessions = vec![MetaSessionState {
-            meta_session_id: "old".to_string(),
-            phase: SessionPhase::Active,
-            last_accessed: now - TimeDelta::hours(2),
-            sandbox_info: Some(SandboxInfo {
-                mode: "cgroup".to_string(),
-                memory_max_mb: Some(12_288),
-                filesystem_mode: None,
-                readonly_project_root: None,
-            }),
-            ..Default::default()
-        }];
+        let sessions = vec![admission_session(
+            "old",
+            now - TimeDelta::hours(2),
+            Some(12_288),
+        )];
 
         let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
 
@@ -349,13 +382,27 @@ mod tests {
     fn balloon_count_ignores_stale_active_without_live_signal() {
         let now = Utc::now();
         let sessions = vec![
-            active_session("recent", now - TimeDelta::minutes(2), Some(4096)),
-            active_session("old", now - TimeDelta::hours(2), Some(4096)),
+            admission_session("recent", now - TimeDelta::minutes(2), Some(4096)),
+            admission_session("old", now - TimeDelta::hours(2), Some(4096)),
         ];
 
         let count = count_observable_active_sessions(&sessions, "current", now, |_| None);
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn balloon_count_ignores_recent_runtime_active_without_live_signal() {
+        let now = Utc::now();
+        let sessions = vec![active_session(
+            "completed",
+            now - TimeDelta::minutes(2),
+            Some(4096),
+        )];
+
+        let count = count_observable_active_sessions(&sessions, "current", now, |_| None);
+
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -382,6 +429,36 @@ mod tests {
         assert!(
             session.last_accessed > old,
             "unchanged pre-spawn projection must still refresh the pending-start window"
+        );
+        let info = session
+            .sandbox_info
+            .as_ref()
+            .expect("projection should stay recorded");
+        assert_eq!(info.mode, PRE_SPAWN_ADMISSION_MODE);
+        assert_eq!(info.filesystem_mode, None);
+        assert_eq!(info.readonly_project_root, None);
+    }
+
+    #[test]
+    fn clear_spawn_projection_removes_admission_marker() {
+        let now = Utc::now();
+        let mut session = admission_session("pending", now, Some(12_288));
+
+        assert!(clear_spawn_memory_projection(&mut session));
+
+        assert_eq!(session.sandbox_info, None);
+    }
+
+    #[test]
+    fn clear_spawn_projection_preserves_runtime_sandbox_info() {
+        let now = Utc::now();
+        let mut session = active_session("completed", now, Some(12_288));
+
+        assert!(!clear_spawn_memory_projection(&mut session));
+
+        assert_eq!(
+            session.sandbox_info.as_ref().map(|info| info.mode.as_str()),
+            Some("cgroup")
         );
     }
 }

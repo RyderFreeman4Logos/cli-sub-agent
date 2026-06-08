@@ -125,15 +125,19 @@ pub(super) fn persist_pipeline_pre_exec_failure(
     termination_reason: Option<&str>,
 ) -> anyhow::Error {
     write_pre_exec_error_result(project_root, &session.meta_session_id, tool_name, &err);
+    let cleared_admission_projection =
+        crate::resource_admission::clear_spawn_memory_projection(session);
     if let Some(reason) = termination_reason {
         session.termination_reason = Some(reason.to_string());
+    }
+    if termination_reason.is_some() || cleared_admission_projection {
         session.last_accessed = chrono::Utc::now();
         if let Err(save_err) = save_session(session) {
             warn!(
                 session = %session.meta_session_id,
                 error = %save_err,
-                termination_reason = reason,
-                "Failed to persist pre-exec termination reason"
+                termination_reason = ?termination_reason,
+                "Failed to persist pre-exec failure session state"
             );
         }
     }

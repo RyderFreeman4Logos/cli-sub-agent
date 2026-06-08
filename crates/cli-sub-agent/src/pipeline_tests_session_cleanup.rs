@@ -344,6 +344,10 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
     let session_id = &sessions[0].meta_session_id;
     let session = csa_session::load_session(project_root, session_id).expect("load session");
     assert_eq!(session.termination_reason.as_deref(), Some("low_memory"));
+    assert_eq!(
+        session.sandbox_info, None,
+        "pre-spawn failure must clear the transient admission marker"
+    );
 
     let result = csa_session::load_result(project_root, session_id)
         .expect("load result")

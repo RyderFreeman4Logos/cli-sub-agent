@@ -26,7 +26,7 @@ impl SessionTreeMemorySampler {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (project_root, session_id);
-            return Ok(Self {});
+            return Err(unsupported_process_tree_memory());
         }
 
         #[cfg(target_os = "linux")]
@@ -52,7 +52,7 @@ impl SessionTreeMemorySampler {
     pub fn sample_rss_mb(&self) -> io::Result<u64> {
         #[cfg(not(target_os = "linux"))]
         {
-            return Ok(0);
+            return Err(unsupported_process_tree_memory());
         }
 
         #[cfg(target_os = "linux")]
@@ -77,13 +77,21 @@ pub fn session_tree_rss_mb(project_root: &Path, session_id: &str) -> io::Result<
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (project_root, session_id);
-        return Ok(0);
+        return Err(unsupported_process_tree_memory());
     }
 
     #[cfg(target_os = "linux")]
     {
         SessionTreeMemorySampler::new(project_root, session_id)?.sample_rss_mb()
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported_process_tree_memory() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "session process-tree memory sampling is only available on Linux",
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -178,6 +186,29 @@ fn read_vmrss_kib(pid: u32) -> Option<u64> {
 #[cfg(any(target_os = "linux", test))]
 fn bytes_to_mb_ceil(bytes: u64) -> u64 {
     bytes.saturating_add(BYTES_PER_MB - 1) / BYTES_PER_MB
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod non_linux_tests {
+    use super::*;
+
+    #[test]
+    fn sampler_reports_memory_sampling_unavailable() {
+        let err = match SessionTreeMemorySampler::new(Path::new("."), "session") {
+            Ok(_) => panic!("non-Linux sampler should be unavailable"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn one_shot_sampler_reports_memory_sampling_unavailable() {
+        let err = session_tree_rss_mb(Path::new("."), "session")
+            .expect_err("non-Linux one-shot sampler should be unavailable");
+
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    }
 }
 
 #[cfg(test)]
