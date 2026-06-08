@@ -126,6 +126,31 @@ fn prepend_review_context_to_prompt_skips_missing_artifacts() {
 }
 
 #[test]
+fn prepend_review_context_to_prompt_accepts_unique_session_prefix() {
+    let project_dir = tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R4";
+    let other_session_id = "01KBT6M5XG7V4M4M6YDRS7P8R5";
+    let session_dir = create_review_session(project_dir.path(), session_id);
+    create_review_session(project_dir.path(), other_session_id);
+    fs::write(
+        session_dir.join("output").join("summary.md"),
+        "Prefix summary\n",
+    )
+    .unwrap();
+
+    let prompt = prepend_review_context_to_prompt(
+        project_dir.path(),
+        "Fix the bug".to_string(),
+        Some("01KAS6M5XG7V4"),
+    )
+    .expect("unique review session prefix should resolve");
+
+    assert!(prompt.starts_with("<csa-review-context session=\"01KAS6M5XG7V4M4M6YDRS7P8R4\">\n"));
+    assert!(prompt.contains("<!-- summary.md -->\nPrefix summary\n"));
+}
+
+#[test]
 fn prepend_review_context_to_prompt_warns_and_leaves_prompt_unchanged_when_outputs_missing() {
     let project_dir = tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
@@ -151,6 +176,22 @@ fn prepend_review_context_to_prompt_warns_and_leaves_prompt_unchanged_when_outpu
     assert_eq!(prompt, "Fix the bug");
     assert!(buffer.contents().contains(
         "Inline review context requested but summary/details/findings artifacts were missing"
+    ));
+}
+
+#[test]
+fn prepend_review_context_to_prompt_rejects_malformed_full_session_id() {
+    let project_dir = tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let err = prepend_review_context_to_prompt(
+        project_dir.path(),
+        "Fix the bug".to_string(),
+        Some("!!!!!!!!!!!!!!!!!!!!!!!!!!"),
+    )
+    .expect_err("malformed full session id should fail");
+
+    assert!(err.to_string().contains(
+        "--inline-context-from-review-session: invalid session ID '!!!!!!!!!!!!!!!!!!!!!!!!!!'"
     ));
 }
 
@@ -197,19 +238,26 @@ fn cli_run_inline_context_from_review_session_accepts_ulid() {
 }
 
 #[test]
-fn cli_run_inline_context_from_review_session_rejects_non_ulid() {
-    let err = match Cli::try_parse_from([
+fn cli_run_inline_context_from_review_session_accepts_prefix() {
+    let cli = Cli::try_parse_from([
         "csa",
         "run",
         "--inline-context-from-review-session",
-        "not-a-ulid",
+        "01KAS6",
         "fix it",
-    ]) {
-        Ok(_) => panic!("non-ulid should be rejected"),
-        Err(err) => err,
-    };
+    ])
+    .expect("cli should parse a session prefix");
 
-    let rendered = err.to_string();
-    assert!(rendered.contains("--inline-context-from-review-session"));
-    assert!(rendered.contains("Invalid session ID"));
+    match cli.command {
+        Commands::Run {
+            inline_context_from_review_session,
+            ..
+        } => {
+            assert_eq!(
+                inline_context_from_review_session.as_deref(),
+                Some("01KAS6")
+            );
+        }
+        _ => panic!("expected run command"),
+    }
 }

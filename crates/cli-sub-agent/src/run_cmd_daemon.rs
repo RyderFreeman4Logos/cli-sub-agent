@@ -366,28 +366,32 @@ pub(crate) fn spawn_and_exit(
     // stdout: machine-readable session ID (for script capture).
     println!("{}", result.session_id);
     // stderr: structured RPJ directive for orchestrators.
-    // Include --cd <project_root> so cross-project callers can find the session.
-    let cd_hint = format!(" --cd '{}'", project_root.display());
+    let wait_cmd =
+        crate::daemon_caller_hints::format_session_wait_command(&result.session_id, &project_root);
+    let attach_cmd = crate::daemon_caller_hints::format_session_attach_command(
+        &result.session_id,
+        &project_root,
+    );
     eprintln!(
         "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
-         wait_cmd=\"csa session wait --session {id}{cd}\" \
-         attach_cmd=\"csa session attach --session {id}{cd}\" -->",
+         wait_cmd=\"{wait_cmd}\" \
+         attach_cmd=\"{attach_cmd}\" -->",
         id = result.session_id,
         pid = result.pid,
         dir = result.session_dir.display(),
-        cd = cd_hint,
+        wait_cmd = wait_cmd,
+        attach_cmd = attach_cmd,
     );
     eprintln!(
         "<!-- CSA:CALLER_HINT action=\"wait\" \
-         rule=\"Call 'csa session wait --session {id}{cd}' with run_in_background: true. \
+         rule=\"Call {wait_cmd} with run_in_background: true. \
          The task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top. \
          NEVER batch multiple waits in a for/while loop; use one backgrounded Bash tool call per session. \
          FORBIDDEN after backgrounding: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
          any manual polling wastes caller tokens with zero benefit. \
          FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
          suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
-        id = result.session_id,
-        cd = cd_hint,
+        wait_cmd = wait_cmd,
     );
     let codex_hint = crate::process_tree::codex_yield_hint();
     if !codex_hint.is_empty() {

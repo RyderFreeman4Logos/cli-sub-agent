@@ -99,7 +99,7 @@ pub enum Commands {
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
         /// Add prior review context to the prompt
-        #[arg(long, value_name = "SESSION_ID", value_parser = validate_ulid)]
+        #[arg(long, value_name = "SESSION")]
         inline_context_from_review_session: Option<String>,
         /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
         #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last", "fork_from_caller"])]

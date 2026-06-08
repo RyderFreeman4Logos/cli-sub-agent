@@ -12,15 +12,12 @@ pub(crate) fn prepend_review_context_to_prompt(
         return Ok(prompt);
     };
 
-    csa_session::validate_session_id(session_id).with_context(|| {
-        format!("--inline-context-from-review-session: invalid session ID '{session_id}'")
-    })?;
-
-    let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+    let resolved_session_id = resolve_review_session_id(project_root, session_id)?;
+    let session_dir = csa_session::get_session_dir(project_root, &resolved_session_id)?;
     if !session_dir.exists() {
         anyhow::bail!(
             "--inline-context-from-review-session: session {} not found",
-            session_id
+            resolved_session_id
         );
     }
 
@@ -38,8 +35,30 @@ pub(crate) fn prepend_review_context_to_prompt(
     }
 
     Ok(format_review_context_prompt(
-        session_id, &prompt, summary, details, findings,
+        &resolved_session_id,
+        &prompt,
+        summary,
+        details,
+        findings,
     ))
+}
+
+fn resolve_review_session_id(project_root: &Path, session_ref: &str) -> Result<String> {
+    if session_ref.is_empty() {
+        anyhow::bail!("--inline-context-from-review-session: session reference cannot be empty");
+    }
+
+    match csa_session::validate_session_id(session_ref) {
+        Ok(()) => Ok(session_ref.to_string()),
+        Err(err) if session_ref.len() == 26 => Err(err).with_context(|| {
+            format!("--inline-context-from-review-session: invalid session ID '{session_ref}'")
+        }),
+        Err(_) => {
+            crate::session_cmds::resolve_session_prefix_with_fallback(project_root, session_ref)
+                .map(|resolution| resolution.session_id)
+                .map_err(|err| anyhow::anyhow!("--inline-context-from-review-session: {err}"))
+        }
+    }
 }
 
 fn read_optional_review_context_file(path: &Path) -> Result<Option<String>> {
