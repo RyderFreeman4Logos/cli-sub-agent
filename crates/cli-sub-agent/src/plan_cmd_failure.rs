@@ -322,26 +322,19 @@ impl PlanFailureRecoverySnapshot {
             }
         };
 
-        if only_weave_lock_dirty(&status_before_cleanup) {
-            match restore_weave_lock(project_root, &status_before_cleanup) {
-                Ok(()) => actions.push("Restored plan-created weave.lock drift.".to_string()),
-                Err(error) => {
-                    return PlanFailureRecoveryReport::manual(
-                        initial_ref_label.clone(),
-                        current_ref_before,
-                        vec![format!(
-                            "Could not restore weave.lock automatically: {error}."
-                        )],
-                        recovery_commands(initial_ref_label.as_deref(), true),
-                    );
-                }
-            }
+        let weave_lock_changed_after_snapshot = only_weave_lock_dirty(&status_before_cleanup);
+        if weave_lock_changed_after_snapshot {
+            actions.push(
+                "Preserved dirty weave.lock because automatic recovery cannot prove it was \
+                 created by this pr-bot run."
+                    .to_string(),
+            );
         } else if !status_before_cleanup.is_empty() {
             return PlanFailureRecoveryReport::manual(
                 initial_ref_label.clone(),
                 current_ref_before,
                 vec![
-                    "Automatic cleanup only handles plan-created weave.lock drift.".to_string(),
+                    "Automatic recovery will not modify dirty paths that it cannot prove were created by pr-bot.".to_string(),
                     format!(
                         "Current dirty paths require manual review: {}",
                         status_before_cleanup.join("; ")
@@ -359,13 +352,15 @@ impl PlanFailureRecoverySnapshot {
                         actions.push(format!("Restored checkout to {}.", initial_ref.label()))
                     }
                     Err(error) => {
+                        let mut messages = actions;
+                        messages.push(format!(
+                            "Could not restore checkout to {} automatically: {error}.",
+                            initial_ref.label()
+                        ));
                         return PlanFailureRecoveryReport::manual(
                             initial_ref_label.clone(),
                             current_ref_before,
-                            vec![format!(
-                                "Could not restore checkout to {} automatically: {error}.",
-                                initial_ref.label()
-                            )],
+                            messages,
                             recovery_commands(initial_ref_label.as_deref(), false),
                         );
                     }
@@ -407,16 +402,32 @@ impl PlanFailureRecoverySnapshot {
                 final_status,
             };
         }
+        if weave_lock_changed_after_snapshot
+            && checkout_restored
+            && only_weave_lock_dirty(&final_status)
+        {
+            let mut messages = actions;
+            messages.push("Review weave.lock before retrying pr-bot.".to_string());
+            return PlanFailureRecoveryReport::manual_with_refs(
+                initial_ref_label,
+                current_ref_before,
+                current_ref_after,
+                messages,
+                vec!["git status --short --branch".to_string()],
+                final_status,
+            );
+        }
 
-        PlanFailureRecoveryReport::manual(
+        PlanFailureRecoveryReport::manual_with_refs(
             initial_ref_label,
+            current_ref_before,
             current_ref_after,
             vec![
                 "Automatic recovery ran but the checkout or worktree is still not restored."
                     .to_string(),
-                format!("Remaining status: {}", final_status.join("; ")),
             ],
             vec!["git status --short --branch".to_string()],
+            final_status,
         )
     }
 }
@@ -454,14 +465,32 @@ impl PlanFailureRecoveryReport {
         messages: Vec<String>,
         recovery_commands: Vec<String>,
     ) -> Self {
+        Self::manual_with_refs(
+            initial_ref,
+            current_ref.clone(),
+            current_ref,
+            messages,
+            recovery_commands,
+            Vec::new(),
+        )
+    }
+
+    fn manual_with_refs(
+        initial_ref: Option<String>,
+        current_ref_before: Option<String>,
+        current_ref_after: Option<String>,
+        messages: Vec<String>,
+        recovery_commands: Vec<String>,
+        final_status: Vec<String>,
+    ) -> Self {
         Self {
             status: PlanRecoveryStatus::ManualRequired,
             initial_ref,
-            current_ref_before: current_ref.clone(),
-            current_ref_after: current_ref,
+            current_ref_before,
+            current_ref_after,
             messages,
             recovery_commands,
-            final_status: Vec::new(),
+            final_status,
         }
     }
 
@@ -557,32 +586,6 @@ fn porcelain_path(line: &str) -> Option<&str> {
     })
 }
 
-fn restore_weave_lock(project_root: &Path, status_lines: &[String]) -> Result<()> {
-    let tracked = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["ls-files", "--error-unmatch", WEAVE_LOCK])
-        .output()
-        .context("failed to check whether weave.lock is tracked")?
-        .status
-        .success();
-    if tracked {
-        run_git_status(
-            project_root,
-            &["restore", "--staged", "--worktree", "--", WEAVE_LOCK],
-        )
-    } else if status_lines.iter().any(|line| line.starts_with("?? ")) {
-        let path = project_root.join(WEAVE_LOCK);
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("failed to remove {}", path.display()))?;
-        }
-        Ok(())
-    } else {
-        anyhow::bail!("weave.lock is dirty but not tracked or safely removable")
-    }
-}
-
 fn restore_checkout(project_root: &Path, initial_ref: &CheckoutRef) -> Result<()> {
     match initial_ref {
         CheckoutRef::Branch(branch) => run_git_status(project_root, &["switch", branch]),
@@ -630,3 +633,7 @@ fn run_git(project_root: &Path, args: &[&str]) -> Result<String> {
 fn run_git_status(project_root: &Path, args: &[&str]) -> Result<()> {
     run_git(project_root, args).map(|_| ())
 }
+
+#[cfg(test)]
+#[path = "plan_cmd_failure_tests.rs"]
+mod tests;

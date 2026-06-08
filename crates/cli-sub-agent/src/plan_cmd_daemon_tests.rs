@@ -171,7 +171,7 @@ on_fail = "abort"
 }
 
 #[tokio::test]
-async fn daemon_child_failed_pr_bot_restores_checkout_and_weave_lock_when_initially_clean() {
+async fn daemon_child_failed_pr_bot_preserves_weave_lock_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
@@ -224,17 +224,23 @@ on_fail = "abort"
         .args(["status", "--short"])
         .output()
         .expect("git status should run");
+    let status = String::from_utf8_lossy(&status.stdout);
     assert!(
-        status.stdout.is_empty(),
-        "failed pr-bot plan should clean plan-created weave.lock drift: {}",
-        String::from_utf8_lossy(&status.stdout)
+        status.contains("weave.lock"),
+        "failed pr-bot plan should preserve post-snapshot weave.lock changes: {status}"
+    );
+    let weave_lock = std::fs::read_to_string(project_root.join("weave.lock"))
+        .expect("weave.lock should remain readable");
+    assert!(
+        weave_lock.contains("plan drift"),
+        "failed pr-bot plan must not discard weave.lock content: {weave_lock}"
     );
     let details = csa_session::read_section(&session_dir, "details")
         .expect("details should load")
         .expect("details section should exist");
     assert!(
-        details.contains("Recovery status: `restored`")
-            && details.contains("Restored plan-created weave.lock drift")
+        details.contains("Recovery status: `manual-required`")
+            && details.contains("Preserved dirty weave.lock")
             && details.contains("Restored checkout to fix/pr-bot-recovery"),
         "details must include structured recovery result: {details}"
     );
