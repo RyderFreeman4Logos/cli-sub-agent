@@ -152,10 +152,6 @@ pub(crate) fn handle_session_result(
     };
     let repaired_result = repaired_result.or(daemon_completion_result);
 
-    // If structured output flags are active, handle them and return early
-    if structured.is_active() {
-        return display_structured_output(&session_dir, &resolved_id, &structured, json);
-    }
     if let Some(result) = repaired_result.as_ref().filter(|result| {
         crate::session_tier_failover::is_pending_tier_failover_handoff(&session_dir, result)
     }) {
@@ -165,6 +161,9 @@ pub(crate) fn handle_session_result(
             json,
         );
         return Ok(());
+    }
+    if structured.is_active() {
+        return display_structured_output(&session_dir, &resolved_id, &structured, json);
     }
 
     let transcript_summary = match load_transcript_summary(&session_dir) {
@@ -696,6 +695,9 @@ pub(crate) use tool_output::handle_session_tool_output;
 #[cfg(test)]
 #[path = "session_cmds_result_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "session_cmds_result_tier_failover_tests.rs"]
+mod tier_failover_tests;
 #[cfg(test)]
 #[path = "session_cmds_result_token_tests.rs"]
 mod token_tests;
