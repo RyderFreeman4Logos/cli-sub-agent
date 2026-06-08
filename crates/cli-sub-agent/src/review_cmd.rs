@@ -403,6 +403,7 @@ pub(crate) async fn handle_review(
         let verdict = resolved.verdict;
         let decision = resolved.decision;
         let auth_prompt_failure = resolved.auth_prompt_failure;
+        let failure_reason = resolved.failure_reason;
         print!(
             "{}",
             diff_size::add_review_diff_size_line(&sanitized, diff.as_ref())
@@ -432,7 +433,7 @@ pub(crate) async fn handle_review(
             status_reason: result.status_reason.clone(),
             routed_to: result.routed_to.clone(),
             primary_failure: result.primary_failure.clone(),
-            failure_reason: result.failure_reason.clone(),
+            failure_reason,
             tool: result.executed_tool.to_string(),
             scope: scope.clone(),
             exit_code: effective_exit_code,

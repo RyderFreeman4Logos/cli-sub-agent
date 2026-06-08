@@ -86,6 +86,7 @@ pub(super) struct SingleReviewResolution {
     pub decision: ReviewDecision,
     pub effective_exit_code: i32,
     pub auth_prompt_failure: bool,
+    pub failure_reason: Option<String>,
 }
 
 pub(super) fn resolve_single_review_result(
@@ -184,6 +185,9 @@ pub(super) fn resolve_single_review_result(
     };
     let verdict = verdict_from_decision(decision);
     let effective_exit_code = crate::verdict_exit_code::exit_code_from_review_decision(decision);
+    let failure_reason = terminal_tool_error
+        .clone()
+        .or_else(|| result.failure_reason.clone());
 
     SingleReviewResolution {
         sanitized,
@@ -192,6 +196,7 @@ pub(super) fn resolve_single_review_result(
         decision,
         effective_exit_code,
         auth_prompt_failure,
+        failure_reason,
     }
 }
 
