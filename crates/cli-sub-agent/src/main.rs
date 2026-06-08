@@ -12,6 +12,7 @@ mod claude_sub_agent_cmd;
 mod cli;
 mod codex_transcript_filter;
 mod config_cmds;
+mod daemon_caller_hints;
 mod debate_cmd;
 mod debate_cmd_output;
 mod debate_cmd_resolve;

@@ -88,12 +88,6 @@ pub(crate) fn parse_spec_path_arg(spec: &str) -> std::result::Result<String, Str
         .map_err(|err| err.to_string())
 }
 
-pub(crate) fn validate_ulid(value: &str) -> std::result::Result<String, String> {
-    csa_session::validate_session_id(value)
-        .map(|_| value.to_string())
-        .map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_model_spec_arg_with_warning;

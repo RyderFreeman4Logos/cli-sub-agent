@@ -6,6 +6,8 @@
 //! removal during future edits to the four daemon entry points.
 #![cfg(test)]
 
+use std::path::Path;
+
 const NO_STACK_WAKEUP_WARNING: &str = "do NOT stack ScheduleWakeup, /loop, or sleep loops on top";
 const BACKGROUND_WAIT_RECOMMENDATION: &str = "with run_in_background: true";
 const TASK_NOTIFICATION_WAKE_SIGNAL: &str = "The task-notification IS your wake signal";
@@ -47,6 +49,14 @@ fn assert_wait_hint_contract(block: &str, site: &str) {
         "{site} CALLER_HINT must recommend backgrounding session wait with run_in_background: true"
     );
     assert!(
+        block.contains("Call {wait_cmd} with run_in_background: true"),
+        "{site} CALLER_HINT must reuse the SESSION_STARTED wait_cmd variable"
+    );
+    assert!(
+        !block.contains("{id}{cd}"),
+        "{site} CALLER_HINT must not rebuild the wait command by concatenating id and cd"
+    );
+    assert!(
         block.contains(TASK_NOTIFICATION_WAKE_SIGNAL),
         "{site} CALLER_HINT must state that task-notification is the wake signal"
     );
@@ -65,6 +75,62 @@ fn assert_wait_hint_contract(block: &str, site: &str) {
     assert!(
         block.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
         "{site} CALLER_HINT must forbid stderr suppression (2>/dev/null)"
+    );
+}
+
+#[test]
+fn daemon_wait_command_places_cd_after_single_session_id() {
+    let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R9";
+    let command =
+        crate::daemon_caller_hints::format_session_wait_command(session_id, Path::new("/tmp/repo"));
+
+    assert_eq!(
+        command,
+        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/tmp/repo'"
+    );
+    assert_eq!(
+        command.matches(session_id).count(),
+        1,
+        "session id must appear only in --session"
+    );
+    assert!(
+        !command.contains(&format!("--cd '{session_id}")),
+        "session id must not be duplicated into the --cd argument"
+    );
+}
+
+#[test]
+fn daemon_wait_command_shell_escapes_project_root_single_quotes() {
+    let command = crate::daemon_caller_hints::format_session_wait_command(
+        "01KAS6M5XG7V4M4M6YDRS7P8R9",
+        Path::new("/tmp/csa'; touch /tmp/csa-review-proof; echo '"),
+    );
+
+    assert!(
+        command.contains("'\\''; touch /tmp/csa-review-proof; echo '\\'''"),
+        "project root single quotes must remain inside the --cd shell argument: {command}"
+    );
+    assert!(
+        !command.contains("--cd '/tmp/csa'; touch"),
+        "project root must not terminate the --cd shell argument: {command}"
+    );
+}
+
+#[test]
+fn daemon_caller_hint_attrs_escape_shell_command_values() {
+    let command = crate::daemon_caller_hints::format_session_wait_command(
+        "01KAS6M5XG7V4M4M6YDRS7P8R9",
+        Path::new("/tmp/a\"b&<c>d"),
+    );
+    let attr = crate::daemon_caller_hints::escape_structured_comment_attr(&command);
+
+    assert_eq!(
+        attr,
+        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/tmp/a&quot;b&amp;&lt;c&gt;d'"
+    );
+    assert!(
+        !attr.contains('"') && !attr.contains('<') && !attr.contains('>'),
+        "escaped attribute must not contain raw XML attribute delimiters: {attr}"
     );
 }
 
