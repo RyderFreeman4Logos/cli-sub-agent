@@ -250,6 +250,7 @@ impl AgentSession for ExecutorAgentSession {
                 // stripped from `SpawnConfig.env` at construction, so a caller
                 // cannot smuggle a pin through `env`.
                 None,
+                false,
                 csa_process::StreamMode::BufferOnly,
                 csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
                 Self::resolved_initial_response_timeout(&self.executor),

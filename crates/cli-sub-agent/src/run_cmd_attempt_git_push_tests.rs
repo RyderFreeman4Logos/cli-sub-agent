@@ -27,6 +27,9 @@ fn has_push_env(attempt: &super::prompt::AttemptPrompt) -> bool {
     attempt.extra_env.as_ref().is_some_and(|env| {
         env.get(crate::pipeline_env::CSA_GIT_PUSH_ALLOWED_ENV)
             .is_some_and(|value| value == "true")
+            || env
+                .get(crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV)
+                .is_some_and(|value| value == "true")
     })
 }
 
@@ -44,5 +47,8 @@ fn run_attempt_prompt_allows_git_push_with_explicit_authorization() {
     let attempt = build_attempt(true);
 
     assert!(!attempt.effective_prompt.contains("<git-push-guard>"));
-    assert!(has_push_env(&attempt));
+    assert!(
+        !has_push_env(&attempt),
+        "git push authorization travels through typed executor options, not generic extra_env"
+    );
 }

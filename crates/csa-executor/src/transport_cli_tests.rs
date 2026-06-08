@@ -241,14 +241,13 @@ fn build_command_rebuilds_session_env_for_cli_transport() {
             "/tmp/outer-daemon-session".to_string(),
         ),
     ]);
-
     let cmd = transport.build_command(
         "hello",
         std::path::Path::new("/tmp/test-project"),
         Some(&session),
         None,
         Some(&extra_env),
-        None,
+        (None, false),
     );
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: StdHashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
@@ -257,7 +256,7 @@ fn build_command_rebuilds_session_env_for_cli_transport() {
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("CSA_SESSION_ID")),
         Some(&Some(std::ffi::OsStr::new("01HCLITEST000000000000000"))),
-        "CLI transport must rebuild CSA_SESSION_ID from the new session"
+        "rebuild CSA_SESSION_ID"
     );
     let session_dir = env_map
         .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
@@ -266,7 +265,7 @@ fn build_command_rebuilds_session_env_for_cli_transport() {
         .to_string_lossy();
     assert!(
         session_dir.contains("01HCLITEST000000000000000"),
-        "CLI transport must rebuild CSA_SESSION_DIR from the new session, got: {session_dir}"
+        "rebuild CSA_SESSION_DIR, got: {session_dir}"
     );
     assert_eq!(
         env_map.get(std::ffi::OsStr::new("CSA_DAEMON_SESSION_DIR")),
@@ -282,14 +281,13 @@ fn build_command_scrubs_startup_subtree_keys_from_generic_extra_env() {
     for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
         extra_env.insert((*key).to_string(), format!("spoofed-{key}"));
     }
-
     let cmd = transport.build_command(
         "hello",
         std::path::Path::new("/tmp/test-project"),
         None,
         None,
         Some(&extra_env),
-        None,
+        (None, false),
     );
     let envs: Vec<_> = cmd.as_std().get_envs().collect();
     let env_map: StdHashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
@@ -741,6 +739,7 @@ async fn claude_cli_smoke() {
             tmp.path(),
             None,
             None,
+            false,
             StreamMode::BufferOnly,
             30,
             ResolvedTimeout::of(60),

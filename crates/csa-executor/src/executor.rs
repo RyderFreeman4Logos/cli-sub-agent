@@ -351,6 +351,7 @@ impl Executor {
             sandbox: sandbox_transport.as_ref(),
             thinking_budget: self.thinking_budget().cloned(),
             subtree_pin: options.subtree_pin.clone(),
+            allow_git_push: options.allow_git_push,
         };
         let transport = self.transport(session_config)?;
         let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;
@@ -379,6 +380,7 @@ impl Executor {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -389,6 +391,7 @@ impl Executor {
                 work_dir,
                 extra_env,
                 subtree_pin,
+                allow_git_push,
                 stream_mode,
                 idle_timeout_seconds,
                 initial_response_timeout,
@@ -405,6 +408,7 @@ impl Executor {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,
@@ -416,6 +420,7 @@ impl Executor {
                 work_dir,
                 extra_env,
                 subtree_pin,
+                allow_git_push,
                 stream_mode,
                 idle_timeout_seconds,
                 initial_response_timeout,

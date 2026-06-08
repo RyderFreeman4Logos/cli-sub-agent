@@ -460,22 +460,16 @@ impl TmuxTransport {
         }
     }
 
-    /// Full session lifecycle: snapshot → spawn → ready → prompt → discover → watch.
-    ///
-    /// When `session` is provided, the transport injects the full CSA session env
-    /// (`CSA_SESSION_ID`, `CSA_DEPTH`, `CSA_PROJECT_ROOT`, `CSA_TOOL`,
-    /// `CSA_RESULT_TOML_PATH_CONTRACT`, etc.) into the tmux environment, enables
-    /// result.toml reading as the preferred output source, and creates a JSONL
-    /// symlink in the session output directory for xurl/recall audit access.
     async fn execute_session(
         &self,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
-        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        trust: TmuxTrustOptions<'_>,
         idle_timeout_seconds: u64,
         session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
+        let (subtree_pin, allow_git_push) = trust;
         let session_name = Self::session_name();
         let prompt_file_path = prompt_file_path_for_session(&session_name);
         tracing::debug!(
@@ -484,7 +478,6 @@ impl TmuxTransport {
             "tmux transport: spawning session"
         );
 
-        // Snapshot existing JSONL files before spawning so we can diff later.
         let jsonl_dir = project_jsonl_dir(work_dir)?;
         let before_snapshot = snapshot_jsonl_files(&jsonl_dir);
         tracing::debug!(
@@ -502,11 +495,10 @@ impl TmuxTransport {
             _ => (None, None),
         };
 
-        // Merge caller-provided env with full CSA session env vars, aligned
-        // with inject_cli_session_env in transport_cli.rs.
         let (merged_env, session_dir) = {
             let mut env = extra_env.cloned().unwrap_or_default();
             csa_core::env::scrub_subtree_contract_env_map(&mut env);
+            csa_core::env::strip_git_push_authorization_keys(&mut env);
             let mut dir = None;
             if let Some(session) = session {
                 env.insert("CSA_SESSION_ID".into(), session.meta_session_id.clone());
@@ -550,13 +542,17 @@ impl TmuxTransport {
                     );
                 }
             }
-            // #1741: apply CSA's trusted subtree pin LAST, after every generic
-            // merge (which stripped the pin keys) — the only writer of the pin
-            // keys in the tmux child env.
+            // #1741: apply CSA's trusted subtree pin after generic env merge.
             if let Some(pin) = subtree_pin {
                 for (key, value) in pin.pin_env_entries() {
                     env.insert(key.to_string(), value);
                 }
+            }
+            if allow_git_push {
+                env.insert(
+                    csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY.to_string(),
+                    "true".to_string(),
+                );
             }
             (env, dir)
         };
@@ -684,7 +680,7 @@ impl Transport for TmuxTransport {
             prompt,
             &work_dir,
             extra_env,
-            options.subtree_pin.as_ref(),
+            (options.subtree_pin.as_ref(), options.allow_git_push),
             options.idle_timeout_seconds,
             Some(session),
         )
@@ -697,6 +693,7 @@ impl Transport for TmuxTransport {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
         _stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         _initial_response_timeout: ResolvedTimeout,
@@ -705,7 +702,7 @@ impl Transport for TmuxTransport {
             prompt,
             work_dir,
             extra_env,
-            subtree_pin,
+            (subtree_pin, allow_git_push),
             idle_timeout_seconds,
             None,
         )
@@ -717,6 +714,8 @@ impl Transport for TmuxTransport {
         self
     }
 }
+
+type TmuxTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool);
 
 // ── csa gc integration ────────────────────────────────────────────────────────
 

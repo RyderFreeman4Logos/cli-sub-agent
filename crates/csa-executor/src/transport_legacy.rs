@@ -11,6 +11,7 @@ struct ExecuteInAttempt<'a> {
     work_dir: &'a Path,
     extra_env: Option<&'a HashMap<String, String>>,
     subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     /// Already resolved by `Executor::execute_in_with_transport()`.
@@ -96,12 +97,15 @@ impl LegacyTransport {
         // when this function returns (#1620). For all other executors this
         // is `None` and a no-op.
         let _antigravity_guard = request.executor.antigravity_settings_guard()?;
-        let (cmd, stdin_data) = request.executor.build_execute_in_command(
-            request.prompt,
-            request.work_dir,
-            request.extra_env,
-            request.subtree_pin,
-        );
+        let (cmd, stdin_data) = request
+            .executor
+            .build_execute_in_command_with_git_push_allowed(
+                request.prompt,
+                request.work_dir,
+                request.extra_env,
+                request.subtree_pin,
+                request.allow_git_push,
+            );
         let spawn_options = SpawnOptions {
             stdin_write_timeout: std::time::Duration::from_secs(
                 csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
@@ -165,12 +169,13 @@ impl LegacyTransport {
         // when this function returns (#1620). For all other executors this
         // is `None` and a no-op.
         let _antigravity_guard = executor.antigravity_settings_guard()?;
-        let (cmd, stdin_data) = executor.build_command(
+        let (cmd, stdin_data) = executor.build_command_with_git_push_allowed(
             prompt,
             tool_state,
             session,
             attempt_env.extra_env,
             options.subtree_pin.as_ref(),
+            options.allow_git_push,
         );
 
         let gemini_sandbox_plan = options
@@ -230,12 +235,13 @@ impl LegacyTransport {
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
                 let fallback_cmd = executor
-                    .build_command(
+                    .build_command_with_git_push_allowed(
                         prompt,
                         tool_state,
                         session,
                         attempt_env.extra_env,
                         options.subtree_pin.as_ref(),
+                        options.allow_git_push,
                     )
                     .0;
                 let child =

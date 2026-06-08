@@ -71,6 +71,11 @@ pub struct TransportOptions<'a> {
     /// unconditionally strip the pin keys. This typed channel is the only way
     /// the subtree-pin env keys may reach a child process.
     pub subtree_pin: Option<csa_core::env::SubtreeModelPin>,
+    /// Whether CSA explicitly authorized this tool process to run `git push`.
+    ///
+    /// Transports must ignore any generic/inherited git-push authorization env
+    /// and write `CSA_GIT_PUSH_ALLOWED=true` only when this is true.
+    pub allow_git_push: bool,
 }
 
 #[derive(Debug, Clone)]

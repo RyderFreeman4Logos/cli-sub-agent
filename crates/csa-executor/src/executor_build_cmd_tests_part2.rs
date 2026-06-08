@@ -303,6 +303,8 @@ fn test_stripped_env_vars_contains_lefthook() {
     );
 }
 
+include!("executor_build_cmd_tests_git_push.rs");
+
 #[test]
 fn test_build_execute_in_command_scrubs_startup_subtree_contract_env() {
     let exec = Executor::GeminiCli {

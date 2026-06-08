@@ -737,7 +737,6 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         agent: None,
         thinking_budget: None,
     };
-
     let execution = execute_with_session_and_meta_with_parent_source(
         &executor,
         &ToolName::Opencode,
@@ -750,7 +749,8 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         project_root,
         None,
         Some(&extra_env),
-        None, // subtree_pin (#1741)
+        None,
+        false,
         Some("review"),
         None,
         None,
@@ -763,10 +763,10 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         ParentSessionSource::ExplicitOnly,
         SessionCreationMode::DaemonManaged,
-        false, // no_fs_sandbox
-        false, // readonly_project_root
-        &[],   // extra_writable
-        &[],   // extra_readable,
+        false,
+        false,
+        &[],
+        &[],
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
         &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,

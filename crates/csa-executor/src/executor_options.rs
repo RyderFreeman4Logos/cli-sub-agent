@@ -44,6 +44,11 @@ pub struct ExecuteOptions {
     /// only channel through which the subtree-pin env keys may reach a child;
     /// user/request/config env can never introduce them (#1741).
     pub subtree_pin: Option<csa_core::env::SubtreeModelPin>,
+    /// Whether CSA explicitly authorized this tool process to run `git push`.
+    ///
+    /// Defaults to `false`. Generic env maps are scrubbed; this typed option is
+    /// the only executor-side source that may set `CSA_GIT_PUSH_ALLOWED=true`.
+    pub allow_git_push: bool,
 }
 
 /// Sandbox configuration resolved from project/tool config.
@@ -83,12 +88,19 @@ impl ExecuteOptions {
             sandbox: None,
             pre_session_hook: None,
             subtree_pin: None,
+            allow_git_push: false,
         }
     }
 
     /// Attach the CSA-decided subtree model pin (trusted typed channel, #1741).
     pub fn with_subtree_pin(mut self, pin: Option<csa_core::env::SubtreeModelPin>) -> Self {
         self.subtree_pin = pin;
+        self
+    }
+
+    /// Attach CSA's explicit `git push` authorization.
+    pub fn with_git_push_allowed(mut self, allow_git_push: bool) -> Self {
+        self.allow_git_push = allow_git_push;
         self
     }
 

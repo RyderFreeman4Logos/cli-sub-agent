@@ -25,6 +25,33 @@ pub const CSA_PARENT_SESSION_ENV_KEY: &str = "CSA_PARENT_SESSION";
 /// Marker that a nested execution command was spawned by CSA itself.
 pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
 
+/// Leaf-tool git wrapper authorization for `git push`.
+///
+/// This key is CSA-owned. Generic env maps and inherited process env MUST NOT
+/// be trusted to set it; the executor may only write it from an explicit typed
+/// run authorization.
+pub const CSA_GIT_PUSH_ALLOWED_ENV_KEY: &str = "CSA_GIT_PUSH_ALLOWED";
+
+/// Internal run authorization marker consumed before spawning a leaf tool.
+///
+/// This marker is never part of the child tool contract. It exists only as a
+/// reserved key that must be scrubbed from generic env maps and inherited
+/// process env.
+pub const CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY: &str = "CSA_RUN_GIT_PUSH_AUTHORIZED";
+
+/// Git-push authorization keys reserved for CSA-owned injection.
+pub const GIT_PUSH_AUTHORIZATION_ENV_KEYS: &[&str] = &[
+    CSA_GIT_PUSH_ALLOWED_ENV_KEY,
+    CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY,
+];
+
+/// Strip git-push authorization keys from a generic env map.
+pub fn strip_git_push_authorization_keys(env: &mut std::collections::HashMap<String, String>) {
+    for key in GIT_PUSH_AUTHORIZATION_ENV_KEYS {
+        env.remove(*key);
+    }
+}
+
 /// Marker that a CSA command runs INSIDE a weave pattern pipeline (`csa plan
 /// run`).
 ///

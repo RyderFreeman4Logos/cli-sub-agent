@@ -1,3 +1,4 @@
+use crate::pipeline_env::MergedEnvRequest;
 use chrono::Utc;
 use csa_config::config::CURRENT_SCHEMA_VERSION;
 use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig};
@@ -38,15 +39,15 @@ fn test_config() -> ProjectConfig {
 fn build_merged_env_propagates_pattern_internal_marker_to_leaf_tool() {
     let cfg = test_config();
 
-    let marked = crate::pipeline_env::build_merged_env(
-        None,
-        Some(&cfg),
-        None,
-        "claude-code",
-        0,
-        true,
-        false,
-    );
+    let marked = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "claude-code",
+        current_depth: 0,
+        pattern_internal: true,
+        allow_git_push: false,
+    });
     assert_eq!(
         marked
             .get(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY)
@@ -54,30 +55,30 @@ fn build_merged_env_propagates_pattern_internal_marker_to_leaf_tool() {
         Some("1")
     );
 
-    let unmarked = crate::pipeline_env::build_merged_env(
-        None,
-        Some(&cfg),
-        None,
-        "claude-code",
-        0,
-        false,
-        false,
-    );
+    let unmarked = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "claude-code",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
     assert!(!unmarked.contains_key(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY));
 }
 
 #[test]
 fn build_merged_env_denies_git_push_for_sa_mode_without_explicit_authorization() {
     let cfg = test_config();
-    let denied = crate::pipeline_env::build_merged_env(
-        None,
-        Some(&cfg),
-        None,
-        "claude-code",
-        0,
-        false,
-        true,
-    );
+    let denied = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "claude-code",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
 
     assert!(!denied.contains_key("CSA_GIT_PUSH_ALLOWED"));
 }
@@ -85,19 +86,15 @@ fn build_merged_env_denies_git_push_for_sa_mode_without_explicit_authorization()
 #[test]
 fn build_merged_env_allows_git_push_with_explicit_authorization() {
     let cfg = test_config();
-    let extra_env = HashMap::from([(
-        crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV.to_string(),
-        "true".to_string(),
-    )]);
-    let allowed = crate::pipeline_env::build_merged_env(
-        Some(&extra_env),
-        Some(&cfg),
-        None,
-        "claude-code",
-        0,
-        false,
-        true,
-    );
+    let allowed = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "claude-code",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: true,
+    });
 
     assert_eq!(
         allowed.get("CSA_GIT_PUSH_ALLOWED").map(String::as_str),
@@ -112,17 +109,24 @@ fn build_merged_env_allows_git_push_with_explicit_authorization() {
 #[test]
 fn build_merged_env_removes_spoofed_git_push_permission_for_leaf_workers() {
     let cfg = test_config();
-    let extra_env = HashMap::from([("CSA_GIT_PUSH_ALLOWED".to_string(), "true".to_string())]);
+    let extra_env = HashMap::from([
+        ("CSA_GIT_PUSH_ALLOWED".to_string(), "true".to_string()),
+        (
+            crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV.to_string(),
+            "true".to_string(),
+        ),
+    ]);
 
-    let leaf = crate::pipeline_env::build_merged_env(
-        Some(&extra_env),
-        Some(&cfg),
-        None,
-        "claude-code",
-        0,
-        false,
-        false,
-    );
+    let leaf = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: Some(&extra_env),
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "claude-code",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
 
     assert!(!leaf.contains_key("CSA_GIT_PUSH_ALLOWED"));
+    assert!(!leaf.contains_key(crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV));
 }

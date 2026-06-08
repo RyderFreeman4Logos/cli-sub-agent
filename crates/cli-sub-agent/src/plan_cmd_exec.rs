@@ -292,6 +292,7 @@ pub(super) async fn execute_csa_step(
             config,
             extra_env.as_ref(),
             subtree_pin.as_ref(),
+            false,
             Some("plan"),
             None,
             None,

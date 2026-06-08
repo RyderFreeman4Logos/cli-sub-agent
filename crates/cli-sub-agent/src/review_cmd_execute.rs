@@ -728,7 +728,6 @@ pub(crate) async fn execute_review_with_tier_filter(
 
     unreachable!("tier candidate list is never empty")
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn execute_review_once(
     executor: &Executor,
@@ -766,6 +765,7 @@ async fn execute_review_once(
         project_config,
         extra_env,
         subtree_pin,
+        false,
         Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         tier_name,
         None,
@@ -783,7 +783,7 @@ async fn execute_review_once(
         extra_writable,
         extra_readable,
         error_marker_scan_override,
-        false, // cli_no_hook_bypass_scan: review has no CLI flag; defer to config
+        false,
         startup_env,
     )
     .await

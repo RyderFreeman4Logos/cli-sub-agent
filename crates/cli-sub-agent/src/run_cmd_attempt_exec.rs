@@ -32,6 +32,7 @@ pub(super) struct EphemeralRunRequest<'a> {
     pub(super) extra_env: Option<&'a std::collections::HashMap<String, String>>,
     /// CSA-decided subtree pin (#1741), carried out-of-band from `extra_env`.
     pub(super) subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
+    pub(super) allow_git_push: bool,
     pub(super) stream_mode: csa_process::StreamMode,
     pub(super) idle_timeout_seconds: u64,
     pub(super) initial_response_timeout_seconds: Option<u64>,
@@ -58,6 +59,7 @@ pub(super) async fn run_ephemeral_with_timeout(
             request.project_root,
             request.extra_env,
             request.subtree_pin,
+            request.allow_git_push,
             request.stream_mode,
             request.idle_timeout_seconds,
             direct_entry_resolved_timeout(request.initial_response_timeout_seconds),
@@ -91,6 +93,7 @@ pub(super) async fn run_ephemeral_without_timeout(
                 request.project_root,
                 request.extra_env,
                 request.subtree_pin,
+                request.allow_git_push,
                 request.stream_mode,
                 request.idle_timeout_seconds,
                 direct_entry_resolved_timeout(request.initial_response_timeout_seconds),
@@ -114,6 +117,7 @@ pub(super) async fn run_persistent_with_timeout(
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
     subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     resolved_tier_name: Option<&str>,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
@@ -149,6 +153,7 @@ pub(super) async fn run_persistent_with_timeout(
             config,
             extra_env,
             subtree_pin,
+            allow_git_push,
             resolved_tier_name,
             context_load_options,
             stream_mode,
@@ -191,6 +196,7 @@ pub(super) async fn run_persistent_without_timeout(
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
     subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     resolved_tier_name: Option<&str>,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
@@ -223,6 +229,7 @@ pub(super) async fn run_persistent_without_timeout(
         config,
         extra_env,
         subtree_pin,
+        allow_git_push,
         resolved_tier_name,
         context_load_options,
         stream_mode,
@@ -260,6 +267,7 @@ async fn execute_persistent(
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
     subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+    allow_git_push: bool,
     resolved_tier_name: Option<&str>,
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
@@ -299,7 +307,7 @@ async fn execute_persistent(
         parent
     };
 
-    let execution = match pipeline::execute_with_session_and_meta(
+    let execution = match pipeline::execute_with_session_and_meta_with_parent_source(
         executor,
         current_tool,
         effective_prompt,
@@ -312,6 +320,7 @@ async fn execute_persistent(
         config,
         extra_env,
         subtree_pin,
+        allow_git_push,
         Some("run"),
         resolved_tier_name,
         context_load_options,
@@ -322,6 +331,8 @@ async fn execute_persistent(
         Some(memory_injection),
         Some(global_config),
         pre_session_hook,
+        pipeline::ParentSessionSource::ExplicitOrEnv,
+        pipeline::SessionCreationMode::DaemonManaged,
         no_fs_sandbox,
         false, // readonly_project_root: `csa run` allows writes
         extra_writable,

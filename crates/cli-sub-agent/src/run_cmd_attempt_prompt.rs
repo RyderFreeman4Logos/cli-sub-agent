@@ -42,17 +42,6 @@ pub(super) fn build_attempt_prompt(request: AttemptPromptRequest<'_>) -> Attempt
         env.remove(crate::pipeline_env::CSA_GIT_PUSH_ALLOWED_ENV);
         env.remove(crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV);
     }
-    if request.allow_git_push {
-        let env = extra_env.get_or_insert_with(HashMap::new);
-        env.insert(
-            crate::pipeline_env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV.to_string(),
-            "true".to_string(),
-        );
-        env.insert(
-            crate::pipeline_env::CSA_GIT_PUSH_ALLOWED_ENV.to_string(),
-            "true".to_string(),
-        );
-    }
     crate::build_jobs_env::apply_build_jobs_env(&mut extra_env, request.build_jobs);
     crate::executor_csa_guard::mark_skill_executor_env(&mut extra_env, request.skill.is_some());
 

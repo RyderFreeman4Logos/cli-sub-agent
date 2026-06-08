@@ -154,6 +154,7 @@ echo "ok effort=$effort"
             temp.path(),
             Some(&env),
             None,
+            false,
             StreamMode::BufferOnly,
             30,
             super::ResolvedTimeout(Some(1)),

@@ -31,6 +31,7 @@ pub trait Transport: Send + Sync {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
         stream_mode: csa_process::StreamMode,
         idle_timeout_seconds: u64,
         initial_response_timeout: ResolvedTimeout,

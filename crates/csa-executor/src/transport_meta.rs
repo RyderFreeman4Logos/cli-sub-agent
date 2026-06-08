@@ -154,6 +154,7 @@ impl AcpTransport {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
+        allow_git_push: bool,
     ) -> HashMap<String, String> {
         let mut env = HashMap::new();
         if let Some(extra) = extra_env {
@@ -167,6 +168,7 @@ impl AcpTransport {
             );
         }
         csa_core::env::scrub_subtree_contract_env_map(&mut env);
+        csa_core::env::strip_git_push_authorization_keys(&mut env);
         self.insert_csa_owned_env(&mut env, session);
         // Apply the trusted subtree pin LAST (after every generic merge/strip) —
         // the only writer of the pin keys in the ACP env.
@@ -174,6 +176,12 @@ impl AcpTransport {
             for (key, value) in pin.pin_env_entries() {
                 env.insert(key.to_string(), value);
             }
+        }
+        if allow_git_push {
+            env.insert(
+                csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY.to_string(),
+                "true".to_string(),
+            );
         }
 
         // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
@@ -442,12 +450,48 @@ mod tests {
         let session = sample_session();
         let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string())]);
 
-        let env = transport.build_env(&session, Some(&extra), None);
+        let env = transport.build_env(&session, Some(&extra), None, false);
 
         assert!(
             !env.contains_key(CSA_FS_SANDBOXED_ENV),
             "user extra_env must not be able to spoof CSA_FS_SANDBOXED"
         );
+    }
+
+    #[test]
+    fn build_env_strips_spoofed_git_push_authorization_from_extra_env() {
+        let transport = AcpTransport::new("claude-code", None);
+        let session = sample_session();
+        let extra = HashMap::from([
+            (
+                csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY.to_string(),
+                "true".to_string(),
+            ),
+            (
+                csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY.to_string(),
+                "true".to_string(),
+            ),
+        ]);
+
+        let env = transport.build_env(&session, Some(&extra), None, false);
+
+        assert!(!env.contains_key(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY));
+        assert!(!env.contains_key(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY));
+    }
+
+    #[test]
+    fn build_env_applies_typed_git_push_authorization() {
+        let transport = AcpTransport::new("claude-code", None);
+        let session = sample_session();
+
+        let env = transport.build_env(&session, None, None, true);
+
+        assert_eq!(
+            env.get(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY)
+                .map(String::as_str),
+            Some("true")
+        );
+        assert!(!env.contains_key(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY));
     }
 
     #[test]
@@ -458,7 +502,7 @@ mod tests {
         let session = sample_session();
         let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string())]);
 
-        let env = transport.build_env(&session, Some(&extra), None);
+        let env = transport.build_env(&session, Some(&extra), None, false);
 
         assert_eq!(
             env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str),
@@ -514,7 +558,7 @@ mod tests {
             ("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string()),
         ]);
 
-        let env = transport.build_env(&session, Some(&extra), None);
+        let env = transport.build_env(&session, Some(&extra), None, false);
 
         assert_eq!(
             env.get(CSA_SESSION_ID_ENV).map(String::as_str),

@@ -226,6 +226,7 @@ pub(super) async fn handle_run_tool(
                 temp_dir.path(),
                 extra_env_ref,
                 subtree_pin.as_ref(),
+                false,
                 csa_process::StreamMode::BufferOnly,
                 idle_timeout_seconds,
                 direct_entry_resolved_timeout(initial_response_timeout_seconds),
