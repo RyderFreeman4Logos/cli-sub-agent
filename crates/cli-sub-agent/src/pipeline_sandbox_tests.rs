@@ -297,44 +297,6 @@ fn test_none_config_heavyweight_gets_sandbox() {
     }
 }
 
-#[test]
-fn run_memory_override_sets_sandbox_memory_limit() {
-    let cfg = parse_project_config(
-        r#"
-[tools.codex]
-enabled = true
-memory_max_mb = 16384
-"#,
-    );
-
-    let result = resolve_sandbox_options_with_overrides(
-        SandboxResolveInput {
-            config: Some(&cfg),
-            tool_name: "codex",
-            session_id: "test-session",
-            project_root: &current_project_root(),
-            stream_mode: StreamMode::BufferOnly,
-            idle_timeout_seconds: 120,
-            liveness_dead_seconds: 600,
-            initial_response_timeout_seconds: Some(120),
-            no_fs_sandbox: false,
-            readonly_project_root: false,
-            extra_writable: &[],
-            extra_readable: &[],
-        },
-        crate::run_resource_overrides::RunResourceOverrides::new(Some(6144), None),
-    );
-
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("Expected SandboxResolution::Ok");
-    };
-
-    let Some(ctx) = opts.sandbox.as_ref() else {
-        return; // Host has no resource sandbox capability.
-    };
-    assert_eq!(ctx.isolation_plan.memory_max_mb, Some(6144));
-}
-
 // ---------------------------------------------------------------------------
 // Per-tool filesystem sandbox integration tests
 // ---------------------------------------------------------------------------
