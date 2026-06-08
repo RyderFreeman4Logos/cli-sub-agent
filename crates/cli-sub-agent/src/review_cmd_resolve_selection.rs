@@ -60,9 +60,10 @@ pub(crate) fn resolve_review_selection(
     force_override_user_config: bool,
     cli_tier: Option<&str>,
     force_ignore_tier_setting: bool,
+    direct_tool_requested: bool,
 ) -> Result<ResolvedReviewSelection> {
     crate::run_helpers::validate_tool_tier_override_flags(
-        arg_tool.is_some(),
+        direct_tool_requested,
         cli_tier,
         force_ignore_tier_setting,
     )?;
@@ -99,7 +100,7 @@ pub(crate) fn resolve_review_selection(
     // Enforce tier routing: block direct --tool when tiers are configured,
     // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
     validate_review_direct_tool_tier_restriction(
-        arg_tool.is_some(),
+        direct_tool_requested,
         project_config,
         cli_tier,
         force_override_user_config,
@@ -269,6 +270,7 @@ pub(crate) fn resolve_review_tool(
         force_override_user_config,
         cli_tier,
         force_ignore_tier_setting,
+        arg_tool.is_some(),
     )?;
     Ok((resolved.tool, resolved.model_spec))
 }

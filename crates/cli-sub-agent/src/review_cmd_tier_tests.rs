@@ -1,4 +1,5 @@
 use super::*;
+use crate::review_cmd::resolve::resolve_review_selection;
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{ReviewConfig, ToolConfig, ToolSelection};
 use std::collections::HashMap;
@@ -229,6 +230,7 @@ fn test_review_tool_plus_tier_force_override_resolves_disabled_requested_tool() 
         true,
         Some("quality"),
         false,
+        true,
     )
     .expect("force override should honor disabled requested review tool");
 
@@ -262,6 +264,7 @@ fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
         false,
         Some("quality"),
         false,
+        true,
     )
     .expect("tool+tier should resolve requested review tool");
 
