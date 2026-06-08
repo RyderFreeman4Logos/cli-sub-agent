@@ -13,6 +13,7 @@ mod config_tiers;
 pub mod config_tool;
 pub mod gc;
 pub mod global;
+mod global_caller_hints;
 mod global_env;
 mod global_impl;
 mod global_kv_cache;
@@ -50,6 +51,7 @@ pub use global::{
     ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, TierPolicyConfig,
     ToolSelection,
 };
+pub use global_caller_hints::{CallerHintsConfig, DEFAULT_CODEX_SESSION_WAIT_YIELD_MS};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use memory::{MemoryBackend, MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};

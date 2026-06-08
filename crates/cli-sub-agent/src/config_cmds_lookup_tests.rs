@@ -75,6 +75,51 @@ tool = "auto"
 }
 
 #[test]
+fn resolve_effective_key_ignores_project_caller_hints_override() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    write_global_config(
+        r#"
+[caller_hints]
+codex_session_wait_yield_ms = 450000
+"#,
+    );
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[caller_hints]
+codex_session_wait_yield_ms = 9999
+"#,
+    )
+    .unwrap();
+
+    let key = "caller_hints.codex_session_wait_yield_ms";
+    let lookup =
+        build_config_get_lookup(Some(dir.path()), key, false, is_global_only_key(key)).unwrap();
+    assert!(matches!(
+        lookup.sources.as_slice(),
+        [LookupSourceSpec::RawGlobal { .. }]
+    ));
+
+    let runtime_ms = GlobalConfig::resolve_codex_session_wait_yield_ms();
+    let value = resolve_effective_key(Some(dir.path()), key, false, false)
+        .unwrap()
+        .expect("caller hint interval should resolve from the raw global config");
+
+    assert_eq!(runtime_ms, 450_000);
+    assert_eq!(value.as_integer(), Some(i64::try_from(runtime_ms).unwrap()));
+}
+
+#[test]
 fn resolve_lookup_sources_global_raw_match_survives_invalid_unrelated_global_field() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
