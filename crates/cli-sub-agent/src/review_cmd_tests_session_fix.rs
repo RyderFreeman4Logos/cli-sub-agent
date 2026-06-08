@@ -1,6 +1,7 @@
 use super::{
-    SelectionResolutionCtx, resolve_selection_or_persist_error, resolve_selection_tool,
-    resolve_session_fix_selection, validate_session_fix_before_daemon,
+    SelectionResolutionCtx, effective_no_failover_for_session_fix,
+    resolve_selection_or_persist_error, resolve_selection_tool, resolve_session_fix_selection,
+    validate_session_fix_before_daemon,
 };
 use crate::cli::{Cli, Commands, ReviewArgs, validate_review_args};
 use crate::test_env_lock::ScopedEnvVarRestore;
@@ -200,6 +201,83 @@ fn review_session_fix_skips_non_concrete_metadata_and_uses_result_tool() {
     .expect("session fix selection should use concrete result tool");
 
     assert_eq!(resolved_tool, Some(ToolName::Codex));
+}
+
+#[test]
+fn review_without_session_fix_preserves_failover_setting() {
+    assert!(!effective_no_failover_for_session_fix(false, None));
+    assert!(effective_no_failover_for_session_fix(true, None));
+}
+
+#[test]
+fn review_session_fix_suppresses_cross_tool_tier_candidates_after_selection() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    let config = review_config_with_quality_tier();
+    let global_config = GlobalConfig::default();
+    let source = csa_session::create_session(project_dir.path(), Some("failed review"), None, None)
+        .expect("source session should be created");
+    write_session_metadata(
+        project_dir.path(),
+        &source.meta_session_id,
+        "unknown",
+        false,
+    );
+    write_session_result(project_dir.path(), &source.meta_session_id, "codex");
+    let args = parse_session_fix_args(project_dir.path(), &source.meta_session_id, &[]);
+    let selection = resolve_selection_tool(&args, project_dir.path(), None)
+        .expect("session fix selection tool should resolve");
+
+    let resolved = resolve_selection_or_persist_error(SelectionResolutionCtx {
+        args: &args,
+        project_config: Some(&config),
+        global_config: &global_config,
+        parent_tool: Some("claude-code"),
+        project_root: project_dir.path(),
+        effective_tier: Some("quality"),
+        selection_tool: selection.selection_tool,
+        direct_tool_requested: selection.direct_tool_requested,
+        session_fix: selection.session_fix.as_ref(),
+        review_description: "review: src/lib.rs",
+    })
+    .expect("runtime selection should accept the recorded result tool");
+
+    assert_eq!(resolved.tool, ToolName::Codex);
+    assert_eq!(
+        resolved.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.5/xhigh")
+    );
+    assert_eq!(resolved.tier_preference_order, vec!["codex".to_string()]);
+
+    let execution_no_failover =
+        effective_no_failover_for_session_fix(args.no_failover, selection.session_fix.as_ref());
+    assert!(execution_no_failover);
+    let tier_active = resolved.model_spec.is_some()
+        && args.model_spec.is_none()
+        && !args.force_ignore_tier_setting;
+    assert!(tier_active);
+
+    let candidates = crate::tier_model_fallback::ordered_tier_candidates(
+        resolved.tool,
+        resolved.model_spec.as_deref(),
+        Some("quality"),
+        Some(&config),
+        Some(&global_config),
+        tier_active && !execution_no_failover,
+        &resolved.tier_preference_order,
+    );
+
+    assert_eq!(
+        candidates,
+        vec![(
+            ToolName::Codex,
+            Some("codex/openai/gpt-5.5/xhigh".to_string())
+        )]
+    );
 }
 
 #[test]

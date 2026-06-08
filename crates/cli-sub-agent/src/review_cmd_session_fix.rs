@@ -74,6 +74,13 @@ pub(super) fn resolve_selection_or_persist_error(
     Ok(resolved)
 }
 
+pub(super) fn effective_no_failover_for_session_fix(
+    no_failover: bool,
+    session_fix: Option<&SessionFixTool>,
+) -> bool {
+    no_failover || session_fix.and_then(|fix| fix.tool).is_some()
+}
+
 fn persist_selection_error(ctx: &SelectionResolutionCtx<'_>, err: anyhow::Error) -> anyhow::Error {
     crate::session_guard::persist_pre_exec_error_result(crate::session_guard::PreExecErrorCtx {
         project_root: ctx.project_root,

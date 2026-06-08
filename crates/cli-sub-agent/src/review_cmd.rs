@@ -246,6 +246,11 @@ pub(crate) async fn handle_review(
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
+    // Session-fix resumes must not fail over beyond the recorded tool.
+    let execution_no_failover = session_fix::effective_no_failover_for_session_fix(
+        args.no_failover,
+        selection.session_fix.as_ref(),
+    );
     let resolved_tier_name = if tier_active {
         resolve_review_tier_name(
             config.as_ref(),
@@ -330,7 +335,7 @@ pub(crate) async fn handle_review(
             initial_response_timeout_seconds,
             args.force_override_user_config,
             args.force_ignore_tier_setting,
-            args.no_failover,
+            execution_no_failover,
             args.build_jobs,
             args.fast_but_more_cost,
             true,
@@ -519,7 +524,7 @@ pub(crate) async fn handle_review(
             initial_response_timeout_seconds,
             force_override_user_config: args.force_override_user_config,
             force_ignore_tier_setting: args.force_ignore_tier_setting,
-            no_failover: args.no_failover,
+            no_failover: execution_no_failover,
             build_jobs: args.build_jobs,
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
