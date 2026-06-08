@@ -377,3 +377,59 @@ fn daemon_child_startup_env_uses_preassigned_session_context() {
     assert_eq!(effective.session_id(), Some(actual_session_id.as_str()));
     assert_eq!(effective.session_dir(), Some(expected_session_dir.as_str()));
 }
+
+#[test]
+fn daemon_started_session_is_waitable_and_listed_before_marker_emit() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("project root should be created");
+    let session_id = csa_session::new_session_id();
+    let session_root =
+        csa_session::get_session_root(&project_root).expect("session root should resolve");
+    let session_dir = session_root.join("sessions").join(&session_id);
+
+    persist_daemon_placeholder_session(&project_root, &session_dir, &session_id, "review")
+        .expect("placeholder session should persist");
+
+    verify_daemon_session_waitable(&project_root, &session_id)
+        .expect("placeholder session should be waitable before marker emission");
+    let resolved = crate::session_cmds::resolve_session_prefix_with_global_fallback(
+        &project_root,
+        &session_id,
+    )
+    .expect("session wait prefix resolution should see the session");
+    assert_eq!(resolved.session_id, session_id);
+
+    let listed = csa_session::list_sessions(&project_root, None)
+        .expect("session list should load persisted placeholder");
+    assert!(
+        listed
+            .iter()
+            .any(|session| session.meta_session_id == session_id),
+        "session list must include a session id printed in CSA:SESSION_STARTED"
+    );
+    let _ = std::fs::remove_dir_all(session_root);
+}
+
+#[test]
+fn daemon_started_marker_is_blocked_when_session_state_is_unreadable() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("project root should be created");
+    let session_id = csa_session::new_session_id();
+    let session_root =
+        csa_session::get_session_root(&project_root).expect("session root should resolve");
+    let session_dir = session_root.join("sessions").join(&session_id);
+    std::fs::create_dir_all(session_dir.join("input")).expect("session dir should be created");
+    std::fs::create_dir_all(session_dir.join("output")).expect("session dir should be created");
+
+    let err = verify_daemon_session_waitable(&project_root, &session_id)
+        .expect_err("unreadable state must block CSA:SESSION_STARTED emission");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("state is not readable by `csa session wait`")
+            || message.contains("Session"),
+        "error should explain why no usable wait command can be printed: {message}"
+    );
+    let _ = std::fs::remove_dir_all(session_root);
+}

@@ -44,6 +44,22 @@ pub struct ExecutionResult {
     /// session can still be diagnosed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_process_exit_code: Option<i32>,
+    /// Unix signal number that terminated the process, when available.
+    ///
+    /// This is orthogonal to `exit_code`: on Unix, signal 9 is represented as
+    /// exit code 137 for shell/caller compatibility while this field preserves
+    /// the raw signal for diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_signal: Option<i32>,
+    /// Best-effort signal/kill classification attached by callers that can
+    /// inspect host or session resources. `csa-process` only captures the raw
+    /// signal; higher layers decide whether it was OOM, earlyoom, timeout, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_hint: Option<String>,
+    /// Human-readable resource context for no-session executions, such as
+    /// ephemeral runs where no `result.toml` can carry `kill_hint`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_diagnostics: Option<String>,
     /// CSA-own deterministic gate failure marker. `Some(reason)` means one of CSA's
     /// own post-run gates (edit guard / new-file guard / commit policy / no-op /
     /// worker-blocked / no-progress / tool exhaustion) fired and the nonzero

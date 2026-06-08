@@ -363,6 +363,7 @@ pub(crate) fn spawn_and_exit(
     };
 
     let result = csa_process::daemon::spawn_daemon(config)?;
+    verify_daemon_session_waitable(&project_root, &result.session_id)?;
     // stdout: machine-readable session ID (for script capture).
     println!("{}", result.session_id);
     // stderr: structured RPJ directive for orchestrators.
@@ -405,6 +406,35 @@ pub(crate) fn spawn_and_exit(
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(0);
+}
+
+fn verify_daemon_session_waitable(project_root: &Path, session_id: &str) -> Result<()> {
+    let resolved = crate::session_cmds::resolve_session_prefix_with_global_fallback(
+        project_root,
+        session_id,
+    )
+    .with_context(|| {
+        format!(
+            "daemon session {session_id} was spawned but is not resolvable by `csa session wait`"
+        )
+    })?;
+    anyhow::ensure!(
+        resolved.session_id == session_id,
+        "daemon session {session_id} resolved to unexpected session {}",
+        resolved.session_id
+    );
+
+    let load_project_root = resolved
+        .foreign_project_root
+        .as_deref()
+        .unwrap_or(project_root);
+    csa_session::load_session(load_project_root, session_id).with_context(|| {
+        format!(
+            "daemon session {session_id} was spawned but its state is not readable by `csa session wait`"
+        )
+    })?;
+
+    Ok(())
 }
 
 fn validate_run_daemon_writable_sources(
