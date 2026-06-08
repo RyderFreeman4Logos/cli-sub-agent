@@ -64,6 +64,8 @@ mod resolve;
 mod result_handling;
 #[path = "review_cmd_reviewers.rs"]
 mod reviewers;
+#[path = "review_cmd_session_fix.rs"]
+mod session_fix;
 #[path = "review_cmd_subtree_pin.rs"]
 mod subtree_pin;
 #[cfg(test)]
@@ -84,8 +86,7 @@ use flow::persist_review_sidecars_if_session_exists_with_diff_size;
 #[cfg(not(test))]
 use flow::{persist_review_sidecars_if_session_exists_with_diff_size, should_run_fix_loop};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
-#[rustfmt::skip]
-use prior_rounds::{ explicit_review_tool, load_prior_rounds_section_or_persist_error, review_pre_exec_session_id };
+use prior_rounds::load_prior_rounds_section_or_persist_error;
 #[cfg(test)]
 use resolve::build_review_instruction;
 #[cfg(test)]
@@ -93,8 +94,8 @@ pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_readonly_configured,
-    resolve_review_readonly_project_root, resolve_review_selection, resolve_review_stream_mode,
-    resolve_review_thinking, resolve_review_tier_name, review_scope_allows_auto_discovery,
+    resolve_review_readonly_project_root, resolve_review_stream_mode, resolve_review_thinking,
+    resolve_review_tier_name, review_scope_allows_auto_discovery,
     validate_review_direct_tool_tier_restriction, verify_review_skill_available,
 };
 use result_handling::resolve_single_review_result;
@@ -103,6 +104,7 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
+pub(crate) use session_fix::validate_session_fix_before_daemon;
 
 pub(crate) async fn handle_review(
     mut args: ReviewArgs,
@@ -124,6 +126,7 @@ pub(crate) async fn handle_review(
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
+    let selection = session_fix::resolve_selection_tool(&args, &project_root, args_tool)?;
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config.as_ref(),
         global_config: &global_config,
@@ -137,7 +140,7 @@ pub(crate) async fn handle_review(
         inherited_trusted_pin,
     })?;
     validate_review_direct_tool_tier_restriction(
-        args_tool.is_some(),
+        selection.direct_tool_requested,
         config.as_ref(),
         effective_tier.as_deref(),
         args.force_override_user_config,
@@ -220,40 +223,34 @@ pub(crate) async fn handle_review(
 
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    crate::run_helpers::warn_if_tier_without_tool(args.tier.as_deref(), args_tool.is_some());
-    let resolved_selection = match resolve_review_selection(
-        args_tool,
-        args.model_spec.as_deref(),
-        config.as_ref(),
-        &global_config,
-        parent_tool.as_deref(),
-        &project_root,
-        args.force_override_user_config,
-        effective_tier.as_deref(),
-        args.force_ignore_tier_setting,
-    ) {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            return Err(crate::session_guard::persist_pre_exec_error_result(
-                crate::session_guard::PreExecErrorCtx {
-                    project_root: &project_root,
-                    session_id: review_pre_exec_session_id(&args),
-                    description: Some(review_description.as_str()),
-                    parent: None,
-                    tool_name: explicit_review_tool(&args).map(|tool| tool.as_str()),
-                    task_type: Some("review"),
-                    tier_name: effective_tier.as_deref(),
-                    error: err,
-                },
-            ));
-        }
-    };
+    crate::run_helpers::warn_if_tier_without_tool(
+        args.tier.as_deref(),
+        selection.direct_tool_requested,
+    );
+    let resolved_selection =
+        session_fix::resolve_selection_or_persist_error(session_fix::SelectionResolutionCtx {
+            args: &args,
+            project_config: config.as_ref(),
+            global_config: &global_config,
+            parent_tool: parent_tool.as_deref(),
+            project_root: &project_root,
+            effective_tier: effective_tier.as_deref(),
+            selection_tool: selection.selection_tool,
+            direct_tool_requested: selection.direct_tool_requested,
+            session_fix: selection.session_fix.as_ref(),
+            review_description: &review_description,
+        })?;
     let tool = resolved_selection.tool;
     let resolved_model_spec = resolved_selection.model_spec.clone();
     let tier_preference_order = resolved_selection.tier_preference_order.clone();
     let tier_active = resolved_model_spec.is_some()
         && args.model_spec.is_none()
         && !args.force_ignore_tier_setting;
+    // Session-fix resumes must not fail over beyond the recorded tool.
+    let execution_no_failover = session_fix::effective_no_failover_for_session_fix(
+        args.no_failover,
+        selection.session_fix.as_ref(),
+    );
     let resolved_tier_name = if tier_active {
         resolve_review_tier_name(
             config.as_ref(),
@@ -338,7 +335,7 @@ pub(crate) async fn handle_review(
             initial_response_timeout_seconds,
             args.force_override_user_config,
             args.force_ignore_tier_setting,
-            args.no_failover,
+            execution_no_failover,
             args.build_jobs,
             args.fast_but_more_cost,
             true,
@@ -527,7 +524,7 @@ pub(crate) async fn handle_review(
             initial_response_timeout_seconds,
             force_override_user_config: args.force_override_user_config,
             force_ignore_tier_setting: args.force_ignore_tier_setting,
-            no_failover: args.no_failover,
+            no_failover: execution_no_failover,
             build_jobs: args.build_jobs,
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,

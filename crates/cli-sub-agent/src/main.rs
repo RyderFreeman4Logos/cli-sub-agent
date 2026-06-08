@@ -495,6 +495,9 @@ async fn run() -> Result<()> {
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
+            if !args.no_daemon && !args.daemon_child && args.session_id.is_none() {
+                review_cmd::validate_session_fix_before_daemon(&args)?;
+            }
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
                 args.no_daemon || args.check_verdict,
