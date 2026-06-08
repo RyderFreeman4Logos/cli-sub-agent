@@ -449,10 +449,9 @@ fn ensure_terminal_result_for_dead_active_session_preserves_session_with_recent_
 
 #[cfg(unix)]
 #[test]
-fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
+fn handle_session_wait_returns_on_terminal_result_before_daemon_exit() {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
-    use std::time::{Duration, Instant};
 
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
@@ -471,7 +470,7 @@ fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
     let result_toml = toml::to_string_pretty(&make_result("success", 0)).unwrap();
     let directive = "<!-- CSA:NEXT_STEP cmd=\"echo done\" required=true -->";
     let script = format!(
-        "#!/bin/sh\nset -eu\nsession_id=\"$1\"\nresult_path=\"$2\"\nstdout_path=\"$3\"\ncat > \"$result_path\" <<'EOF'\n{result_toml}\nEOF\nsleep 2\nprintf '%s\\n' '{directive}' > \"$stdout_path\"\n# Keep the session id in the argv/cmdline for liveness context matching.\nprintf '%s' \"$session_id\" >/dev/null\n"
+        "#!/bin/sh\nset -eu\nsession_id=\"$1\"\nresult_path=\"$2\"\nstdout_path=\"$3\"\ncat > \"$result_path\" <<'EOF'\n{result_toml}\nEOF\nsleep 5\nprintf '%s\\n' '{directive}' > \"$stdout_path\"\n# Keep the session id in the argv/cmdline for liveness context matching.\nprintf '%s' \"$session_id\" >/dev/null\n"
     );
     std::fs::write(&script_path, script).unwrap();
     let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
@@ -487,25 +486,23 @@ fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
     std::fs::write(session_dir.join("daemon.pid"), child.id().to_string()).unwrap();
     wait_for_spawned_daemon_visibility(&session_dir, &mut child);
 
-    let started = Instant::now();
     let exit_code = handle_session_wait(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
         10,
     )
     .unwrap();
-    let elapsed = started.elapsed();
 
     assert_eq!(exit_code, 0);
     assert!(
-        elapsed >= Duration::from_secs(1),
-        "wait should not return immediately after result.toml appears while daemon is still alive; elapsed={elapsed:?}"
+        child.try_wait().unwrap().is_none(),
+        "terminal result.toml should complete wait before delayed daemon stdout is written"
     );
     assert!(
-        std::fs::read_to_string(&stdout_path)
+        !std::fs::read_to_string(&stdout_path)
             .unwrap_or_default()
             .contains("CSA:NEXT_STEP"),
-        "wait should return only after delayed stdout payload is present"
+        "wait should not wait for post-result stdout once terminal result.toml exists"
     );
 
     let status = child.wait().unwrap();

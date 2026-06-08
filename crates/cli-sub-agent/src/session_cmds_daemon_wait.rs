@@ -33,7 +33,7 @@ use types::WaitExecutionOptions;
 pub(crate) use types::WaitLoopTiming;
 pub(crate) use types::{SessionWaitOutputMode, WaitBehavior, WaitReconciliationOutcome};
 
-/// Wait for a daemon session to reach a terminal result and daemon exit.
+/// Wait for a daemon session to reach a terminal result.
 /// Exits 0 on session success, 1 on terminal session failure, 124 when the
 /// wait times out while the session is still active, and 33 for memory warnings.
 #[cfg(test)]
