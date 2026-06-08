@@ -911,3 +911,5 @@ async fn execute_review_unavailable_does_not_persist_session_artifacts() {
         unknown_output.display()
     );
 }
+
+include!("review_cmd_exact_1953_tests.rs");

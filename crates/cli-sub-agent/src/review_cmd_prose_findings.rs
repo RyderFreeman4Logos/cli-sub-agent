@@ -11,6 +11,26 @@ pub(in crate::review_cmd) fn findings_file_from_prose(text: &str) -> Option<Find
     }
 }
 
+pub(in crate::review_cmd) fn findings_file_from_explicit_findings_sections(
+    text: &str,
+) -> Option<FindingsFile> {
+    let mut findings = Vec::new();
+    for body in findings_section_bodies(text) {
+        let parser_input = format!("Findings\n{}", body.as_str());
+        for mut finding in extract_review_findings_from_prose_with_default(&parser_input, None) {
+            if findings
+                .iter()
+                .any(|existing| review_finding_payload_eq(existing, &finding))
+            {
+                continue;
+            }
+            finding.id = format!("prose-{:03}", findings.len() + 1);
+            findings.push(finding);
+        }
+    }
+    (!findings.is_empty()).then_some(FindingsFile { findings })
+}
+
 pub(in crate::review_cmd) fn extract_review_findings_from_prose(text: &str) -> Vec<ReviewFinding> {
     let default_unlabeled_severity =
         contains_blocking_review_signal(text).then_some(Severity::Medium);
@@ -425,6 +445,14 @@ fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
     } else {
         value.trim().to_string()
     }
+}
+
+fn review_finding_payload_eq(left: &ReviewFinding, right: &ReviewFinding) -> bool {
+    left.severity == right.severity
+        && left.file_ranges == right.file_ranges
+        && left.is_regression_of_commit == right.is_regression_of_commit
+        && left.suggested_test_scenario == right.suggested_test_scenario
+        && left.description == right.description
 }
 
 pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
