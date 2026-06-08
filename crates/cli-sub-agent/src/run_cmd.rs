@@ -146,6 +146,7 @@ impl SubagentRunConfig {
             false,
             false,
             None,
+            Default::default(),
             false,
             None,
             None,

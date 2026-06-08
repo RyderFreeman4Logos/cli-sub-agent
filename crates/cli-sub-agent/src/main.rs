@@ -84,6 +84,7 @@ mod run_cmd_preflight;
 mod run_cmd_tool_selection;
 mod run_helpers;
 mod run_helpers_branch_guard;
+mod run_resource_overrides;
 #[cfg(test)]
 mod sa_mode_tests;
 mod self_update;
@@ -271,6 +272,8 @@ async fn run() -> Result<()> {
             no_failover,
             fast_but_more_cost,
             build_jobs,
+            memory_max_mb,
+            min_free_memory_mb,
             wait,
             idle_timeout,
             initial_response_timeout,
@@ -373,6 +376,10 @@ async fn run() -> Result<()> {
                 no_failover,
                 fast_but_more_cost,
                 build_jobs,
+                resource_overrides: run_resource_overrides::RunResourceOverrides::new(
+                    memory_max_mb,
+                    min_free_memory_mb,
+                ),
                 wait,
                 idle_timeout,
                 initial_response_timeout,

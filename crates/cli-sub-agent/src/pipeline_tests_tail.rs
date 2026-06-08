@@ -731,7 +731,6 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         "PATH".to_string(),
         format!("{}:{inherited_path}", bin_dir.display()),
     );
-
     let executor = Executor::Opencode {
         model_override: None,
         agent: None,
@@ -763,6 +762,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         ParentSessionSource::ExplicitOnly,
         SessionCreationMode::DaemonManaged,
+        Default::default(),
         false,
         false,
         &[],

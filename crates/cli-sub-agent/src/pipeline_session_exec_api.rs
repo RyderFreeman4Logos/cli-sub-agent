@@ -13,6 +13,7 @@ use super::execute_with_session_and_meta_with_parent_source;
 use crate::pipeline::{
     MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
 };
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 #[allow(clippy::too_many_arguments)]
@@ -141,6 +142,7 @@ pub(crate) async fn execute_with_session_and_meta(
         pre_session_hook,
         ParentSessionSource::ExplicitOrEnv,
         SessionCreationMode::DaemonManaged,
+        RunResourceOverrides::default(),
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,

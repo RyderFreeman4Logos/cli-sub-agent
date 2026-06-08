@@ -6,7 +6,10 @@ use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{MetaSessionState, save_session};
 use tracing::warn;
 
-use crate::resource_admission::{build_spawn_memory_admission, spawn_memory_projection_mb};
+use crate::resource_admission::{
+    build_spawn_memory_admission, spawn_memory_projection_mb_with_overrides,
+};
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(super) fn check_resources_before_spawn(
@@ -15,14 +18,13 @@ pub(super) fn check_resources_before_spawn(
     project_root: &Path,
     session: &mut MetaSessionState,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
+    resource_overrides: RunResourceOverrides,
 ) -> anyhow::Result<()> {
-    let default_resources = csa_config::ResourcesConfig::default();
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
-        min_free_memory_mb: config
-            .map(|cfg| cfg.resources.min_free_memory_mb)
-            .unwrap_or(default_resources.min_free_memory_mb),
+        min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
     });
-    let projected_spawn_mb = spawn_memory_projection_mb(config, executor.tool_name());
+    let projected_spawn_mb =
+        spawn_memory_projection_mb_with_overrides(config, executor.tool_name(), resource_overrides);
     if let Err(err) =
         crate::resource_admission::persist_spawn_memory_projection(session, projected_spawn_mb)
     {
@@ -52,8 +54,14 @@ pub(super) fn check_resources_before_spawn(
     }
     if let Some(cfg) = config {
         resource_guard.check_health(
-            cfg.sandbox_memory_max_mb(executor.tool_name()),
+            resource_overrides.resolve_memory_max_mb(config, executor.tool_name()),
             cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
+            60,
+        );
+    } else if resource_overrides.memory_max_mb.is_some() {
+        resource_guard.check_health(
+            resource_overrides.resolve_memory_max_mb(None, executor.tool_name()),
+            csa_config::default_sandbox_for_tool(executor.tool_name()).memory_swap_max_mb,
             60,
         );
     }

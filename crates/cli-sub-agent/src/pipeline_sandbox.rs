@@ -15,8 +15,18 @@ use csa_resource::isolation_plan::{
 use csa_session::MetaSessionState;
 use tracing::{info, warn};
 
+use crate::run_resource_overrides::RunResourceOverrides;
+
+#[path = "pipeline_sandbox_memory_balloon.rs"]
+mod memory_balloon;
+#[path = "pipeline_sandbox_memory_override.rs"]
+mod memory_override;
 #[path = "pipeline_sandbox_writable.rs"]
 mod writable_sources;
+
+pub(crate) use memory_balloon::maybe_inflate_balloon;
+#[cfg(test)]
+pub(crate) use memory_balloon::should_skip_balloon_prewarm;
 
 /// Outcome of sandbox resolution — either enriched options or a fatal error string
 /// (for `Required` mode with no capability).
@@ -25,6 +35,22 @@ pub(crate) enum SandboxResolution {
     Ok(Box<ExecuteOptions>),
     /// Sandbox is required but no capability was detected; caller must bail.
     RequiredButUnavailable(String),
+}
+
+/// Sandbox resolution inputs for one session spawn.
+pub(crate) struct SandboxResolveInput<'a> {
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) tool_name: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) stream_mode: StreamMode,
+    pub(crate) idle_timeout_seconds: u64,
+    pub(crate) liveness_dead_seconds: u64,
+    pub(crate) initial_response_timeout_seconds: Option<u64>,
+    pub(crate) no_fs_sandbox: bool,
+    pub(crate) readonly_project_root: bool,
+    pub(crate) extra_writable: &'a [PathBuf],
+    pub(crate) extra_readable: &'a [PathBuf],
 }
 
 fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> PathBuf {
@@ -72,6 +98,7 @@ pub(crate) fn validate_run_extra_writable_sources_exist(
 /// When `readonly_project_root` is `true`, the project root is mounted read-only
 /// via bwrap `--ro-bind` instead of `--bind`. Used by review/debate to prevent
 /// the tool from modifying project files.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
@@ -87,6 +114,45 @@ pub(crate) fn resolve_sandbox_options(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
 ) -> SandboxResolution {
+    resolve_sandbox_options_with_overrides(
+        SandboxResolveInput {
+            config,
+            tool_name,
+            session_id,
+            project_root,
+            stream_mode,
+            idle_timeout_seconds,
+            liveness_dead_seconds,
+            initial_response_timeout_seconds,
+            no_fs_sandbox,
+            readonly_project_root,
+            extra_writable,
+            extra_readable,
+        },
+        RunResourceOverrides::default(),
+    )
+}
+
+pub(crate) fn resolve_sandbox_options_with_overrides(
+    input: SandboxResolveInput<'_>,
+    resource_overrides: RunResourceOverrides,
+) -> SandboxResolution {
+    let SandboxResolveInput {
+        config,
+        tool_name,
+        session_id,
+        project_root,
+        stream_mode,
+        idle_timeout_seconds,
+        liveness_dead_seconds,
+        initial_response_timeout_seconds,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+        extra_readable,
+    } = input;
+    let has_run_memory_override = resource_overrides.memory_max_mb.is_some();
+
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
         .map(|cfg| cfg.resources.stdin_write_timeout_seconds)
@@ -114,11 +180,14 @@ pub(crate) fn resolve_sandbox_options(
         let defaults = csa_config::default_sandbox_for_tool(tool_name);
         execute_options = execute_options.with_setting_sources(defaults.setting_sources);
 
-        if matches!(defaults.enforcement, csa_config::EnforcementMode::Off) {
+        if memory_override::default_off_allows_unsandboxed(
+            defaults.enforcement,
+            has_run_memory_override,
+        ) {
             return SandboxResolution::Ok(Box::new(execute_options));
         }
 
-        let Some(_memory_max_mb) = defaults.memory_max_mb else {
+        let Some(memory_max_mb) = resource_overrides.resolve_memory_max_mb(None, tool_name) else {
             return SandboxResolution::Ok(Box::new(execute_options));
         };
 
@@ -128,6 +197,13 @@ pub(crate) fn resolve_sandbox_options(
         } else {
             csa_resource::detect_filesystem_capability()
         };
+        if let Some(message) = memory_override::capability_error_if_unenforced(
+            tool_name,
+            has_run_memory_override,
+            resource_cap,
+        ) {
+            return SandboxResolution::RequiredButUnavailable(message);
+        }
         if matches!(resource_cap, csa_resource::ResourceCapability::None) {
             warn!(
                 tool = tool_name,
@@ -142,7 +218,7 @@ pub(crate) fn resolve_sandbox_options(
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
             .with_resource_limits(
-                defaults.memory_max_mb,
+                Some(memory_max_mb),
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
@@ -191,6 +267,11 @@ pub(crate) fn resolve_sandbox_options(
         let plan = builder
             .build()
             .expect("BestEffort IsolationPlan should never fail");
+        if let Some(message) =
+            memory_override::plan_error_if_unenforced(tool_name, has_run_memory_override, &plan)
+        {
+            return SandboxResolution::RequiredButUnavailable(message);
+        }
 
         execute_options = execute_options.with_sandbox(SandboxContext {
             isolation_plan: plan,
@@ -205,16 +286,23 @@ pub(crate) fn resolve_sandbox_options(
     execute_options = execute_options.with_setting_sources(cfg.tool_setting_sources(tool_name));
 
     // Use per-tool enforcement mode (profile-aware) instead of global-only.
-    let enforcement = cfg.tool_enforcement_mode(tool_name);
-    if matches!(enforcement, csa_config::EnforcementMode::Off) {
-        return SandboxResolution::Ok(Box::new(execute_options));
-    }
+    let enforcement = match memory_override::resolve_config_enforcement(
+        cfg,
+        tool_name,
+        has_run_memory_override,
+    ) {
+        Ok(Some(enforcement)) => enforcement,
+        Ok(None) => {
+            return SandboxResolution::Ok(Box::new(execute_options));
+        }
+        Err(message) => return SandboxResolution::RequiredButUnavailable(message),
+    };
 
-    let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
+    let Some(memory_max_mb) = resource_overrides.resolve_memory_max_mb(Some(cfg), tool_name) else {
         if matches!(enforcement, csa_config::EnforcementMode::Required) {
             return SandboxResolution::RequiredButUnavailable(format!(
                 "Sandbox enforcement is required for tool '{tool_name}' but no memory_max_mb is configured. \
-                 Set resources.memory_max_mb or tools.{tool_name}.memory_max_mb in config."
+                 Set --memory-max-mb, resources.memory_max_mb, or tools.{tool_name}.memory_max_mb."
             ));
         }
         info!(
@@ -227,6 +315,13 @@ pub(crate) fn resolve_sandbox_options(
 
     // Memory limit exists — detect capabilities and build IsolationPlan.
     let resource_cap = csa_resource::detect_resource_capability();
+    if let Some(message) = memory_override::capability_error_if_unenforced(
+        tool_name,
+        has_run_memory_override,
+        resource_cap,
+    ) {
+        return SandboxResolution::RequiredButUnavailable(message);
+    }
 
     // Resolve filesystem enforcement independently from resource enforcement.
     // tool_fs_enforcement_mode already handles the full priority chain:
@@ -406,6 +501,11 @@ pub(crate) fn resolve_sandbox_options(
             ));
         }
     };
+    if let Some(message) =
+        memory_override::plan_error_if_unenforced(tool_name, has_run_memory_override, &plan)
+    {
+        return SandboxResolution::RequiredButUnavailable(message);
+    }
 
     info!(
         tool = %tool_name,
@@ -424,61 +524,6 @@ pub(crate) fn resolve_sandbox_options(
     });
 
     SandboxResolution::Ok(Box::new(execute_options))
-}
-
-/// Conditionally inflate and immediately deflate a memory balloon for claude-code.
-///
-/// Pre-warms RAM by `mmap`-ing a large anonymous mapping with `MAP_POPULATE`, forcing
-/// the kernel to swap out other processes.  The balloon is dropped (deflated) right
-/// away so the freed physical pages are available for the tool process about to launch.
-pub(crate) fn maybe_inflate_balloon(tool_name: &str, project_root: &Path, session_id: &str) {
-    use csa_resource::memory_balloon::{MemoryBalloon, should_enable_balloon};
-
-    if tool_name != "claude-code" {
-        return;
-    }
-
-    const BALLOON_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let available_memory = sys.available_memory();
-    let available_swap = sys.free_swap();
-    let available_memory_mb = available_memory / 1024 / 1024;
-    let active_session_count =
-        crate::resource_admission::active_session_count_for_balloon(project_root, session_id);
-
-    if should_skip_balloon_prewarm(available_memory_mb, active_session_count) {
-        warn!(
-            available_memory_mb,
-            active_session_count,
-            "Skipping MemoryBalloon prewarm under host memory or concurrent-session pressure"
-        );
-        return;
-    }
-
-    if !should_enable_balloon(available_memory, available_swap, BALLOON_SIZE as u64) {
-        return;
-    }
-
-    match MemoryBalloon::inflate(BALLOON_SIZE) {
-        Ok(balloon) => {
-            info!(
-                size_mb = BALLOON_SIZE / 1024 / 1024,
-                "Memory balloon inflated — deflating immediately"
-            );
-            drop(balloon);
-        }
-        Err(e) => {
-            // Balloon is an optimisation; failure is non-fatal.
-            warn!(error = %e, "Memory balloon inflation failed; continuing without pre-warming");
-        }
-    }
-}
-
-const BALLOON_MIN_AVAILABLE_MEMORY_MB: u64 = 8192;
-
-fn should_skip_balloon_prewarm(available_memory_mb: u64, active_session_count: u64) -> bool {
-    available_memory_mb < BALLOON_MIN_AVAILABLE_MEMORY_MB || active_session_count > 0
 }
 
 /// Record sandbox telemetry in session state (first turn only).
@@ -571,6 +616,10 @@ pub(crate) fn check_sandbox_permission_errors(
 #[cfg(test)]
 #[path = "pipeline_sandbox_extra_writable_tests.rs"]
 mod extra_writable_tests;
+
+#[cfg(test)]
+#[path = "pipeline_sandbox_memory_override_tests.rs"]
+mod memory_override_tests;
 
 #[cfg(test)]
 #[path = "pipeline_sandbox_tests.rs"]

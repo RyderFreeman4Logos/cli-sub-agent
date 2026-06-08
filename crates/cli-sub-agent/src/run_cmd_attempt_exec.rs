@@ -14,6 +14,7 @@ use csa_executor::{Executor, ResolvedTimeout};
 
 use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 pub(super) enum AttemptExecution {
@@ -129,6 +130,7 @@ pub(super) async fn run_persistent_with_timeout(
     memory_injection: &pipeline::MemoryInjectionOptions,
     global_config: &GlobalConfig,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
+    resource_overrides: RunResourceOverrides,
     fork_resolution: Option<&ForkResolution>,
     fresh_spawn_preflight_override: bool,
     executed_session_id: &mut Option<String>,
@@ -165,6 +167,7 @@ pub(super) async fn run_persistent_with_timeout(
             memory_injection,
             global_config,
             pre_session_hook,
+            resource_overrides,
             fork_resolution,
             fresh_spawn_preflight_override,
             executed_session_id,
@@ -207,6 +210,7 @@ pub(super) async fn run_persistent_without_timeout(
     memory_injection: &pipeline::MemoryInjectionOptions,
     global_config: &GlobalConfig,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
+    resource_overrides: RunResourceOverrides,
     fork_resolution: Option<&ForkResolution>,
     fresh_spawn_preflight_override: bool,
     executed_session_id: &mut Option<String>,
@@ -241,6 +245,7 @@ pub(super) async fn run_persistent_without_timeout(
         memory_injection,
         global_config,
         pre_session_hook,
+        resource_overrides,
         fork_resolution,
         fresh_spawn_preflight_override,
         executed_session_id,
@@ -279,6 +284,7 @@ async fn execute_persistent(
     memory_injection: &pipeline::MemoryInjectionOptions,
     global_config: &GlobalConfig,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
+    resource_overrides: RunResourceOverrides,
     fork_resolution: Option<&ForkResolution>,
     fresh_spawn_preflight_override: bool,
     executed_session_id: &mut Option<String>,
@@ -335,6 +341,7 @@ async fn execute_persistent(
         pre_session_hook,
         pipeline::ParentSessionSource::ExplicitOrEnv,
         pipeline::SessionCreationMode::DaemonManaged,
+        resource_overrides,
         no_fs_sandbox,
         false, // readonly_project_root: `csa run` allows writes
         extra_writable,

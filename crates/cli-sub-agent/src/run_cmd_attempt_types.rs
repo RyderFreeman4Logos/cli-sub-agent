@@ -39,6 +39,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) no_failover: bool,
     pub(crate) fast_but_more_cost: bool,
     pub(crate) build_jobs: Option<u32>,
+    pub(crate) resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
     pub(crate) wait: bool,
     pub(crate) idle_timeout_seconds: u64,
     pub(crate) cli_idle_timeout: Option<u64>,

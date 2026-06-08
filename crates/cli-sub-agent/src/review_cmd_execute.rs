@@ -778,6 +778,7 @@ async fn execute_review_once(
         pre_session_hook,
         crate::pipeline::ParentSessionSource::ExplicitOnly,
         crate::pipeline::SessionCreationMode::DaemonManaged,
+        Default::default(),
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
@@ -899,12 +900,11 @@ pub(super) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Opti
 mod tests;
 
 #[cfg(test)]
-#[path = "review_cmd_execute_readonly_tests.rs"]
-mod readonly_tests;
-
-#[cfg(test)]
 #[path = "review_cmd_execute_guard_tests.rs"]
 mod guard_tests;
+#[cfg(test)]
+#[path = "review_cmd_execute_readonly_tests.rs"]
+mod readonly_tests;
 
 #[cfg(test)]
 #[path = "review_cmd_execute_tier_tests.rs"]

@@ -6,6 +6,8 @@ use csa_resource::SpawnMemoryAdmission;
 use csa_session::{MetaSessionState, SandboxInfo, SessionPhase, SessionTreeMemorySampler};
 use tracing::warn;
 
+use crate::run_resource_overrides::RunResourceOverrides;
+
 const FALLBACK_SPAWN_PROJECTION_MB: u64 = 4096;
 const RECENT_ACTIVE_FALLBACK_PROJECTION_MB: u64 = 4096;
 const RECENT_ACTIVE_FALLBACK_WINDOW_SECS: i64 = 15 * 60;
@@ -32,10 +34,18 @@ enum SessionMemorySample {
     Unavailable,
 }
 
+#[cfg(test)]
 pub(crate) fn spawn_memory_projection_mb(config: Option<&ProjectConfig>, tool_name: &str) -> u64 {
-    config
-        .and_then(|cfg| cfg.sandbox_memory_max_mb(tool_name))
-        .or_else(|| csa_config::default_sandbox_for_tool(tool_name).memory_max_mb)
+    spawn_memory_projection_mb_with_overrides(config, tool_name, RunResourceOverrides::default())
+}
+
+pub(crate) fn spawn_memory_projection_mb_with_overrides(
+    config: Option<&ProjectConfig>,
+    tool_name: &str,
+    resource_overrides: RunResourceOverrides,
+) -> u64 {
+    resource_overrides
+        .resolve_memory_max_mb(config, tool_name)
         .unwrap_or(FALLBACK_SPAWN_PROJECTION_MB)
 }
 
@@ -312,6 +322,23 @@ mod tests {
             toml::from_str("[resources]\nmemory_max_mb = 8192\n").expect("config should parse");
 
         assert_eq!(spawn_memory_projection_mb(Some(&cfg), "codex"), 8192);
+    }
+
+    #[test]
+    fn spawn_projection_uses_run_override_before_tool_config() {
+        let cfg: ProjectConfig = toml::from_str(
+            r#"
+[tools.codex]
+memory_max_mb = 16384
+"#,
+        )
+        .expect("config should parse");
+        let overrides = RunResourceOverrides::new(Some(6144), None);
+
+        assert_eq!(
+            spawn_memory_projection_mb_with_overrides(Some(&cfg), "codex", overrides),
+            6144
+        );
     }
 
     #[test]

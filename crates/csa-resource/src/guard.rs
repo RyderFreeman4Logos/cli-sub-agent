@@ -155,7 +155,7 @@ fn evaluate_memory_availability(
         eprintln!("{message}");
         bail!(
             "{message}. Free system memory or reduce [resources] min_free_memory_mb in \
-             .csa/config.toml."
+             .csa/config.toml. For one csa run, pass --min-free-memory-mb <MB>."
         );
     }
 
@@ -197,7 +197,10 @@ fn evaluate_memory_availability(
             eprintln!("{message}");
             bail!(
                 "{message}. Free host memory, wait for active CSA sessions to finish, or lower \
-                 tool memory limits before spawning more work."
+                 tool memory limits before spawning more work. For one csa run, pass \
+                 --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
+                 to lower the reserve. Persistent config keys: resources.memory_max_mb, \
+                 tools.<tool>.memory_max_mb, resources.min_free_memory_mb."
             );
         }
 
@@ -223,7 +226,9 @@ fn evaluate_memory_availability(
             );
             eprintln!("{message}");
             bail!(
-                "{message}. CSA is refusing to launch work that could collectively exhaust host RAM."
+                "{message}. CSA is refusing to launch work that could collectively exhaust host RAM. \
+                 For one csa run, pass --memory-max-mb <MB> to lower projected_spawn. \
+                 Persistent config keys: resources.memory_max_mb or tools.<tool>.memory_max_mb."
             );
         }
 
@@ -343,6 +348,7 @@ mod tests {
             msg.contains("required_mb=4096"),
             "Should show reserve: {msg}"
         );
+        assert!(msg.contains("--min-free-memory-mb <MB>"));
     }
 
     #[test]
@@ -413,6 +419,9 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("host memory admission denied"));
         assert!(msg.contains("projected_spawn=8192MB"));
+        assert!(msg.contains("--memory-max-mb <MB>"));
+        assert!(msg.contains("--min-free-memory-mb <MB>"));
+        assert!(msg.contains("tools.<tool>.memory_max_mb"));
     }
 
     #[test]
@@ -432,6 +441,8 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("active-session memory admission denied"));
         assert!(msg.contains("projected_active=28192MB"));
+        assert!(msg.contains("--memory-max-mb <MB>"));
+        assert!(msg.contains("resources.memory_max_mb"));
     }
 
     #[test]

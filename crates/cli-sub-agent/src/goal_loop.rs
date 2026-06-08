@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolArg};
 
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 pub(crate) struct GoalLoop {
@@ -94,6 +95,7 @@ pub(crate) struct GoalRunRequest {
     pub(crate) no_failover: bool,
     pub(crate) fast_but_more_cost: bool,
     pub(crate) build_jobs: Option<u32>,
+    pub(crate) resource_overrides: RunResourceOverrides,
     pub(crate) wait: bool,
     pub(crate) idle_timeout: Option<u64>,
     pub(crate) initial_response_timeout: Option<u64>,
@@ -172,6 +174,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.no_failover,
         request.fast_but_more_cost,
         request.build_jobs,
+        request.resource_overrides,
         request.wait,
         request.idle_timeout,
         request.initial_response_timeout,
@@ -337,6 +340,7 @@ async fn run_goal_iteration(
         request.no_failover,
         request.fast_but_more_cost,
         request.build_jobs,
+        request.resource_overrides,
         request.wait,
         request.idle_timeout,
         request.initial_response_timeout,
