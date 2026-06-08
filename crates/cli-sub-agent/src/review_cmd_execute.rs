@@ -31,10 +31,10 @@ use crate::review_routing::{
 };
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
-    TierAttemptFailure, chain_failure_reasons, classify_next_model_failure_with_elapsed,
-    earliest_backend_reset_window, fallback_reason_for_result,
-    format_all_models_failed_reason_with_reset, ordered_tier_candidates,
-    parse_backend_reset_duration, persist_fallback_chain, persist_fallback_result_fields,
+    TierAttemptFailure, chain_failure_reasons, earliest_backend_reset_window,
+    fallback_reason_for_result, format_all_models_failed_reason_with_reset,
+    ordered_tier_candidates, parse_backend_reset_duration, persist_fallback_chain,
+    persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -46,10 +46,11 @@ use artifact_guard::detect_repo_root_review_artifact_violations;
 #[cfg(test)]
 use failures::read_review_failure_excerpt;
 use failures::{
-    build_gemini_api_key_retry_env, classify_review_failover_reason,
-    classify_review_failure_result, enforce_review_artifact_contract,
-    extract_meta_session_id_from_error, maybe_synthesize_missing_review_result,
-    repair_completed_review_restriction_result, retire_tier_failover_session,
+    build_gemini_api_key_retry_env, classify_review_failover_error,
+    classify_review_failover_reason, classify_review_failure_result,
+    enforce_review_artifact_contract, extract_meta_session_id_from_error,
+    maybe_synthesize_missing_review_result, repair_completed_review_restriction_result,
+    retire_tier_failover_session,
 };
 
 const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
@@ -361,12 +362,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                 let error_text = format!("{err:#}");
                 if tier_fallback_enabled
                     && candidates.len() > 1
-                    && let Some(detected) = classify_next_model_failure_with_elapsed(
-                        attempt_tool.as_str(),
-                        &error_text,
-                        "",
-                        1,
+                    && let Some(detected) = classify_review_failover_error(
+                        *attempt_tool,
                         attempt_model_spec.as_deref(),
+                        &error_text,
                         Some(attempt_started_at.elapsed()),
                     )
                 {
@@ -376,10 +375,11 @@ pub(crate) async fn execute_review_with_tier_filter(
                     if let Some(reset_after) = parse_backend_reset_duration(&error_text) {
                         reset_windows.push(reset_after);
                     }
-                    failures.push(TierAttemptFailure::from_rate_limit(
-                        model_label.clone(),
-                        &detected,
-                    ));
+                    failures.push(TierAttemptFailure {
+                        model_spec: model_label.clone(),
+                        reason: detected.reason.clone(),
+                        quota_exhausted: detected.quota_exhausted,
+                    });
                     warn!(
                         failed_tool = %attempt_tool,
                         failed_model = %model_label,

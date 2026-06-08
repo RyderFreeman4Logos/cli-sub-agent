@@ -179,6 +179,14 @@ pub(crate) fn resolve_review_readonly_configured(
         .or(global_config.review.readonly_sandbox)
 }
 
+pub(crate) fn resolve_review_readonly_project_root(fix: bool, configured: Option<bool>) -> bool {
+    if fix {
+        false
+    } else {
+        configured.unwrap_or(true)
+    }
+}
+
 fn resolve_review_tool_from_selection(
     selection: &csa_config::ToolSelection,
     parent_tool: Option<&str>,

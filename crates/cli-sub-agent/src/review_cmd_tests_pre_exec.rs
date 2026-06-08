@@ -1,6 +1,32 @@
 use super::*;
 
 #[tokio::test]
+async fn handle_review_rejects_missing_prompt_file_before_pre_exec() {
+    let project_dir = tempdir().unwrap();
+    let cd = project_dir.path().display().to_string();
+    let missing = project_dir.path().join("missing-review-prompt.md");
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--cd",
+        &cd,
+        "--diff",
+        "--prompt-file",
+        missing.to_str().expect("utf-8 path"),
+    ]);
+
+    let err = handle_review(args, 0, &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV)
+        .await
+        .expect_err("missing --prompt-file must fail before review execution");
+
+    assert!(
+        err.chain()
+            .any(|cause| cause.to_string().contains("--prompt-file: failed to read")),
+        "unexpected error chain: {err:#}"
+    );
+}
+
+#[tokio::test]
 async fn handle_review_persists_result_for_prior_rounds_summary_parse_failure() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
