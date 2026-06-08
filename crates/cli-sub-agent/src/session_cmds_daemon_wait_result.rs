@@ -26,9 +26,6 @@ fn load_completed_daemon_result(
             Err(err) => return Err(err),
         };
 
-    if session_has_terminal_process(session_dir) {
-        return Ok(None);
-    }
     Ok(Some(result))
 }
 
@@ -69,9 +66,6 @@ fn load_completed_daemon_result_adaptive(
             }
             Err(err) => return Err(err),
         };
-        if session_has_terminal_process(session_dir) {
-            return Ok(None);
-        }
         Ok(Some(result))
     } else {
         load_completed_daemon_result(project_root, session_id, session_dir)

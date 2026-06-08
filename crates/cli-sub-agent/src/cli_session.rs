@@ -250,7 +250,7 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Wait for a daemon session to complete (poll until result exists and the daemon exits).
+    /// Wait for a daemon session to report a terminal result.
     /// Timeout comes from `~/.config/cli-sub-agent/config.toml` `[kv_cache].long_poll_seconds`
     /// with a legacy 250s fallback when `[kv_cache]` is absent.
     ///
