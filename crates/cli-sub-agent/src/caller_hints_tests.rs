@@ -100,6 +100,41 @@ fn daemon_wait_command_places_cd_after_single_session_id() {
 }
 
 #[test]
+fn daemon_wait_command_shell_escapes_project_root_single_quotes() {
+    let command = crate::daemon_caller_hints::format_session_wait_command(
+        "01KAS6M5XG7V4M4M6YDRS7P8R9",
+        Path::new("/tmp/csa'; touch /tmp/csa-review-proof; echo '"),
+    );
+
+    assert!(
+        command.contains("'\\''; touch /tmp/csa-review-proof; echo '\\'''"),
+        "project root single quotes must remain inside the --cd shell argument: {command}"
+    );
+    assert!(
+        !command.contains("--cd '/tmp/csa'; touch"),
+        "project root must not terminate the --cd shell argument: {command}"
+    );
+}
+
+#[test]
+fn daemon_caller_hint_attrs_escape_shell_command_values() {
+    let command = crate::daemon_caller_hints::format_session_wait_command(
+        "01KAS6M5XG7V4M4M6YDRS7P8R9",
+        Path::new("/tmp/a\"b&<c>d"),
+    );
+    let attr = crate::daemon_caller_hints::escape_structured_comment_attr(&command);
+
+    assert_eq!(
+        attr,
+        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/tmp/a&quot;b&amp;&lt;c&gt;d'"
+    );
+    assert!(
+        !attr.contains('"') && !attr.contains('<') && !attr.contains('>'),
+        "escaped attribute must not contain raw XML attribute delimiters: {attr}"
+    );
+}
+
+#[test]
 fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
     // A doc/line comment that mentions the marker name MUST NOT be parsed
     // as a hint block; only the exact emitted marker prefix counts.

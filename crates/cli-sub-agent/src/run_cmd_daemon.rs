@@ -372,15 +372,20 @@ pub(crate) fn spawn_and_exit(
         &result.session_id,
         &project_root,
     );
+    let session_dir_attr = crate::daemon_caller_hints::escape_structured_comment_attr(
+        &result.session_dir.display().to_string(),
+    );
+    let wait_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
+    let attach_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&attach_cmd);
     eprintln!(
         "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
          wait_cmd=\"{wait_cmd}\" \
          attach_cmd=\"{attach_cmd}\" -->",
         id = result.session_id,
         pid = result.pid,
-        dir = result.session_dir.display(),
-        wait_cmd = wait_cmd,
-        attach_cmd = attach_cmd,
+        dir = session_dir_attr,
+        wait_cmd = wait_cmd_attr,
+        attach_cmd = attach_cmd_attr,
     );
     eprintln!(
         "<!-- CSA:CALLER_HINT action=\"wait\" \
@@ -391,7 +396,7 @@ pub(crate) fn spawn_and_exit(
          any manual polling wastes caller tokens with zero benefit. \
          FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
          suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
-        wait_cmd = wait_cmd,
+        wait_cmd = wait_cmd_attr,
     );
     let codex_hint = crate::process_tree::codex_yield_hint();
     if !codex_hint.is_empty() {

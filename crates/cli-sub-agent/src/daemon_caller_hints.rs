@@ -16,6 +16,19 @@ pub(crate) fn format_session_attach_command(session_id: &str, project_root: &Pat
     )
 }
 
-fn format_cd_arg(project_root: &Path) -> String {
-    format!(" --cd '{}'", project_root.display())
+pub(crate) fn format_cd_arg(project_root: &Path) -> String {
+    let project_root = project_root.to_string_lossy();
+    format!(" --cd {}", shell_escape_for_command(&project_root))
+}
+
+pub(crate) fn escape_structured_comment_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn shell_escape_for_command(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }

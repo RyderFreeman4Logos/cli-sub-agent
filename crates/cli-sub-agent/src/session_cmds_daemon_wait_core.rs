@@ -325,35 +325,37 @@ where
         if elapsed >= wait_options.behavior.wait_timeout_secs {
             let cd_arg = cd
                 .as_ref()
-                .map(|path| format!(" --cd '{}'", path))
+                .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
                 .unwrap_or_default();
             let session_alive = session_has_terminal_process(&session_dir)
                 || csa_process::ToolLiveness::is_alive(&session_dir);
             if session_alive {
+                let wait_cmd = format!(
+                    "csa session wait --session {}{}",
+                    resolved.session_id, cd_arg
+                );
+                let wait_cmd_attr =
+                    crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
                 // KV-warm exit: session still alive at the wait cap. See #1439.
                 eprintln!(
                     "Session {} still running after {}s wait cap; returning so caller can warm its KV cache before re-waiting.",
                     resolved.session_id, wait_options.behavior.wait_timeout_secs,
                 );
                 eprintln!(
-                    "<!-- CSA:SESSION_WAIT_KV_WARM session={} status=alive elapsed={}s action=re-wait cmd=\"csa session wait --session {}{}\" -->",
-                    resolved.session_id, elapsed, resolved.session_id, cd_arg,
+                    "<!-- CSA:SESSION_WAIT_KV_WARM session={} status=alive elapsed={}s action=re-wait cmd=\"{}\" -->",
+                    resolved.session_id, elapsed, wait_cmd_attr,
                 );
                 eprintln!(
                     "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
                      rule=\"Session is alive; this exit is healthy. Process this output NOW and generate tokens to warm your KV cache, \
-                     then call 'csa session wait --session {sid}{cd}' again in a NEW Bash call. \
+                     then call {wait_cmd} again in a NEW Bash call. \
                      NEVER batch multiple session waits in one Bash call. \
                      If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
                      FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
                      any manual polling wastes caller tokens with zero benefit. \
                      FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
                      suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
-                    sid = resolved.session_id,
-                    cd = cd
-                        .as_ref()
-                        .map(|p| format!(" --cd '{p}'"))
-                        .unwrap_or_default(),
+                    wait_cmd = wait_cmd_attr,
                 );
                 let codex_hint = crate::process_tree::codex_yield_hint();
                 if !codex_hint.is_empty() {
@@ -366,9 +368,15 @@ where
                 "Timeout: session {} did not complete within {}s and no live daemon process remains.",
                 resolved.session_id, wait_options.behavior.wait_timeout_secs,
             );
+            let result_cmd = format!(
+                "csa session result --session {}{}",
+                resolved.session_id, cd_arg
+            );
+            let result_cmd_attr =
+                crate::daemon_caller_hints::escape_structured_comment_attr(&result_cmd);
             eprintln!(
-                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s status=dead cmd=\"csa session result --session {}{}\" -->",
-                resolved.session_id, elapsed, resolved.session_id, cd_arg,
+                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s status=dead cmd=\"{}\" -->",
+                resolved.session_id, elapsed, result_cmd_attr,
             );
             return Ok(SESSION_WAIT_TIMEOUT_EXIT_CODE);
         }
