@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::plan_cmd::PlanRunArgs;
+use std::process::Command;
 
 fn make_args() -> PlanRunArgs {
     PlanRunArgs {
@@ -19,6 +20,65 @@ fn make_args() -> PlanRunArgs {
         pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
         startup_env: crate::startup_env::StartupSubtreeEnv::default(),
     }
+}
+
+fn run_git(project_root: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .expect("git command should start");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_plan_test_repo(project_root: &std::path::Path) {
+    run_git(project_root, &["init", "-b", "main"]);
+    run_git(
+        project_root,
+        &["config", "user.email", "csa-test@example.com"],
+    );
+    run_git(project_root, &["config", "user.name", "CSA Test"]);
+    run_git(project_root, &["config", "core.excludesFile", "/dev/null"]);
+    std::fs::write(
+        project_root.join(".git").join("info").join("exclude"),
+        ".csa/\n",
+    )
+    .expect("write repo-local exclude");
+    std::fs::write(project_root.join("README.md"), "test repo\n").expect("write readme");
+    std::fs::write(project_root.join("weave.lock"), "lock = 1\n").expect("write weave.lock");
+}
+
+fn commit_all(project_root: &std::path::Path, message: &str) {
+    run_git(
+        project_root,
+        &["add", "README.md", "weave.lock", "workflow.toml"],
+    );
+    run_git(project_root, &["commit", "-m", message]);
+}
+
+fn plan_daemon_args(project_root: &std::path::Path) -> PlanRunArgs {
+    let mut args = make_args();
+    args.file = Some("workflow.toml".to_string());
+    args.cd = Some(project_root.display().to_string());
+    args
+}
+
+fn prepare_plan_session(
+    project_root: &std::path::Path,
+    description: &str,
+) -> (String, std::path::PathBuf) {
+    let session_id = csa_session::new_session_id();
+    let session_dir = csa_session::get_session_dir(project_root, &session_id)
+        .expect("session dir should resolve");
+    persist_placeholder_plan_session(project_root, &session_dir, &session_id, description)
+        .expect("placeholder plan session should persist");
+    (session_id, session_dir)
 }
 
 #[test]
@@ -50,8 +110,141 @@ fn describe_unknown_when_no_source_provided() {
     assert_eq!(describe_plan_run(&args), "plan: (unknown workflow)");
 }
 
+#[tokio::test]
+async fn daemon_child_failed_plan_writes_structured_failure_output() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    std::fs::create_dir_all(&project_root).expect("repo dir should be created");
+    init_plan_test_repo(&project_root);
+    std::fs::write(
+        project_root.join("workflow.toml"),
+        r#"[workflow]
+name = "failing-plan"
+
+[[workflow.steps]]
+id = 1
+title = "Failing Bash"
+tool = "bash"
+prompt = '''
+```bash
+printf 'structured boom\n' >&2
+exit 7
+```
+'''
+on_fail = "abort"
+"#,
+    )
+    .expect("write workflow");
+    commit_all(&project_root, "initial");
+    let (session_id, session_dir) = prepare_plan_session(&project_root, "plan: failing-plan");
+
+    let result = handle_plan_run_daemon_child(plan_daemon_args(&project_root), &session_id).await;
+
+    assert!(result.is_err(), "failing plan should return an error");
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("summary should load")
+        .expect("summary section should exist");
+    assert!(
+        summary.contains("Failed step: 1 (Failing Bash) exited 7"),
+        "summary must identify failed step and exit code: {summary}"
+    );
+    let details = csa_session::read_section(&session_dir, "details")
+        .expect("details should load")
+        .expect("details section should exist");
+    assert!(
+        details.contains("Step 1: Failing Bash")
+            && details.contains("exit 7")
+            && details.contains("structured boom"),
+        "details must include failed step id, command, exit code, and stderr excerpt: {details}"
+    );
+    let persisted = csa_session::load_result(&project_root, &session_id)
+        .expect("result should load")
+        .expect("result.toml should exist");
+    assert_eq!(persisted.exit_code, 1);
+    assert!(
+        persisted
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/details.md"),
+        "result artifacts must point callers at structured details"
+    );
+}
+
+#[tokio::test]
+async fn daemon_child_failed_pr_bot_restores_checkout_and_weave_lock_when_initially_clean() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    std::fs::create_dir_all(&project_root).expect("repo dir should be created");
+    init_plan_test_repo(&project_root);
+    std::fs::write(
+        project_root.join("workflow.toml"),
+        r#"[workflow]
+name = "pr-bot"
+
+[[workflow.steps]]
+id = 1
+title = "Dirty Main Failure"
+tool = "bash"
+prompt = '''
+```bash
+git switch main
+printf 'plan drift\n' >> weave.lock
+printf 'failed on main\n' >&2
+exit 9
+```
+'''
+on_fail = "abort"
+"#,
+    )
+    .expect("write workflow");
+    commit_all(&project_root, "initial");
+    run_git(&project_root, &["switch", "-c", "fix/pr-bot-recovery"]);
+    let (session_id, session_dir) = prepare_plan_session(&project_root, "plan: pr-bot");
+
+    let result = handle_plan_run_daemon_child(plan_daemon_args(&project_root), &session_id).await;
+
+    assert!(
+        result.is_err(),
+        "failing pr-bot plan should return an error"
+    );
+    let branch = Command::new("git")
+        .arg("-C")
+        .arg(&project_root)
+        .args(["branch", "--show-current"])
+        .output()
+        .expect("git branch should run");
+    assert_eq!(
+        String::from_utf8_lossy(&branch.stdout).trim(),
+        "fix/pr-bot-recovery",
+        "failed pr-bot plan should restore the caller checkout"
+    );
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&project_root)
+        .args(["status", "--short"])
+        .output()
+        .expect("git status should run");
+    assert!(
+        status.stdout.is_empty(),
+        "failed pr-bot plan should clean plan-created weave.lock drift: {}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+    let details = csa_session::read_section(&session_dir, "details")
+        .expect("details should load")
+        .expect("details section should exist");
+    assert!(
+        details.contains("Recovery status: `restored`")
+            && details.contains("Restored plan-created weave.lock drift")
+            && details.contains("Restored checkout to fix/pr-bot-recovery"),
+        "details must include structured recovery result: {details}"
+    );
+}
+
 #[test]
 fn daemon_child_injects_preassigned_session_into_startup_env() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let session_id = "01PARENTSESSION000000000000";
     let mut args = make_args();

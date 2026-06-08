@@ -27,11 +27,11 @@ use super::{
 };
 use crate::startup_env::StartupSubtreeEnv;
 
-const STEP_FAILURE_STDERR_TAIL_LINES: usize = 20;
-const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
-
+#[path = "plan_cmd_step_failure.rs"]
+mod step_failure;
 #[path = "plan_cmd_step_target.rs"]
 mod step_target;
+use step_failure::{describe_step_command, format_step_failure_error, stderr_tail};
 #[cfg(test)]
 pub(crate) use step_target::resolve_step_tool;
 pub(crate) use step_target::{
@@ -51,6 +51,12 @@ pub(crate) struct StepResult {
     pub(crate) output: Option<String>,
     /// CSA meta session ID, exposed to later steps as `${STEP_<id>_SESSION}`.
     pub(crate) session_id: Option<String>,
+    /// Human-readable command or dispatch description for failure reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) command: Option<String>,
+    /// Captured stderr from the final attempt, kept out of step output variables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stderr: Option<String>,
 }
 
 pub(super) struct PlanRunContext<'a> {
@@ -288,6 +294,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: None,
                 output: None,
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
         info!("{} - Condition '{}' met, proceeding", label, condition);
@@ -303,6 +311,8 @@ pub(crate) async fn execute_step_with_workflow(
             error: Some("Loop steps not supported in v1".to_string()),
             output: None,
             session_id: None,
+            command: None,
+            stderr: None,
         };
     }
 
@@ -326,6 +336,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: Some(format!("Tool resolution failed: {e}")),
                 output: None,
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
     };
@@ -365,6 +377,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: None,
                 output: None,
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
         StepTarget::Note => {
@@ -379,6 +393,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: None,
                 output: None,
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
         StepTarget::Manual => {
@@ -398,6 +414,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: Some(status),
                 output: Some(message),
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
         StepTarget::AwaitUser => {
@@ -417,6 +435,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: Some(status),
                 output: Some(message),
                 session_id: None,
+                command: None,
+                stderr: None,
             };
         }
         StepTarget::DirectBash | StepTarget::CsaTool { .. } => {}
@@ -463,6 +483,7 @@ pub(crate) async fn execute_step_with_workflow(
     };
 
     let mut last_failure = None;
+    let command = describe_step_command(&target, step, csa_session.as_deref());
 
     for attempt in 1..=max_attempts {
         if attempt > 1 {
@@ -547,6 +568,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: None,
                 output,
                 session_id: outcome.session_id,
+                command: Some(command.clone()),
+                stderr: None,
             };
         }
 
@@ -562,6 +585,7 @@ pub(crate) async fn execute_step_with_workflow(
         .as_ref()
         .map(|outcome| outcome.stderr.as_str())
         .unwrap_or_default();
+    let failure_stderr_tail = stderr_tail(failure_stderr);
     let failure_error = format_step_failure_error(exit_code, failure_stderr);
 
     // Handle on_fail
@@ -581,6 +605,8 @@ pub(crate) async fn execute_step_with_workflow(
                 error: Some(format!("Skipped after failure ({failure_error})")),
                 output: None,
                 session_id: None,
+                command: Some(command.clone()),
+                stderr: failure_stderr_tail,
             }
         }
         FailAction::Delegate(target) => {
@@ -600,6 +626,8 @@ pub(crate) async fn execute_step_with_workflow(
                 )),
                 output: None,
                 session_id: None,
+                command: Some(command.clone()),
+                stderr: failure_stderr_tail,
             }
         }
         _ => {
@@ -615,42 +643,9 @@ pub(crate) async fn execute_step_with_workflow(
                 error: Some(failure_error),
                 output: None,
                 session_id: None,
+                command: Some(command),
+                stderr: failure_stderr_tail,
             }
         }
     }
-}
-
-fn format_step_failure_error(exit_code: i32, stderr: &str) -> String {
-    let mut error = format!("Exit code {exit_code}");
-    if let Some(stderr_tail) = stderr_tail(stderr) {
-        error.push_str(&format!(
-            "\nstderr (last {STEP_FAILURE_STDERR_TAIL_LINES} lines):\n{stderr_tail}"
-        ));
-    }
-    error
-}
-
-fn stderr_tail(stderr: &str) -> Option<String> {
-    let mut lines = stderr
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .rev()
-        .take(STEP_FAILURE_STDERR_TAIL_LINES)
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
-    lines.reverse();
-    let mut tail = lines.join("\n");
-    if tail.len() > STEP_FAILURE_STDERR_TAIL_MAX_CHARS {
-        let keep_from = tail
-            .char_indices()
-            .rev()
-            .find_map(|(idx, _)| {
-                (tail.len() - idx <= STEP_FAILURE_STDERR_TAIL_MAX_CHARS).then_some(idx)
-            })
-            .unwrap_or(0);
-        tail = format!("...{}", &tail[keep_from..]);
-    }
-    Some(tail)
 }

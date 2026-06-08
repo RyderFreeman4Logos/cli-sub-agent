@@ -41,4 +41,14 @@ async fn execute_step_failure_reports_stderr_tail() {
         !error.contains("err-01"),
         "failure summary must keep only the stderr tail: {error}"
     );
+    let command = result.command.as_deref().unwrap_or_default();
+    assert!(
+        command.contains("exit 1"),
+        "failure report command must include the executed bash script: {command}"
+    );
+    let stderr = result.stderr.as_deref().unwrap_or_default();
+    assert!(
+        stderr.contains("err-25") && !stderr.contains("err-01"),
+        "structured stderr excerpt must keep the same tail as the error summary: {stderr}"
+    );
 }

@@ -38,6 +38,9 @@ use plan_cmd_exec::{extract_bash_code_block, truncate};
 #[path = "plan_cmd_flow.rs"]
 mod plan_cmd_flow;
 
+#[path = "plan_cmd_failure.rs"]
+pub(crate) mod plan_cmd_failure;
+
 #[path = "plan_cmd_assignment.rs"]
 mod plan_cmd_assignment;
 
@@ -333,6 +336,8 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         plan.name,
         plan.steps.len()
     );
+    let recovery_snapshot =
+        plan_cmd_failure::capture_failure_recovery_snapshot(&plan.name, &project_root);
     let total_start = Instant::now();
     if let Some(ref tool) = tool_override {
         eprintln!("  Tool override: --tool {} (all CSA steps)", tool.as_str());
@@ -429,14 +434,25 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         .count();
     let total_failures = execution_failures + unsupported_skips;
     if total_failures > 0 {
-        journal.status = "failed".to_string();
-        journal.last_error = Some(format!(
+        let failure_summary = format!(
             "{total_failures} step(s) failed ({execution_failures} execution, {unsupported_skips} unsupported-skip)"
-        ));
+        );
+        let recovery = recovery_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.recover_after_failure(&project_root));
+        let failure_report = plan_cmd_failure::PlanFailureReport::from_results(
+            &plan.name,
+            &workflow_path,
+            failure_summary.clone(),
+            &results,
+            recovery,
+        );
+        journal.status = "failed".to_string();
+        journal.last_error = Some(failure_summary.clone());
         apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
         persist_plan_journal(&journal_path, &journal)?;
-        bail!(
-            "{total_failures} step(s) failed ({execution_failures} execution, {unsupported_skips} unsupported-skip)"
+        return Err(
+            plan_cmd_failure::PlanFailureError::new(failure_summary, failure_report).into(),
         );
     }
 
