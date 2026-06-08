@@ -213,7 +213,11 @@ deny:
     # Hide the inclusion graph to keep duplicate-crate warnings bounded.
     # The full graph is useful interactively, but in AI-driven commit workflows
     # it can explode into gigabytes of output and crash ACP-backed tools.
-    cargo deny check --hide-inclusion-graph
+    deny_args="--hide-inclusion-graph"; \
+    if [ "${CARGO_DENY_DISABLE_FETCH:-}" = "1" ] || [ "${CARGO_DENY_OFFLINE:-}" = "1" ]; then \
+        deny_args="$deny_args --disable-fetch"; \
+    fi; \
+    cargo deny check $deny_args
 
 # ==============================================================================
 # 🧪 Testing

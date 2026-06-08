@@ -607,18 +607,9 @@ where
             trigger = %trigger,
             reconciliation_reason = "daemon_completion",
             error = %err,
-            "Failed to persist retired daemon-completed session state during reconciliation; removing daemon completion result and leaving session state unchanged"
+            "Failed to persist retired daemon-completed session state during reconciliation; preserving daemon completion result so callers can recover the terminal outcome"
         );
-        rollback_reconciliation_artifacts(result_path, result_contents.as_bytes(), None).map_err(
-            |cleanup_err| {
-                anyhow!(
-                    "Failed to persist retired daemon-completed session state for {session_id}: {err}; additionally failed to remove daemon completion result: {cleanup_err}"
-                )
-            },
-        )?;
-        return Err(anyhow!(
-            "Failed to persist retired daemon-completed session state for {session_id}: {err}"
-        ));
+        return Ok(DeadActiveSessionReconciliation::DaemonCompletionFinalized);
     }
     csa_session::write_cooldown_marker_from_session_dir(session_dir, session_id, completed_at);
     warn!(

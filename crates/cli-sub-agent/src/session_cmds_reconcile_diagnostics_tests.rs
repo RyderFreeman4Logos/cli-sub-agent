@@ -1,7 +1,11 @@
 use super::*;
 use crate::test_session_sandbox::ScopedSessionSandbox;
-use csa_session::{create_session, get_session_dir, load_result, load_session};
+use anyhow::{Result, anyhow};
+use csa_session::{
+    MetaSessionState, SessionPhase, create_session, get_session_dir, load_result, load_session,
+};
 use std::fs;
+use std::path::Path;
 
 struct SessionTestEnv {
     _sandbox: ScopedSessionSandbox,
@@ -178,4 +182,58 @@ fn daemon_completion_packet_present_finalizes_dead_active_session() {
         persisted.termination_reason.as_deref(),
         Some("daemon_completion")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_completion_result_survives_state_save_failure() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session =
+        create_session(project, Some("daemon-completion-save-failure"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let state_path = session_dir.join("state.toml");
+    let original_state = fs::read_to_string(&state_path).unwrap();
+    fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .unwrap();
+    let persist_fail = |_: &Path, _: &MetaSessionState| -> Result<()> { Err(anyhow!("boom")) };
+
+    let reconciled = ensure_terminal_result_for_dead_active_session_impl(
+        project,
+        &session_id,
+        "session wait",
+        &session_dir,
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &noop_path,
+        },
+        |_| {},
+        &persist_fail,
+    )
+    .unwrap();
+
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::DaemonCompletionFinalized
+    );
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion result must remain recoverable");
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.summary.contains("daemon completion recorded"),
+        "unexpected daemon completion summary: {}",
+        result.summary
+    );
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, SessionPhase::Active);
+    assert_eq!(persisted.termination_reason, None);
+    assert_eq!(fs::read_to_string(&state_path).unwrap(), original_state);
 }
