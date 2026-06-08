@@ -11,6 +11,9 @@ use csa_core::types::OutputFormat;
 #[path = "config_cmds_helpers.rs"]
 mod helpers;
 use helpers::{format_missing_key_message, format_toml_value, resolve_key, suggest_key_paths};
+#[path = "config_cmds_key_scope.rs"]
+mod key_scope;
+use key_scope::{global_key_prefers_raw_lookup, is_global_only_key};
 #[path = "config_cmds_display.rs"]
 mod display;
 use display::{build_execution_toml, build_project_display_json, build_project_display_toml};
@@ -370,12 +373,6 @@ struct LookupResolution {
     diagnostics: LookupDiagnostics,
 }
 
-fn is_global_only_key(key: &str) -> bool {
-    key.starts_with("experimental.")
-        || key.starts_with("kv_cache.")
-        || key.starts_with("state_dir.")
-}
-
 #[derive(Debug, Clone)]
 enum LookupSourceSpec {
     EffectiveProject {
@@ -606,10 +603,6 @@ fn prefers_effective_lookup(key: &str) -> Result<bool> {
         return Ok(false);
     };
     Ok(known_effective_top_level_sections()?.contains(top_level))
-}
-
-fn global_key_prefers_raw_lookup(key: &str) -> bool {
-    key.starts_with("kv_cache.") || key.starts_with("state_dir.")
 }
 
 fn known_effective_top_level_sections() -> Result<BTreeSet<String>> {
