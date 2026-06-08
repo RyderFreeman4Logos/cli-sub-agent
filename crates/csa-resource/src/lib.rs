@@ -21,7 +21,7 @@ pub use cgroup::{
     scope_unit_name,
 };
 pub use filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
-pub use guard::{ResourceGuard, ResourceLimits};
+pub use guard::{ResourceGuard, ResourceLimits, SpawnMemoryAdmission};
 pub use isolation_plan::{EnforcementMode, IsolationPlan, IsolationPlanBuilder};
 pub use landlock::apply_landlock_rules;
 pub use rlimit::apply_rlimits;

@@ -21,6 +21,21 @@ impl Default for ResourceLimits {
     }
 }
 
+/// Host-memory projection for a session spawn admission decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnMemoryAdmission {
+    /// Memory the new session is expected to be allowed to consume.
+    pub projected_spawn_mb: u64,
+    /// Aggregate sampled RSS from already-active CSA session trees.
+    pub active_session_rss_mb: u64,
+    /// Aggregate active-session pressure after per-session projections are applied.
+    pub active_session_projected_mb: u64,
+    /// Number of active CSA sessions considered, excluding the session being spawned.
+    pub active_session_count: u64,
+    /// Number of active sessions whose process tree RSS was sampled successfully.
+    pub sampled_session_count: u64,
+}
+
 /// Guards resource availability before launching tools.
 pub struct ResourceGuard {
     sys: System,
@@ -40,12 +55,23 @@ impl ResourceGuard {
     /// - **Hard block**: MemAvailable < reserve_mb → refuse to launch.
     /// - **Warning**: MemAvailable < 150% of reserve_mb → warn but allow.
     pub fn check_availability(&mut self, tool_name: &str) -> Result<()> {
+        self.check_availability_with_admission(tool_name, None)
+    }
+
+    /// Check host memory with active-session and new-spawn projection.
+    pub fn check_availability_with_admission(
+        &mut self,
+        tool_name: &str,
+        admission: Option<SpawnMemoryAdmission>,
+    ) -> Result<()> {
         self.sys.refresh_memory();
 
         let available_phys_bytes = self.sys.available_memory();
         let available_swap_bytes = self.sys.free_swap();
+        let total_ram_bytes = self.sys.total_memory();
         let available_phys = available_phys_bytes / 1024 / 1024;
         let available_swap = available_swap_bytes / 1024 / 1024;
+        let total_ram = total_ram_bytes / 1024 / 1024;
         let available_combined = available_phys.saturating_add(available_swap);
 
         evaluate_memory_availability(
@@ -53,7 +79,9 @@ impl ResourceGuard {
             available_phys,
             available_swap,
             available_combined,
+            total_ram,
             self.limits.min_free_memory_mb,
+            admission,
         )
     }
 
@@ -98,6 +126,10 @@ impl ResourceGuard {
 /// Multiplier for the warning threshold (150% of reserve).
 const WARNING_MULTIPLIER_NUM: u64 = 3;
 const WARNING_MULTIPLIER_DEN: u64 = 2;
+const ACTIVE_SESSION_SAFE_FRACTION_NUM: u64 = 3;
+const ACTIVE_SESSION_SAFE_FRACTION_DEN: u64 = 4;
+const ACTIVE_SESSION_WARNING_FRACTION_NUM: u64 = 9;
+const ACTIVE_SESSION_WARNING_FRACTION_DEN: u64 = 10;
 
 /// Pure evaluation of memory availability against reserve.
 ///
@@ -109,7 +141,9 @@ fn evaluate_memory_availability(
     available_phys_mb: u64,
     available_swap_mb: u64,
     available_combined_mb: u64,
+    total_ram_mb: u64,
     reserve_mb: u64,
+    admission: Option<SpawnMemoryAdmission>,
 ) -> Result<()> {
     if available_phys_mb < reserve_mb {
         let message = format!(
@@ -140,6 +174,77 @@ fn evaluate_memory_availability(
              (reserve {reserve_mb}MB, warning threshold {warn_threshold}MB). \
              Session will proceed but may hit OOM pressure."
         );
+    }
+
+    if let Some(admission) = admission
+        && admission.projected_spawn_mb > 0
+    {
+        let required_available_mb = reserve_mb.saturating_add(admission.projected_spawn_mb);
+        if available_phys_mb < required_available_mb {
+            let message = format!(
+                "CSA: host memory admission denied — available={available_phys_mb}MB < \
+                 required={required_available_mb}MB (reserve={reserve_mb}MB + \
+                 projected_spawn={projected_spawn_mb}MB). active_sessions={active_sessions} \
+                 sampled_sessions={sampled_sessions} active_session_rss_mb={active_rss} \
+                 active_session_projected_mb={active_projected} swap_available_mb={available_swap_mb} \
+                 combined_available_mb={available_combined_mb}",
+                projected_spawn_mb = admission.projected_spawn_mb,
+                active_sessions = admission.active_session_count,
+                sampled_sessions = admission.sampled_session_count,
+                active_rss = admission.active_session_rss_mb,
+                active_projected = admission.active_session_projected_mb,
+            );
+            eprintln!("{message}");
+            bail!(
+                "{message}. Free host memory, wait for active CSA sessions to finish, or lower \
+                 tool memory limits before spawning more work."
+            );
+        }
+
+        let host_safe_limit_mb = total_ram_mb.saturating_mul(ACTIVE_SESSION_SAFE_FRACTION_NUM)
+            / ACTIVE_SESSION_SAFE_FRACTION_DEN;
+        let projected_active_mb = admission
+            .active_session_projected_mb
+            .saturating_add(admission.projected_spawn_mb);
+        if host_safe_limit_mb > 0 && projected_active_mb > host_safe_limit_mb {
+            let message = format!(
+                "CSA: active-session memory admission denied — projected_active={projected_active_mb}MB \
+                 > host_safe_limit={host_safe_limit_mb}MB ({safe_num}/{safe_den} of total_ram={total_ram_mb}MB). \
+                 active_sessions={active_sessions} sampled_sessions={sampled_sessions} \
+                 active_session_rss_mb={active_rss} active_session_projected_mb={active_projected} \
+                 projected_spawn_mb={projected_spawn_mb} available_mb={available_phys_mb}",
+                safe_num = ACTIVE_SESSION_SAFE_FRACTION_NUM,
+                safe_den = ACTIVE_SESSION_SAFE_FRACTION_DEN,
+                active_sessions = admission.active_session_count,
+                sampled_sessions = admission.sampled_session_count,
+                active_rss = admission.active_session_rss_mb,
+                active_projected = admission.active_session_projected_mb,
+                projected_spawn_mb = admission.projected_spawn_mb,
+            );
+            eprintln!("{message}");
+            bail!(
+                "{message}. CSA is refusing to launch work that could collectively exhaust host RAM."
+            );
+        }
+
+        let host_warning_limit_mb = host_safe_limit_mb
+            .saturating_mul(ACTIVE_SESSION_WARNING_FRACTION_NUM)
+            / ACTIVE_SESSION_WARNING_FRACTION_DEN;
+        if host_warning_limit_mb > 0 && projected_active_mb > host_warning_limit_mb {
+            eprintln!(
+                "CSA: active-session memory warning — projected_active={projected_active_mb}MB is \
+                 near host_safe_limit={host_safe_limit_mb}MB; active_sessions={active_sessions}.",
+                active_sessions = admission.active_session_count,
+            );
+            warn!(
+                tool = tool_name,
+                projected_active_mb,
+                host_safe_limit_mb,
+                active_sessions = admission.active_session_count,
+                sampled_sessions = admission.sampled_session_count,
+                "Active CSA session memory is near host admission limit"
+            );
+        }
     }
 
     Ok(())
@@ -222,7 +327,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_hard_block_when_available_below_reserve() {
-        let result = evaluate_memory_availability("test_tool", 3000, 1000, 4000, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 3000, 1000, 4000, 32_000, 4096, None);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -242,14 +348,16 @@ mod tests {
     #[test]
     fn test_evaluate_warning_when_available_between_100_and_150_percent() {
         // reserve=4096, 150% = 6144. available=5000 is between 4096..6144.
-        let result = evaluate_memory_availability("test_tool", 5000, 1000, 6000, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 5000, 1000, 6000, 32_000, 4096, None);
         // Should succeed (warning only, no error).
         assert!(result.is_ok(), "Should warn but not block: {result:?}");
     }
 
     #[test]
     fn test_evaluate_blocks_when_memavailable_below_reserve_even_with_swap() {
-        let result = evaluate_memory_availability("test_tool", 3900, 4096, 7996, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 3900, 4096, 7996, 32_000, 4096, None);
         assert!(
             result.is_err(),
             "swap must not satisfy min_free_memory_mb when MemAvailable is low"
@@ -263,25 +371,89 @@ mod tests {
     #[test]
     fn test_evaluate_no_warning_when_available_above_150_percent() {
         // reserve=4096, 150% = 6144. available=7000 is above 6144.
-        let result = evaluate_memory_availability("test_tool", 7000, 1000, 8000, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 7000, 1000, 8000, 32_000, 4096, None);
         assert!(result.is_ok(), "Should pass without warning: {result:?}");
     }
 
     #[test]
     fn test_evaluate_exact_boundary_at_reserve() {
         // Exactly at reserve — should pass (not strictly less than).
-        let result = evaluate_memory_availability("test_tool", 4096, 1096, 5192, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 4096, 1096, 5192, 32_000, 4096, None);
         assert!(result.is_ok(), "Exact reserve should pass: {result:?}");
     }
 
     #[test]
     fn test_evaluate_exact_boundary_at_warning_threshold() {
         // reserve=4096, 150% = 6144. available=6144 is exactly at warning threshold.
-        let result = evaluate_memory_availability("test_tool", 6144, 1144, 7288, 4096);
+        let result =
+            evaluate_memory_availability("test_tool", 6144, 1144, 7288, 32_000, 4096, None);
         // 6144 is NOT < 6144, so no warning.
         assert!(
             result.is_ok(),
             "Exact warning threshold should pass: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_evaluate_blocks_when_spawn_projection_exceeds_available_headroom() {
+        let admission = SpawnMemoryAdmission {
+            projected_spawn_mb: 8192,
+            active_session_rss_mb: 2048,
+            active_session_projected_mb: 4096,
+            active_session_count: 1,
+            sampled_session_count: 1,
+        };
+
+        let result =
+            evaluate_memory_availability("codex", 10_000, 0, 10_000, 32_000, 4096, Some(admission));
+
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("host memory admission denied"));
+        assert!(msg.contains("projected_spawn=8192MB"));
+    }
+
+    #[test]
+    fn test_evaluate_blocks_when_active_projection_exceeds_host_safe_limit() {
+        let admission = SpawnMemoryAdmission {
+            projected_spawn_mb: 8192,
+            active_session_rss_mb: 16_000,
+            active_session_projected_mb: 20_000,
+            active_session_count: 3,
+            sampled_session_count: 2,
+        };
+
+        let result =
+            evaluate_memory_availability("codex", 20_000, 0, 20_000, 32_000, 4096, Some(admission));
+
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("active-session memory admission denied"));
+        assert!(msg.contains("projected_active=28192MB"));
+    }
+
+    #[test]
+    fn test_evaluate_allows_safe_spawn_projection() {
+        let admission = SpawnMemoryAdmission {
+            projected_spawn_mb: 4096,
+            active_session_rss_mb: 2048,
+            active_session_projected_mb: 4096,
+            active_session_count: 1,
+            sampled_session_count: 1,
+        };
+
+        let result = evaluate_memory_availability(
+            "claude-code",
+            12_000,
+            0,
+            12_000,
+            32_000,
+            4096,
+            Some(admission),
+        );
+
+        assert!(result.is_ok(), "safe projection should pass: {result:?}");
     }
 }

@@ -351,7 +351,11 @@ pub(super) async fn prepare_session_runtime(
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);
     }
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session);
-    crate::pipeline_sandbox::maybe_inflate_balloon(input.tool.as_str());
+    crate::pipeline_sandbox::maybe_inflate_balloon(
+        input.tool.as_str(),
+        input.project_root,
+        &session.meta_session_id,
+    );
     if let Err(err) =
         session_exec_metadata::persist_session_runtime_binary(input.session_dir, input.executor)
     {

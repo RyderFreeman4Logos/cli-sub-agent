@@ -431,7 +431,7 @@ pub(crate) fn resolve_sandbox_options(
 /// Pre-warms RAM by `mmap`-ing a large anonymous mapping with `MAP_POPULATE`, forcing
 /// the kernel to swap out other processes.  The balloon is dropped (deflated) right
 /// away so the freed physical pages are available for the tool process about to launch.
-pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
+pub(crate) fn maybe_inflate_balloon(tool_name: &str, project_root: &Path, session_id: &str) {
     use csa_resource::memory_balloon::{MemoryBalloon, should_enable_balloon};
 
     if tool_name != "claude-code" {
@@ -443,6 +443,18 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
     sys.refresh_memory();
     let available_memory = sys.available_memory();
     let available_swap = sys.free_swap();
+    let available_memory_mb = available_memory / 1024 / 1024;
+    let active_session_count =
+        crate::resource_admission::active_session_count_for_balloon(project_root, session_id);
+
+    if should_skip_balloon_prewarm(available_memory_mb, active_session_count) {
+        warn!(
+            available_memory_mb,
+            active_session_count,
+            "Skipping MemoryBalloon prewarm under host memory or concurrent-session pressure"
+        );
+        return;
+    }
 
     if !should_enable_balloon(available_memory, available_swap, BALLOON_SIZE as u64) {
         return;
@@ -461,6 +473,12 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
             warn!(error = %e, "Memory balloon inflation failed; continuing without pre-warming");
         }
     }
+}
+
+const BALLOON_MIN_AVAILABLE_MEMORY_MB: u64 = 8192;
+
+fn should_skip_balloon_prewarm(available_memory_mb: u64, active_session_count: u64) -> bool {
+    available_memory_mb < BALLOON_MIN_AVAILABLE_MEMORY_MB || active_session_count > 0
 }
 
 /// Record sandbox telemetry in session state (first turn only).

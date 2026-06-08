@@ -50,6 +50,21 @@ fn test_filesystem_sandbox_active_helper() {
     assert!(!filesystem_sandbox_active(Some(&inactive)));
 }
 
+#[test]
+fn balloon_prewarm_skips_when_available_memory_is_low() {
+    assert!(should_skip_balloon_prewarm(4096, 0));
+}
+
+#[test]
+fn balloon_prewarm_skips_when_other_sessions_are_active() {
+    assert!(should_skip_balloon_prewarm(16_384, 1));
+}
+
+#[test]
+fn balloon_prewarm_allows_idle_host_with_memory_headroom() {
+    assert!(!should_skip_balloon_prewarm(16_384, 0));
+}
+
 /// Heavyweight tools (claude-code) with no project config should get setting_sources=Some(vec![]).
 #[test]
 fn test_none_config_sets_setting_sources_for_heavyweight() {
