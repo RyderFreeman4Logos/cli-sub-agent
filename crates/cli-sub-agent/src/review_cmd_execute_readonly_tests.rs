@@ -27,3 +27,6 @@ fn with_readonly_session_env_injects_flag() {
 
 #[path = "review_cmd_execute_failover_classification_tests.rs"]
 mod failover_classification_tests;
+
+#[path = "review_cmd_execute_tier_1958_tests.rs"]
+mod tier_1958_tests;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_tier_failover::TIER_FAILOVER_SUPERSEDED_STATUS;
 use csa_session::{PhaseEvent, SessionPhase};
 
 /// A classified review-failover failure: the normalized reason plus, when the
@@ -72,13 +73,15 @@ fn classify_gemini_cli_runtime_failure(
         "gemini_runtime_home_unavailable"
     } else if is_gemini_cli_internal_crash(&lower) {
         "gemini_cli_crash"
+    } else if is_gemini_reviewer_http_400_failure(&lower) {
+        "HTTP 400"
     } else {
         return None;
     };
 
     Some(ReviewFailoverFailure {
         reason: reason.to_string(),
-        quota_exhausted: None,
+        quota_exhausted: (reason == "HTTP 400").then_some(false),
     })
 }
 
@@ -105,6 +108,13 @@ fn is_gemini_cli_internal_crash(lower: &str) -> bool {
             || lower.contains("node:internal")
             || lower.contains("/gemini-cli/bundle/")
             || lower.contains("npm-google-gemini-cli"))
+}
+
+fn is_gemini_reviewer_http_400_failure(lower: &str) -> bool {
+    lower.contains("status: 400")
+        || lower.contains("status 400")
+        || lower.contains("http 400")
+        || lower.contains("400 bad request")
 }
 
 pub(super) fn build_gemini_api_key_retry_env(
@@ -288,8 +298,6 @@ fn truncate_for_summary(text: &str, max_chars: usize) -> String {
 ///
 /// Prevents `csa session list` from showing "Failed" during the window between
 /// a tier-failover attempt and the next model's result (#1475).
-pub(super) const TIER_FAILOVER_SUPERSEDED_STATUS: &str = "tier_failover_superseded";
-
 /// Mark an intermediate tier-failover session so it shows as "Retired" in
 /// `csa session list` rather than "Failed" during the failover transition.
 ///

@@ -5,6 +5,23 @@ use anyhow::Result;
 
 use super::super::session_has_terminal_process;
 
+fn suppress_pending_tier_failover_result(
+    session_id: &str,
+    session_dir: &Path,
+    result: csa_session::SessionResult,
+) -> Option<csa_session::SessionResult> {
+    if crate::session_tier_failover::is_pending_tier_failover_handoff(session_dir, &result) {
+        tracing::debug!(
+            session_id,
+            status = %result.status,
+            "Ignoring intermediate tier-failover result while fallback handoff is still live"
+        );
+        None
+    } else {
+        Some(result)
+    }
+}
+
 fn load_completed_daemon_result(
     project_root: &Path,
     session_id: &str,
@@ -26,7 +43,11 @@ fn load_completed_daemon_result(
             Err(err) => return Err(err),
         };
 
-    Ok(Some(result))
+    Ok(suppress_pending_tier_failover_result(
+        session_id,
+        session_dir,
+        result,
+    ))
 }
 
 /// Refresh result via session_dir for cross-project sessions or via project_root otherwise.
@@ -36,11 +57,13 @@ pub(super) fn refresh_result_for_wait(
     session_dir: &Path,
     is_cross_project: bool,
 ) -> Result<Option<csa_session::SessionResult>> {
-    if is_cross_project {
+    let result = if is_cross_project {
         crate::session_observability::refresh_and_repair_result_from_dir(session_dir)
     } else {
         crate::session_observability::refresh_and_repair_result(project_root, session_id)
-    }
+    }?;
+    Ok(result
+        .and_then(|result| suppress_pending_tier_failover_result(session_id, session_dir, result)))
 }
 
 fn load_completed_daemon_result_adaptive(
@@ -66,7 +89,11 @@ fn load_completed_daemon_result_adaptive(
             }
             Err(err) => return Err(err),
         };
-        Ok(Some(result))
+        Ok(suppress_pending_tier_failover_result(
+            session_id,
+            session_dir,
+            result,
+        ))
     } else {
         load_completed_daemon_result(project_root, session_id, session_dir)
     }
