@@ -46,16 +46,16 @@ impl PlanFailureReport {
                 title: result.title.clone(),
                 exit_code: result.exit_code,
                 skipped: result.skipped,
-                command: result.command.clone(),
-                stderr_excerpt: result.stderr.clone(),
-                error: result.error.clone(),
+                command: redact_optional_text(&result.command),
+                stderr_excerpt: redact_optional_text(&result.stderr),
+                error: redact_optional_text(&result.error),
             })
             .collect();
 
         Self {
             workflow_name: workflow_name.to_string(),
             workflow_path: workflow_path.display().to_string(),
-            summary,
+            summary: csa_session::redact_text_content(&summary),
             failed_steps,
             recovery,
         }
@@ -169,6 +169,7 @@ pub(crate) fn persist_plan_failure_output(
         "<!-- CSA:SECTION:summary -->\n{summary}\n<!-- CSA:SECTION:summary:END -->\n\n\
          <!-- CSA:SECTION:details -->\n{details}\n<!-- CSA:SECTION:details:END -->\n"
     );
+    let marked = csa_session::redact_text_content(&marked);
 
     std::fs::create_dir_all(session_dir)
         .with_context(|| format!("Failed to create session dir: {}", session_dir.display()))?;
@@ -303,7 +304,7 @@ impl PlanFailureRecoverySnapshot {
                     "Automatic recovery skipped because the worktree was already dirty before pr-bot started.".to_string(),
                     "Resolve the pre-existing changes before retrying pr-bot.".to_string(),
                 ],
-                recovery_commands(initial_ref_label.as_deref(), true),
+                recovery_commands(initial_ref_label.as_deref()),
             );
         }
 
@@ -317,7 +318,7 @@ impl PlanFailureRecoverySnapshot {
                     vec![format!(
                         "Could not inspect failed worktree status: {error}."
                     )],
-                    recovery_commands(initial_ref_label.as_deref(), true),
+                    recovery_commands(initial_ref_label.as_deref()),
                 );
             }
         };
@@ -340,7 +341,7 @@ impl PlanFailureRecoverySnapshot {
                         status_before_cleanup.join("; ")
                     ),
                 ],
-                recovery_commands(initial_ref_label.as_deref(), false),
+                recovery_commands(initial_ref_label.as_deref()),
             );
         }
 
@@ -361,7 +362,7 @@ impl PlanFailureRecoverySnapshot {
                             initial_ref_label.clone(),
                             current_ref_before,
                             messages,
-                            recovery_commands(initial_ref_label.as_deref(), false),
+                            recovery_commands(initial_ref_label.as_deref()),
                         );
                     }
                 },
@@ -595,11 +596,12 @@ fn restore_checkout(project_root: &Path, initial_ref: &CheckoutRef) -> Result<()
     }
 }
 
-fn recovery_commands(initial_ref: Option<&str>, include_weave_lock_restore: bool) -> Vec<String> {
+fn redact_optional_text(value: &Option<String>) -> Option<String> {
+    value.as_deref().map(csa_session::redact_text_content)
+}
+
+fn recovery_commands(initial_ref: Option<&str>) -> Vec<String> {
     let mut commands = Vec::new();
-    if include_weave_lock_restore {
-        commands.push(format!("git restore --staged --worktree -- {WEAVE_LOCK}"));
-    }
     if let Some(initial_ref) = initial_ref {
         commands.push(format!(
             "git switch {}",

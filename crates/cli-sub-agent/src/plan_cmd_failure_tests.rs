@@ -40,6 +40,62 @@ fn current_branch(project_root: &Path) -> String {
 }
 
 #[test]
+fn persisted_failure_output_redacts_step_secrets() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let session_dir = temp.path().join("session");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 1,
+        title: "Secret Failure".to_string(),
+        exit_code: 7,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some("Exit code 7\nstderr:\npassword=hunter2".to_string()),
+        output: None,
+        session_id: None,
+        command: Some(
+            "curl -H 'Authorization: Bearer abcDEF123._-token' api_key=key-prod_987654321"
+                .to_string(),
+        ),
+        stderr: Some("client_secret=top-secret-value".to_string()),
+    }];
+    let report = PlanFailureReport::from_results(
+        "failing-plan",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    persist_plan_failure_output(&session_dir, &report).expect("failure output should persist");
+
+    let output_log =
+        std::fs::read_to_string(session_dir.join("output.log")).expect("output.log should exist");
+    let details = csa_session::read_section(&session_dir, "details")
+        .expect("details should load")
+        .expect("details section should exist");
+    for rendered in [&output_log, &details] {
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "persisted failure output must mark redacted secrets: {rendered}"
+        );
+        assert!(
+            !rendered.contains("abcDEF123._-token"),
+            "bearer token leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("key-prod_987654321"),
+            "api key leaked: {rendered}"
+        );
+        assert!(!rendered.contains("hunter2"), "password leaked: {rendered}");
+        assert!(
+            !rendered.contains("top-secret-value"),
+            "client secret leaked: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn recovery_preserves_tracked_weave_lock_change_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");
@@ -104,5 +160,42 @@ fn recovery_preserves_untracked_weave_lock_change_after_snapshot() {
             .iter()
             .any(|line| line.starts_with("?? ") && line.contains(WEAVE_LOCK)),
         "manual report should surface untracked weave.lock status: {report:?}"
+    );
+}
+
+#[test]
+fn recovery_commands_do_not_restore_initially_dirty_weave_lock() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, true);
+    std::fs::write(
+        project_root.join(WEAVE_LOCK),
+        "lock = 1\npre-existing user edit\n",
+    )
+    .expect("write pre-existing weave.lock change");
+    let snapshot = PlanFailureRecoverySnapshot::capture(&project_root);
+
+    let report = snapshot.recover_after_failure(&project_root);
+
+    assert_eq!(report.status.as_str(), "manual-required");
+    assert!(
+        report
+            .messages
+            .iter()
+            .any(|message| message.contains("already dirty before pr-bot started")),
+        "manual report should explain pre-existing dirty state: {report:?}"
+    );
+    assert!(
+        report
+            .recovery_commands
+            .iter()
+            .all(|command| !command.contains("git restore --staged --worktree -- weave.lock")),
+        "manual recovery commands must not discard pre-existing weave.lock edits: {report:?}"
+    );
+    assert!(
+        std::fs::read_to_string(project_root.join(WEAVE_LOCK))
+            .expect("weave.lock should remain")
+            .contains("pre-existing user edit"),
+        "recovery report generation must not alter pre-existing weave.lock content"
     );
 }

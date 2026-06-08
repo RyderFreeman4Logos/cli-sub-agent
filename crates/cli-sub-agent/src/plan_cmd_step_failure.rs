@@ -1,6 +1,6 @@
 use weave::compiler::PlanStep;
 
-use super::StepTarget;
+use super::{StepResult, StepTarget};
 
 const STEP_FAILURE_STDERR_TAIL_LINES: usize = 20;
 const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
@@ -50,6 +50,11 @@ pub(super) fn format_step_failure_error(exit_code: i32, stderr: &str) -> String 
     error
 }
 
+pub(super) fn serialize_step_result_json(result: &StepResult) -> String {
+    let json = serde_json::to_string(result).expect("serialize StepResult");
+    csa_session::redact_event(&json)
+}
+
 pub(super) fn stderr_tail(stderr: &str) -> Option<String> {
     let mut lines = stderr
         .lines()
@@ -74,3 +79,7 @@ pub(super) fn stderr_tail(stderr: &str) -> Option<String> {
     }
     Some(tail)
 }
+
+#[cfg(test)]
+#[path = "plan_cmd_steps_serialization_tests.rs"]
+mod step_result_serialization_tests;

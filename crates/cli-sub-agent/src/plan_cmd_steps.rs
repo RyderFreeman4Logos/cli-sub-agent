@@ -31,7 +31,9 @@ use crate::startup_env::StartupSubtreeEnv;
 mod step_failure;
 #[path = "plan_cmd_step_target.rs"]
 mod step_target;
-use step_failure::{describe_step_command, format_step_failure_error, stderr_tail};
+use step_failure::{
+    describe_step_command, format_step_failure_error, serialize_step_result_json, stderr_tail,
+};
 #[cfg(test)]
 pub(crate) use step_target::resolve_step_tool;
 pub(crate) use step_target::{
@@ -189,8 +191,7 @@ pub(super) async fn execute_plan_with_journal(
                 persist_plan_journal(path, run_ctx.journal)?;
             }
             if run_ctx.chunked {
-                let json = serde_json::to_string(&result)
-                    .expect("StepResult serialization should never fail");
+                let json = serialize_step_result_json(&result);
                 println!("{json}");
                 results.push(result);
                 break;
@@ -215,8 +216,7 @@ pub(super) async fn execute_plan_with_journal(
         }
 
         if run_ctx.chunked && !result.skipped {
-            let json =
-                serde_json::to_string(&result).expect("StepResult serialization should never fail");
+            let json = serialize_step_result_json(&result);
             println!("{json}");
             results.push(result);
             break;
