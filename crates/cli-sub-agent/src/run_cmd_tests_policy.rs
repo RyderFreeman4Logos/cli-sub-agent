@@ -168,7 +168,7 @@ fn format_post_run_commit_guard_message_includes_next_step_and_paths() {
         ],
     };
 
-    let message = format_post_run_commit_guard_message(&guard, false);
+    let message = format_post_run_commit_guard_message(&guard, false, false);
     assert!(message.contains("WARNING"));
     assert!(message.contains("csa run --skill commit"));
     assert!(message.contains("Cargo.lock"));
@@ -211,7 +211,7 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, Some(&guard));
+    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, false, Some(&guard));
 
     assert_eq!(result.exit_code, 1);
     assert_eq!(result.summary, "ok");
@@ -243,11 +243,50 @@ fn apply_post_run_commit_policy_keeps_success_when_policy_disabled() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, false, Some(&guard));
+    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, false, false, Some(&guard));
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.summary, "ok");
     assert!(result.stderr_output.contains("WARNING"));
+}
+
+#[test]
+fn apply_post_run_commit_policy_fails_when_commit_attempt_left_head_unchanged() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "created commit object 49a0bad".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let guard = PostRunCommitGuard {
+        workspace_mutated: true,
+        head_changed: false,
+        changed_paths: vec!["src/lib.rs".to_string()],
+    };
+
+    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, false, true, Some(&guard));
+
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(
+        result.csa_gate_failure.as_deref(),
+        Some("commit-policy-ref-update")
+    );
+    assert!(
+        result.stderr_output.contains(
+            "post-run policy blocked: git commit was attempted but HEAD did not advance"
+        ),
+        "{}",
+        result.stderr_output
+    );
+    assert!(
+        result
+            .stderr_output
+            .contains("git commit was attempted but HEAD did not advance"),
+        "{}",
+        result.stderr_output
+    );
 }
 
 #[test]
@@ -317,6 +356,9 @@ fn apply_unverifiable_commit_policy_is_noop_when_verification_is_available() {
 fn is_post_run_commit_policy_block_detects_known_policy_summaries() {
     assert!(is_post_run_commit_policy_block(
         "post-run policy blocked: workspace mutated without commit"
+    ));
+    assert!(is_post_run_commit_policy_block(
+        "post-run policy blocked: git commit was attempted but HEAD did not advance"
     ));
     assert!(is_post_run_commit_policy_block(
         "post-run policy blocked: unable to verify workspace mutation state"

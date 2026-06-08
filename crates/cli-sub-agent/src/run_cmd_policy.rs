@@ -8,11 +8,14 @@ use std::collections::HashMap;
 
 use super::git::PostRunCommitGuard;
 use super::shell::{
-    detect_hook_bypass_env_usage, detect_lefthook_bypass_commands, detect_no_verify_commit_commands,
+    detect_git_commit_commands, detect_hook_bypass_env_usage, detect_lefthook_bypass_commands,
+    detect_no_verify_commit_commands,
 };
 
 const POST_RUN_POLICY_BLOCKED_SUMMARY: &str =
     "post-run policy blocked: workspace mutated without commit";
+const POST_RUN_POLICY_REF_UPDATE_FAILED_SUMMARY: &str =
+    "post-run policy blocked: git commit was attempted but HEAD did not advance";
 const POST_RUN_POLICY_UNVERIFIABLE_SUMMARY: &str =
     "post-run policy blocked: unable to verify workspace mutation state";
 const POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY: &str =
@@ -31,6 +34,7 @@ pub(crate) fn resolve_hook_bypass_scan_enabled(
 #[cfg(test)]
 pub(crate) fn is_post_run_commit_policy_block(summary: &str) -> bool {
     summary == POST_RUN_POLICY_BLOCKED_SUMMARY
+        || summary == POST_RUN_POLICY_REF_UPDATE_FAILED_SUMMARY
         || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
         || summary == POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
         || summary == POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY
@@ -49,6 +53,7 @@ fn is_post_run_commit_policy_gate_failure_reason(reason: &str) -> bool {
     matches!(
         reason,
         "commit-policy-uncommitted"
+            | "commit-policy-ref-update"
             | "commit-policy-unverifiable"
             | "commit-policy-no-verify"
             | "commit-policy-lefthook-bypass"
@@ -59,31 +64,46 @@ pub(crate) fn apply_post_run_commit_policy(
     result: &mut csa_process::ExecutionResult,
     output_format: &OutputFormat,
     require_commit_on_mutation: bool,
+    git_commit_attempted: bool,
     commit_guard: Option<&PostRunCommitGuard>,
 ) {
     let Some(commit_guard) = commit_guard else {
         return;
     };
 
-    let enforce_closed_policy =
-        require_commit_on_mutation && commit_guard.workspace_mutated && !commit_guard.head_changed;
-    let guard_message = format_post_run_commit_guard_message(commit_guard, enforce_closed_policy);
+    let commit_ref_update_failed =
+        git_commit_attempted && commit_guard.workspace_mutated && !commit_guard.head_changed;
+    let enforce_closed_policy = commit_guard.workspace_mutated
+        && !commit_guard.head_changed
+        && (require_commit_on_mutation || commit_ref_update_failed);
+    let guard_message = format_post_run_commit_guard_message(
+        commit_guard,
+        enforce_closed_policy,
+        commit_ref_update_failed,
+    );
 
     if enforce_closed_policy {
         let previous_summary = result.summary.clone();
-        // CSA-own gate: workspace mutated without commit. Mark it so the #161
-        // classifier treats the exit as authoritative-fatal, preserving a more
-        // specific pre-existing failure exit code if the run already failed.
-        result.note_gate_failure("commit-policy-uncommitted");
-        if !previous_summary.trim().is_empty()
-            && previous_summary != POST_RUN_POLICY_BLOCKED_SUMMARY
-        {
+        let (gate_reason, blocked_summary) = if commit_ref_update_failed {
+            (
+                "commit-policy-ref-update",
+                POST_RUN_POLICY_REF_UPDATE_FAILED_SUMMARY,
+            )
+        } else {
+            ("commit-policy-uncommitted", POST_RUN_POLICY_BLOCKED_SUMMARY)
+        };
+        // CSA-own gate: the run left required/attempted commit work uncommitted.
+        // Mark it so the #161 classifier treats the exit as authoritative-fatal,
+        // preserving a more specific pre-existing failure exit code if the run
+        // already failed.
+        result.note_gate_failure(gate_reason);
+        if !previous_summary.trim().is_empty() && previous_summary != blocked_summary {
             append_stderr_block(
                 &mut result.stderr_output,
                 &format!("Original summary before commit policy: {previous_summary}"),
             );
         }
-        append_stderr_block(&mut result.stderr_output, POST_RUN_POLICY_BLOCKED_SUMMARY);
+        append_stderr_block(&mut result.stderr_output, blocked_summary);
     }
 
     match output_format {
@@ -108,10 +128,12 @@ pub(crate) fn apply_post_session_commit_policies(
     result: &mut csa_process::ExecutionResult,
     args: PostSessionCommitPolicyArgs<'_>,
 ) {
+    let git_commit_attempted = !detect_git_commit_commands(args.executed_shell_commands).is_empty();
     apply_post_run_commit_policy(
         result,
         args.output_format,
         args.require_commit_on_mutation,
+        git_commit_attempted,
         args.commit_guard,
     );
     apply_unverifiable_commit_policy(result, args.output_format, args.policy_evaluation_failed);
@@ -273,13 +295,16 @@ Matched commands:",
 pub(crate) fn format_post_run_commit_guard_message(
     guard: &PostRunCommitGuard,
     enforce_closed_policy: bool,
+    commit_ref_update_failed: bool,
 ) -> String {
     let severity = if enforce_closed_policy {
         "ERROR"
     } else {
         "WARNING"
     };
-    let reason = if guard.head_changed {
+    let reason = if commit_ref_update_failed {
+        "git commit was attempted but HEAD did not advance; work remains uncommitted"
+    } else if guard.head_changed {
         "run created commit(s) but still left uncommitted workspace mutations"
     } else {
         "run left uncommitted workspace mutations compared to start"

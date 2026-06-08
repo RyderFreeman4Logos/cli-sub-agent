@@ -1,6 +1,6 @@
 use super::{
-    command_contains_forbidden_no_verify_commit, detect_no_verify_commit_commands,
-    tokenize_shell_tokens,
+    command_contains_forbidden_no_verify_commit, command_contains_git_commit,
+    detect_git_commit_commands, detect_no_verify_commit_commands, tokenize_shell_tokens,
 };
 
 #[test]
@@ -39,4 +39,49 @@ fn command_contains_forbidden_no_verify_commit_detects_prefixed_commit_in_shell_
     assert!(command_contains_forbidden_no_verify_commit(
         "bash -lc \"env -i git commit --no-verify -m unsafe\""
     ));
+}
+
+#[test]
+fn command_contains_git_commit_detects_plain_and_global_option_forms() {
+    assert!(command_contains_git_commit("git commit -m fix"));
+    assert!(command_contains_git_commit(
+        "git -C /tmp/repo commit --message fix"
+    ));
+    assert!(command_contains_git_commit(
+        "env FOO=1 sudo nice git commit -m fix"
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_detects_shell_payload() {
+    assert!(command_contains_git_commit(
+        "bash -lc \"git add src/lib.rs && git commit -m fix\""
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_rejects_non_commit_git_commands() {
+    assert!(!command_contains_git_commit("git push origin HEAD"));
+    assert!(!command_contains_git_commit("git commit-tree HEAD^{tree}"));
+    assert!(!command_contains_git_commit("echo git commit -m fix"));
+}
+
+#[test]
+fn detect_git_commit_commands_dedupes_matches() {
+    let commands = vec![
+        "git status".to_string(),
+        "git commit -m fix".to_string(),
+        "git commit -m fix".to_string(),
+        "bash -lc \"git commit -m nested\"".to_string(),
+    ];
+
+    let matches = detect_git_commit_commands(&commands);
+
+    assert_eq!(
+        matches,
+        vec![
+            "git commit -m fix".to_string(),
+            "bash -lc \"git commit -m nested\"".to_string()
+        ]
+    );
 }
