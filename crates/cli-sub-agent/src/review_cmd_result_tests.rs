@@ -602,3 +602,6 @@ fn all_killed_reviewers_persist_unavailable_decision_on_disk() {
         1
     );
 }
+
+#[path = "review_cmd_result_terminal_error_tests.rs"]
+mod terminal_error_tests;

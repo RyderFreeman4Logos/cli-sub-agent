@@ -25,6 +25,8 @@ mod prose_signals;
 mod sections;
 #[path = "review_cmd_output_summary.rs"]
 mod summary_artifact;
+#[path = "review_cmd_output_terminal_error.rs"]
+mod terminal_error;
 #[path = "review_cmd_output_text.rs"]
 mod text;
 #[path = "review_cmd_output_tool_failure.rs"]
@@ -52,11 +54,14 @@ pub(super) use sections::{
 pub(super) use summary_artifact::{
     ensure_review_summary_artifact, is_edit_restriction_summary, truncate_review_result_summary,
 };
+use terminal_error::terminal_error_artifact_from_full_output;
 use text::{
     derive_decision_from_text, parse_overall_risk_from_text, severity_counts_from_text,
     zero_severity_counts,
 };
-pub(super) use text::{extract_review_text, stream_started_without_terminal_event};
+pub(super) use text::{
+    extract_review_text, stream_started_without_terminal_event, terminal_tool_error_reason,
+};
 pub(super) use tool_failure::{ToolReviewFailureKind, detect_tool_review_failure};
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
@@ -111,7 +116,7 @@ pub(super) fn persist_review_verdict_artifact(
             };
             artifact.routed_to = meta.routed_to.clone();
             artifact.primary_failure = meta.primary_failure.clone();
-            artifact.failure_reason = meta.failure_reason.clone();
+            artifact.failure_reason = meta.failure_reason.clone().or(artifact.failure_reason);
             artifact.review_mode = meta.review_mode.clone();
             if let Err(error) = enforce_final_verdict_consistency(&session_dir, &mut artifact) {
                 warn!(
@@ -216,6 +221,10 @@ fn derive_review_verdict_artifact(
     meta: &ReviewSessionMeta,
     findings: &[Finding],
 ) -> Result<ReviewVerdictArtifact, anyhow::Error> {
+    if let Some(artifact) = terminal_error_artifact_from_full_output(session_dir, meta, findings)? {
+        return Ok(artifact);
+    }
+
     let prose_signals = review_prose_signals(session_dir)?;
     let mut synthetic_empty_findings_counts = None;
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
@@ -559,6 +568,9 @@ pub(in crate::review_cmd) use clean_detection::is_review_output_empty;
 #[cfg(test)]
 #[path = "review_cmd_output_fix_reuse_tests.rs"]
 mod fix_reuse_tests;
+#[cfg(test)]
+#[path = "review_cmd_output_terminal_error_reason_tests.rs"]
+mod terminal_error_reason_tests;
 #[cfg(test)]
 #[path = "review_cmd_output_tests.rs"]
 mod tests;

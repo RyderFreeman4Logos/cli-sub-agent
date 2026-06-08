@@ -17,6 +17,7 @@ use super::execute::ReviewExecutionOutcome;
 use super::output::{
     GEMINI_AUTH_PROMPT_STATUS_REASON, ReviewerOutcome, detect_tool_diagnostic, extract_review_text,
     is_review_output_empty, sanitize_review_output, stream_started_without_terminal_event,
+    terminal_tool_error_reason,
 };
 
 const AUTH_PROMPT_REVIEW_UNAVAILABLE: &str = "Review unavailable: gemini-cli OAuth prompt detected; authentication required (no review verdict produced).\n";
@@ -85,6 +86,7 @@ pub(super) struct SingleReviewResolution {
     pub decision: ReviewDecision,
     pub effective_exit_code: i32,
     pub auth_prompt_failure: bool,
+    pub failure_reason: Option<String>,
 }
 
 pub(super) fn resolve_single_review_result(
@@ -96,6 +98,7 @@ pub(super) fn resolve_single_review_result(
     let auth_prompt_failure =
         result.status_reason.as_deref() == Some(GEMINI_AUTH_PROMPT_STATUS_REASON);
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
+    let terminal_tool_error = terminal_tool_error_reason(&result.execution.execution.output);
     let tool_unavailable_reason = tool_unavailable_failure_reason(result, tool);
     let opaque_total_exhaustion = opaque_total_exhaustion_message(
         result.primary_failure.as_deref(),
@@ -113,6 +116,12 @@ pub(super) fn resolve_single_review_result(
                 .as_deref()
                 .unwrap_or("all configured tier models failed")
         )
+    } else if let Some(reason) = terminal_tool_error.as_deref() {
+        format!(
+            "{REVIEW_UNAVAILABLE_PREFIX}{} tool failure: {}\n",
+            tool.as_str(),
+            truncate_single_line(reason, 240)
+        )
     } else if let Some(reason) = tool_unavailable_reason.as_deref() {
         format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
     } else {
@@ -120,6 +129,7 @@ pub(super) fn resolve_single_review_result(
     };
     let empty_output = !auth_prompt_failure
         && !forced_unavailable
+        && terminal_tool_error.is_none()
         && tool_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.execution.output);
     let tool_diagnostic = if opaque_total_exhaustion.is_some() {
@@ -150,7 +160,9 @@ pub(super) fn resolve_single_review_result(
         load_summary_fallback(project_root, &result.execution.meta_session_id).as_deref(),
     );
 
-    let decision = if reviewer_killed_before_completion(
+    let decision = if terminal_tool_error.is_some() {
+        ReviewDecision::Unavailable
+    } else if reviewer_killed_before_completion(
         &result.execution.execution.output,
         result.execution.execution.exit_code,
     ) {
@@ -173,6 +185,9 @@ pub(super) fn resolve_single_review_result(
     };
     let verdict = verdict_from_decision(decision);
     let effective_exit_code = crate::verdict_exit_code::exit_code_from_review_decision(decision);
+    let failure_reason = terminal_tool_error
+        .clone()
+        .or_else(|| result.failure_reason.clone());
 
     SingleReviewResolution {
         sanitized,
@@ -181,6 +196,7 @@ pub(super) fn resolve_single_review_result(
         decision,
         effective_exit_code,
         auth_prompt_failure,
+        failure_reason,
     }
 }
 
@@ -196,6 +212,7 @@ pub(super) fn build_reviewer_outcome(
         session_result.forced_decision,
         Some(ReviewDecision::Unavailable)
     );
+    let terminal_tool_error = terminal_tool_error_reason(&result.execution.output);
     let tool_unavailable_reason = tool_unavailable_failure_reason(session_result, reviewer_tool);
     let opaque_total_exhaustion = opaque_total_exhaustion_message(
         session_result.primary_failure.as_deref(),
@@ -203,6 +220,7 @@ pub(super) fn build_reviewer_outcome(
     );
     let empty = !auth_prompt_failure
         && !forced_unavailable
+        && terminal_tool_error.is_none()
         && tool_unavailable_reason.is_none()
         && is_review_output_empty(&result.execution.output);
     let diagnostic =
@@ -221,7 +239,9 @@ pub(super) fn build_reviewer_outcome(
         result.execution.exit_code,
         None,
     );
-    let decision = if reviewer_killed_before_completion(
+    let decision = if terminal_tool_error.is_some() {
+        ReviewDecision::Unavailable
+    } else if reviewer_killed_before_completion(
         &result.execution.output,
         result.execution.exit_code,
     ) {
@@ -263,6 +283,12 @@ pub(super) fn build_reviewer_outcome(
                     .as_deref()
                     .unwrap_or("all configured tier models failed")
             )
+        } else if let Some(reason) = terminal_tool_error.as_deref() {
+            format!(
+                "{REVIEW_UNAVAILABLE_PREFIX}{} tool failure: {}\n",
+                reviewer_tool.as_str(),
+                truncate_single_line(reason, 240)
+            )
         } else if let Some(reason) = tool_unavailable_reason.as_deref() {
             format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
         } else {
@@ -274,6 +300,7 @@ pub(super) fn build_reviewer_outcome(
         } else {
             diagnostic
                 .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
+                .or_else(|| terminal_tool_error.clone())
                 .or_else(|| tool_unavailable_reason.clone())
         },
     })

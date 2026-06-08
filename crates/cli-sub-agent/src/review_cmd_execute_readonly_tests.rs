@@ -24,3 +24,6 @@ fn with_readonly_session_env_injects_flag() {
         Some("1")
     );
 }
+
+#[path = "review_cmd_execute_failover_classification_tests.rs"]
+mod failover_classification_tests;

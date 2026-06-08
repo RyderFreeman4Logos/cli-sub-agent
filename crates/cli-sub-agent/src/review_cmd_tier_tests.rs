@@ -208,6 +208,39 @@ fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
 }
 
 #[test]
+fn test_review_tool_plus_tier_force_override_resolves_disabled_requested_tool() {
+    let _tool_availability = assume_tier_tools_available();
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["gemini-cli"],
+    );
+    let selection = resolve_review_selection(
+        Some(ToolName::Codex),
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        true,
+        Some("quality"),
+        false,
+    )
+    .expect("force override should honor disabled requested review tool");
+
+    assert_eq!(selection.tool, ToolName::Codex);
+    assert_eq!(
+        selection.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/high")
+    );
+    assert_eq!(selection.tier_preference_order, vec!["codex"]);
+}
+
+#[test]
 fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
     let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
