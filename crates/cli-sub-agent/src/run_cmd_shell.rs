@@ -268,7 +268,7 @@ fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
             return None;
         }
         if shell_option_enables_c_payload(shell_flag) {
-            return (idx + 1 < tokens.len()).then_some(&tokens[idx + 1..]);
+            return (idx + 1 < tokens.len()).then_some(&tokens[idx + 1..idx + 2]);
         }
 
         idx += 1;

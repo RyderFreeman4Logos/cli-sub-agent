@@ -48,6 +48,13 @@ fn command_contains_forbidden_no_verify_commit_detects_prefixed_commit_in_shell_
 }
 
 #[test]
+fn command_contains_forbidden_no_verify_commit_ignores_shell_c_positionals() {
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "bash -lc 'true;' git commit --no-verify -m fake"
+    ));
+}
+
+#[test]
 fn command_contains_git_commit_detects_plain_and_global_option_forms() {
     assert!(command_contains_git_commit("git commit -m fix"));
     assert!(command_contains_git_commit(
@@ -82,6 +89,13 @@ fn command_contains_git_commit_detects_shell_payload_after_shell_options() {
 }
 
 #[test]
+fn command_contains_git_commit_ignores_shell_c_positionals() {
+    assert!(!command_contains_git_commit(
+        "bash -lc 'true;' git commit -m fake"
+    ));
+}
+
+#[test]
 fn command_contains_git_commit_rejects_non_commit_git_commands() {
     assert!(!command_contains_git_commit("git push origin HEAD"));
     assert!(!command_contains_git_commit("git commit-tree HEAD^{tree}"));
@@ -109,6 +123,13 @@ fn detect_git_commit_commands_detects_direct_and_shell_wrapped_commits() {
             "sh -u -c \"git commit -m sh_u\"".to_string(),
         ]
     );
+}
+
+#[test]
+fn detect_git_commit_commands_ignores_shell_c_positionals() {
+    let commands = vec!["bash -lc 'true;' git commit -m fake".to_string()];
+
+    assert!(detect_git_commit_commands(&commands).is_empty());
 }
 
 #[test]
