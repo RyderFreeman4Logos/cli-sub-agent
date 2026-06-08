@@ -145,24 +145,45 @@ where
                     }
                 }
             }
-            let streamed_output = emit_wait_terminal_output(
-                &session_dir,
-                &resolved.session_id,
-                loaded_result.as_ref(),
-                wait_options.output_mode,
-            )?;
-            super::emit_wait_next_step_if_needed(&session_dir)?;
-            #[rustfmt::skip]
-            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, loaded_result.as_ref());
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-            emit_completion_signal(
-                &resolved.session_id,
-                completion_status.as_ref(),
-                exit_code,
-                synthetic,
-                !streamed_output,
-            );
-            return Ok(exit_code);
+            if let Some(result) = loaded_result {
+                let streamed_output = emit_wait_terminal_output(
+                    &session_dir,
+                    &resolved.session_id,
+                    Some(&result),
+                    wait_options.output_mode,
+                )?;
+                super::emit_wait_next_step_if_needed(&session_dir)?;
+                #[rustfmt::skip]
+                let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, Some(&result));
+                emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
+                emit_completion_signal(
+                    &resolved.session_id,
+                    completion_status.as_ref(),
+                    exit_code,
+                    synthetic,
+                    !streamed_output,
+                );
+                return Ok(exit_code);
+            }
+
+            if csa_process::ToolLiveness::is_alive(&session_dir) {
+                tracing::debug!(
+                    session_id = %resolved.session_id,
+                    completion_status = %completion.status,
+                    completion_exit_code = completion.exit_code,
+                    "Daemon completion packet exists but no authoritative result is available yet; continuing wait"
+                );
+            } else {
+                eprintln!(
+                    "Session {} has a daemon completion packet but no terminal result.toml.",
+                    resolved.session_id,
+                );
+                eprintln!(
+                    "Run `csa session result --session {}` for diagnostics.",
+                    resolved.session_id
+                );
+                return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+            }
         }
 
         if let Some(result) = load_completed_daemon_result_with_fallback(

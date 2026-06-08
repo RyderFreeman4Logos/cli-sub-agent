@@ -859,3 +859,5 @@ mod tail_tests_wait;
 mod tail_tests_wait_liveness;
 #[path = "session_cmds_tests_tail_wait_lock.rs"]
 mod tail_tests_wait_lock;
+#[path = "session_cmds_tests_tail_wait_regression.rs"]
+mod tail_tests_wait_regression;
