@@ -1,5 +1,6 @@
 use super::*;
 use crate::session_tier_failover::TIER_FAILOVER_SUPERSEDED_STATUS;
+use crate::tier_model_fallback::classify_next_model_failure_with_elapsed;
 use csa_session::{PhaseEvent, SessionPhase};
 
 /// A classified review-failover failure: the normalized reason plus, when the
@@ -51,6 +52,27 @@ pub(super) fn classify_review_failover_reason(
     .or_else(|| classify_gemini_cli_runtime_failure(tool, execution))
 }
 
+pub(super) fn classify_review_failover_error(
+    tool: ToolName,
+    model_spec: Option<&str>,
+    error_text: &str,
+    attempt_elapsed: Option<std::time::Duration>,
+) -> Option<ReviewFailoverFailure> {
+    classify_next_model_failure_with_elapsed(
+        tool.as_str(),
+        error_text,
+        "",
+        1,
+        model_spec,
+        attempt_elapsed,
+    )
+    .map(|detected| ReviewFailoverFailure {
+        reason: detected.reason,
+        quota_exhausted: Some(detected.quota_exhausted),
+    })
+    .or_else(|| classify_gemini_cli_runtime_error_text(tool, error_text))
+}
+
 fn classify_gemini_cli_runtime_failure(
     tool: ToolName,
     execution: &crate::pipeline::SessionExecutionResult,
@@ -66,7 +88,18 @@ fn classify_gemini_cli_runtime_failure(
         "{}\n{}\n{}",
         execution.execution.summary, execution.execution.output, execution.execution.stderr_output,
     );
-    let lower = combined.to_ascii_lowercase();
+    classify_gemini_cli_runtime_error_text(tool, &combined)
+}
+
+fn classify_gemini_cli_runtime_error_text(
+    tool: ToolName,
+    error_text: &str,
+) -> Option<ReviewFailoverFailure> {
+    if tool != ToolName::GeminiCli {
+        return None;
+    }
+
+    let lower = error_text.to_ascii_lowercase();
     let reason = if is_gemini_manual_auth_failure(&lower) {
         "auth_unavailable"
     } else if is_gemini_runtime_home_enospc_failure(&lower) {

@@ -32,6 +32,16 @@ pub(crate) fn resolve_review_context(
     }
 }
 
+pub(crate) fn validate_review_prompt_file(path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+
+    std::fs::read_to_string(path)
+        .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
+    Ok(())
+}
+
 fn resolve_explicit_review_context(path: &str) -> Result<ResolvedReviewContext> {
     let path_ref = Path::new(path);
 

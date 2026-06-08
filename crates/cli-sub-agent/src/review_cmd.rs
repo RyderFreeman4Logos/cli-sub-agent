@@ -7,9 +7,9 @@ use crate::review_consensus::CLEAN;
 use crate::review_consensus::{consensus_strategy_label, parse_consensus_strategy};
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
-use crate::review_context::resolve_review_context;
 #[cfg(test)]
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
+use crate::review_context::{resolve_review_context, validate_review_prompt_file};
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
 use crate::startup_env::StartupSubtreeEnv;
@@ -93,8 +93,8 @@ pub(crate) use resolve::resolve_review_tool;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_readonly_configured,
-    resolve_review_selection, resolve_review_stream_mode, resolve_review_thinking,
-    resolve_review_tier_name, review_scope_allows_auto_discovery,
+    resolve_review_readonly_project_root, resolve_review_selection, resolve_review_stream_mode,
+    resolve_review_thinking, resolve_review_tier_name, review_scope_allows_auto_discovery,
     validate_review_direct_tool_tier_restriction, verify_review_skill_available,
 };
 use result_handling::resolve_single_review_result;
@@ -113,6 +113,7 @@ pub(crate) async fn handle_review(
     if args.check_verdict {
         return check_verdict::handle_check_verdict(&project_root, &args);
     }
+    validate_review_prompt_file(args.prompt_file.as_deref())?;
     let project_root_for_hooks = project_root.display().to_string();
     let Some((config, global_config)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
@@ -609,14 +610,6 @@ pub(crate) async fn handle_review(
         startup_env,
     })
     .await
-}
-
-fn resolve_review_readonly_project_root(fix: bool, configured: Option<bool>) -> bool {
-    if fix {
-        false
-    } else {
-        configured.unwrap_or(true)
-    }
 }
 
 #[cfg(test)]
