@@ -483,14 +483,15 @@ fn should_skip_balloon_prewarm(available_memory_mb: u64, active_session_count: u
 
 /// Record sandbox telemetry in session state (first turn only).
 ///
-/// If sandbox options are present and `session.sandbox_info` is still `None`,
-/// detects the active capability and writes a `SandboxInfo` snapshot.
+/// If sandbox options are present, detects the active capability and writes a
+/// `SandboxInfo` snapshot. If runtime preparation resolves to no sandbox,
+/// clears any transient pre-spawn admission marker.
 pub(crate) fn record_sandbox_telemetry(
     execute_options: &ExecuteOptions,
     session: &mut MetaSessionState,
 ) -> bool {
     let Some(sandbox_context) = execute_options.sandbox.as_ref() else {
-        return false;
+        return crate::resource_admission::clear_spawn_memory_projection(session);
     };
 
     let capability = csa_resource::detect_resource_capability();

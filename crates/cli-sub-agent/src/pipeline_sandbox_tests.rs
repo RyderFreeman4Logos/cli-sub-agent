@@ -92,6 +92,66 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection() {
 }
 
 #[test]
+fn record_sandbox_telemetry_clears_pre_spawn_projection_without_sandbox() {
+    let execute_options = csa_executor::ExecuteOptions::new(StreamMode::BufferOnly, 600);
+    let mut session = csa_session::MetaSessionState {
+        meta_session_id: "test-session".to_string(),
+        sandbox_info: Some(csa_session::SandboxInfo {
+            mode: "admission".to_string(),
+            memory_max_mb: Some(12_288),
+            filesystem_mode: None,
+            readonly_project_root: None,
+        }),
+        ..Default::default()
+    };
+
+    assert!(record_sandbox_telemetry(&execute_options, &mut session));
+
+    assert_eq!(session.sandbox_info, None);
+}
+
+#[test]
+fn record_sandbox_telemetry_overwrites_pre_spawn_projection_without_memory_limit() {
+    let isolation_plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_resource_capability(csa_resource::ResourceCapability::None)
+    .with_filesystem_capability(csa_resource::FilesystemCapability::None)
+    .with_resource_limits(None, None, None)
+    .with_readonly_project_root(false)
+    .build()
+    .expect("test isolation plan");
+    let execute_options = csa_executor::ExecuteOptions::new(StreamMode::BufferOnly, 600)
+        .with_sandbox(csa_executor::SandboxContext {
+            isolation_plan,
+            tool_name: "gemini-cli".to_string(),
+            session_id: "test-session".to_string(),
+            best_effort: true,
+        });
+    let mut session = csa_session::MetaSessionState {
+        meta_session_id: "test-session".to_string(),
+        sandbox_info: Some(csa_session::SandboxInfo {
+            mode: "admission".to_string(),
+            memory_max_mb: Some(4096),
+            filesystem_mode: None,
+            readonly_project_root: None,
+        }),
+        ..Default::default()
+    };
+
+    assert!(record_sandbox_telemetry(&execute_options, &mut session));
+    let info = session
+        .sandbox_info
+        .as_ref()
+        .expect("runtime telemetry should replace admission marker");
+
+    assert_ne!(info.mode, "admission");
+    assert_eq!(info.memory_max_mb, None);
+    assert_eq!(info.filesystem_mode.as_deref(), Some("none"));
+    assert_eq!(info.readonly_project_root, Some(false));
+}
+
+#[test]
 fn balloon_prewarm_skips_when_available_memory_is_low() {
     assert!(should_skip_balloon_prewarm(4096, 0));
 }
