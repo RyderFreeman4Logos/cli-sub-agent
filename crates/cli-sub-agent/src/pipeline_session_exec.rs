@@ -3,6 +3,7 @@ use super::{
 };
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::session_guard::SessionCleanupGuard;
 use crate::startup_env::StartupSubtreeEnv;
 use anyhow::{Context, Result};
@@ -83,6 +84,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     parent_session_source: ParentSessionSource,
     session_creation_mode: SessionCreationMode,
+    resource_overrides: RunResourceOverrides,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -172,6 +174,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         project_root,
         &mut session,
         &mut cleanup_guard,
+        resource_overrides,
     )?;
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
@@ -223,6 +226,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             memory_injection,
             global_config,
             pre_session_hook,
+            resource_overrides,
             no_fs_sandbox,
             readonly_project_root,
             extra_writable,

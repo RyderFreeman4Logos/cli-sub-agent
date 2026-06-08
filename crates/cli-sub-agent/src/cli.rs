@@ -157,11 +157,11 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
 
-        /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
+        /// Override disabled-tool config for explicit requests
         #[arg(long)]
         force_override_user_config: bool,
 
-        /// Allow tier failover even when a specific --tool is explicitly selected.
+        /// Allow tier failover with explicit --tool
         #[arg(long)]
         allow_fallback: bool,
 
@@ -169,16 +169,21 @@ pub enum Commands {
         #[arg(long)]
         no_failover: bool,
 
-        /// Enable Codex fast_mode for faster responses at higher cost. Only affects codex.
+        /// Enable Codex fast_mode
         #[arg(long)]
         fast_but_more_cost: bool,
 
-        /// Cap build (CARGO_BUILD_JOBS) and test (NEXTEST_TEST_THREADS)
-        /// parallelism of the validation gate to N. Use on memory-tight hosts
-        /// to avoid OOM-kills / spawn flakes. Unset = uncapped (honors an
-        /// inherited CARGO_BUILD_JOBS).
+        /// Cap validation jobs. Unset honors inherited env.
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         build_jobs: Option<u32>,
+
+        /// Per-run memory cap/projection override
+        #[arg(long, value_name = "MB", value_parser = clap::value_parser!(u64).range(256..))]
+        memory_max_mb: Option<u64>,
+
+        /// Per-run MemAvailable reserve override
+        #[arg(long, value_name = "MB")]
+        min_free_memory_mb: Option<u64>,
 
         /// Block-wait for a free slot instead of failing when all slots are occupied
         #[arg(long)]

@@ -15,6 +15,8 @@ use csa_resource::isolation_plan::{
 use csa_session::MetaSessionState;
 use tracing::{info, warn};
 
+use crate::run_resource_overrides::RunResourceOverrides;
+
 #[path = "pipeline_sandbox_writable.rs"]
 mod writable_sources;
 
@@ -25,6 +27,22 @@ pub(crate) enum SandboxResolution {
     Ok(Box<ExecuteOptions>),
     /// Sandbox is required but no capability was detected; caller must bail.
     RequiredButUnavailable(String),
+}
+
+/// Sandbox resolution inputs for one session spawn.
+pub(crate) struct SandboxResolveInput<'a> {
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) tool_name: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) stream_mode: StreamMode,
+    pub(crate) idle_timeout_seconds: u64,
+    pub(crate) liveness_dead_seconds: u64,
+    pub(crate) initial_response_timeout_seconds: Option<u64>,
+    pub(crate) no_fs_sandbox: bool,
+    pub(crate) readonly_project_root: bool,
+    pub(crate) extra_writable: &'a [PathBuf],
+    pub(crate) extra_readable: &'a [PathBuf],
 }
 
 fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> PathBuf {
@@ -72,6 +90,7 @@ pub(crate) fn validate_run_extra_writable_sources_exist(
 /// When `readonly_project_root` is `true`, the project root is mounted read-only
 /// via bwrap `--ro-bind` instead of `--bind`. Used by review/debate to prevent
 /// the tool from modifying project files.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
@@ -87,6 +106,44 @@ pub(crate) fn resolve_sandbox_options(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
 ) -> SandboxResolution {
+    resolve_sandbox_options_with_overrides(
+        SandboxResolveInput {
+            config,
+            tool_name,
+            session_id,
+            project_root,
+            stream_mode,
+            idle_timeout_seconds,
+            liveness_dead_seconds,
+            initial_response_timeout_seconds,
+            no_fs_sandbox,
+            readonly_project_root,
+            extra_writable,
+            extra_readable,
+        },
+        RunResourceOverrides::default(),
+    )
+}
+
+pub(crate) fn resolve_sandbox_options_with_overrides(
+    input: SandboxResolveInput<'_>,
+    resource_overrides: RunResourceOverrides,
+) -> SandboxResolution {
+    let SandboxResolveInput {
+        config,
+        tool_name,
+        session_id,
+        project_root,
+        stream_mode,
+        idle_timeout_seconds,
+        liveness_dead_seconds,
+        initial_response_timeout_seconds,
+        no_fs_sandbox,
+        readonly_project_root,
+        extra_writable,
+        extra_readable,
+    } = input;
+
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
         .map(|cfg| cfg.resources.stdin_write_timeout_seconds)
@@ -118,7 +175,7 @@ pub(crate) fn resolve_sandbox_options(
             return SandboxResolution::Ok(Box::new(execute_options));
         }
 
-        let Some(_memory_max_mb) = defaults.memory_max_mb else {
+        let Some(memory_max_mb) = resource_overrides.resolve_memory_max_mb(None, tool_name) else {
             return SandboxResolution::Ok(Box::new(execute_options));
         };
 
@@ -142,7 +199,7 @@ pub(crate) fn resolve_sandbox_options(
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
             .with_resource_limits(
-                defaults.memory_max_mb,
+                Some(memory_max_mb),
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
@@ -210,11 +267,11 @@ pub(crate) fn resolve_sandbox_options(
         return SandboxResolution::Ok(Box::new(execute_options));
     }
 
-    let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
+    let Some(memory_max_mb) = resource_overrides.resolve_memory_max_mb(Some(cfg), tool_name) else {
         if matches!(enforcement, csa_config::EnforcementMode::Required) {
             return SandboxResolution::RequiredButUnavailable(format!(
                 "Sandbox enforcement is required for tool '{tool_name}' but no memory_max_mb is configured. \
-                 Set resources.memory_max_mb or tools.{tool_name}.memory_max_mb in config."
+                 Set --memory-max-mb, resources.memory_max_mb, or tools.{tool_name}.memory_max_mb."
             ));
         }
         info!(

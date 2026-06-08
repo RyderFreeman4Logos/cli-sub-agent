@@ -101,6 +101,42 @@ fn run_cli_parses_build_jobs_flag() {
 }
 
 #[test]
+fn run_cli_parses_resource_override_flags() {
+    let cli = try_parse_cli(&[
+        "csa",
+        "run",
+        "--memory-max-mb",
+        "6144",
+        "--min-free-memory-mb",
+        "512",
+        "x",
+    ])
+    .unwrap();
+
+    match cli.command {
+        crate::cli::Commands::Run {
+            memory_max_mb,
+            min_free_memory_mb,
+            ..
+        } => {
+            assert_eq!(memory_max_mb, Some(6144));
+            assert_eq!(min_free_memory_mb, Some(512));
+        }
+        _ => panic!("expected run command"),
+    }
+}
+
+#[test]
+fn run_cli_rejects_memory_override_below_config_minimum() {
+    let result = try_parse_cli(&["csa", "run", "--memory-max-mb", "255", "x"]);
+
+    assert!(
+        result.is_err(),
+        "memory_max_mb below 256 should be rejected"
+    );
+}
+
+#[test]
 fn run_cli_rejects_zero_build_jobs() {
     let result = try_parse_cli(&["csa", "run", "--build-jobs", "0", "x"]);
 

@@ -47,6 +47,7 @@ pub(super) struct SessionRuntimeInput<'a> {
     pub(super) memory_injection: Option<&'a MemoryInjectionOptions>,
     pub(super) global_config: Option<&'a GlobalConfig>,
     pub(super) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
+    pub(super) resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
     pub(super) no_fs_sandbox: bool,
     pub(super) readonly_project_root: bool,
     pub(super) extra_writable: &'a [PathBuf],
@@ -295,19 +296,23 @@ async fn prepare_session_runtime_inner(
         input.config,
     );
     let liveness_dead_seconds = resolve_liveness_dead_seconds(input.config);
-    let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
-        input.config,
-        input.executor.tool_name(),
-        &session.meta_session_id,
-        input.project_root,
-        input.stream_mode,
-        input.idle_timeout_seconds,
+    let sandbox_input = crate::pipeline_sandbox::SandboxResolveInput {
+        config: input.config,
+        tool_name: input.executor.tool_name(),
+        session_id: &session.meta_session_id,
+        project_root: input.project_root,
+        stream_mode: input.stream_mode,
+        idle_timeout_seconds: input.idle_timeout_seconds,
         liveness_dead_seconds,
-        input.initial_response_timeout_seconds,
-        input.no_fs_sandbox,
-        input.readonly_project_root,
-        input.extra_writable,
-        input.extra_readable,
+        initial_response_timeout_seconds: input.initial_response_timeout_seconds,
+        no_fs_sandbox: input.no_fs_sandbox,
+        readonly_project_root: input.readonly_project_root,
+        extra_writable: input.extra_writable,
+        extra_readable: input.extra_readable,
+    };
+    let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options_with_overrides(
+        sandbox_input,
+        input.resource_overrides,
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
