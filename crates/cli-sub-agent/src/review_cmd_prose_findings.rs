@@ -476,6 +476,8 @@ fn line_has_blocking_review_signal(line: &str) -> bool {
         "bugs",
         "defect",
         "defects",
+        "regression",
+        "regressions",
         "violation",
         "violations",
     ];
@@ -560,5 +562,20 @@ fn priority_severity_from_label(label: &str) -> Option<Severity> {
         1 => Some(Severity::High),
         2 => Some(Severity::Medium),
         _ => Some(Severity::Low),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_blocking_review_signal;
+
+    #[test]
+    fn issue_1971_blocking_regression_summary_is_blocking_signal() {
+        assert!(contains_blocking_review_signal(
+            "FAIL: one blocking test reliability regression found in the new provider-error failover coverage."
+        ));
+        assert!(!contains_blocking_review_signal(
+            "Found one non-blocking test reliability regression."
+        ));
     }
 }
