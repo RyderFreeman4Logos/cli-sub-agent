@@ -142,6 +142,7 @@ fn issue_1930_plain_prose_quoted_terminal_error_payload_persists_pass() {
             "<!-- CSA:SECTION:details -->",
             "No blocking issues found. The reviewed code quotes this terminal-error payload:",
             "```json",
+            r#"{"type":"system","subtype":"init"}"#,
             r#"{"type":"result","subtype":"error_api","is_error":true,"result":"HTTP 403 Forbidden: authentication failed"}"#,
             "```",
             "<!-- CSA:SECTION:details:END -->",

@@ -70,10 +70,19 @@ pub(in crate::review_cmd) fn extract_review_text(raw_output: &str) -> Option<Str
 pub(in crate::review_cmd) fn terminal_tool_error_reason(raw_output: &str) -> Option<String> {
     let mut stream_segment_started = false;
     let mut terminal_error_reason = None;
+    let mut in_code_fence = false;
 
     for line in raw_output.lines() {
         let line = line.trim();
         if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            stream_segment_started = false;
+            continue;
+        }
+        if in_code_fence {
             continue;
         }
         if !(line.starts_with('{') && line.ends_with('}')) {

@@ -33,3 +33,18 @@ fn terminal_tool_error_reason_updates_after_prior_terminal_error() {
         Some("HTTP 403 Forbidden: authentication failed")
     );
 }
+
+#[test]
+fn terminal_tool_error_reason_ignores_fenced_stream_fixture() {
+    let transcript = [
+        "Reviewer prose quotes a terminal stream fixture:",
+        "```json",
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"result","subtype":"error_api","is_error":true,"result":"HTTP 403 Forbidden: authentication failed"}"#,
+        "```",
+        "The quoted fixture is evidence, not the live reviewer stream.",
+    ]
+    .join("\n");
+
+    assert_eq!(terminal_tool_error_reason(&transcript), None);
+}

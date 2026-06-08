@@ -173,6 +173,7 @@ fn resolve_single_review_result_ignores_fenced_terminal_error_payload_in_plain_p
         "<!-- CSA:SECTION:details -->",
         "No blocking issues found. The reviewed code contains this JSON fixture:",
         "```json",
+        r#"{"type":"system","subtype":"init"}"#,
         r#"{"type":"result","subtype":"error_api","is_error":true,"result":"HTTP 403 Forbidden: authentication failed"}"#,
         "```",
         "<!-- CSA:SECTION:details:END -->",
