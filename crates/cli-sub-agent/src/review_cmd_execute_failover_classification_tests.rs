@@ -39,6 +39,25 @@ fn classify_review_failover_reason_uses_summary_http_400_for_review_fallback() {
 }
 
 #[test]
+fn classify_review_failover_reason_uses_late_gemini_http_400_for_review_fallback() {
+    let execution = execution_with("", "", "status: 400", 1);
+
+    let failure = classify_review_failover_reason(
+        ToolName::GeminiCli,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        &execution,
+        None,
+        Some(std::time::Duration::from_secs(39)),
+    )
+    .expect(
+        "review-specific Gemini status:400 failure must fall back even past init window (#1958)",
+    );
+
+    assert_eq!(failure.reason, "HTTP 400");
+    assert_eq!(failure.quota_exhausted, Some(false));
+}
+
+#[test]
 fn classify_review_failover_reason_detects_gemini_noninteractive_manual_auth() {
     let stderr = "\
 Error authenticating: FatalAuthenticationError: Manual authorization is required but the current session is non-interactive. \

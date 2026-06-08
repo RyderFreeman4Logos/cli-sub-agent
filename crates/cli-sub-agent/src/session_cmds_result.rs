@@ -156,6 +156,16 @@ pub(crate) fn handle_session_result(
     if structured.is_active() {
         return display_structured_output(&session_dir, &resolved_id, &structured, json);
     }
+    if let Some(result) = repaired_result.as_ref().filter(|result| {
+        crate::session_tier_failover::is_pending_tier_failover_handoff(&session_dir, result)
+    }) {
+        crate::session_tier_failover::emit_pending_tier_failover_handoff(
+            &resolved_id,
+            result,
+            json,
+        );
+        return Ok(());
+    }
 
     let transcript_summary = match load_transcript_summary(&session_dir) {
         Ok(summary) => summary,

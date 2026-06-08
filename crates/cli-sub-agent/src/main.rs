@@ -97,6 +97,7 @@ mod session_observability;
 mod session_outcome;
 mod session_result_publish;
 mod session_summary_text;
+mod session_tier_failover;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_dispatch;
