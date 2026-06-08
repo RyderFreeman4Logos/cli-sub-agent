@@ -327,37 +327,52 @@ fn load_total_token_usage(session_dir: &Path) -> Option<TokenUsage> {
 }
 
 fn print_token_usage(usage: &TokenUsage) {
+    for line in render_token_usage_lines(usage) {
+        println!("{line}");
+    }
+}
+
+fn render_token_usage_lines(usage: &TokenUsage) -> Vec<String> {
     let any_field = usage.input_tokens.is_some()
         || usage.output_tokens.is_some()
         || usage.total_tokens.is_some()
         || usage.estimated_cost_usd.is_some()
         || usage.cache_read_input_tokens.is_some();
     if !any_field {
-        return;
+        return Vec::new();
     }
-    println!("Tokens:");
+
+    let mut lines = vec!["Tokens:".to_string()];
     if let Some(v) = usage.input_tokens {
-        println!("  Input:  {} tokens", format_thousands(v));
+        lines.push(format!("  Input:  {} tokens", format_thousands(v)));
     }
     if let Some(v) = usage.output_tokens {
-        println!("  Output: {} tokens", format_thousands(v));
+        lines.push(format!("  Output: {} tokens", format_thousands(v)));
     }
-    if let Some(v) = usage.total_tokens {
-        println!("  Total:  {} tokens", format_thousands(v));
+    if let Some(v) = display_total_tokens(usage) {
+        lines.push(format!("  Total:  {} tokens", format_thousands(v)));
     }
     if let Some(v) = usage.cache_read_input_tokens {
         if let Some(ratio) = usage.cache_hit_ratio() {
-            println!(
+            lines.push(format!(
                 "  Cache read: {} tokens ({:.0}% hit rate)",
                 format_thousands(v),
                 ratio * 100.0
-            );
+            ));
         } else {
-            println!("  Cache read: {} tokens", format_thousands(v));
+            lines.push(format!("  Cache read: {} tokens", format_thousands(v)));
         }
     }
     if let Some(cost) = usage.estimated_cost_usd {
-        println!("  Cost:   ${cost:.4}");
+        lines.push(format!("  Cost:   ${cost:.4}"));
+    }
+    lines
+}
+
+fn display_total_tokens(usage: &TokenUsage) -> Option<u64> {
+    match (usage.input_tokens, usage.output_tokens) {
+        (Some(input), Some(output)) => input.checked_add(output),
+        _ => usage.total_tokens,
     }
 }
 
@@ -419,13 +434,20 @@ fn build_result_json_payload(
         payload["review_meta"] = serde_json::to_value(meta)?;
     }
     if let Some(usage) = token_usage {
-        let mut value = serde_json::to_value(usage)?;
+        let usage = normalized_token_usage_for_output(usage);
+        let mut value = serde_json::to_value(&usage)?;
         if let Some(ratio) = usage.cache_hit_ratio() {
             value["cache_hit_ratio"] = serde_json::json!(ratio);
         }
         payload["total_token_usage"] = value;
     }
     Ok(payload)
+}
+
+fn normalized_token_usage_for_output(usage: &TokenUsage) -> TokenUsage {
+    let mut normalized = usage.clone();
+    normalized.total_tokens = display_total_tokens(usage);
+    normalized
 }
 
 fn display_sidecar(label: &str, sidecar: Option<&toml::Value>) {
@@ -664,3 +686,6 @@ pub(crate) use tool_output::handle_session_tool_output;
 #[cfg(test)]
 #[path = "session_cmds_result_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "session_cmds_result_token_tests.rs"]
+mod token_tests;
