@@ -4,7 +4,9 @@ use std::path::Path;
 use anyhow::Result;
 use csa_session::{ReviewFinding, Severity};
 
-use super::clean_detection::{contains_clean_phrase, detect_prose_clean_conclusion};
+use super::clean_detection::{
+    contains_clean_phrase, detect_prose_clean_conclusion, detect_prose_fail_conclusion,
+};
 use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
     FindingsSectionParse, classify_findings_section_body,
@@ -66,9 +68,9 @@ fn current_round_review_prose_contents(
         }
     }
 
-    let blocking_summary = latest_summary
-        .as_deref()
-        .is_some_and(contains_blocking_issue_signal);
+    let blocking_summary = latest_summary.as_deref().is_some_and(|summary| {
+        contains_blocking_issue_signal(summary) || detect_prose_fail_conclusion(summary)
+    });
 
     let mut contents = Vec::new();
     if let Some(content) = latest_summary {
