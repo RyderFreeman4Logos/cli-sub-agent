@@ -135,6 +135,11 @@ async fn execute_review_falls_back_from_gemini_status_400_to_codex() {
 async fn execute_review_falls_back_from_gemini_status_400_transport_error_to_codex() {
     use std::os::unix::fs::PermissionsExt;
 
+    if which::which("bwrap").is_err() {
+        eprintln!("skipping: bwrap not installed (CI gap, see #987)");
+        return;
+    }
+
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let bin_dir = project_dir.path().join("bin");
