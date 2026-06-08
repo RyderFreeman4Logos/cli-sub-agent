@@ -465,6 +465,11 @@ pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
 }
 
 fn line_has_blocking_review_signal(line: &str) -> bool {
+    line.split(['.', ';', ':'])
+        .any(blocking_review_clause_has_signal)
+}
+
+fn blocking_review_clause_has_signal(clause: &str) -> bool {
     const ISSUE_NOUNS: &[&str] = &[
         "issue",
         "issues",
@@ -485,7 +490,7 @@ fn line_has_blocking_review_signal(line: &str) -> bool {
     const MAX_TOKENS_AFTER_BLOCKING: usize = 8;
     const MAX_NEGATION_LOOKBACK: usize = 3;
 
-    let tokens = line
+    let tokens = clause
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .map(str::to_ascii_lowercase)
@@ -498,12 +503,7 @@ fn line_has_blocking_review_signal(line: &str) -> bool {
         if token != "blocking" {
             continue;
         }
-        if tokens[..index]
-            .iter()
-            .rev()
-            .take(MAX_NEGATION_LOOKBACK)
-            .any(|candidate| NEGATIONS.contains(&candidate.as_str()))
-        {
+        if blocking_token_is_negated(&tokens, index, MAX_NEGATION_LOOKBACK, NEGATIONS) {
             continue;
         }
         if ((index + 1)..tokens.len()).any(|candidate| {
@@ -515,6 +515,32 @@ fn line_has_blocking_review_signal(line: &str) -> bool {
     }
 
     false
+}
+
+fn blocking_token_is_negated(
+    tokens: &[String],
+    index: usize,
+    max_negation_lookback: usize,
+    negations: &[&str],
+) -> bool {
+    tokens[..index]
+        .iter()
+        .rev()
+        .take(max_negation_lookback)
+        .any(|candidate| negations.contains(&candidate.as_str()))
+        || leading_clause_negation_applies(tokens, index)
+}
+
+fn leading_clause_negation_applies(tokens: &[String], index: usize) -> bool {
+    matches!(
+        tokens.first().map(String::as_str),
+        Some("no" | "none" | "without")
+    ) && !tokens[..index].iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "but" | "however" | "except" | "though" | "although"
+        )
+    })
 }
 
 fn findings_section_body_has_unparseable_text(
@@ -576,6 +602,25 @@ mod tests {
         ));
         assert!(!contains_blocking_review_signal(
             "Found one non-blocking test reliability regression."
+        ));
+    }
+
+    #[test]
+    fn issue_1978_blocking_correctness_finding_summary_is_blocking_signal() {
+        assert!(contains_blocking_review_signal(
+            "One blocking correctness finding was found in csa review --session 01KTMDAQM18XK6R7DDA0ZP6C57 --fix tool selection."
+        ));
+        assert!(contains_blocking_review_signal(
+            "Review found one blocking finding in the wait result classification."
+        ));
+        assert!(!contains_blocking_review_signal(
+            "No blocking correctness findings were found in the review."
+        ));
+        assert!(!contains_blocking_review_signal(
+            "No correctness, regression, security, or blocking test-coverage findings."
+        ));
+        assert!(contains_blocking_review_signal(
+            "No prior context; one blocking finding remains."
         ));
     }
 }

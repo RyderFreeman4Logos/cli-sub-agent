@@ -68,10 +68,6 @@ fn current_round_review_prose_contents(
         }
     }
 
-    let blocking_summary = latest_summary.as_deref().is_some_and(|summary| {
-        contains_blocking_issue_signal(summary) || detect_prose_fail_conclusion(summary)
-    });
-
     let mut contents = Vec::new();
     if let Some(content) = latest_summary {
         push_review_content(&mut contents, "summary", content);
@@ -80,6 +76,7 @@ fn current_round_review_prose_contents(
     if let Some(content) = latest_details {
         push_review_content(&mut contents, "details", content);
     }
+    let indexed_review_content_count = contents.len();
 
     if let Some(content) =
         crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
@@ -88,10 +85,23 @@ fn current_round_review_prose_contents(
         push_review_content(&mut contents, "canonical", content);
     }
 
+    let blocking_summary = contents
+        .iter()
+        .take(if indexed_review_content_count == 0 {
+            contents.len()
+        } else {
+            indexed_review_content_count
+        })
+        .any(|(_, content)| content_has_blocking_review_outcome(content));
+
     Ok(CurrentRoundReviewProseContents {
         blocking_summary,
         contents,
     })
+}
+
+fn content_has_blocking_review_outcome(content: &str) -> bool {
+    contains_blocking_issue_signal(content) || detect_prose_fail_conclusion(content)
 }
 
 fn push_review_content(contents: &mut Vec<(String, String)>, section_id: &str, content: String) {
