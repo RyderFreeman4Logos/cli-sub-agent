@@ -62,6 +62,7 @@ mod process_exit;
 mod process_tree;
 mod push_cmd;
 mod recall_cmd;
+mod resource_admission;
 mod review_cmd;
 mod review_consensus;
 mod review_context;

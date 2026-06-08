@@ -431,7 +431,7 @@ pub(crate) fn resolve_sandbox_options(
 /// Pre-warms RAM by `mmap`-ing a large anonymous mapping with `MAP_POPULATE`, forcing
 /// the kernel to swap out other processes.  The balloon is dropped (deflated) right
 /// away so the freed physical pages are available for the tool process about to launch.
-pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
+pub(crate) fn maybe_inflate_balloon(tool_name: &str, project_root: &Path, session_id: &str) {
     use csa_resource::memory_balloon::{MemoryBalloon, should_enable_balloon};
 
     if tool_name != "claude-code" {
@@ -443,6 +443,18 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
     sys.refresh_memory();
     let available_memory = sys.available_memory();
     let available_swap = sys.free_swap();
+    let available_memory_mb = available_memory / 1024 / 1024;
+    let active_session_count =
+        crate::resource_admission::active_session_count_for_balloon(project_root, session_id);
+
+    if should_skip_balloon_prewarm(available_memory_mb, active_session_count) {
+        warn!(
+            available_memory_mb,
+            active_session_count,
+            "Skipping MemoryBalloon prewarm under host memory or concurrent-session pressure"
+        );
+        return;
+    }
 
     if !should_enable_balloon(available_memory, available_swap, BALLOON_SIZE as u64) {
         return;
@@ -463,17 +475,24 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
     }
 }
 
+const BALLOON_MIN_AVAILABLE_MEMORY_MB: u64 = 8192;
+
+fn should_skip_balloon_prewarm(available_memory_mb: u64, active_session_count: u64) -> bool {
+    available_memory_mb < BALLOON_MIN_AVAILABLE_MEMORY_MB || active_session_count > 0
+}
+
 /// Record sandbox telemetry in session state (first turn only).
 ///
-/// If sandbox options are present and `session.sandbox_info` is still `None`,
-/// detects the active capability and writes a `SandboxInfo` snapshot.
+/// If sandbox options are present, detects the active capability and writes a
+/// `SandboxInfo` snapshot. If runtime preparation resolves to no sandbox,
+/// clears any transient pre-spawn admission marker.
 pub(crate) fn record_sandbox_telemetry(
     execute_options: &ExecuteOptions,
     session: &mut MetaSessionState,
-) {
-    if execute_options.sandbox.is_none() || session.sandbox_info.is_some() {
-        return;
-    }
+) -> bool {
+    let Some(sandbox_context) = execute_options.sandbox.as_ref() else {
+        return crate::resource_admission::clear_spawn_memory_projection(session);
+    };
 
     let capability = csa_resource::detect_resource_capability();
     let mode = match capability {
@@ -481,32 +500,28 @@ pub(crate) fn record_sandbox_telemetry(
         csa_resource::ResourceCapability::Setrlimit => "rlimit",
         csa_resource::ResourceCapability::None => "none",
     };
-    let memory: Option<u64> = execute_options
-        .sandbox
-        .as_ref()
-        .and_then(|ctx| ctx.isolation_plan.memory_max_mb);
+    let memory: Option<u64> = sandbox_context.isolation_plan.memory_max_mb;
 
     // Capture filesystem isolation mode from the isolation plan.
-    let fs_mode = execute_options
-        .sandbox
-        .as_ref()
-        .map(|ctx| match ctx.isolation_plan.filesystem {
-            csa_resource::FilesystemCapability::Bwrap => "bwrap".to_string(),
-            csa_resource::FilesystemCapability::Landlock => "landlock".to_string(),
-            csa_resource::FilesystemCapability::None => "none".to_string(),
-        });
+    let fs_mode = Some(match sandbox_context.isolation_plan.filesystem {
+        csa_resource::FilesystemCapability::Bwrap => "bwrap".to_string(),
+        csa_resource::FilesystemCapability::Landlock => "landlock".to_string(),
+        csa_resource::FilesystemCapability::None => "none".to_string(),
+    });
 
-    let readonly = execute_options
-        .sandbox
-        .as_ref()
-        .map(|ctx| ctx.isolation_plan.readonly_project_root);
+    let readonly = Some(sandbox_context.isolation_plan.readonly_project_root);
 
-    session.sandbox_info = Some(csa_session::SandboxInfo {
+    let sandbox_info = csa_session::SandboxInfo {
         mode: mode.to_string(),
         memory_max_mb: memory,
         filesystem_mode: fs_mode.clone(),
         readonly_project_root: readonly,
-    });
+    };
+    if session.sandbox_info.as_ref() == Some(&sandbox_info) {
+        return false;
+    }
+
+    session.sandbox_info = Some(sandbox_info);
 
     info!(
         session = %session.meta_session_id,
@@ -515,6 +530,7 @@ pub(crate) fn record_sandbox_telemetry(
         filesystem_mode = ?fs_mode,
         "Sandbox telemetry recorded in session state"
     );
+    true
 }
 
 pub(crate) fn filesystem_sandbox_active(sandbox_info: Option<&csa_session::SandboxInfo>) -> bool {

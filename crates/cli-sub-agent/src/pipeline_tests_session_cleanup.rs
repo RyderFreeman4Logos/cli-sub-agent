@@ -344,6 +344,10 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
     let session_id = &sessions[0].meta_session_id;
     let session = csa_session::load_session(project_root, session_id).expect("load session");
     assert_eq!(session.termination_reason.as_deref(), Some("low_memory"));
+    assert_eq!(
+        session.sandbox_info, None,
+        "pre-spawn failure must clear the transient admission marker"
+    );
 
     let result = csa_session::load_result(project_root, session_id)
         .expect("load result")
@@ -351,6 +355,104 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
     assert_eq!(result.status, "failure");
     assert!(result.summary.starts_with("pre-exec:"));
     assert!(result.summary.contains("CSA: low memory"));
+}
+
+#[tokio::test]
+async fn resumed_pre_run_failure_clears_admission_projection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let executor = Executor::Opencode {
+        model_override: None,
+        agent: None,
+        thinking_budget: None,
+    };
+
+    let mut session =
+        csa_session::create_session(project_root, Some("resume target"), None, Some("opencode"))
+            .expect("create resume session");
+    session
+        .apply_phase_event(csa_session::PhaseEvent::Compressed)
+        .expect("mark session available for resume");
+    csa_session::save_session(&session).expect("persist available resume session");
+
+    let session_root = csa_session::get_session_root(project_root).expect("session root");
+    fs::write(
+        session_root.join("hooks.toml"),
+        r#"
+[pre_run]
+enabled = true
+command = "exit 42"
+timeout_secs = 1
+fail_policy = "closed"
+"#,
+    )
+    .expect("write closed pre-run hook");
+
+    let err = match execute_with_session_and_meta(
+        &executor,
+        &ToolName::Opencode,
+        "fail during runtime preparation",
+        OutputFormat::Json,
+        Some(session.meta_session_id.clone()),
+        false,
+        Some("resume-pre-run-failure".to_string()),
+        None,
+        project_root,
+        None,
+        None,
+        None, // subtree_pin (#1741)
+        Some("run"),
+        None,
+        None,
+        csa_process::StreamMode::BufferOnly,
+        DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        &[],
+        &[],
+        None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
+        false, // cli_no_hook_bypass_scan: no CLI flag here; defer to config
+        &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
+    )
+    .await
+    {
+        Ok(_) => panic!("closed pre-run hook must reject resumed execution"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("Hook PreRun exited with code 42"),
+        "pre-run hook failure should propagate: {err:#}"
+    );
+
+    let loaded =
+        csa_session::load_session(project_root, &session.meta_session_id).expect("load session");
+    assert_eq!(
+        loaded.phase,
+        csa_session::SessionPhase::Active,
+        "resume path should mark the session active before runtime preparation"
+    );
+    assert_eq!(
+        loaded.sandbox_info, None,
+        "runtime-preparation failure must clear the transient admission marker"
+    );
+
+    let result = csa_session::load_result(project_root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result exists");
+    assert_eq!(result.status, "failure");
+    assert!(result.summary.starts_with("pre-exec:"));
+    assert!(
+        result.summary.contains("Hook PreRun exited with code 42"),
+        "result should preserve the runtime-preparation failure: {}",
+        result.summary
+    );
 }
 
 #[tokio::test]

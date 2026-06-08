@@ -95,6 +95,27 @@ pub(super) async fn prepare_session_runtime(
     session: &mut MetaSessionState,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
 ) -> Result<SessionRuntimePlan> {
+    let project_root = input.project_root;
+    let tool_name = input.executor.tool_name().to_string();
+
+    prepare_session_runtime_inner(input, session)
+        .await
+        .map_err(|err| {
+            persist_pipeline_pre_exec_failure(
+                project_root,
+                session,
+                &tool_name,
+                err,
+                cleanup_guard,
+                None,
+            )
+        })
+}
+
+async fn prepare_session_runtime_inner(
+    input: SessionRuntimeInput<'_>,
+    session: &mut MetaSessionState,
+) -> Result<SessionRuntimePlan> {
     let can_edit = input
         .config
         .is_none_or(|cfg| cfg.can_tool_edit_existing(input.executor.tool_name()));
@@ -112,24 +133,12 @@ pub(super) async fn prepare_session_runtime(
         .global_config
         .is_some_and(|cfg| cfg.experimental.enable_prompt_caching);
     let mut prompt_assembly = PromptAssembly::new(raw_prompt.clone(), prompt_caching_enabled);
-    let state_dir_warning = match state_preflight::run(
+    let state_dir_warning = state_preflight::run(
         input.global_config,
         &session.meta_session_id,
         input.startup_env.session_id(),
         input.session_arg.is_none() || input.fresh_spawn_preflight_override,
-    ) {
-        Ok(warning) => warning,
-        Err(err) => {
-            return Err(persist_pipeline_pre_exec_failure(
-                input.project_root,
-                session,
-                input.executor.tool_name(),
-                err,
-                cleanup_guard,
-                None,
-            ));
-        }
-    };
+    )?;
     if let Some(w) = state_dir_warning {
         prompt_assembly.prepend_dynamic(&w);
     }
@@ -302,15 +311,7 @@ pub(super) async fn prepare_session_runtime(
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
-            let err = anyhow::anyhow!(msg);
-            return Err(persist_pipeline_pre_exec_failure(
-                input.project_root,
-                session,
-                input.executor.tool_name(),
-                err,
-                cleanup_guard,
-                None,
-            ));
+            return Err(anyhow::anyhow!(msg));
         }
     };
     crate::pipeline::ensure_tool_runtime_prerequisites(
@@ -350,8 +351,20 @@ pub(super) async fn prepare_session_runtime(
     if let Some(pre_session_hook) = input.pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);
     }
-    crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session);
-    crate::pipeline_sandbox::maybe_inflate_balloon(input.tool.as_str());
+    if crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session)
+        && let Err(err) = csa_session::save_session(session)
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to persist sandbox telemetry"
+        );
+    }
+    crate::pipeline_sandbox::maybe_inflate_balloon(
+        input.tool.as_str(),
+        input.project_root,
+        &session.meta_session_id,
+    );
     if let Err(err) =
         session_exec_metadata::persist_session_runtime_binary(input.session_dir, input.executor)
     {

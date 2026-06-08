@@ -6,6 +6,7 @@ use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{MetaSessionState, save_session};
 use tracing::warn;
 
+use crate::resource_admission::{build_spawn_memory_admission, spawn_memory_projection_mb};
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(super) fn check_resources_before_spawn(
@@ -15,13 +16,30 @@ pub(super) fn check_resources_before_spawn(
     session: &mut MetaSessionState,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
 ) -> anyhow::Result<()> {
-    let mut resource_guard = config.map(|cfg| {
-        ResourceGuard::new(ResourceLimits {
-            min_free_memory_mb: cfg.resources.min_free_memory_mb,
-        })
+    let default_resources = csa_config::ResourcesConfig::default();
+    let mut resource_guard = ResourceGuard::new(ResourceLimits {
+        min_free_memory_mb: config
+            .map(|cfg| cfg.resources.min_free_memory_mb)
+            .unwrap_or(default_resources.min_free_memory_mb),
     });
-    if let Some(ref mut guard) = resource_guard
-        && let Err(err) = guard.check_availability(executor.tool_name())
+    let projected_spawn_mb = spawn_memory_projection_mb(config, executor.tool_name());
+    if let Err(err) =
+        crate::resource_admission::persist_spawn_memory_projection(session, projected_spawn_mb)
+    {
+        return Err(persist_pipeline_pre_exec_failure(
+            project_root,
+            session,
+            executor.tool_name(),
+            err.context("Failed to persist pre-spawn memory projection"),
+            cleanup_guard,
+            None,
+        ));
+    }
+    let admission =
+        build_spawn_memory_admission(project_root, &session.meta_session_id, projected_spawn_mb);
+
+    if let Err(err) =
+        resource_guard.check_availability_with_admission(executor.tool_name(), Some(admission))
     {
         return Err(persist_pipeline_pre_exec_failure(
             project_root,
@@ -32,8 +50,8 @@ pub(super) fn check_resources_before_spawn(
             Some("low_memory"),
         ));
     }
-    if let (Some(guard), Some(cfg)) = (&mut resource_guard, config) {
-        guard.check_health(
+    if let Some(cfg) = config {
+        resource_guard.check_health(
             cfg.sandbox_memory_max_mb(executor.tool_name()),
             cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
             60,
@@ -107,15 +125,19 @@ pub(super) fn persist_pipeline_pre_exec_failure(
     termination_reason: Option<&str>,
 ) -> anyhow::Error {
     write_pre_exec_error_result(project_root, &session.meta_session_id, tool_name, &err);
+    let cleared_admission_projection =
+        crate::resource_admission::clear_spawn_memory_projection(session);
     if let Some(reason) = termination_reason {
         session.termination_reason = Some(reason.to_string());
+    }
+    if termination_reason.is_some() || cleared_admission_projection {
         session.last_accessed = chrono::Utc::now();
         if let Err(save_err) = save_session(session) {
             warn!(
                 session = %session.meta_session_id,
                 error = %save_err,
-                termination_reason = reason,
-                "Failed to persist pre-exec termination reason"
+                termination_reason = ?termination_reason,
+                "Failed to persist pre-exec failure session state"
             );
         }
     }
