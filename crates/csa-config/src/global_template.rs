@@ -107,6 +107,12 @@ task_pool_workers = 1
 frequent_poll_seconds = 60
 long_poll_seconds = 240
 
+# Parent-tool caller hints.
+# Codex shell calls should pass this `yield_time_ms` for `csa session wait`.
+# The default 300000 ms (5 minutes) is conservative for OpenAI in-memory prompt-cache TTL retention.
+# [caller_hints]
+# codex_session_wait_yield_ms = 300000
+
 # Optional early-exit warning for `csa session wait`.
 # When the watched session's process tree RSS exceeds this threshold,
 # `csa session wait` prints a CSA:MEMORY_WARN marker and exits 33.

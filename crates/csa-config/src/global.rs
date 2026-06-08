@@ -14,7 +14,6 @@ pub use crate::tool_selection::ToolSelection;
 use csa_core::types::ToolName;
 
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
-
 /// Global configuration loaded from `~/.config/cli-sub-agent/config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalConfig {
@@ -779,23 +778,18 @@ fn default_max_concurrent() -> u32 {
 #[cfg(test)]
 #[path = "global_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "global_tests_heterogeneous.rs"]
-mod tests_heterogeneous;
-
-#[cfg(test)]
-#[path = "global_tests_priority.rs"]
-mod tests_priority;
-
-#[cfg(test)]
-#[path = "global_tests_review_batch.rs"]
-mod tests_review_batch;
-
 #[cfg(test)]
 #[path = "global_tests_github.rs"]
 mod tests_github;
-
+#[cfg(test)]
+#[path = "global_tests_heterogeneous.rs"]
+mod tests_heterogeneous;
+#[cfg(test)]
+#[path = "global_tests_priority.rs"]
+mod tests_priority;
+#[cfg(test)]
+#[path = "global_tests_review_batch.rs"]
+mod tests_review_batch;
 #[cfg(test)]
 #[path = "global_tests_state_dir.rs"]
 mod tests_state_dir;

@@ -71,18 +71,23 @@ pub(crate) fn detect_ancestor_tool() -> Option<String> {
     None
 }
 
-const CODEX_YIELD_TIME_MS: u64 = 300_000;
-
 pub(crate) fn codex_yield_hint() -> String {
     if detect_ancestor_tool().as_deref() != Some("codex") {
         return String::new();
     }
+    format_codex_yield_hint(csa_config::GlobalConfig::resolve_codex_session_wait_yield_ms())
+}
+
+pub(crate) fn format_codex_yield_hint(yield_time_ms: u64) -> String {
     format!(
         "\n<!-- CSA:CODEX_HINT yield_time_ms={ms} \
          rule=\"You are running inside Codex. When calling 'csa session wait', \
-         pass yield_time_ms: {ms} (5 min) to avoid 10s re-polling that wastes tokens. \
+         pass yield_time_ms: {ms}. The default 300000 ms (5 minutes) is a conservative \
+         OpenAI in-memory prompt-cache TTL tradeoff: short high-frequency polling wastes \
+         tokens, while overly long waits can let the caller cache go cold. Do not manually \
+         poll every 10-30s; use this interval unless there is a concrete failure signal. \
          Example tool call: shell({{ command: 'csa session wait --session <ID> --cd <PATH>', yield_time_ms: {ms} }})\" -->",
-        ms = CODEX_YIELD_TIME_MS,
+        ms = yield_time_ms,
     )
 }
 
@@ -328,6 +333,31 @@ mod tests {
     fn test_detect_ancestor_tool_does_not_panic() {
         // Just verify it doesn't panic. Result depends on runtime context.
         let _result = detect_ancestor_tool();
+    }
+
+    #[test]
+    fn test_format_codex_yield_hint_describes_cache_tradeoff_and_polling_interval() {
+        let hint = format_codex_yield_hint(csa_config::DEFAULT_CODEX_SESSION_WAIT_YIELD_MS);
+
+        assert!(hint.contains("CSA:CODEX_HINT"));
+        assert!(hint.contains("yield_time_ms=300000"));
+        assert!(hint.contains("yield_time_ms: 300000"));
+        assert!(hint.contains("default 300000 ms (5 minutes)"));
+        assert!(hint.contains("OpenAI in-memory prompt-cache TTL tradeoff"));
+        assert!(hint.contains("short high-frequency polling wastes"));
+        assert!(hint.contains("caller cache go cold"));
+        assert!(hint.contains("Do not manually poll every"));
+        assert!(hint.contains("10-30s"));
+        assert!(hint.contains("unless there is a concrete failure signal"));
+    }
+
+    #[test]
+    fn test_format_codex_yield_hint_uses_configured_interval() {
+        let hint = format_codex_yield_hint(450_000);
+
+        assert!(hint.contains("yield_time_ms=450000"));
+        assert!(hint.contains("yield_time_ms: 450000"));
+        assert!(hint.contains("default 300000 ms (5 minutes)"));
     }
 
     /// Verify that every `Executor::runtime_binary_name()` value is recognized
