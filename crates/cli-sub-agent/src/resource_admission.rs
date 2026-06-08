@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{io, path::Path};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
@@ -23,6 +23,13 @@ struct ActiveSessionMemory {
 struct ActiveSessionObservation {
     sampled_rss_mb: Option<u64>,
     projected_mb: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionMemorySample {
+    RssMb(u64),
+    UnsupportedLiveProcess,
+    Unavailable,
 }
 
 pub(crate) fn spawn_memory_projection_mb(config: Option<&ProjectConfig>, tool_name: &str) -> u64 {
@@ -76,7 +83,7 @@ pub(crate) fn build_spawn_memory_admission(
             &sessions,
             current_session_id,
             Utc::now(),
-            sample_session_tree_rss_mb,
+            sample_session_memory,
         ),
         Err(err) => {
             warn!(
@@ -97,17 +104,36 @@ pub(crate) fn build_spawn_memory_admission(
     }
 }
 
-fn sample_session_tree_rss_mb(session: &MetaSessionState) -> Option<u64> {
+fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
     let project_root = Path::new(&session.project_path);
-    let sampler = SessionTreeMemorySampler::new(project_root, &session.meta_session_id).ok()?;
-    sampler.sample_rss_mb().ok()
+    match SessionTreeMemorySampler::new(project_root, &session.meta_session_id)
+        .and_then(|sampler| sampler.sample_rss_mb())
+    {
+        Ok(rss_mb) => SessionMemorySample::RssMb(rss_mb),
+        Err(err)
+            if err.kind() == io::ErrorKind::Unsupported
+                && session_has_live_process_signal(project_root, &session.meta_session_id) =>
+        {
+            SessionMemorySample::UnsupportedLiveProcess
+        }
+        Err(_) => SessionMemorySample::Unavailable,
+    }
+}
+
+fn session_has_live_process_signal(project_root: &Path, session_id: &str) -> bool {
+    let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
+        return false;
+    };
+
+    csa_process::ToolLiveness::has_live_process(&session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir)
 }
 
 fn aggregate_active_session_memory(
     sessions: &[MetaSessionState],
     current_session_id: &str,
     now: DateTime<Utc>,
-    sample_rss_mb: impl Fn(&MetaSessionState) -> Option<u64>,
+    sample_memory: impl Fn(&MetaSessionState) -> SessionMemorySample,
 ) -> ActiveSessionMemory {
     let mut memory = ActiveSessionMemory::default();
 
@@ -119,7 +145,7 @@ fn aggregate_active_session_memory(
             continue;
         }
 
-        let Some(observation) = active_session_observation(session, now, &sample_rss_mb) else {
+        let Some(observation) = active_session_observation(session, now, &sample_memory) else {
             continue;
         };
 
@@ -139,19 +165,28 @@ fn aggregate_active_session_memory(
 fn active_session_observation(
     session: &MetaSessionState,
     now: DateTime<Utc>,
-    sample_rss_mb: impl Fn(&MetaSessionState) -> Option<u64>,
+    sample_memory: impl Fn(&MetaSessionState) -> SessionMemorySample,
 ) -> Option<ActiveSessionObservation> {
-    let sampled_rss = sample_rss_mb(session);
+    let sample = sample_memory(session);
     let sandbox_projection = session
         .sandbox_info
         .as_ref()
         .and_then(|sandbox| sandbox.memory_max_mb);
 
-    if let Some(rss_mb) = sampled_rss {
-        return Some(ActiveSessionObservation {
-            sampled_rss_mb: Some(rss_mb),
-            projected_mb: rss_mb.max(sandbox_projection.unwrap_or(0)),
-        });
+    match sample {
+        SessionMemorySample::RssMb(rss_mb) => {
+            return Some(ActiveSessionObservation {
+                sampled_rss_mb: Some(rss_mb),
+                projected_mb: rss_mb.max(sandbox_projection.unwrap_or(0)),
+            });
+        }
+        SessionMemorySample::UnsupportedLiveProcess => {
+            return Some(ActiveSessionObservation {
+                sampled_rss_mb: None,
+                projected_mb: sandbox_projection.unwrap_or(FALLBACK_SPAWN_PROJECTION_MB),
+            });
+        }
+        SessionMemorySample::Unavailable => {}
     }
 
     let recent_pending_projection = recent_pending_projection_mb(session, now, sandbox_projection);
@@ -191,7 +226,7 @@ pub(crate) fn active_session_count_for_balloon(
             &sessions,
             current_session_id,
             Utc::now(),
-            sample_session_tree_rss_mb,
+            sample_session_memory,
         ),
         Err(err) => {
             warn!(
@@ -208,13 +243,13 @@ fn count_observable_active_sessions(
     sessions: &[MetaSessionState],
     current_session_id: &str,
     now: DateTime<Utc>,
-    sample_rss_mb: impl Fn(&MetaSessionState) -> Option<u64>,
+    sample_memory: impl Fn(&MetaSessionState) -> SessionMemorySample,
 ) -> u64 {
     sessions
         .iter()
         .filter(|session| session.meta_session_id != current_session_id)
         .filter(|session| matches!(session.phase, SessionPhase::Active))
-        .filter(|session| active_session_observation(session, now, &sample_rss_mb).is_some())
+        .filter(|session| active_session_observation(session, now, &sample_memory).is_some())
         .count()
         .try_into()
         .unwrap_or(u64::MAX)
@@ -229,12 +264,21 @@ mod tests {
         last_accessed: DateTime<Utc>,
         memory_max_mb: Option<u64>,
     ) -> MetaSessionState {
+        active_session_with_mode(id, last_accessed, "cgroup", memory_max_mb)
+    }
+
+    fn active_session_with_mode(
+        id: &str,
+        last_accessed: DateTime<Utc>,
+        mode: &str,
+        memory_max_mb: Option<u64>,
+    ) -> MetaSessionState {
         MetaSessionState {
             meta_session_id: id.to_string(),
             phase: SessionPhase::Active,
             last_accessed,
             sandbox_info: Some(SandboxInfo {
-                mode: "cgroup".to_string(),
+                mode: mode.to_string(),
                 memory_max_mb,
                 filesystem_mode: None,
                 readonly_project_root: None,
@@ -286,9 +330,9 @@ mod tests {
 
         let memory = aggregate_active_session_memory(&sessions, "current", now, |session| {
             match session.meta_session_id.as_str() {
-                "a" => Some(1024),
-                "b" => Some(4096),
-                _ => None,
+                "a" => SessionMemorySample::RssMb(1024),
+                "b" => SessionMemorySample::RssMb(4096),
+                _ => SessionMemorySample::Unavailable,
             }
         });
 
@@ -307,7 +351,9 @@ mod tests {
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(memory.active_count, 1);
         assert_eq!(memory.sampled_count, 0);
@@ -323,7 +369,9 @@ mod tests {
             None,
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(memory.active_count, 1);
         assert_eq!(memory.sampled_count, 0);
@@ -339,7 +387,9 @@ mod tests {
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(memory.active_count, 0);
         assert_eq!(memory.sampled_count, 0);
@@ -355,7 +405,9 @@ mod tests {
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| None);
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(memory.active_count, 0);
         assert_eq!(memory.projected_mb, 0);
@@ -370,12 +422,53 @@ mod tests {
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| Some(1024));
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::RssMb(1024)
+        });
 
         assert_eq!(memory.active_count, 1);
         assert_eq!(memory.sampled_count, 1);
         assert_eq!(memory.sampled_rss_mb, 1024);
         assert_eq!(memory.projected_mb, 12_288);
+    }
+
+    #[test]
+    fn active_memory_counts_live_runtime_projection_when_sampler_unsupported() {
+        let now = Utc::now();
+        let sessions = vec![active_session_with_mode(
+            "live",
+            now - TimeDelta::hours(2),
+            "rlimit",
+            Some(12_288),
+        )];
+
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::UnsupportedLiveProcess
+        });
+
+        assert_eq!(memory.active_count, 1);
+        assert_eq!(memory.sampled_count, 0);
+        assert_eq!(memory.sampled_rss_mb, 0);
+        assert_eq!(memory.projected_mb, 12_288);
+    }
+
+    #[test]
+    fn active_memory_uses_fallback_for_live_runtime_without_projection_when_sampler_unsupported() {
+        let now = Utc::now();
+        let sessions = vec![active_session_with_mode(
+            "live",
+            now - TimeDelta::hours(2),
+            "none",
+            None,
+        )];
+
+        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+            SessionMemorySample::UnsupportedLiveProcess
+        });
+
+        assert_eq!(memory.active_count, 1);
+        assert_eq!(memory.sampled_count, 0);
+        assert_eq!(memory.projected_mb, FALLBACK_SPAWN_PROJECTION_MB);
     }
 
     #[test]
@@ -386,7 +479,9 @@ mod tests {
             admission_session("old", now - TimeDelta::hours(2), Some(4096)),
         ];
 
-        let count = count_observable_active_sessions(&sessions, "current", now, |_| None);
+        let count = count_observable_active_sessions(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(count, 1);
     }
@@ -400,9 +495,28 @@ mod tests {
             Some(4096),
         )];
 
-        let count = count_observable_active_sessions(&sessions, "current", now, |_| None);
+        let count = count_observable_active_sessions(&sessions, "current", now, |_| {
+            SessionMemorySample::Unavailable
+        });
 
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn balloon_count_counts_live_runtime_when_sampler_unsupported() {
+        let now = Utc::now();
+        let sessions = vec![active_session_with_mode(
+            "live",
+            now - TimeDelta::hours(2),
+            "rlimit",
+            Some(4096),
+        )];
+
+        let count = count_observable_active_sessions(&sessions, "current", now, |_| {
+            SessionMemorySample::UnsupportedLiveProcess
+        });
+
+        assert_eq!(count, 1);
     }
 
     #[test]
