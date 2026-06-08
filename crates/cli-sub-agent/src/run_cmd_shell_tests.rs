@@ -1,6 +1,6 @@
 use super::{
-    command_contains_forbidden_no_verify_commit, detect_no_verify_commit_commands,
-    tokenize_shell_tokens,
+    command_contains_forbidden_no_verify_commit, command_contains_git_commit,
+    detect_git_commit_commands, detect_no_verify_commit_commands, tokenize_shell_tokens,
 };
 
 #[test]
@@ -39,4 +39,115 @@ fn command_contains_forbidden_no_verify_commit_detects_prefixed_commit_in_shell_
     assert!(command_contains_forbidden_no_verify_commit(
         "bash -lc \"env -i git commit --no-verify -m unsafe\""
     ));
+    assert!(command_contains_forbidden_no_verify_commit(
+        "bash -e -c \"git commit -n -m unsafe\""
+    ));
+    assert!(command_contains_forbidden_no_verify_commit(
+        "bash -eo pipefail -c \"git commit --no-verify -m unsafe\""
+    ));
+}
+
+#[test]
+fn command_contains_forbidden_no_verify_commit_ignores_shell_c_positionals() {
+    assert!(!command_contains_forbidden_no_verify_commit(
+        "bash -lc 'true;' git commit --no-verify -m fake"
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_detects_plain_and_global_option_forms() {
+    assert!(command_contains_git_commit("git commit -m fix"));
+    assert!(command_contains_git_commit(
+        "git -C /tmp/repo commit --message fix"
+    ));
+    assert!(command_contains_git_commit(
+        "env FOO=1 sudo nice git commit -m fix"
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_detects_shell_payload() {
+    assert!(command_contains_git_commit(
+        "bash -lc \"git add src/lib.rs && git commit -m fix\""
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_detects_shell_payload_after_shell_options() {
+    assert!(command_contains_git_commit(
+        "bash -e -c \"git commit -m fix\""
+    ));
+    assert!(command_contains_git_commit(
+        "bash -eo pipefail -c \"git commit -m fix\""
+    ));
+    assert!(command_contains_git_commit(
+        "sh -u -c \"git commit -m fix\""
+    ));
+    assert!(command_contains_git_commit(
+        "zsh -f -c \"git commit -m fix\""
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_ignores_shell_c_positionals() {
+    assert!(!command_contains_git_commit(
+        "bash -lc 'true;' git commit -m fake"
+    ));
+}
+
+#[test]
+fn command_contains_git_commit_rejects_non_commit_git_commands() {
+    assert!(!command_contains_git_commit("git push origin HEAD"));
+    assert!(!command_contains_git_commit("git commit-tree HEAD^{tree}"));
+    assert!(!command_contains_git_commit("echo git commit -m fix"));
+}
+
+#[test]
+fn detect_git_commit_commands_detects_direct_and_shell_wrapped_commits() {
+    let commands = vec![
+        "git status".to_string(),
+        "git commit -m direct".to_string(),
+        "bash -e -c \"git commit -m bash_e\"".to_string(),
+        "bash -eo pipefail -c \"git commit -m bash_eo\"".to_string(),
+        "sh -u -c \"git commit -m sh_u\"".to_string(),
+    ];
+
+    let matches = detect_git_commit_commands(&commands);
+
+    assert_eq!(
+        matches,
+        vec![
+            "git commit -m direct".to_string(),
+            "bash -e -c \"git commit -m bash_e\"".to_string(),
+            "bash -eo pipefail -c \"git commit -m bash_eo\"".to_string(),
+            "sh -u -c \"git commit -m sh_u\"".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn detect_git_commit_commands_ignores_shell_c_positionals() {
+    let commands = vec!["bash -lc 'true;' git commit -m fake".to_string()];
+
+    assert!(detect_git_commit_commands(&commands).is_empty());
+}
+
+#[test]
+fn detect_git_commit_commands_dedupes_matches() {
+    let commands = vec![
+        "git status".to_string(),
+        "git commit -m fix".to_string(),
+        "git commit -m fix".to_string(),
+        "bash -lc \"git commit -m nested\"".to_string(),
+    ];
+
+    let matches = detect_git_commit_commands(&commands);
+
+    assert_eq!(
+        matches,
+        vec![
+            "git commit -m fix".to_string(),
+            "bash -lc \"git commit -m nested\"".to_string()
+        ]
+    );
 }

@@ -26,10 +26,33 @@ pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String
     matches
 }
 
+pub(crate) fn detect_git_commit_commands(executed_shell_commands: &[String]) -> Vec<String> {
+    let mut matches = Vec::new();
+    for command in executed_shell_commands {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !command_contains_git_commit(trimmed) {
+            continue;
+        }
+        if !matches.iter().any(|existing| existing == trimmed) {
+            matches.push(trimmed.to_string());
+        }
+    }
+    matches
+}
+
 pub(crate) fn command_contains_forbidden_no_verify_commit(command: &str) -> bool {
     split_shell_segments_preserving_quotes(command)
         .into_iter()
         .any(|segment| segment_contains_forbidden_git_bypass(&segment))
+}
+
+pub(crate) fn command_contains_git_commit(command: &str) -> bool {
+    split_shell_segments_preserving_quotes(command)
+        .into_iter()
+        .any(|segment| segment_contains_git_commit(&segment))
 }
 
 fn split_shell_segments_preserving_quotes(command: &str) -> Vec<String> {
@@ -125,6 +148,21 @@ fn segment_contains_forbidden_git_bypass(segment: &str) -> bool {
     )
 }
 
+fn segment_contains_git_commit(segment: &str) -> bool {
+    let tokens = tokenize_shell_tokens(segment);
+    if tokens.is_empty() {
+        return false;
+    }
+
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
+        && shell_script_contains_git_commit(shell_script_tokens)
+    {
+        return true;
+    }
+
+    locate_git_commit_command(&tokens).is_some()
+}
+
 pub(crate) fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -215,18 +253,78 @@ fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
 }
 
 fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
-    let idx = skip_command_prefix_tokens(tokens, 0);
-    if idx + 2 >= tokens.len() {
+    let mut idx = skip_command_prefix_tokens(tokens, 0);
+    if idx >= tokens.len() {
         return None;
     }
     if !is_shell_token(tokens[idx].as_str()) {
         return None;
     }
-    let shell_flag = tokens[idx + 1].as_str();
-    if !shell_flag.starts_with('-') || !shell_flag.contains('c') {
-        return None;
+    idx += 1;
+
+    while idx < tokens.len() {
+        let shell_flag = tokens[idx].as_str();
+        if shell_flag == "--" || !is_shell_option_token(shell_flag) {
+            return None;
+        }
+        if shell_option_enables_c_payload(shell_flag) {
+            return (idx + 1 < tokens.len()).then_some(&tokens[idx + 1..idx + 2]);
+        }
+
+        idx += 1;
+        if shell_option_consumes_value(shell_flag) && idx < tokens.len() {
+            idx += 1;
+        }
     }
-    Some(&tokens[idx + 2..])
+
+    None
+}
+
+fn is_shell_option_token(token: &str) -> bool {
+    token.len() > 1 && (token.starts_with('-') || token.starts_with('+'))
+}
+
+fn shell_option_enables_c_payload(token: &str) -> bool {
+    if token == "-c" || token == "--command" {
+        return true;
+    }
+    if !token.starts_with('-') || token.starts_with("--") {
+        return false;
+    }
+
+    for flag in token[1..].chars() {
+        if flag == 'c' {
+            return true;
+        }
+        if shell_short_option_consumes_value(flag) {
+            return false;
+        }
+    }
+
+    false
+}
+
+fn shell_option_consumes_value(token: &str) -> bool {
+    if token.starts_with("--") {
+        return shell_long_option_consumes_value(token) && !token.contains('=');
+    }
+
+    let mut chars = token[1..].chars().peekable();
+    while let Some(flag) = chars.next() {
+        if shell_short_option_consumes_value(flag) {
+            return chars.peek().is_none();
+        }
+    }
+
+    false
+}
+
+fn shell_short_option_consumes_value(flag: char) -> bool {
+    matches!(flag, 'o' | 'O')
+}
+
+fn shell_long_option_consumes_value(token: &str) -> bool {
+    matches!(token, "--init-file" | "--rcfile" | "--emulate")
 }
 
 fn locate_git_hook_relevant_command(tokens: &[String]) -> Option<(usize, usize)> {
@@ -238,6 +336,18 @@ fn locate_git_hook_relevant_command(tokens: &[String]) -> Option<(usize, usize)>
         return None;
     }
     let subcommand_idx = find_git_hook_relevant_subcommand(tokens, idx + 1)?;
+    Some((idx, subcommand_idx))
+}
+
+fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
+    let idx = skip_command_prefix_tokens(tokens, 0);
+    if idx >= tokens.len() {
+        return None;
+    }
+    if !is_git_token(tokens[idx].as_str()) {
+        return None;
+    }
+    let subcommand_idx = find_git_commit_subcommand(tokens, idx + 1)?;
     Some((idx, subcommand_idx))
 }
 
@@ -271,6 +381,36 @@ fn shell_script_contains_forbidden_git_bypass(tokens: &[String]) -> bool {
                 &command_tokens[subcommand_idx + 1..],
             )
         {
+            return true;
+        }
+
+        command_start = command_end.saturating_add(1);
+    }
+
+    false
+}
+
+fn shell_script_contains_git_commit(tokens: &[String]) -> bool {
+    let script_tokens = expand_shell_script_tokens(tokens);
+    let mut command_start = 0usize;
+
+    while command_start < script_tokens.len() {
+        while command_start < script_tokens.len()
+            && is_command_separator_token(script_tokens[command_start].as_str())
+        {
+            command_start += 1;
+        }
+        if command_start >= script_tokens.len() {
+            break;
+        }
+
+        let command_end = script_tokens[command_start..]
+            .iter()
+            .position(|token| is_command_separator_token(token.as_str()))
+            .map_or(script_tokens.len(), |idx| command_start + idx);
+        let command_tokens = &script_tokens[command_start..command_end];
+
+        if locate_git_commit_command(command_tokens).is_some() {
             return true;
         }
 
@@ -381,6 +521,30 @@ fn find_git_hook_relevant_subcommand(tokens: &[String], mut idx: usize) -> Optio
         }
         if token == "--" {
             if idx + 1 < tokens.len() && is_hook_relevant_git_subcommand(tokens[idx + 1].as_str()) {
+                return Some(idx + 1);
+            }
+            return None;
+        }
+        if !token.starts_with('-') {
+            return None;
+        }
+        if git_global_option_consumes_value(token) && idx + 1 < tokens.len() {
+            idx += 2;
+            continue;
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn find_git_commit_subcommand(tokens: &[String], mut idx: usize) -> Option<usize> {
+    while idx < tokens.len() {
+        let token = tokens[idx].as_str();
+        if token.eq_ignore_ascii_case("commit") {
+            return Some(idx);
+        }
+        if token == "--" {
+            if idx + 1 < tokens.len() && tokens[idx + 1].eq_ignore_ascii_case("commit") {
                 return Some(idx + 1);
             }
             return None;
