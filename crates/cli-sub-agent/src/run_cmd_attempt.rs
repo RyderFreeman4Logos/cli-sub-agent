@@ -420,14 +420,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             }
             AttemptExecution::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
             AttemptExecution::Finished {
-                result: Ok(result),
+                result,
                 changed_paths: attempt_changed_paths,
-            } => (result, attempt_changed_paths),
-            AttemptExecution::Finished {
-                result: Err(e),
-                changed_paths: _,
-            } => {
-                match handle_attempt_error(
+            } => match *result {
+                Ok(result) => (result, attempt_changed_paths),
+                Err(e) => match handle_attempt_error(
                     e,
                     AttemptErrorRequest {
                         run_timeout_seconds: request.run_timeout_seconds,
@@ -483,8 +480,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         }
                         continue;
                     }
-                }
-            }
+                },
+            },
         };
 
         match evaluate_post_attempt_retry(

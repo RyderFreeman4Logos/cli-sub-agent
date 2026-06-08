@@ -23,6 +23,7 @@ mod process_activity;
 pub use process_activity::{ProcessTreeActivity, ProcessTreeStatus, process_tree_cpu_ticks};
 #[path = "lib_output_helpers.rs"]
 mod output_helpers;
+mod signal_exit;
 #[path = "lib_subprocess_helpers.rs"]
 mod subprocess_helpers;
 mod tool_liveness;
@@ -266,6 +267,9 @@ mod tests_heartbeat;
 #[cfg(test)]
 #[path = "lib_tests_retry.rs"]
 mod tests_retry;
+#[cfg(test)]
+#[path = "lib_tests_signal_exit.rs"]
+mod tests_signal_exit;
 #[cfg(test)]
 #[path = "lib_tests_stderr_dedup.rs"]
 mod tests_stderr_dedup;

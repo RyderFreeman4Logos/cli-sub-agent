@@ -83,14 +83,7 @@ pub(crate) struct KillDiagnostic {
 }
 
 impl KillDiagnostic {
-    pub(crate) fn stderr_line(&self) -> Option<String> {
-        let hint = match self.hint {
-            KillHint::Earlyoom => "earlyoom",
-            KillHint::MemoryPressure => "memory pressure",
-            KillHint::PossibleMemoryPressure => "possible memory pressure",
-            KillHint::CsaTimeout | KillHint::UnknownSignal => return None,
-        };
-
+    fn detail_parts(&self) -> Vec<String> {
         let mut details = Vec::new();
         if let Some(meminfo) = &self.observations.meminfo {
             details.push(format!(
@@ -112,11 +105,29 @@ impl KillDiagnostic {
                 events.oom, events.oom_kill
             ));
         }
+        details
+    }
+
+    pub(crate) fn stderr_line(&self) -> Option<String> {
+        let hint = match self.hint {
+            KillHint::Earlyoom => "earlyoom",
+            KillHint::MemoryPressure => "memory pressure",
+            KillHint::PossibleMemoryPressure => "possible memory pressure",
+            KillHint::CsaTimeout | KillHint::UnknownSignal => return None,
+        };
 
         Some(format!(
             "CSA diagnostic: signal kill hint: {hint} ({}). Re-dispatch when host memory frees.",
-            details.join(", ")
+            self.detail_parts().join(", ")
         ))
+    }
+
+    pub(crate) fn ephemeral_line(&self) -> String {
+        format!(
+            "CSA diagnostic: ephemeral run ended by signal (kill_hint={}, {}). No persistent session metadata was created.",
+            self.hint.as_result_hint(),
+            self.detail_parts().join(", ")
+        )
     }
 }
 
@@ -129,6 +140,17 @@ pub(crate) fn diagnose_signal_kill(
     diagnose_signal_kill_with(exit_code, terminal_reason, || {
         collect_signal_observations(tool_name, session_id)
     })
+}
+
+pub(crate) fn diagnose_ephemeral_signal_kill(
+    exit_code: i32,
+    terminal_reason: Option<&str>,
+) -> Option<KillDiagnostic> {
+    diagnose_signal_kill_with(
+        exit_code,
+        terminal_reason,
+        collect_ephemeral_signal_observations,
+    )
 }
 
 pub(crate) fn diagnose_signal_kill_with(
@@ -286,6 +308,20 @@ fn collect_signal_observations(tool_name: &str, session_id: &str) -> KillSignalO
 
 #[cfg(not(target_os = "linux"))]
 fn collect_signal_observations(_tool_name: &str, _session_id: &str) -> KillSignalObservations {
+    KillSignalObservations::default()
+}
+
+#[cfg(target_os = "linux")]
+fn collect_ephemeral_signal_observations() -> KillSignalObservations {
+    KillSignalObservations {
+        meminfo: read_meminfo_from_path(Path::new("/proc/meminfo")),
+        earlyoom_running: earlyoom_running(),
+        cgroup_memory_events: None,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn collect_ephemeral_signal_observations() -> KillSignalObservations {
     KillSignalObservations::default()
 }
 

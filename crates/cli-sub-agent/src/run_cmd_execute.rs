@@ -626,6 +626,9 @@ pub(crate) async fn handle_run(
         require_commit,
         config.as_ref(),
     );
+    if ephemeral && executed_session_id.is_none() {
+        run_output::enrich_ephemeral_signal_diagnostics(&mut result);
+    }
 
     if result.exit_code == 0 {
         let post_exec_gate_env = crate::build_jobs_env::build_jobs_env(build_jobs);

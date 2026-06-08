@@ -1,4 +1,5 @@
 use super::*;
+use crate::signal_exit::{append_signal_exit_note, process_exit_status};
 
 /// Wait for a spawned child process, capturing output and enforcing idle-timeout.
 ///
@@ -393,11 +394,8 @@ pub async fn wait_and_capture_with_idle_timeout(
     }
 
     let status = child.wait().await.context("Failed to wait for command")?;
-
-    let mut exit_code = status.code().unwrap_or_else(|| {
-        warn!("Process terminated by signal, using exit code 1");
-        1
-    });
+    let process_exit = process_exit_status(status);
+    let mut exit_code = process_exit.code;
     if let Some(note) = persistent_rate_limit_note.as_deref() {
         exit_code = 1;
         if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
@@ -427,6 +425,8 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
         stderr_output.push_str(&workspace_boundary_note);
         stderr_output.push('\n');
+    } else if let Some(note) = process_exit.note.as_deref() {
+        append_signal_exit_note(&mut stderr_output, note);
     }
 
     let summary = if let Some(note) = persistent_rate_limit_note {
@@ -435,6 +435,8 @@ pub async fn wait_and_capture_with_idle_timeout(
         timeout_note
     } else if child_exited_early {
         child_exited_early_note.clone()
+    } else if let Some(note) = process_exit.note.clone() {
+        note
     } else if exit_code == 0 {
         extract_summary(&output)
     } else if workspace_boundary_timed_out {
@@ -452,18 +454,21 @@ pub async fn wait_and_capture_with_idle_timeout(
     let raw_process_exit_code = exit_code;
     let terminal_reason = if idle_timed_out || workspace_boundary_timed_out {
         Some("idle_timeout".to_string())
+    } else if process_exit.signal.is_some() {
+        Some("signal".to_string())
     } else {
         parse_legacy_terminal_reason(&output)
     };
-    let model_completed = if idle_timed_out || workspace_boundary_timed_out {
-        Some(false)
-    } else if terminal_reason.is_some() {
-        crate::model_completed_from_terminal_reason(terminal_reason.as_deref())
-    } else if child_exited_early {
-        Some(false)
-    } else {
-        None
-    };
+    let model_completed =
+        if idle_timed_out || workspace_boundary_timed_out || process_exit.signal.is_some() {
+            Some(false)
+        } else if terminal_reason.is_some() {
+            crate::model_completed_from_terminal_reason(terminal_reason.as_deref())
+        } else if child_exited_early {
+            Some(false)
+        } else {
+            None
+        };
 
     let output = sanitize_opaque_object_payloads(&output);
     let mut stderr_output = sanitize_opaque_object_payloads(&stderr_output);
@@ -505,6 +510,7 @@ pub async fn wait_and_capture_with_idle_timeout(
         raw_process_exit_code: Some(raw_process_exit_code),
         model_completed,
         terminal_reason,
+        exit_signal: process_exit.signal,
         peak_memory_mb: None,
         ..Default::default()
     })
