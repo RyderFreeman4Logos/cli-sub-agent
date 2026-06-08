@@ -6,7 +6,9 @@ use csa_session::{FindingsFile, write_findings_toml};
 use tracing::{debug, warn};
 
 use crate::review_cmd::output::extract_review_text;
-use crate::review_cmd::prose_findings::findings_file_from_prose;
+use crate::review_cmd::prose_findings::{
+    findings_file_from_explicit_findings_sections, findings_file_from_prose,
+};
 
 const FINDINGS_TOML_FENCE_LABEL: &str = "findings.toml";
 
@@ -109,7 +111,9 @@ fn derive_findings_toml_artifact(
     let prose_artifact = findings_file_from_prose(&review_text);
     match extract_findings_toml_from_text(&review_text) {
         Some(artifact) if artifact.findings.is_empty() => {
-            if let Some(prose_artifact) = prose_artifact {
+            if let Some(prose_artifact) =
+                findings_file_from_explicit_findings_sections(&review_text)
+            {
                 Ok((prose_artifact, None))
             } else {
                 Ok((artifact, None))
@@ -265,6 +269,9 @@ fn is_findings_toml_fence_label(info: &str) -> bool {
         .any(|token| token.eq_ignore_ascii_case(FINDINGS_TOML_FENCE_LABEL))
 }
 
+#[cfg(test)]
+#[path = "review_cmd_findings_toml_1953_tests.rs"]
+mod issue_1953_tests;
 #[cfg(test)]
 #[path = "review_cmd_findings_toml_source_set_tests.rs"]
 mod source_set_tests;
