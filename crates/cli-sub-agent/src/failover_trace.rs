@@ -117,6 +117,12 @@ impl FailoverSkipKind {
             || lower.contains("server shut down")
             || lower.contains("spawn")
             || lower.contains("broken pipe")
+            || lower.contains("gemini_cli_crash")
+            || lower.contains("gemini_runtime_home_unavailable")
+            || lower.contains("tool_crash")
+            || lower.contains("unexpected critical error")
+            || lower.contains("enospc")
+            || lower.contains("no space left on device")
         {
             Self::TransportError
         } else {

@@ -47,6 +47,64 @@ pub(super) fn classify_review_failover_reason(
         reason: detected.reason,
         quota_exhausted: Some(detected.quota_exhausted),
     })
+    .or_else(|| classify_gemini_cli_runtime_failure(tool, execution))
+}
+
+fn classify_gemini_cli_runtime_failure(
+    tool: ToolName,
+    execution: &crate::pipeline::SessionExecutionResult,
+) -> Option<ReviewFailoverFailure> {
+    if tool != ToolName::GeminiCli || execution.execution.exit_code == 0 {
+        return None;
+    }
+    if has_structured_review_content(&execution.execution.output) {
+        return None;
+    }
+
+    let combined = format!(
+        "{}\n{}\n{}",
+        execution.execution.summary, execution.execution.output, execution.execution.stderr_output,
+    );
+    let lower = combined.to_ascii_lowercase();
+    let reason = if is_gemini_manual_auth_failure(&lower) {
+        "auth_unavailable"
+    } else if is_gemini_runtime_home_enospc_failure(&lower) {
+        "gemini_runtime_home_unavailable"
+    } else if is_gemini_cli_internal_crash(&lower) {
+        "gemini_cli_crash"
+    } else {
+        return None;
+    };
+
+    Some(ReviewFailoverFailure {
+        reason: reason.to_string(),
+        quota_exhausted: None,
+    })
+}
+
+fn is_gemini_manual_auth_failure(lower: &str) -> bool {
+    lower.contains("manual authorization is required")
+        && (lower.contains("non-interactive")
+            || lower.contains("interactive terminal")
+            || lower.contains("gemini_api_key")
+            || lower.contains("application default credentials"))
+}
+
+fn is_gemini_runtime_home_enospc_failure(lower: &str) -> bool {
+    (lower.contains("enospc") || lower.contains("no space left on device"))
+        && (lower.contains(".gemini/projects.json")
+            || lower.contains("runtime/gemini-home")
+            || lower.contains("failed to save project registry"))
+}
+
+fn is_gemini_cli_internal_crash(lower: &str) -> bool {
+    (lower.contains("an unexpected critical error occurred")
+        || lower.contains("fatalauthenticationerror")
+        || lower.contains("at async main "))
+        && (lower.contains("@google/gemini-cli")
+            || lower.contains("node:internal")
+            || lower.contains("/gemini-cli/bundle/")
+            || lower.contains("npm-google-gemini-cli"))
 }
 
 pub(super) fn build_gemini_api_key_retry_env(
