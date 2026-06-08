@@ -17,7 +17,7 @@ use super::completion::{
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
     emit_wait_terminal_output, load_completed_daemon_result_with_fallback, refresh_result_for_wait,
-    try_acquire_session_wait_lock,
+    suppress_pending_tier_failover_result, try_acquire_session_wait_lock,
 };
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::session_cmds_daemon::{
@@ -127,7 +127,14 @@ where
                     "session wait",
                 )?;
             } else {
-                loaded_result = finalize_daemon_completion_if_present(&session_dir)?;
+                loaded_result =
+                    finalize_daemon_completion_if_present(&session_dir)?.and_then(|result| {
+                        suppress_pending_tier_failover_result(
+                            &resolved.session_id,
+                            &session_dir,
+                            result,
+                        )
+                    });
                 if loaded_result.is_none() {
                     let reconciled = reconcile_dead_active_session(
                         effective_root,

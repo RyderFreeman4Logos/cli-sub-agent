@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use super::super::session_has_terminal_process;
 
-fn suppress_pending_tier_failover_result(
+pub(super) fn suppress_pending_tier_failover_result(
     session_id: &str,
     session_dir: &Path,
     result: csa_session::SessionResult,
@@ -99,7 +99,10 @@ fn load_completed_daemon_result_adaptive(
     }
 }
 
-fn load_output_result_fallback(session_dir: &Path) -> Result<Option<csa_session::SessionResult>> {
+fn load_output_result_fallback(
+    session_id: &str,
+    session_dir: &Path,
+) -> Result<Option<csa_session::SessionResult>> {
     let output_result_path = session_dir
         .join("output")
         .join(csa_session::result::RESULT_FILE_NAME);
@@ -114,7 +117,11 @@ fn load_output_result_fallback(session_dir: &Path) -> Result<Option<csa_session:
 
     let contents = fs::read_to_string(&output_result_path)?;
     let result: csa_session::SessionResult = toml::from_str(&contents)?;
-    Ok(Some(result))
+    Ok(suppress_pending_tier_failover_result(
+        session_id,
+        session_dir,
+        result,
+    ))
 }
 
 pub(super) fn load_completed_daemon_result_with_fallback(
@@ -133,7 +140,7 @@ pub(super) fn load_completed_daemon_result_with_fallback(
     }
 
     if !session_has_terminal_process(session_dir)
-        && let Some(output_result) = load_output_result_fallback(session_dir)?
+        && let Some(output_result) = load_output_result_fallback(session_id, session_dir)?
     {
         tracing::info!(
             session_id,
