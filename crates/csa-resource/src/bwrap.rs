@@ -239,6 +239,7 @@ pub fn from_isolation_plan(
 
     let mut env_overrides = plan.env_overrides.clone();
     csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+    csa_core::env::strip_git_push_authorization_keys(&mut env_overrides);
     for (key, value) in &env_overrides {
         builder.with_env(key, value);
     }

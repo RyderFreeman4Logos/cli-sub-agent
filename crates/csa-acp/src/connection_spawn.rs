@@ -85,6 +85,7 @@ impl AcpConnection {
         if let Some(overrides) = sandbox_env_overrides {
             let mut env_overrides = overrides.clone();
             csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+            csa_core::env::strip_git_push_authorization_keys(&mut env_overrides);
             merged_env.extend(env_overrides);
         }
         merged_env
@@ -98,6 +99,7 @@ impl AcpConnection {
         if let Some(overrides) = sandbox_env_overrides {
             let mut env_overrides = overrides.clone();
             csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+            csa_core::env::strip_git_push_authorization_keys(&mut env_overrides);
             merged_plan.env_overrides.extend(env_overrides);
         }
         merged_plan
@@ -287,10 +289,7 @@ impl AcpConnection {
                     }
                 }
 
-                for var in Self::STRIPPED_ENV_VARS {
-                    cmd.env_remove(var);
-                }
-                csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
+                Self::scrub_inherited_child_env(&mut cmd);
                 for (key, value) in &effective_env {
                     cmd.env(key, value);
                 }
@@ -454,20 +453,20 @@ impl AcpConnection {
         // explicit kill() in transport.rs handles normal cleanup.
         cmd.kill_on_drop(true);
 
-        // Strip parent-process env vars that interfere with the ACP child.
-        // CLAUDECODE=1 triggers recursion detection in claude-code, causing
-        // immediate exit with "unset the CLAUDECODE environment variable".
-        // CLAUDE_CODE_ENTRYPOINT is parent-specific context, not relevant.
-        for var in Self::STRIPPED_ENV_VARS {
-            cmd.env_remove(var);
-        }
-        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
+        Self::scrub_inherited_child_env(&mut cmd);
 
         for (key, value) in env {
             cmd.env(key, value);
         }
 
         cmd
+    }
+
+    fn scrub_inherited_child_env(cmd: &mut Command) {
+        for var in Self::STRIPPED_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        csa_core::env::scrub_subtree_contract_env_tokio(cmd);
     }
 
     /// Shared connection setup from a pre-built command.
