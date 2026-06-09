@@ -221,7 +221,13 @@ pub(super) fn handle_attempt_error(
                 failover_context: FailoverContextUpdate::Replace(failover_context),
             }))
         }
-        _ => {
+        RateLimitAction::ExhaustedFailovers { reason } => {
+            cleanup_pre_created_fork_session(pre_created_fork_session_id, request.project_root);
+            Ok(AttemptErrorAction::Error(
+                error.context(format!("tier failover unavailable: {reason}")),
+            ))
+        }
+        RateLimitAction::NoRateLimit => {
             cleanup_pre_created_fork_session(pre_created_fork_session_id, request.project_root);
             Ok(AttemptErrorAction::Error(error))
         }
@@ -234,7 +240,7 @@ pub(super) enum PostAttemptAction {
 }
 
 pub(super) struct PostAttemptRequest<'a> {
-    pub(super) exec_result: &'a csa_process::ExecutionResult,
+    pub(super) exec_result: &'a mut csa_process::ExecutionResult,
     pub(super) exec_changed_paths: Option<Vec<String>>,
     pub(super) runtime_fallback_enabled: bool,
     pub(super) max_runtime_fallback_attempts: u8,
@@ -364,6 +370,28 @@ pub(super) fn evaluate_post_attempt_retry(
                 failover_context: FailoverContextUpdate::Replace(failover_context),
             }))
         }
-        _ => Ok(PostAttemptAction::Break(request.exec_changed_paths)),
+        RateLimitAction::ExhaustedFailovers { reason } => {
+            annotate_failover_exhaustion(request.exec_result, &reason);
+            Ok(PostAttemptAction::Break(request.exec_changed_paths))
+        }
+        RateLimitAction::NoRateLimit => Ok(PostAttemptAction::Break(request.exec_changed_paths)),
+    }
+}
+
+fn annotate_failover_exhaustion(exec_result: &mut csa_process::ExecutionResult, reason: &str) {
+    let detail = format!("tier failover unavailable: {reason}");
+    if !exec_result.summary.contains(&detail) {
+        if exec_result.summary.trim().is_empty() || exec_result.summary.starts_with("exit code ") {
+            exec_result.summary = detail.clone();
+        } else {
+            exec_result.summary = format!("{}; {detail}", exec_result.summary);
+        }
+    }
+    if !exec_result.stderr_output.contains(&detail) {
+        if !exec_result.stderr_output.is_empty() && !exec_result.stderr_output.ends_with('\n') {
+            exec_result.stderr_output.push('\n');
+        }
+        exec_result.stderr_output.push_str(&detail);
+        exec_result.stderr_output.push('\n');
     }
 }

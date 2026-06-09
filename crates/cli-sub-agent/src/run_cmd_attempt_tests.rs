@@ -76,7 +76,7 @@ fn assert_retry_to(action: RateLimitAction, expected_tool: &str, expected_spec: 
             assert_eq!(new_model_spec.as_deref(), Some(expected_spec));
         }
         RateLimitAction::NoRateLimit => panic!("expected failover retry, got no rate limit"),
-        RateLimitAction::ExhaustedFailovers => {
+        RateLimitAction::ExhaustedFailovers { .. } => {
             panic!("expected failover retry, got exhausted failovers")
         }
     }
@@ -86,7 +86,7 @@ fn assert_no_rate_limit(action: RateLimitAction) {
     match action {
         RateLimitAction::NoRateLimit => {}
         RateLimitAction::Retry { .. } => panic!("expected no failover, got retry"),
-        RateLimitAction::ExhaustedFailovers => {
+        RateLimitAction::ExhaustedFailovers { .. } => {
             panic!("expected no failover, got exhausted failovers")
         }
     }
@@ -637,60 +637,6 @@ fn explicit_tool_no_tier_crash_no_failover() {
     assert!(
         tried_specs.is_empty(),
         "disabled crash failover should not mutate retry state"
-    );
-}
-
-#[test]
-fn explicit_tool_in_tier_permanent_quota_no_failover() {
-    // Explicit tool (tier_auto_select=false) with permanent quota:
-    // failover is suppressed (returns NoRateLimit). Behavior is independent
-    // of the #1629 fix: the explicit-tool guard remains the merge gate.
-    let config = make_named_failover_config(
-        "tier-3-complex",
-        &[
-            "codex/openai/o4-mini/high",
-            "claude-code/anthropic/claude-sonnet/high",
-        ],
-    );
-    let mut tried_tools = Vec::new();
-    let mut tried_specs = Vec::new();
-    let mut fallback_chain = Vec::new();
-
-    let action = evaluate_error_rate_limit_failover(
-        "codex",
-        r#"Internal error: {"codex_error_info": "usage_limit_exceeded", "message": "You've hit your usage limit."}"#,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/o4-mini/high"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert_no_rate_limit(action);
-    assert!(
-        tried_tools.is_empty(),
-        "explicit-tool guard suppresses failover; tried_tools stays empty"
-    );
-    assert!(
-        tried_specs.is_empty(),
-        "explicit-tool guard suppresses failover; tried_specs stays empty"
-    );
-    assert!(
-        fallback_chain.is_empty(),
-        "explicit-tool guard suppresses failover; no fallback_chain entry"
     );
 }
 

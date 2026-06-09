@@ -48,6 +48,26 @@ fn provider_quota_error_on_stderr_is_permanent_exhaustion() {
 }
 
 #[test]
+fn codex_model_scoped_usage_limit_is_not_permanent_tool_exhaustion() {
+    let result = result_with(
+        "Codex Spark quota reached",
+        "You've hit your usage limit for GPT-5.3-Codex-Spark. \
+         Switch to another model now, or try again at Jun 11th, 2026 7:42 AM.",
+        "",
+    );
+
+    assert!(
+        detect_permanent_tool_exhaustion_result(
+            "codex",
+            &result,
+            Some("codex/openai/gpt-5.3-codex-spark/xhigh")
+        )
+        .is_none(),
+        "model-scoped Codex quota should fail over by model, not self-kill the tool"
+    );
+}
+
+#[test]
 fn transport_error_chain_quota_is_permanent_exhaustion() {
     // The error path feeds the anyhow error chain as the provider channel; a
     // provider quota error there must still be detected.
