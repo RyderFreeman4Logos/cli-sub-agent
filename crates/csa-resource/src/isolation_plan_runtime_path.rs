@@ -69,8 +69,23 @@ pub(super) fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
 /// `/tmp`, `/usr/local/share/mise`, etc.
 pub(super) fn is_sensitive_system_path(path: &Path) -> bool {
     const SENSITIVE_PREFIXES: &[&str] = &[
-        "/etc", "/var/lib", "/var/log", "/var/run", "/boot", "/sbin", "/bin", "/lib", "/lib64",
-        "/sys", "/proc", "/dev", "/run",
+        "/etc",
+        "/var/lib",
+        "/var/log",
+        "/var/run",
+        "/boot",
+        "/sbin",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/run",
+        "/private/etc",
+        "/private/var/lib",
+        "/private/var/log",
+        "/private/var/run",
     ];
 
     for prefix in SENSITIVE_PREFIXES {

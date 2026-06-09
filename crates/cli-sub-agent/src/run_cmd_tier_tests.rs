@@ -60,7 +60,11 @@ fn run_config_with_tier(
             created_at: chrono::Utc::now(),
             max_recursion_depth: 5,
         },
-        resources: csa_config::ResourcesConfig::default(),
+        resources: csa_config::ResourcesConfig {
+            memory_max_mb: Some(1024),
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,

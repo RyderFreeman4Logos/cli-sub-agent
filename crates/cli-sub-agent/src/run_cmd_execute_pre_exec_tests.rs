@@ -30,7 +30,11 @@ fn run_config_with_tier(
             created_at: chrono::Utc::now(),
             max_recursion_depth: 5,
         },
-        resources: ResourcesConfig::default(),
+        resources: ResourcesConfig {
+            memory_max_mb: Some(1024),
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,
@@ -256,12 +260,31 @@ async fn handle_run_no_preflight_skips_ai_config_check() {
 
 #[tokio::test]
 async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     let project_dir = tempdir().unwrap();
     let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
+    sandbox.track_env("PATH");
     // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
     unsafe {
         std::env::set_var(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    }
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_codex = bin_dir.join("codex");
+    std::fs::write(&fake_codex, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, perms).unwrap();
+    }
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var("PATH", format!("{}:{inherited_path}", bin_dir.display()));
     }
     let config = run_config_with_tier("default", vec!["codex/openai/o4-mini/high"], &["codex"]);
     write_project_config(project_dir.path(), &config);

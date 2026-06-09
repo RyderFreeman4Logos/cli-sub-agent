@@ -315,8 +315,10 @@ fn migrate_gemini_skills_moves_unique_skills_to_agents() {
     // after normalizing it relative to the destination directory so the test
     // does not depend on platform-specific canonicalize behavior for symlinks.
     let stored_target = std::fs::read_link(agents_dir.join("commit")).unwrap();
-    let resolved = crate::path_utils::normalize_path(&agents_dir.join(stored_target));
-    let expected = crate::path_utils::normalize_path(&source_skill);
+    let resolved = crate::path_utils::normalize_path(&agents_dir.join(stored_target))
+        .canonicalize()
+        .unwrap();
+    let expected = source_skill.canonicalize().unwrap();
     assert_eq!(resolved, expected);
 }
 

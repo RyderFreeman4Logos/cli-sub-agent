@@ -32,6 +32,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
             max_recursion_depth: 5,
         },
         resources: csa_config::ResourcesConfig {
+            memory_max_mb: Some(1024),
             min_free_memory_mb: 1,
             ..Default::default()
         },

@@ -65,7 +65,11 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),
-        resources: ResourcesConfig::default(),
+        resources: ResourcesConfig {
+            memory_max_mb: Some(1024),
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,

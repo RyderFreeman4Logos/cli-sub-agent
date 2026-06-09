@@ -1,6 +1,3 @@
-// End-to-end tests for the csa binary.
-// Requires actual tool installations for full testing.
-
 #[path = "../src/cli.rs"]
 mod cli_defs;
 #[path = "../src/gc_args.rs"]
@@ -538,17 +535,22 @@ fn write_project_config_with_tier(project_root: &Path) {
     .expect("write config");
 }
 
-fn session_root_for_state_home(state_home: &Path, project_root: &Path) -> std::path::PathBuf {
+fn session_root_for_temp_home(tmp: &Path, project_root: &Path) -> std::path::PathBuf {
+    let app_state = if cfg!(target_os = "macos") {
+        "Library/Application Support/cli-sub-agent"
+    } else {
+        ".local/state/cli-sub-agent"
+    };
     let project_key = std::fs::canonicalize(project_root)
         .unwrap_or_else(|_| project_root.to_path_buf())
         .to_string_lossy()
         .trim_start_matches('/')
         .replace('/', std::path::MAIN_SEPARATOR_STR);
-    state_home.join("cli-sub-agent").join(project_key)
+    tmp.join(app_state).join(project_key)
 }
 
-fn write_tiered_session(state_home: &Path, project_root: &Path) {
-    let session_root = session_root_for_state_home(state_home, project_root);
+fn write_tiered_session(tmp: &Path, project_root: &Path) {
+    let session_root = session_root_for_temp_home(tmp, project_root);
     let now = chrono::Utc::now();
     let session = csa_session::MetaSessionState {
         meta_session_id: csa_session::new_session_id(),
@@ -736,10 +738,6 @@ fn review_cli_validation_rejects_red_team_with_security_off() {
         validate_command_args(&cli.command, 1800).expect_err("validation should reject conflict");
     assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
-
-// ---------------------------------------------------------------------------
-// Smoke tests for subcommands that do NOT launch real LLM tools.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn config_show_exits_zero_after_init_minimal() {
@@ -1240,12 +1238,9 @@ fn session_list_exits_zero() {
 #[test]
 fn session_list_text_shows_tier_column_next_to_tools() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let state_home = tmp.path().join(".local/state");
-    std::fs::create_dir_all(&state_home).expect("create state home");
-
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
-    write_tiered_session(&state_home, &project);
+    write_tiered_session(tmp.path(), &project);
 
     let output = csa_cmd(tmp.path())
         .args(["session", "list", "--cd"])

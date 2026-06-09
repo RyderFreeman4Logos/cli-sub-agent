@@ -48,6 +48,7 @@ pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         schema_version: 1,
         project: ProjectMeta::default(),
         resources: ResourcesConfig {
+            memory_max_mb: Some(1024),
             min_free_memory_mb: 1,
             ..Default::default()
         },
@@ -202,8 +203,7 @@ fn resolve_review_tool_prefers_cli_override() {
 fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
-    // Parent=claude-code (Anthropic family), so first heterogeneous candidate
-    // in default order is gemini-cli.
+    // Parent=claude-code; first heterogeneous default is gemini-cli.
     let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         None,
