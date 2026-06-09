@@ -195,3 +195,35 @@ fn clean_pass_summary_preserves_success_result() {
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[test]
+fn zero_count_severity_summary_preserves_success_result() {
+    let session_id = "01KTMZZZZZZZZZZZZZZZZZZZZY";
+    let summary = "PASS: 0 high-severity issues. no high-severity findings. Critical severity issues: 0. High severity issues: 0. Medium findings: 0. P1 findings: 0. P2 violations: 0. Blocking issues: 0.";
+    let (_env_lock, project_root, session_dir) =
+        persist_pass_meta_review("issue-1981-zero-count-clean-control", session_id, summary);
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+
+    let mut result = success_result(summary);
+    crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.status, "success");
+
+    let wait_summary =
+        crate::session_cmds_daemon::render_wait_result_summary(&session_dir, session_id, &result);
+    assert!(wait_summary.contains("Status: success"));
+    assert!(wait_summary.contains("Exit code: 0"));
+    assert!(wait_summary.contains("Review verdict: PASS"));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
