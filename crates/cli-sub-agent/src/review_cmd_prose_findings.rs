@@ -464,37 +464,53 @@ pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
         || normalized.eq_ignore_ascii_case("review findings")
 }
 
+const REVIEW_ISSUE_NOUNS: &[&str] = &[
+    "issue",
+    "issues",
+    "finding",
+    "findings",
+    "problem",
+    "problems",
+    "bug",
+    "bugs",
+    "defect",
+    "defects",
+    "regression",
+    "regressions",
+    "violation",
+    "violations",
+];
+const BLOCKING_REVIEW_SEVERITIES: &[&str] = &["critical", "high", "medium", "p0", "p1", "p2"];
+const ZERO_COUNT_WORDS: &[&str] = &["0", "zero", "none", "no"];
+const MAX_TOKENS_AFTER_REVIEW_SIGNAL: usize = 8;
+
 fn line_has_blocking_review_signal(line: &str) -> bool {
-    line.split(['.', ';', ':'])
-        .any(blocking_review_clause_has_signal)
+    line.split(['.', ';', ':']).any(|clause| {
+        let clause = clause.trim();
+        review_clause_has_blocking_signal(clause)
+            && !(zero_count_summary_label_has_signal(clause)
+                && line_has_zero_count_for_clause(line, clause))
+    })
+}
+
+fn review_clause_has_blocking_signal(clause: &str) -> bool {
+    blocking_review_clause_has_signal(clause) || severe_review_clause_has_signal(clause)
 }
 
 fn blocking_review_clause_has_signal(clause: &str) -> bool {
-    const ISSUE_NOUNS: &[&str] = &[
-        "issue",
-        "issues",
-        "finding",
-        "findings",
-        "problem",
-        "problems",
-        "bug",
-        "bugs",
-        "defect",
-        "defects",
-        "regression",
-        "regressions",
-        "violation",
-        "violations",
+    const NEGATIONS: &[&str] = &[
+        "0",
+        "zero",
+        "no",
+        "non",
+        "nonblocking",
+        "not",
+        "none",
+        "without",
     ];
-    const NEGATIONS: &[&str] = &["no", "non", "nonblocking", "not", "none", "without"];
-    const MAX_TOKENS_AFTER_BLOCKING: usize = 8;
     const MAX_NEGATION_LOOKBACK: usize = 3;
 
-    let tokens = clause
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>();
+    let tokens = review_signal_tokens(clause);
 
     for (index, token) in tokens.iter().enumerate() {
         if token == "nonblocking" {
@@ -506,15 +522,121 @@ fn blocking_review_clause_has_signal(clause: &str) -> bool {
         if blocking_token_is_negated(&tokens, index, MAX_NEGATION_LOOKBACK, NEGATIONS) {
             continue;
         }
-        if ((index + 1)..tokens.len()).any(|candidate| {
-            candidate - index <= MAX_TOKENS_AFTER_BLOCKING
-                && ISSUE_NOUNS.contains(&tokens[candidate].as_str())
-        }) {
-            return true;
+        let Some(noun_index) = next_review_issue_noun_index(&tokens, index) else {
+            continue;
+        };
+        if review_issue_noun_is_followed_by_zero_count(&tokens, noun_index) {
+            continue;
         }
+        return true;
     }
 
     false
+}
+
+fn severe_review_clause_has_signal(clause: &str) -> bool {
+    const NEGATIONS: &[&str] = &[
+        "0",
+        "zero",
+        "no",
+        "non",
+        "nonblocking",
+        "not",
+        "none",
+        "without",
+    ];
+    const MAX_NEGATION_LOOKBACK: usize = 3;
+
+    let tokens = review_signal_tokens(clause);
+
+    for (index, token) in tokens.iter().enumerate() {
+        if !BLOCKING_REVIEW_SEVERITIES.contains(&token.as_str()) {
+            continue;
+        }
+        if blocking_token_is_negated(&tokens, index, MAX_NEGATION_LOOKBACK, NEGATIONS) {
+            continue;
+        }
+        let Some(noun_index) = next_review_issue_noun_index(&tokens, index) else {
+            continue;
+        };
+        if review_issue_noun_is_followed_by_zero_count(&tokens, noun_index) {
+            continue;
+        }
+        return true;
+    }
+
+    false
+}
+
+fn zero_count_summary_label_has_signal(clause: &str) -> bool {
+    const NONZERO_OR_REMAINING_WORDS: &[&str] = &[
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "some",
+        "several",
+        "multiple",
+        "remain",
+        "remains",
+        "remaining",
+        "fail",
+        "failed",
+        "failure",
+    ];
+
+    let tokens = review_signal_tokens(clause);
+    !tokens
+        .iter()
+        .any(|token| NONZERO_OR_REMAINING_WORDS.contains(&token.as_str()))
+        && tokens.iter().enumerate().any(|(index, token)| {
+            (token == "blocking" || BLOCKING_REVIEW_SEVERITIES.contains(&token.as_str()))
+                && next_review_issue_noun_index(&tokens, index).is_some()
+        })
+}
+
+fn leading_zero_count_clause(clause: &str) -> bool {
+    review_signal_tokens(clause)
+        .first()
+        .is_some_and(|token| ZERO_COUNT_WORDS.contains(&token.as_str()))
+}
+
+fn line_has_zero_count_for_clause(line: &str, clause: &str) -> bool {
+    line.split(['.', ';']).any(|segment| {
+        let colon_parts = segment.split(':').collect::<Vec<_>>();
+        colon_parts
+            .windows(2)
+            .any(|pair| pair[0].trim() == clause && leading_zero_count_clause(pair[1]))
+    })
+}
+
+fn review_issue_noun_is_followed_by_zero_count(tokens: &[String], noun_index: usize) -> bool {
+    const MAX_TOKENS_AFTER_NOUN_FOR_ZERO_COUNT: usize = 3;
+
+    ((noun_index + 1)..tokens.len()).any(|candidate| {
+        candidate - noun_index <= MAX_TOKENS_AFTER_NOUN_FOR_ZERO_COUNT
+            && ZERO_COUNT_WORDS.contains(&tokens[candidate].as_str())
+    })
+}
+
+fn next_review_issue_noun_index(tokens: &[String], index: usize) -> Option<usize> {
+    ((index + 1)..tokens.len()).find(|candidate| {
+        candidate - index <= MAX_TOKENS_AFTER_REVIEW_SIGNAL
+            && REVIEW_ISSUE_NOUNS.contains(&tokens[*candidate].as_str())
+    })
+}
+
+fn review_signal_tokens(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 fn blocking_token_is_negated(
@@ -592,35 +714,5 @@ fn priority_severity_from_label(label: &str) -> Option<Severity> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::contains_blocking_review_signal;
-
-    #[test]
-    fn issue_1971_blocking_regression_summary_is_blocking_signal() {
-        assert!(contains_blocking_review_signal(
-            "FAIL: one blocking test reliability regression found in the new provider-error failover coverage."
-        ));
-        assert!(!contains_blocking_review_signal(
-            "Found one non-blocking test reliability regression."
-        ));
-    }
-
-    #[test]
-    fn issue_1978_blocking_correctness_finding_summary_is_blocking_signal() {
-        assert!(contains_blocking_review_signal(
-            "One blocking correctness finding was found in csa review --session 01KTMDAQM18XK6R7DDA0ZP6C57 --fix tool selection."
-        ));
-        assert!(contains_blocking_review_signal(
-            "Review found one blocking finding in the wait result classification."
-        ));
-        assert!(!contains_blocking_review_signal(
-            "No blocking correctness findings were found in the review."
-        ));
-        assert!(!contains_blocking_review_signal(
-            "No correctness, regression, security, or blocking test-coverage findings."
-        ));
-        assert!(contains_blocking_review_signal(
-            "No prior context; one blocking finding remains."
-        ));
-    }
-}
+#[path = "review_cmd_prose_findings_tests.rs"]
+mod tests;

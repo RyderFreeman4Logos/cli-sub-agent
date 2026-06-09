@@ -574,3 +574,6 @@ mod terminal_error_reason_tests;
 #[cfg(test)]
 #[path = "review_cmd_output_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "review_cmd_output_verdict_1981_tests.rs"]
+mod verdict_1981_tests;
