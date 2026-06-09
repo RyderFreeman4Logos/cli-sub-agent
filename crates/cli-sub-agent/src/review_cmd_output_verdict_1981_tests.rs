@@ -156,6 +156,31 @@ fn issue_1981_high_severity_summary_repairs_success_result_to_failure() {
 }
 
 #[test]
+fn issue_1990_high_severity_result_summary_without_verdict_artifact_repairs_success_result() {
+    let session_id = "01KTN7DBN6YZ6D8PCXYX625ZV4";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1990-high-severity-result-summary", session_id);
+    let summary = "Reviewed `main...HEAD` in read-only mode. Found 1 high-severity issue: the review result summary lost its verdict artifact.";
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+
+    let mut result = success_result(summary);
+    let changed = crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert!(changed, "summary classification must repair the result");
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.status, "failure");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1982_medium_correctness_fail_summary_repairs_success_result_to_failure() {
     assert_summary_fails_canonical_result(
         "issue-1982-medium-correctness-summary",

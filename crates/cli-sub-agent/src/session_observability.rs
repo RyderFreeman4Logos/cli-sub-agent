@@ -7,6 +7,7 @@ use csa_session::{ReviewVerdictArtifact, SessionArtifact, SessionResult};
 use tracing::debug;
 
 const SUMMARY_MAX_CHARS: usize = 200;
+const REVIEW_SUMMARY_FAIL_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];
 
 pub(crate) fn refresh_and_repair_result(
     project_root: &Path,
@@ -104,16 +105,94 @@ pub(crate) fn enrich_result_from_session_dir(
 
 fn sync_review_verdict_exit_code(session_dir: &Path, result: &mut SessionResult) -> Result<bool> {
     let Some(exit_code) = read_review_verdict_exit_code(session_dir)? else {
-        return Ok(false);
+        return Ok(sync_review_summary_exit_code(session_dir, result));
     };
+    Ok(sync_result_exit_code(result, exit_code))
+}
+
+fn sync_review_summary_exit_code(session_dir: &Path, result: &mut SessionResult) -> bool {
+    let summary_has_fail_verdict = review_summary_has_fail_verdict(&result.summary);
+    let review_summary_has_blocking_outcome = session_dir.join("review_meta.json").is_file()
+        && review_summary_has_blocking_outcome(&result.summary);
+    if !(summary_has_fail_verdict || review_summary_has_blocking_outcome) {
+        return false;
+    }
+
+    sync_result_exit_code(result, 1)
+}
+
+fn review_summary_has_fail_verdict(summary: &str) -> bool {
+    summary.lines().map(str::trim).any(|line| {
+        REVIEW_SUMMARY_FAIL_TOKENS
+            .iter()
+            .any(|token| summary_line_has_verdict_prefix(line, token))
+    })
+}
+
+fn review_summary_has_blocking_outcome(summary: &str) -> bool {
+    summary.lines().any(summary_line_has_blocking_outcome)
+}
+
+fn summary_line_has_blocking_outcome(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    !summary_line_negates_blocking_outcome(&normalized)
+        && (normalized.contains("high-severity")
+            || normalized.contains("high severity")
+            || normalized.contains("critical-severity")
+            || normalized.contains("critical severity")
+            || normalized.contains("blocking finding")
+            || normalized.contains("blocking issue")
+            || normalized.contains("p1 finding")
+            || normalized.contains("p1 issue")
+            || normalized.contains("p1 correctness"))
+}
+
+fn summary_line_negates_blocking_outcome(normalized: &str) -> bool {
+    normalized.contains("non-blocking")
+        || normalized.contains("no high")
+        || summary_line_has_zero_count(normalized, "0 high")
+        || normalized.contains("high severity issues: 0")
+        || normalized.contains("high-severity findings: 0")
+        || normalized.contains("no critical")
+        || summary_line_has_zero_count(normalized, "0 critical")
+        || normalized.contains("critical severity issues: 0")
+        || normalized.contains("no blocking")
+        || summary_line_has_zero_count(normalized, "0 blocking")
+        || normalized.contains("blocking issues: 0")
+        || normalized.contains("p1 findings: 0")
+        || normalized.contains("no correctness, regression, security, or blocking")
+}
+
+fn summary_line_has_zero_count(normalized: &str, prefix: &str) -> bool {
+    normalized.starts_with(prefix) || normalized.contains(&format!(" {prefix}"))
+}
+
+fn summary_line_has_verdict_prefix(line: &str, token: &str) -> bool {
+    let stripped = line.trim_start_matches(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '*' | '_' | '`' | '#' | '-' | '>')
+    });
+    let Some(prefix) = stripped.get(..token.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(token) {
+        return false;
+    }
+
+    stripped[token.len()..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+}
+
+fn sync_result_exit_code(result: &mut SessionResult, exit_code: i32) -> bool {
     let status = SessionResult::status_from_exit_code(exit_code);
     if result.exit_code == exit_code && result.status == status {
-        return Ok(false);
+        return false;
     }
 
     result.exit_code = exit_code;
     result.status = status;
-    Ok(true)
+    true
 }
 
 fn read_review_verdict_exit_code(session_dir: &Path) -> Result<Option<i32>> {

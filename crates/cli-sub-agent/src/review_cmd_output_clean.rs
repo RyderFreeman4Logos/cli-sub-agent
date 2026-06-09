@@ -82,6 +82,10 @@ fn verdict_token_pass_or_clean(text: &str) -> bool {
 /// is case-INsensitive; see [`MatchCase`].
 fn verdict_token_fail(text: &str) -> bool {
     verdict_token_matches(text, FAIL_VERDICT_TOKENS, MatchCase::Insensitive)
+        || text
+            .lines()
+            .map(str::trim)
+            .any(|line| has_verdict_token_prefix(line, FAIL_VERDICT_TOKENS, MatchCase::Insensitive))
 }
 
 /// Scan each line for one of `tokens` appearing as a bounded verdict token,

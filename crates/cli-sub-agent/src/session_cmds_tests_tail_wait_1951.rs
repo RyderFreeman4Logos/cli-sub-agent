@@ -179,6 +179,138 @@ fn issue_1971_wait_uses_generated_fail_verdict_for_pass_result() {
 }
 
 #[test]
+fn issue_1990_wait_fails_fail_prefixed_summary_without_review_verdict_artifact() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-fail-prefixed-summary-without-verdict"),
+        None,
+        Some("gemini-cli"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write stale success completion packet");
+    let summary = "FAIL  The PR successfully enables intra-tier failover for Codex model-scoped limits (#1985), ensuring we can fallback to other models when a specific model limit is hit. However, there is a High-severity defect that undermines the defense built for #1736.";
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: summary.to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .expect("save stale success result");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("summary-classified failure should short-circuit before reconcile");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should fail closed from summary");
+
+    assert_eq!(exit_code, 1);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id.clone(), "failure".to_string(), 1, false))
+    );
+    let persisted = load_result(project, &session_id)
+        .expect("load result")
+        .expect("result should remain terminal");
+    assert_eq!(persisted.status, "failure");
+    assert_eq!(persisted.exit_code, 1);
+}
+
+#[test]
+fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-zero-count-review-summary-without-verdict"),
+        None,
+        Some("gemini-cli"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write success completion packet");
+    let summary = "PASS: 0 high-severity issues. no high-severity findings. Critical severity issues: 0. High severity issues: 0. Medium findings: 0. P1 findings: 0. P2 violations: 0. Blocking issues: 0.";
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: summary.to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .expect("save success result");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("terminal success result should not need reconcile");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should preserve zero-count review summary");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id.clone(), "success".to_string(), 0, false))
+    );
+    let persisted = load_result(project, &session_id)
+        .expect("load result")
+        .expect("result should remain terminal");
+    assert_eq!(persisted.status, "success");
+    assert_eq!(persisted.exit_code, 0);
+}
+
+#[test]
 fn issue_1978_wait_uses_generated_fail_verdict_for_blocking_summary_without_fail_token() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
