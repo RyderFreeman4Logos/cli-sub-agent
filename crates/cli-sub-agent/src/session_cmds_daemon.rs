@@ -30,8 +30,8 @@ const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-b
 pub(crate) use completion::{
     DaemonCompletionPacket, daemon_completion_exists, daemon_completion_result,
     finalize_daemon_completion_if_present, load_daemon_completion_packet,
-    persist_daemon_completion_from_env, retire_session_from_daemon_completion,
-    seed_daemon_session_env,
+    persist_daemon_completion_from_env, persist_daemon_completion_from_env_with_reason,
+    retire_session_from_daemon_completion, seed_daemon_session_env,
 };
 #[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;

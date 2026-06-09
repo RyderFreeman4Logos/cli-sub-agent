@@ -243,12 +243,18 @@ fn spawn_daemon_signal_handler() {
             tokio::select! {
                 _ = sigterm.recv() => {
                     // 128 + 15 (SIGTERM) = 143
-                    crate::session_cmds_daemon::persist_daemon_completion_from_env(143);
+                    crate::session_cmds_daemon::persist_daemon_completion_from_env_with_reason(
+                        143,
+                        Some("daemon_sigterm"),
+                    );
                     std::process::exit(143);
                 }
                 _ = sigint.recv() => {
                     // 128 + 2 (SIGINT) = 130
-                    crate::session_cmds_daemon::persist_daemon_completion_from_env(130);
+                    crate::session_cmds_daemon::persist_daemon_completion_from_env_with_reason(
+                        130,
+                        Some("daemon_sigint"),
+                    );
                     std::process::exit(130);
                 }
             }
