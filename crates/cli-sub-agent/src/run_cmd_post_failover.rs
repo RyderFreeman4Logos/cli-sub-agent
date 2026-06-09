@@ -18,7 +18,7 @@ pub(crate) enum RateLimitAction {
     /// No rate limit detected; break with result.
     NoRateLimit,
     /// Rate limit detected but no failover possible; break with result.
-    ExhaustedFailovers,
+    ExhaustedFailovers { reason: String },
     /// Retry with a different tool.
     Retry {
         new_tool: ToolName,
@@ -75,19 +75,8 @@ pub(crate) fn detect_permanent_tool_exhaustion_text(
     if exit_code == 0 {
         return None;
     }
-    // PERMANENT tool exhaustion self-kills the session (the caller marks a fatal
-    // gate, blocks failover, and writes `tool_exhausted: ...`). It MUST be
-    // derived only from the provider's own error channel — captured process
-    // stderr, or the anyhow error chain of a transport failure — NEVER from the
-    // agent's stdout (`output`) or the stdout-derived `summary`. A `csa review`
-    // whose reviewed diff/source/commit literally contains a quota phrase (e.g.
-    // "monthly spending cap") must not be misread as a real provider quota
-    // exhaustion (#1736). Both call sites pass the provider-error channel here:
-    // the success path passes `ExecutionResult::stderr_output`, the transport
-    // error path passes the formatted anyhow error chain. `detect_rate_limit`
-    // confirms `quota_exhausted` only from its `stderr` argument, so feeding the
-    // provider channel as stderr (and an empty stdout) yields the permanent
-    // verdict iff the provider itself reported quota exhaustion.
+    // Permanent self-kill must come only from the provider error channel, never
+    // agent stdout/summary that may quote reviewed quota text (#1736).
     csa_scheduler::detect_rate_limit(
         tool_name_str,
         provider_error_channel,
@@ -96,6 +85,13 @@ pub(crate) fn detect_permanent_tool_exhaustion_text(
         current_model_spec,
     )
     .filter(|detected| detected.quota_exhausted)
+    .filter(|detected| {
+        is_provider_wide_quota_exhaustion(
+            tool_name_str,
+            detected.quota_exhausted,
+            provider_error_channel,
+        )
+    })
 }
 
 pub(crate) fn is_permanent_tool_exhaustion_error(
@@ -210,6 +206,23 @@ fn allows_init_failure_failover(
     false
 }
 
+fn is_provider_wide_quota_exhaustion(
+    tool_name_str: &str,
+    quota_exhausted: bool,
+    provider_error_channel: &str,
+) -> bool {
+    quota_exhausted && !is_codex_model_scoped_usage_limit(tool_name_str, provider_error_channel)
+}
+
+fn is_codex_model_scoped_usage_limit(tool_name_str: &str, provider_error_channel: &str) -> bool {
+    if tool_name_str != "codex" {
+        return false;
+    }
+
+    let lower = provider_error_channel.to_ascii_lowercase();
+    lower.contains("usage limit") && lower.contains("switch to another model")
+}
+
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
@@ -277,7 +290,9 @@ pub(crate) fn evaluate_rate_limit_failover(
             "Max failover attempts ({}) reached, returning error",
             max_failover_attempts
         );
-        return Ok(RateLimitAction::ExhaustedFailovers);
+        return Ok(RateLimitAction::ExhaustedFailovers {
+            reason: format!("max failover attempts ({max_failover_attempts}) reached"),
+        });
     }
 
     tried_tools.push(tool_name_str.to_string());
@@ -306,16 +321,26 @@ pub(crate) fn evaluate_rate_limit_failover(
         .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
 
     let Some(cfg) = config else {
-        return Ok(RateLimitAction::ExhaustedFailovers);
+        return Ok(RateLimitAction::ExhaustedFailovers {
+            reason: "project config unavailable; cannot resolve tier fallback candidates"
+                .to_string(),
+        });
     };
 
-    // Permanent quota exhaustion on `tool_name_str` does NOT stop failover
-    // (#1629). Instead, mark its provider as exhausted so `decide_failover`
-    // skips other tools sharing the same upstream quota pool — e.g. gemini-cli
-    // and antigravity-cli both consume Google OAuth quota.
+    let provider_wide_quota_exhaustion = is_provider_wide_quota_exhaustion(
+        tool_name_str,
+        rate_limit.quota_exhausted,
+        &format!(
+            "{}\n{}\n{}",
+            exec_result.stderr_output, exec_result.summary, exec_result.output
+        ),
+    );
+
+    // Provider-wide quota skips shared quota pools (#1629); Codex model-scoped
+    // limits must still allow another `codex/...` tier candidate (#1985).
     let exhausted_providers = collect_exhausted_providers(
         fallback_chain,
-        Some(tool_name_str).filter(|_| rate_limit.quota_exhausted),
+        Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
     let action = csa_scheduler::decide_failover(
@@ -354,7 +379,7 @@ pub(crate) fn evaluate_rate_limit_failover(
                 tool: tool_name_str.to_string(),
                 model_spec: current_model_spec.map(String::from),
                 skip_reason: rate_limit.matched_pattern.clone(),
-                quota_exhausted: rate_limit.quota_exhausted,
+                quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
@@ -369,10 +394,8 @@ pub(crate) fn evaluate_rate_limit_failover(
                 quota_exhausted = rate_limit.quota_exhausted,
                 "Failover not possible, returning original result"
             );
-            // Even when no alternative was found, record the quota-exhaustion
-            // attempt in fallback_chain so result.toml + audit trails reflect
-            // that we recognised the permanent failure (#1629).
-            if rate_limit.quota_exhausted {
+            // Record only provider-wide quota exhaustion as permanent pool state.
+            if provider_wide_quota_exhaustion {
                 fallback_chain.push(FallbackAttempt {
                     tool: tool_name_str.to_string(),
                     model_spec: current_model_spec.map(String::from),
@@ -381,7 +404,7 @@ pub(crate) fn evaluate_rate_limit_failover(
                     timestamp: chrono::Utc::now(),
                 });
             }
-            Ok(RateLimitAction::ExhaustedFailovers)
+            Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
     }
 }
@@ -517,7 +540,9 @@ pub(crate) fn evaluate_error_rate_limit_failover(
             "Max failover attempts ({}) reached for error-path rate limit",
             max_failover_attempts
         );
-        return Ok(RateLimitAction::ExhaustedFailovers);
+        return Ok(RateLimitAction::ExhaustedFailovers {
+            reason: format!("max failover attempts ({max_failover_attempts}) reached"),
+        });
     }
 
     tried_tools.push(tool_name_str.to_string());
@@ -543,14 +568,22 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
 
     let Some(cfg) = config else {
-        return Ok(RateLimitAction::ExhaustedFailovers);
+        return Ok(RateLimitAction::ExhaustedFailovers {
+            reason: "project config unavailable; cannot resolve tier fallback candidates"
+                .to_string(),
+        });
     };
 
-    // See note in `evaluate_rate_limit_failover`: permanent quota exhaustion
-    // exits the failover for THIS provider's pool only, not the whole chain.
+    let provider_wide_quota_exhaustion = is_provider_wide_quota_exhaustion(
+        tool_name_str,
+        failover_signal.quota_exhausted,
+        error_message,
+    );
+
+    // Same provider-pool semantics as the ExecutionResult path above.
     let exhausted_providers = collect_exhausted_providers(
         fallback_chain,
-        Some(tool_name_str).filter(|_| failover_signal.quota_exhausted),
+        Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
     let action = csa_scheduler::decide_failover(
@@ -589,7 +622,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 tool: tool_name_str.to_string(),
                 model_spec: current_model_spec.map(String::from),
                 skip_reason: failover_signal.matched_pattern.clone(),
-                quota_exhausted: failover_signal.quota_exhausted,
+                quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
@@ -605,7 +638,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 "Error-path failover not possible"
             );
             // See parity comment in `evaluate_rate_limit_failover` (#1629).
-            if failover_signal.quota_exhausted {
+            if provider_wide_quota_exhaustion {
                 fallback_chain.push(FallbackAttempt {
                     tool: tool_name_str.to_string(),
                     model_spec: current_model_spec.map(String::from),
@@ -614,7 +647,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                     timestamp: chrono::Utc::now(),
                 });
             }
-            Ok(RateLimitAction::ExhaustedFailovers)
+            Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
     }
 }

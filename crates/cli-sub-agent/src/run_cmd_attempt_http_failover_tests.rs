@@ -59,7 +59,7 @@ fn assert_retry_to(action: RateLimitAction, expected_tool: &str, expected_spec: 
             assert_eq!(new_model_spec.as_deref(), Some(expected_spec));
         }
         RateLimitAction::NoRateLimit => panic!("expected failover retry, got no rate limit"),
-        RateLimitAction::ExhaustedFailovers => {
+        RateLimitAction::ExhaustedFailovers { .. } => {
             panic!("expected failover retry, got exhausted failovers")
         }
     }
@@ -69,7 +69,7 @@ fn assert_no_rate_limit(action: RateLimitAction) {
     match action {
         RateLimitAction::NoRateLimit => {}
         RateLimitAction::Retry { .. } => panic!("expected no failover, got retry"),
-        RateLimitAction::ExhaustedFailovers => {
+        RateLimitAction::ExhaustedFailovers { .. } => {
             panic!("expected no failover, got exhausted failovers")
         }
     }

@@ -393,7 +393,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             .await
         }?;
 
-        let (exec_result, exec_changed_paths) = match attempt_execution {
+        let (mut exec_result, exec_changed_paths) = match attempt_execution {
             AttemptExecution::TimedOut => {
                 let timeout_resume_session = executed_session_id
                     .clone()
@@ -488,7 +488,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
 
         match evaluate_post_attempt_retry(
             PostAttemptRequest {
-                exec_result: &exec_result,
+                exec_result: &mut exec_result,
                 exec_changed_paths,
                 runtime_fallback_enabled,
                 max_runtime_fallback_attempts,
@@ -554,6 +554,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     })))
 }
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_codex_quota_tests.rs"]
+mod codex_quota_tests;
 #[cfg(test)]
 #[path = "run_cmd_attempt_git_push_tests.rs"]
 mod git_push_tests;
