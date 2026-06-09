@@ -465,8 +465,9 @@ pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
 }
 
 fn line_has_blocking_review_signal(line: &str) -> bool {
-    line.split(['.', ';', ':'])
-        .any(blocking_review_clause_has_signal)
+    line.split(['.', ';', ':']).any(|clause| {
+        blocking_review_clause_has_signal(clause) || severe_review_clause_has_signal(clause)
+    })
 }
 
 fn blocking_review_clause_has_signal(clause: &str) -> bool {
@@ -508,6 +509,61 @@ fn blocking_review_clause_has_signal(clause: &str) -> bool {
         }
         if ((index + 1)..tokens.len()).any(|candidate| {
             candidate - index <= MAX_TOKENS_AFTER_BLOCKING
+                && ISSUE_NOUNS.contains(&tokens[candidate].as_str())
+        }) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn severe_review_clause_has_signal(clause: &str) -> bool {
+    const ISSUE_NOUNS: &[&str] = &[
+        "issue",
+        "issues",
+        "finding",
+        "findings",
+        "problem",
+        "problems",
+        "bug",
+        "bugs",
+        "defect",
+        "defects",
+        "regression",
+        "regressions",
+        "violation",
+        "violations",
+    ];
+    const BLOCKING_SEVERITIES: &[&str] = &["critical", "high", "medium", "p0", "p1", "p2"];
+    const NEGATIONS: &[&str] = &[
+        "0",
+        "zero",
+        "no",
+        "non",
+        "nonblocking",
+        "not",
+        "none",
+        "without",
+    ];
+    const MAX_TOKENS_AFTER_SEVERITY: usize = 8;
+    const MAX_NEGATION_LOOKBACK: usize = 3;
+
+    let tokens = clause
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+
+    for (index, token) in tokens.iter().enumerate() {
+        if !BLOCKING_SEVERITIES.contains(&token.as_str()) {
+            continue;
+        }
+        if blocking_token_is_negated(&tokens, index, MAX_NEGATION_LOOKBACK, NEGATIONS) {
+            continue;
+        }
+        if ((index + 1)..tokens.len()).any(|candidate| {
+            candidate - index <= MAX_TOKENS_AFTER_SEVERITY
                 && ISSUE_NOUNS.contains(&tokens[candidate].as_str())
         }) {
             return true;
@@ -621,6 +677,36 @@ mod tests {
         ));
         assert!(contains_blocking_review_signal(
             "No prior context; one blocking finding remains."
+        ));
+    }
+
+    #[test]
+    fn issue_1981_high_severity_summary_is_blocking_signal() {
+        assert!(contains_blocking_review_signal(
+            "Reviewed `main...HEAD` in read-only mode. Found 1 high-severity issue: `--memory-max-mb` can be accepted and used for admission projection."
+        ));
+        assert!(contains_blocking_review_signal(
+            "Found one P1 correctness finding in the review output classifier."
+        ));
+    }
+
+    #[test]
+    fn issue_1982_medium_correctness_remaining_summary_is_blocking_signal() {
+        assert!(contains_blocking_review_signal(
+            "One medium correctness finding remains after re-verifying the prior stale-FTS assumption. The rejudge-specific hard-delete path is fixed. FAIL"
+        ));
+    }
+
+    #[test]
+    fn severe_summary_signal_respects_clean_negation() {
+        assert!(!contains_blocking_review_signal(
+            "PASS: no high or medium severity issues remain after review."
+        ));
+        assert!(!contains_blocking_review_signal(
+            "No correctness, regression, security, or blocking test-coverage findings."
+        ));
+        assert!(!contains_blocking_review_signal(
+            "Found one low-severity documentation issue."
         ));
     }
 }
