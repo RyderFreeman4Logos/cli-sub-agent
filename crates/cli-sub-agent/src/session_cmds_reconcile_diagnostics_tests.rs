@@ -186,6 +186,54 @@ fn daemon_completion_packet_present_finalizes_dead_active_session() {
 
 #[cfg(unix)]
 #[test]
+fn daemon_completion_sigterm_reason_reaches_signal_diagnostic() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("diagnostic-daemon-sigterm"), None, None).unwrap();
+    let session_id = session.meta_session_id.clone();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 143\nstatus = \"signal\"\nreason = \"daemon_sigterm\"\n",
+    )
+    .unwrap();
+    fs::write(session_dir.join("daemon.pid"), "424242 1\n").unwrap();
+    fs::write(
+        session_dir.join("output.log"),
+        "[csa-heartbeat] ACP prompt still running: elapsed=44s idle=15s\n",
+    )
+    .unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session wait")
+            .unwrap();
+
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::DaemonCompletionFinalized
+    );
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion result");
+    assert_eq!(result.status, "signal");
+    assert_eq!(result.exit_code, 143);
+    assert!(
+        result.summary.contains("termination_reason=daemon_sigterm"),
+        "signal diagnostic should include daemon SIGTERM reason: {}",
+        result.summary
+    );
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(
+        persisted.termination_reason.as_deref(),
+        Some("daemon_sigterm")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn daemon_completion_result_survives_state_save_failure() {
     let td = tempfile::tempdir().expect("tempdir");
     let _env = SessionTestEnv::new(&td);

@@ -548,6 +548,11 @@ where
         before_write,
         after_publish,
     } = hooks;
+    if let Some(reason) = packet.reason.as_deref() {
+        session
+            .termination_reason
+            .get_or_insert_with(|| reason.to_string());
+    }
     let result = crate::session_cmds_daemon::daemon_completion_result(
         project_root,
         session_dir,

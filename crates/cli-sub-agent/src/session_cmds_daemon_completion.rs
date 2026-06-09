@@ -16,13 +16,23 @@ const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 pub(crate) struct DaemonCompletionPacket {
     pub(crate) exit_code: i32,
     pub(crate) status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
 }
 
 impl DaemonCompletionPacket {
     fn from_exit_code(exit_code: i32) -> Self {
+        Self::from_exit_code_and_reason(exit_code, None)
+    }
+
+    fn from_exit_code_and_reason(exit_code: i32, reason: Option<&str>) -> Self {
         Self {
             exit_code,
             status: csa_session::SessionResult::status_from_exit_code(exit_code),
+            reason: reason
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
         }
     }
 }
@@ -45,10 +55,17 @@ pub(crate) fn seed_daemon_session_env(session_id: &str, cd: Option<&str>) {
 }
 
 pub(crate) fn persist_daemon_completion_from_env(exit_code: i32) {
+    persist_daemon_completion_from_env_with_reason(exit_code, None);
+}
+
+pub(crate) fn persist_daemon_completion_from_env_with_reason(exit_code: i32, reason: Option<&str>) {
     let Some(session_dir) = resolve_daemon_session_dir_from_env() else {
         return;
     };
-    let packet = DaemonCompletionPacket::from_exit_code(exit_code);
+    let packet = match reason {
+        Some(reason) => DaemonCompletionPacket::from_exit_code_and_reason(exit_code, Some(reason)),
+        None => DaemonCompletionPacket::from_exit_code(exit_code),
+    };
     if let Err(err) = persist_daemon_completion(&session_dir, &packet) {
         warn!(
             path = %daemon_completion_path(&session_dir).display(),
@@ -146,8 +163,14 @@ pub(crate) fn daemon_completion_result(
         .map(|(tool, _)| tool.clone())
         .unwrap_or_else(|| "unknown".to_string());
     let summary_prefix = format!(
-        "daemon completion recorded status={} exit_code={} before result.toml was written; committed or staged work may be salvageable on the session branch",
-        packet.status, packet.exit_code
+        "daemon completion recorded status={} exit_code={}{} before result.toml was written; committed or staged work may be salvageable on the session branch",
+        packet.status,
+        packet.exit_code,
+        packet
+            .reason
+            .as_deref()
+            .map(|reason| format!(" reason={reason}"))
+            .unwrap_or_default()
     );
 
     SessionResult {
@@ -184,11 +207,16 @@ pub(crate) fn retire_session_from_daemon_completion(
 
     session.last_accessed = completed_at;
     session.termination_reason.get_or_insert_with(|| {
-        if packet.exit_code == 0 {
-            "completed".to_string()
-        } else {
-            "daemon_completion".to_string()
-        }
+        packet.reason.as_deref().map_or_else(
+            || {
+                if packet.exit_code == 0 {
+                    "completed".to_string()
+                } else {
+                    "daemon_completion".to_string()
+                }
+            },
+            ToOwned::to_owned,
+        )
     });
     if let Err(err) = session.apply_phase_event(PhaseEvent::Retired) {
         warn!(
