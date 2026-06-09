@@ -311,6 +311,93 @@ fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact(
 }
 
 #[test]
+fn issue_1990_wait_fails_mixed_zero_and_nonzero_severity_summary() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-mixed-severity-summary-without-verdict"),
+        None,
+        Some("gemini-cli"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write stale success completion packet");
+    let meta = csa_session::state::ReviewSessionMeta {
+        session_id: session_id.clone(),
+        head_sha: "deadbeef".to_string(),
+        decision: csa_core::types::ReviewDecision::Pass.as_str().to_string(),
+        verdict: "CLEAN".to_string(),
+        status_reason: None,
+        routed_to: None,
+        primary_failure: None,
+        failure_reason: None,
+        tool: "gemini-cli".to_string(),
+        scope: "range:main...HEAD".to_string(),
+        exit_code: 0,
+        fix_attempted: false,
+        fix_rounds: 0,
+        review_iterations: 1,
+        timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
+        review_mode: None,
+        fix_convergence: None,
+    };
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+    let summary = "Summary: 0 critical issues, 1 high-severity issue remains.";
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: summary.to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .expect("save stale success result");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("summary-classified failure should short-circuit before reconcile");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should fail closed on mixed severity summary");
+
+    assert_eq!(exit_code, 1);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id.clone(), "failure".to_string(), 1, false))
+    );
+    let persisted = load_result(project, &session_id)
+        .expect("load result")
+        .expect("result should remain terminal");
+    assert_eq!(persisted.status, "failure");
+    assert_eq!(persisted.exit_code, 1);
+}
+
+#[test]
 fn issue_1978_wait_uses_generated_fail_verdict_for_blocking_summary_without_fail_token() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
