@@ -268,7 +268,7 @@ fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact(
         "exit_code = 0\nstatus = \"success\"\n",
     )
     .expect("write success completion packet");
-    let summary = "PASS: 0 high-severity issues. no high-severity findings. Critical severity issues: 0. High severity issues: 0. Medium findings: 0. P1 findings: 0. P2 violations: 0. Blocking issues: 0.";
+    let summary = "PASS: 0 high-severity issues. no high-severity findings. High severity vulnerabilities: 0. Critical severity vulnerabilities: 0. High severity issues: 0. Medium findings: 0. P1 findings: 0. P2 violations: 0. Blocking findings: 0.";
     save_result(
         project,
         &session_id,

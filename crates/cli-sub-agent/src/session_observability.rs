@@ -149,8 +149,7 @@ fn summary_line_has_unnegated_high_severity(normalized: &str) -> bool {
 fn summary_line_negates_high_severity(normalized: &str) -> bool {
     normalized.contains("no high")
         || summary_line_has_zero_count(normalized, "0 high")
-        || normalized.contains("high severity issues: 0")
-        || normalized.contains("high-severity findings: 0")
+        || summary_line_has_zero_count_metric(normalized, &["high severity", "high-severity"])
 }
 
 fn summary_line_has_unnegated_critical_severity(normalized: &str) -> bool {
@@ -161,7 +160,10 @@ fn summary_line_has_unnegated_critical_severity(normalized: &str) -> bool {
 fn summary_line_negates_critical_severity(normalized: &str) -> bool {
     normalized.contains("no critical")
         || summary_line_has_zero_count(normalized, "0 critical")
-        || normalized.contains("critical severity issues: 0")
+        || summary_line_has_zero_count_metric(
+            normalized,
+            &["critical severity", "critical-severity"],
+        )
 }
 
 fn summary_line_has_unnegated_blocking_outcome(normalized: &str) -> bool {
@@ -173,7 +175,7 @@ fn summary_line_negates_blocking_outcome(normalized: &str) -> bool {
     normalized.contains("non-blocking")
         || normalized.contains("no blocking")
         || summary_line_has_zero_count(normalized, "0 blocking")
-        || normalized.contains("blocking issues: 0")
+        || summary_line_has_zero_count_metric(normalized, &["blocking"])
         || normalized.contains("no correctness, regression, security, or blocking")
 }
 
@@ -187,12 +189,34 @@ fn summary_line_has_unnegated_p1_outcome(normalized: &str) -> bool {
 fn summary_line_negates_p1_outcome(normalized: &str) -> bool {
     normalized.contains("no p1")
         || summary_line_has_zero_count(normalized, "0 p1")
-        || normalized.contains("p1 findings: 0")
-        || normalized.contains("p1 issues: 0")
+        || summary_line_has_zero_count_metric(normalized, &["p1"])
 }
 
 fn summary_line_has_zero_count(normalized: &str, prefix: &str) -> bool {
     normalized.starts_with(prefix) || normalized.contains(&format!(" {prefix}"))
+}
+
+fn summary_line_has_zero_count_metric(normalized: &str, labels: &[&str]) -> bool {
+    const ZERO_COUNT_NOUNS: &[&str] = &[
+        "bug",
+        "bugs",
+        "defect",
+        "defects",
+        "finding",
+        "findings",
+        "issue",
+        "issues",
+        "violation",
+        "violations",
+        "vulnerability",
+        "vulnerabilities",
+    ];
+
+    labels.iter().any(|label| {
+        ZERO_COUNT_NOUNS
+            .iter()
+            .any(|noun| normalized.contains(&format!("{label} {noun}: 0")))
+    })
 }
 
 fn summary_line_has_verdict_prefix(line: &str, token: &str) -> bool {
