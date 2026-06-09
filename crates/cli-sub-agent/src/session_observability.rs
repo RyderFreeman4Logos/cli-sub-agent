@@ -222,14 +222,28 @@ fn summary_line_has_zero_count_metric(normalized: &str, labels: &[&str]) -> bool
 }
 
 fn summary_line_has_zero_metric(normalized: &str, label: &str) -> bool {
-    normalized.contains(&format!("{label}: 0")) || normalized.contains(&format!("{label} = 0"))
+    summary_metric_label_variants(label).iter().any(|variant| {
+        normalized.contains(&format!("{variant}: 0"))
+            || normalized.contains(&format!("{variant} = 0"))
+    })
 }
 
 fn summary_line_has_metric_label(normalized: &str, label: &str) -> bool {
-    normalized.starts_with(&format!("{label}:"))
-        || normalized.starts_with(&format!("{label} ="))
-        || normalized.contains(&format!(" {label}:"))
-        || normalized.contains(&format!(" {label} ="))
+    summary_metric_label_variants(label).iter().any(|variant| {
+        normalized.starts_with(&format!("{variant}:"))
+            || normalized.starts_with(&format!("{variant} ="))
+            || normalized.contains(&format!(" {variant}:"))
+            || normalized.contains(&format!(" {variant} ="))
+    })
+}
+
+fn summary_metric_label_variants(label: &str) -> [String; 4] {
+    [
+        label.to_string(),
+        format!("**{label}**"),
+        format!("__{label}__"),
+        format!("`{label}`"),
+    ]
 }
 
 fn summary_line_has_verdict_prefix(line: &str, token: &str) -> bool {
@@ -243,10 +257,19 @@ fn summary_line_has_verdict_prefix(line: &str, token: &str) -> bool {
         return false;
     }
 
-    stripped[token.len()..]
-        .chars()
-        .next()
-        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+    summary_verdict_token_is_bounded(&stripped[token.len()..])
+}
+
+fn summary_verdict_token_is_bounded(rest: &str) -> bool {
+    let mut chars = rest.chars();
+    match chars.next() {
+        None => true,
+        Some(ch) if ch.is_ascii_alphanumeric() || ch == '_' => false,
+        Some('-') | Some('/') => chars
+            .next()
+            .is_none_or(|next| !next.is_ascii_alphanumeric() && next != '_'),
+        _ => true,
+    }
 }
 
 fn sync_result_exit_code(result: &mut SessionResult, exit_code: i32) -> bool {

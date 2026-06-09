@@ -28,6 +28,48 @@ fn write_clean_review_meta(session_dir: &Path, session_id: &str, tool: &str) {
     csa_session::state::write_review_meta(session_dir, &meta).expect("write review meta");
 }
 
+fn assert_wait_terminal(
+    project: &Path,
+    session_id: &str,
+    expected_status: &str,
+    expected_exit_code: i32,
+    reconcile_panic: &str,
+) {
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.to_string(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("{reconcile_panic}");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should complete");
+
+    assert_eq!(exit_code, expected_exit_code);
+    assert_eq!(
+        emitted_completion,
+        Some((
+            session_id.to_string(),
+            expected_status.to_string(),
+            expected_exit_code,
+            false,
+        ))
+    );
+    let persisted = load_result(project, session_id)
+        .expect("load result")
+        .expect("result should remain terminal");
+    assert_eq!(persisted.status, expected_status);
+    assert_eq!(persisted.exit_code, expected_exit_code);
+}
+
 #[test]
 fn handle_session_wait_syncs_failed_review_verdict_before_printing_result() {
     let td = tempdir().expect("tempdir");
@@ -239,34 +281,57 @@ fn issue_1990_wait_fails_fail_prefixed_summary_without_review_verdict_artifact()
     )
     .expect("save stale success result");
 
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |_project_root, _current_session_id, _trigger| {
-            panic!("summary-classified failure should short-circuit before reconcile");
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "failure",
+        1,
+        "summary-classified failure should short-circuit before reconcile",
+    );
+}
+
+#[test]
+fn issue_1990_wait_ignores_hyphenated_fail_prefix_without_review_verdict_artifact() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-hyphenated-fail-prefix-without-verdict"),
+        None,
+        Some("gemini-cli"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write success completion packet");
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: "FAIL-over syntax is discussed here without a review verdict.".to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("success", 0)
         },
     )
-    .expect("wait should fail closed from summary");
+    .expect("save success result");
 
-    assert_eq!(exit_code, 1);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 1, false))
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "success",
+        0,
+        "bounded verdict prefix should not need reconcile",
     );
-    let persisted = load_result(project, &session_id)
-        .expect("load result")
-        .expect("result should remain terminal");
-    assert_eq!(persisted.status, "failure");
-    assert_eq!(persisted.exit_code, 1);
 }
 
 #[test]
@@ -294,7 +359,7 @@ fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact(
     )
     .expect("write success completion packet");
     write_clean_review_meta(&session_dir, &session_id, "gemini-cli");
-    let summary = "PASS: 0 high-severity issues. no high-severity findings. High severity: 0. High severity vulnerabilities: 0. Critical severity vulnerabilities: 0. High severity issues = 0. Medium findings: 0. P1: 0. P1 findings: 0. P2 violations: 0. Blocking findings: 0.";
+    let summary = "PASS: 0 high-severity issues. no high-severity findings. High severity: 0. **High severity**: 0. High severity vulnerabilities: 0. Critical severity vulnerabilities: 0. High severity issues = 0. Medium findings: 0. P1: 0. **P1**: 0. P1 findings: 0. P2 violations: 0. Blocking findings: 0.";
     save_result(
         project,
         &session_id,
@@ -306,34 +371,13 @@ fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact(
     )
     .expect("save success result");
 
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |_project_root, _current_session_id, _trigger| {
-            panic!("terminal success result should not need reconcile");
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
-        },
-    )
-    .expect("wait should preserve zero-count review summary");
-
-    assert_eq!(exit_code, 0);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id.clone(), "success".to_string(), 0, false))
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "success",
+        0,
+        "terminal success result should not need reconcile",
     );
-    let persisted = load_result(project, &session_id)
-        .expect("load result")
-        .expect("result should remain terminal");
-    assert_eq!(persisted.status, "success");
-    assert_eq!(persisted.exit_code, 0);
 }
 
 #[test]
@@ -373,34 +417,13 @@ fn issue_1990_wait_fails_mixed_zero_and_nonzero_severity_summary() {
     )
     .expect("save stale success result");
 
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |_project_root, _current_session_id, _trigger| {
-            panic!("summary-classified failure should short-circuit before reconcile");
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
-        },
-    )
-    .expect("wait should fail closed on mixed severity summary");
-
-    assert_eq!(exit_code, 1);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 1, false))
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "failure",
+        1,
+        "summary-classified failure should short-circuit before reconcile",
     );
-    let persisted = load_result(project, &session_id)
-        .expect("load result")
-        .expect("result should remain terminal");
-    assert_eq!(persisted.status, "failure");
-    assert_eq!(persisted.exit_code, 1);
 }
 
 #[test]
@@ -439,34 +462,13 @@ fn issue_1990_wait_fails_bare_nonzero_p1_review_summary() {
     )
     .expect("save stale success result");
 
-    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-        WaitBehavior {
-            wait_timeout_secs: 1,
-            memory_warn_mb: None,
-            timing: WaitLoopTiming::default(),
-        },
-        |_project_root, _current_session_id, _trigger| {
-            panic!("summary-classified failure should short-circuit before reconcile");
-        },
-        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
-            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
-        },
-    )
-    .expect("wait should fail closed on bare P1 count");
-
-    assert_eq!(exit_code, 1);
-    assert_eq!(
-        emitted_completion,
-        Some((session_id.clone(), "failure".to_string(), 1, false))
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "failure",
+        1,
+        "summary-classified failure should short-circuit before reconcile",
     );
-    let persisted = load_result(project, &session_id)
-        .expect("load result")
-        .expect("result should remain terminal");
-    assert_eq!(persisted.status, "failure");
-    assert_eq!(persisted.exit_code, 1);
 }
 
 #[test]
