@@ -329,6 +329,9 @@ fn parse_severity_prefixed_finding(
     let (label, rest) = body.split_once(':')?;
     let severity = severity_from_label(label).or_else(|| leading_severity_from_title(label))?;
     let rest = rest.trim();
+    if severity_prefixed_rest_is_zero_count(rest) {
+        return None;
+    }
     if let Some((file_range, description)) = parse_leading_file_range(rest) {
         return Some(ParsedProseFinding {
             severity,
@@ -341,6 +344,11 @@ fn parse_severity_prefixed_finding(
         file_range: None,
         description: severity_prefixed_description(label, rest),
     })
+}
+
+fn severity_prefixed_rest_is_zero_count(rest: &str) -> bool {
+    let tokens = review_signal_tokens(rest);
+    matches!(tokens.as_slice(), [token] if ZERO_COUNT_WORDS.contains(&token.as_str()))
 }
 
 fn parse_path_prefixed_finding(body: &str, severity: Severity) -> Option<ParsedProseFinding> {

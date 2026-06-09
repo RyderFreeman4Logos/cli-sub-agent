@@ -1,4 +1,6 @@
-use super::contains_blocking_review_signal;
+use csa_session::Severity;
+
+use super::{contains_blocking_review_signal, extract_review_findings_from_prose};
 
 #[test]
 fn issue_1971_blocking_regression_summary_is_blocking_signal() {
@@ -57,4 +59,31 @@ fn severe_summary_signal_respects_clean_negation() {
     assert!(!contains_blocking_review_signal(
         "Found one low-severity documentation issue."
     ));
+}
+
+#[test]
+fn severity_metric_zero_count_bullets_do_not_become_prose_findings() {
+    let findings = extract_review_findings_from_prose(
+        r#"PASS: zero-count examples are clean.
+- `High-severity: 0`
+- `**High-severity**: 0`
+- `Critical-severity: 0`
+- `P1: 0`
+"#,
+    );
+
+    assert!(
+        findings.is_empty(),
+        "zero-count severity metric examples must not become findings: {findings:?}"
+    );
+}
+
+#[test]
+fn severity_prefixed_bullet_with_description_still_becomes_prose_finding() {
+    let findings = extract_review_findings_from_prose(
+        "- High-severity: wait can still report success after a blocking review summary.",
+    );
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::High);
 }
