@@ -180,7 +180,8 @@ fn summary_line_negates_blocking_outcome(normalized: &str) -> bool {
 }
 
 fn summary_line_has_unnegated_p1_outcome(normalized: &str) -> bool {
-    (normalized.contains("p1 finding")
+    (summary_line_has_metric_label(normalized, "p1")
+        || normalized.contains("p1 finding")
         || normalized.contains("p1 issue")
         || normalized.contains("p1 correctness"))
         && !summary_line_negates_p1_outcome(normalized)
@@ -213,10 +214,22 @@ fn summary_line_has_zero_count_metric(normalized: &str, labels: &[&str]) -> bool
     ];
 
     labels.iter().any(|label| {
-        ZERO_COUNT_NOUNS
-            .iter()
-            .any(|noun| normalized.contains(&format!("{label} {noun}: 0")))
+        summary_line_has_zero_metric(normalized, label)
+            || ZERO_COUNT_NOUNS
+                .iter()
+                .any(|noun| summary_line_has_zero_metric(normalized, &format!("{label} {noun}")))
     })
+}
+
+fn summary_line_has_zero_metric(normalized: &str, label: &str) -> bool {
+    normalized.contains(&format!("{label}: 0")) || normalized.contains(&format!("{label} = 0"))
+}
+
+fn summary_line_has_metric_label(normalized: &str, label: &str) -> bool {
+    normalized.starts_with(&format!("{label}:"))
+        || normalized.starts_with(&format!("{label} ="))
+        || normalized.contains(&format!(" {label}:"))
+        || normalized.contains(&format!(" {label} ="))
 }
 
 fn summary_line_has_verdict_prefix(line: &str, token: &str) -> bool {
