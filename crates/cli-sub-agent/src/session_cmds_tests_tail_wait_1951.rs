@@ -381,6 +381,52 @@ fn issue_1990_wait_preserves_zero_count_review_summary_without_verdict_artifact(
 }
 
 #[test]
+fn issue_2001_wait_preserves_pass_summary_that_describes_detection_categories() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-pass-summary-describes-detection-categories"),
+        None,
+        Some("gemini-cli"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .expect("write success completion packet");
+    write_clean_review_meta(&session_dir, &session_id, "gemini-cli");
+    let summary = "The PR successfully addresses issue #1990. It can now detect failure verdicts (FAIL, HAS_ISSUES, REJECT) and blocking outcomes (High/Critical severity findings, P1 issues) directly from the human-readable summary.";
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: summary.to_string(),
+            tool: "gemini-cli".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .expect("save success result");
+
+    assert_wait_terminal(
+        project,
+        &session_id,
+        "success",
+        0,
+        "descriptive pass summary should not need reconcile",
+    );
+}
+
+#[test]
 fn issue_1990_wait_fails_mixed_zero_and_nonzero_severity_summary() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

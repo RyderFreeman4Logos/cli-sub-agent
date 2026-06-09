@@ -144,6 +144,8 @@ fn summary_line_has_blocking_outcome(line: &str) -> bool {
 fn summary_line_has_unnegated_high_severity(normalized: &str) -> bool {
     (normalized.contains("high-severity") || normalized.contains("high severity"))
         && !summary_line_negates_high_severity(normalized)
+        && (summary_line_has_nonzero_count_metric(normalized, &["high severity", "high-severity"])
+            || summary_line_has_blocking_result_signal(normalized))
 }
 
 fn summary_line_negates_high_severity(normalized: &str) -> bool {
@@ -155,6 +157,10 @@ fn summary_line_negates_high_severity(normalized: &str) -> bool {
 fn summary_line_has_unnegated_critical_severity(normalized: &str) -> bool {
     (normalized.contains("critical-severity") || normalized.contains("critical severity"))
         && !summary_line_negates_critical_severity(normalized)
+        && (summary_line_has_nonzero_count_metric(
+            normalized,
+            &["critical severity", "critical-severity"],
+        ) || summary_line_has_blocking_result_signal(normalized))
 }
 
 fn summary_line_negates_critical_severity(normalized: &str) -> bool {
@@ -169,6 +175,8 @@ fn summary_line_negates_critical_severity(normalized: &str) -> bool {
 fn summary_line_has_unnegated_blocking_outcome(normalized: &str) -> bool {
     (normalized.contains("blocking finding") || normalized.contains("blocking issue"))
         && !summary_line_negates_blocking_outcome(normalized)
+        && (summary_line_has_nonzero_count_metric(normalized, &["blocking"])
+            || summary_line_has_blocking_result_signal(normalized))
 }
 
 fn summary_line_negates_blocking_outcome(normalized: &str) -> bool {
@@ -185,6 +193,8 @@ fn summary_line_has_unnegated_p1_outcome(normalized: &str) -> bool {
         || normalized.contains("p1 issue")
         || normalized.contains("p1 correctness"))
         && !summary_line_negates_p1_outcome(normalized)
+        && (summary_line_has_nonzero_count_metric(normalized, &["p1"])
+            || summary_line_has_blocking_result_signal(normalized))
 }
 
 fn summary_line_negates_p1_outcome(normalized: &str) -> bool {
@@ -221,11 +231,87 @@ fn summary_line_has_zero_count_metric(normalized: &str, labels: &[&str]) -> bool
     })
 }
 
+fn summary_line_has_nonzero_count_metric(normalized: &str, labels: &[&str]) -> bool {
+    const NONZERO_COUNT_NOUNS: &[&str] = &[
+        "bug",
+        "bugs",
+        "defect",
+        "defects",
+        "finding",
+        "findings",
+        "issue",
+        "issues",
+        "violation",
+        "violations",
+        "vulnerability",
+        "vulnerabilities",
+    ];
+
+    labels.iter().any(|label| {
+        summary_line_has_nonzero_metric(normalized, label)
+            || summary_line_has_nonzero_count_before_label(normalized, label)
+            || NONZERO_COUNT_NOUNS.iter().any(|noun| {
+                let label_with_noun = format!("{label} {noun}");
+                summary_line_has_nonzero_metric(normalized, &label_with_noun)
+                    || summary_line_has_nonzero_count_before_label(normalized, &label_with_noun)
+            })
+    })
+}
+
 fn summary_line_has_zero_metric(normalized: &str, label: &str) -> bool {
     summary_metric_label_variants(label).iter().any(|variant| {
         normalized.contains(&format!("{variant}: 0"))
             || normalized.contains(&format!("{variant} = 0"))
     })
+}
+
+fn summary_line_has_nonzero_metric(normalized: &str, label: &str) -> bool {
+    summary_metric_label_variants(label).iter().any(|variant| {
+        [format!("{variant}: "), format!("{variant} = ")]
+            .iter()
+            .any(|marker| summary_line_has_nonzero_value_after(normalized, marker))
+    })
+}
+
+fn summary_line_has_nonzero_value_after(normalized: &str, marker: &str) -> bool {
+    normalized
+        .match_indices(marker)
+        .any(|(idx, _)| parse_leading_nonzero(&normalized[idx + marker.len()..]))
+}
+
+fn summary_line_has_nonzero_count_before_label(normalized: &str, label: &str) -> bool {
+    normalized.match_indices(label).any(|(idx, _)| {
+        let before = normalized[..idx].trim_end();
+        let digits_start = before
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| !ch.is_ascii_digit())
+            .map_or(0, |(pos, ch)| pos + ch.len_utf8());
+        parse_leading_nonzero(&before[digits_start..])
+    })
+}
+
+fn parse_leading_nonzero(input: &str) -> bool {
+    let digits: String = input
+        .trim_start()
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    digits.parse::<u64>().is_ok_and(|value| value > 0)
+}
+
+fn summary_line_has_blocking_result_signal(normalized: &str) -> bool {
+    [
+        " found",
+        " remains",
+        " remain",
+        " reported",
+        " present",
+        " was found",
+        " were found",
+    ]
+    .iter()
+    .any(|signal| normalized.contains(signal))
 }
 
 fn summary_line_has_metric_label(normalized: &str, label: &str) -> bool {
