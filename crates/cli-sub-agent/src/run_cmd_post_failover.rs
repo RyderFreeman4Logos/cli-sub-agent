@@ -330,10 +330,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     let provider_wide_quota_exhaustion = is_provider_wide_quota_exhaustion(
         tool_name_str,
         rate_limit.quota_exhausted,
-        &format!(
-            "{}\n{}\n{}",
-            exec_result.stderr_output, exec_result.summary, exec_result.output
-        ),
+        &exec_result.stderr_output,
     );
 
     // Provider-wide quota skips shared quota pools (#1629); Codex model-scoped

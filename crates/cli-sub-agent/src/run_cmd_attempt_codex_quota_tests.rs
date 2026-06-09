@@ -167,6 +167,59 @@ fn codex_model_scoped_quota_result_tries_next_codex_model() {
 }
 
 #[test]
+fn codex_provider_quota_ignores_model_hint_quoted_outside_stderr() {
+    let config = make_config(
+        "tier-3-complex",
+        &[
+            "codex/openai/gpt-5.3-codex-spark/xhigh",
+            "codex/openai/gpt-5.5/xhigh",
+            "claude-code/anthropic/claude-sonnet/high",
+        ],
+    );
+    let exec_result = ExecutionResult {
+        output: "Reviewed text includes: switch to another model.".to_string(),
+        stderr_output: "You've hit your account usage limit. Try again later.".to_string(),
+        summary: "Agent summary quotes: switch to another model.".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
+
+    let action = evaluate_rate_limit_failover(
+        "codex",
+        &exec_result,
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        Some("tier-3-complex"),
+        None,
+        None,
+        true,
+        "review a prompt that mentions switching models",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(
+        action,
+        "claude-code",
+        "claude-code/anthropic/claude-sonnet/high",
+    );
+    assert_eq!(fallback_chain.len(), 1);
+    assert!(fallback_chain[0].quota_exhausted);
+}
+
+#[test]
 fn codex_model_scoped_quota_explains_when_no_fallback_candidate_exists() {
     let config = make_config(
         "tier-3-complex",
