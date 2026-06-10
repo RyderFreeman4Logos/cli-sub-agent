@@ -26,9 +26,15 @@ pub(super) fn enforce_final_verdict_consistency(
             .join("output")
             .join(super::super::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER)
             .exists();
+    let synthetic_empty = findings_file.findings.is_empty()
+        && session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER)
+            .exists();
+    let skip_prose_override = extraction_confirmed_empty || synthetic_empty;
     let findings_file = if findings_file.findings.is_empty()
         && !prose_signals.findings.is_empty()
-        && !extraction_confirmed_empty
+        && !skip_prose_override
     {
         let findings_file = FindingsFile {
             findings: prose_signals.findings.clone(),
@@ -45,7 +51,7 @@ pub(super) fn enforce_final_verdict_consistency(
     };
 
     let findings_counts = severity_counts_from_review_findings(&findings_file.findings);
-    if !extraction_confirmed_empty {
+    if !skip_prose_override {
         artifact.severity_counts =
             reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
         artifact.severity_counts = reconcile_counts_with_prose(
@@ -88,7 +94,7 @@ pub(super) fn enforce_final_verdict_consistency(
     }
 
     if artifact.decision == ReviewDecision::Pass
-        && !extraction_confirmed_empty
+        && !skip_prose_override
         && (resume_to_fix
             || blocking_prose
             || blocking_structured
