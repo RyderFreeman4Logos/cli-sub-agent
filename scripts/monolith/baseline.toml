@@ -740,10 +740,10 @@ rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined
 [[files]]
 path = "patterns/dev2merge/workflow.toml"
 kind = "config"
-baseline_tokens = 10578
+baseline_tokens = 10600
 baseline_lines = 874
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662) and language-aware version bump for non-Rust repos (#1658); no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for dev2merge resume mode (#1662), language-aware version bump (#1658), and pipefail fix (#1986); no-growth ratchet"
 
 [[files]]
 path = "patterns/mktd/PATTERN.md"
