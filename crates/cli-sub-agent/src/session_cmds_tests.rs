@@ -857,6 +857,8 @@ mod tail_tests_recovery;
 mod tail_tests_wait;
 #[path = "session_cmds_tests_tail_wait_1951.rs"]
 mod tail_tests_wait_1951;
+#[path = "session_cmds_tests_tail_wait_2002.rs"]
+mod tail_tests_wait_2002;
 #[path = "session_cmds_tests_tail_wait_liveness.rs"]
 mod tail_tests_wait_liveness;
 #[path = "session_cmds_tests_tail_wait_lock.rs"]

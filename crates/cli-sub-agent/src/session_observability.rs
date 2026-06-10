@@ -61,9 +61,11 @@ pub(crate) fn refresh_and_repair_result_from_dir(
         changed = true;
     }
 
-    if changed {
-        // Write repaired result back (best-effort for cross-project sessions).
-        let _ = fs::write(&result_path, toml::to_string_pretty(&result)?);
+    if changed && let Ok(serialized) = toml::to_string_pretty(&result) {
+        let tmp = result_path.with_extension("toml.tmp");
+        if fs::write(&tmp, &serialized).is_ok() {
+            let _ = fs::rename(&tmp, &result_path);
+        }
     }
 
     Ok(Some(result))
@@ -301,7 +303,7 @@ fn parse_leading_nonzero(input: &str) -> bool {
 }
 
 fn summary_line_has_blocking_result_signal(normalized: &str) -> bool {
-    [
+    const SIGNALS: &[&str] = &[
         " found",
         " remains",
         " remain",
@@ -309,9 +311,15 @@ fn summary_line_has_blocking_result_signal(normalized: &str) -> bool {
         " present",
         " was found",
         " were found",
-    ]
-    .iter()
-    .any(|signal| normalized.contains(signal))
+    ];
+    const POST_NEGATIONS: &[&str] = &[" none", " nothing", " no ", " zero", " 0 ", " previously"];
+
+    SIGNALS.iter().any(|signal| {
+        normalized.match_indices(signal).any(|(idx, _)| {
+            let after = &normalized[idx + signal.len()..];
+            !POST_NEGATIONS.iter().any(|neg| after.starts_with(neg))
+        })
+    })
 }
 
 fn summary_line_has_metric_label(normalized: &str, label: &str) -> bool {
