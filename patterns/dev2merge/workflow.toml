@@ -140,7 +140,7 @@ fi
 
 BRANCH="$(git branch --show-current)"
 [ -n "${BRANCH}" ] && [ "${BRANCH}" != "HEAD" ] || exit 0
-DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)"
 [ -n "${DEFAULT_BRANCH}" ] || DEFAULT_BRANCH="main"
 [ -z "$(git status --porcelain)" ] || exit 0
 
@@ -164,7 +164,7 @@ if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
   echo "ERROR: Cannot determine current branch."
   exit 1
 fi
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)
 if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
 if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
   echo "ERROR: Cannot work directly on $BRANCH. Create a feature branch."
@@ -848,7 +848,7 @@ FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
 SYNC_REMOTE="origin"
 SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
 if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
-  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)"
 fi
 if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
   echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
