@@ -18,6 +18,7 @@ fn run_config_with_tier(
             name.to_string(),
             ToolConfig {
                 enabled: enabled_tools.contains(&name),
+                memory_max_mb: Some(256),
                 ..Default::default()
             },
         );

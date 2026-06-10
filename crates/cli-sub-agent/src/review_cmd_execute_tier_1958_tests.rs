@@ -11,6 +11,9 @@ use csa_core::types::ToolName;
 
 fn config_with_review_tier(enabled_tools: &[&str], models: &[&str]) -> csa_config::ProjectConfig {
     let mut config = project_config_with_enabled_tools(enabled_tools);
+    for tool_config in config.tools.values_mut() {
+        tool_config.memory_max_mb = Some(256);
+    }
     if enabled_tools.contains(&"codex") {
         config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     }
