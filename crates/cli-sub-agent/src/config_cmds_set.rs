@@ -33,29 +33,35 @@ fn validate_config_set_value(key: &str, value: &str) -> Result<()> {
 }
 
 fn write_config_value(path: &std::path::Path, key: &str, value: &str) -> Result<()> {
-    let mut doc = match std::fs::read_to_string(path) {
-        Ok(content) if !content.trim().is_empty() => content
+    let original_content = match std::fs::read_to_string(path) {
+        Ok(content) if !content.trim().is_empty() => Some(content),
+        Ok(_) => None,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    let mut doc = match &original_content {
+        Some(content) => content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|err| anyhow::anyhow!("TOML parse error: {err}"))?,
-        Ok(_) => toml_edit::DocumentMut::new(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
-        Err(err) => return Err(err.into()),
+        None => toml_edit::DocumentMut::new(),
     };
 
     set_document_config_value(&mut doc, key, value)?;
+
+    let serialized = doc.to_string();
+    validate_round_trip(&serialized, original_content.as_deref(), key)?;
 
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("config path has no parent directory"))?;
     std::fs::create_dir_all(parent)?;
 
-    // Preserve original file permissions if the file already exists.
     let original_permissions = std::fs::metadata(path).ok().map(|m| m.permissions());
 
     let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|err| {
         anyhow::anyhow!("failed to create temp file in {}: {err}", parent.display())
     })?;
-    std::io::Write::write_all(&mut tmp, doc.to_string().as_bytes())?;
+    std::io::Write::write_all(&mut tmp, serialized.as_bytes())?;
 
     if let Some(perms) = original_permissions {
         tmp.as_file().set_permissions(perms)?;
@@ -65,6 +71,61 @@ fn write_config_value(path: &std::path::Path, key: &str, value: &str) -> Result<
         .map_err(|err| anyhow::anyhow!("failed to atomically rename config: {err}"))?;
 
     Ok(())
+}
+
+fn validate_round_trip(serialized: &str, original: Option<&str>, key: &str) -> Result<()> {
+    let new: toml::Value = toml::from_str(serialized).map_err(|err| {
+        anyhow::anyhow!("config set '{key}' would produce unparseable TOML: {err}")
+    })?;
+
+    let Some(original) = original else {
+        return Ok(());
+    };
+    let Ok(old) = toml::from_str::<toml::Value>(original) else {
+        return Ok(());
+    };
+
+    let target_top_key = key.split('.').next().unwrap_or(key);
+    let old_table = old.as_table();
+    let new_table = new.as_table();
+    if let (Some(old_t), Some(new_t)) = (old_table, new_table) {
+        for (section_key, old_val) in old_t {
+            if section_key == target_top_key {
+                continue;
+            }
+            match new_t.get(section_key) {
+                Some(new_val) if new_val == old_val => {}
+                Some(new_val) => {
+                    anyhow::bail!(
+                        "config set '{key}' would corrupt unrelated section '[{section_key}]': \
+                         toml_edit round-trip changed its structure. \
+                         Old type: {}, New type: {}. Aborting write.",
+                        toml_type_name(old_val),
+                        toml_type_name(new_val),
+                    );
+                }
+                None => {
+                    anyhow::bail!(
+                        "config set '{key}' would delete unrelated section '[{section_key}]'. \
+                         Aborting write."
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn toml_type_name(v: &toml::Value) -> &'static str {
+    match v {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "boolean",
+        toml::Value::Datetime(_) => "datetime",
+        toml::Value::Array(_) => "array",
+        toml::Value::Table(_) => "table",
+    }
 }
 
 fn set_document_config_value(
@@ -270,5 +331,63 @@ mod tests {
                 .contains("Invalid preferences.primary_writer_spec"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_round_trip_detects_tier_corruption() {
+        let original = r#"
+[tools.gemini-cli]
+enabled = true
+
+[tiers.tier-review]
+models = ["codex/openai/gpt-5.5/xhigh"]
+"#;
+        let corrupted = r#"
+[tools.gemini-cli]
+enabled = true
+
+[tools.gemini-cli.env]
+GEMINI_API_KEY = "test-key"
+
+[tiers.tier-review.models]
+1 = "codex/openai/gpt-5.5/xhigh"
+"#;
+        let err = validate_round_trip(
+            corrupted,
+            Some(original),
+            "tools.gemini-cli.env.GEMINI_API_KEY",
+        )
+        .expect_err("corrupted tiers should be rejected");
+        assert!(
+            err.to_string().contains("corrupt"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_round_trip_allows_clean_modification() {
+        let original = r#"
+[tools.gemini-cli]
+enabled = true
+
+[tiers.tier-review]
+models = ["codex/openai/gpt-5.5/xhigh"]
+"#;
+        let modified = r#"
+[tools.gemini-cli]
+enabled = true
+
+[tools.gemini-cli.env]
+GEMINI_API_KEY = "test-key"
+
+[tiers.tier-review]
+models = ["codex/openai/gpt-5.5/xhigh"]
+"#;
+        validate_round_trip(
+            modified,
+            Some(original),
+            "tools.gemini-cli.env.GEMINI_API_KEY",
+        )
+        .expect("clean modification should pass");
     }
 }
