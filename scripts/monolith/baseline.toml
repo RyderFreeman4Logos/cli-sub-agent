@@ -204,10 +204,10 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_execute_tier_tests.rs"
 kind = "test"
-baseline_tokens = 10389
-baseline_lines = 831
+baseline_tokens = 10440
+baseline_lines = 835
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; bumped for test memory_max_mb fix (#1997); no-growth ratchet"
 
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_findings_toml_tests.rs"
