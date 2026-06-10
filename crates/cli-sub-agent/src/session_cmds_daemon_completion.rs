@@ -161,6 +161,13 @@ pub(crate) fn daemon_completion_result(
         .iter()
         .max_by_key(|(_, state)| state.updated_at)
         .map(|(tool, _)| tool.clone())
+        .or_else(|| {
+            let metadata_path = session_dir.join(csa_session::metadata::METADATA_FILE_NAME);
+            std::fs::read_to_string(metadata_path)
+                .ok()
+                .and_then(|c| toml::from_str::<csa_session::metadata::SessionMetadata>(&c).ok())
+                .map(|m| m.tool)
+        })
         .unwrap_or_else(|| "unknown".to_string());
     let summary_prefix = format!(
         "daemon completion recorded status={} exit_code={}{} before result.toml was written; committed or staged work may be salvageable on the session branch",
