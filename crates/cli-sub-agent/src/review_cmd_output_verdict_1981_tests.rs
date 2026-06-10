@@ -252,3 +252,49 @@ fn zero_count_severity_summary_preserves_success_result() {
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+fn write_extracted_marker(session_dir: &Path) {
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER),
+        b"",
+    )
+    .expect("write extracted marker");
+}
+
+#[test]
+fn issue_2002_extracted_empty_findings_with_descriptive_summary_preserves_pass() {
+    let session_id = "01KTQHD6JFZZZZZZZZZZZZZZZZ";
+    let summary = "PASS: The PR hardens the review summary heuristic to detect failure verdicts (FAIL, HAS_ISSUES, REJECT) and blocking outcomes (High/Critical severity findings, P1 issues) while avoiding false positives from descriptive text.";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2002-extracted-empty", session_id);
+    write_empty_findings_toml(&session_dir);
+    write_extracted_marker(&session_dir);
+    persist_summary(&session_dir, summary);
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Pass,
+        "extracted-empty findings must not be overridden by descriptive prose (#2002)"
+    );
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+
+    let mut result = success_result(summary);
+    crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.status, "success");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
