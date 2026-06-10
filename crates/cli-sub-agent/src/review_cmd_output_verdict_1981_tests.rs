@@ -156,6 +156,31 @@ fn issue_1981_high_severity_summary_repairs_success_result_to_failure() {
 }
 
 #[test]
+fn issue_1990_high_severity_result_summary_without_verdict_artifact_repairs_success_result() {
+    let session_id = "01KTN7DBN6YZ6D8PCXYX625ZV4";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-1990-high-severity-result-summary", session_id);
+    let summary = "Reviewed `main...HEAD` in read-only mode. Found 1 high-severity issue: the review result summary lost its verdict artifact.";
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
+
+    let mut result = success_result(summary);
+    let changed = crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert!(changed, "summary classification must repair the result");
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.status, "failure");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_1982_medium_correctness_fail_summary_repairs_success_result_to_failure() {
     assert_summary_fails_canonical_result(
         "issue-1982-medium-correctness-summary",
@@ -224,6 +249,97 @@ fn zero_count_severity_summary_preserves_success_result() {
     assert!(wait_summary.contains("Status: success"));
     assert!(wait_summary.contains("Exit code: 0"));
     assert!(wait_summary.contains("Review verdict: PASS"));
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+fn write_synthetic_marker(session_dir: &Path) {
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER),
+        b"",
+    )
+    .expect("write synthetic marker");
+}
+
+fn write_extracted_marker(session_dir: &Path) {
+    fs::write(
+        session_dir
+            .join("output")
+            .join(crate::review_cmd::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER),
+        b"",
+    )
+    .expect("write extracted marker");
+}
+
+#[test]
+fn issue_2002_extracted_empty_findings_with_descriptive_summary_preserves_pass() {
+    let session_id = "01KTQHD6JFZZZZZZZZZZZZZZZZ";
+    let summary = "PASS: The PR hardens the review summary heuristic to detect failure verdicts (FAIL, HAS_ISSUES, REJECT) and blocking outcomes (High/Critical severity findings, P1 issues) while avoiding false positives from descriptive text.";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2002-extracted-empty", session_id);
+    write_empty_findings_toml(&session_dir);
+    write_extracted_marker(&session_dir);
+    persist_summary(&session_dir, summary);
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Pass,
+        "extracted-empty findings must not be overridden by descriptive prose (#2002)"
+    );
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+
+    let mut result = success_result(summary);
+    crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.status, "success");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2002_synthetic_empty_findings_with_pass_summary_preserves_pass() {
+    let session_id = "01KTQHD6JGZZZZZZZZZZZZZZZZ";
+    let summary = "**PASS** The PR hardens the review summary heuristic. No correctness, security, or contract violations were found.";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2002-synthetic-empty", session_id);
+    write_empty_findings_toml(&session_dir);
+    write_synthetic_marker(&session_dir);
+    persist_summary(&session_dir, summary);
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(
+        verdict.decision,
+        ReviewDecision::Pass,
+        "synthetic-empty findings with PASS summary must not flip to Fail (#2002)"
+    );
+
+    let mut result = success_result(summary);
+    crate::session_observability::enrich_result_from_session_dir(
+        &project_root,
+        session_id,
+        &session_dir,
+        &mut result,
+    )
+    .expect("enrich session result");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.status, "success");
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

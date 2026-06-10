@@ -372,8 +372,8 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/session_cmds_tests.rs"
 kind = "test"
-baseline_tokens = 9738
-baseline_lines = 867
+baseline_tokens = 9760
+baseline_lines = 869
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 

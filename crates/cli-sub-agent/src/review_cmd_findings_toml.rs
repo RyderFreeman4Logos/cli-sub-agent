@@ -18,6 +18,12 @@ const FINDINGS_TOML_FENCE_LABEL: &str = "findings.toml";
 /// true-empty (#1045 round 3).
 pub(super) const FINDINGS_TOML_SYNTHETIC_MARKER: &str = ".findings.toml.synthetic";
 
+/// Sidecar marker written when the findings extractor ran successfully.
+/// `enforce_final_verdict_consistency` checks this to distinguish
+/// "extractor found nothing" from "test/unknown setup" — prose override
+/// is suppressed only when this marker is present (#2002).
+pub(super) const FINDINGS_TOML_EXTRACTED_MARKER: &str = ".findings.toml.extracted";
+
 /// Persist `output/findings.toml` extracted from the reviewer message.
 ///
 /// Best-effort: missing/invalid fenced TOML produces a synthetic empty file and
@@ -89,6 +95,10 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
             } else {
                 // Real extraction succeeded — remove any stale marker from a prior round.
                 let _ = fs::remove_file(&marker_path);
+                let extracted_marker = session_dir
+                    .join("output")
+                    .join(FINDINGS_TOML_EXTRACTED_MARKER);
+                let _ = fs::write(&extracted_marker, b"");
             }
         }
         Err(error) => {

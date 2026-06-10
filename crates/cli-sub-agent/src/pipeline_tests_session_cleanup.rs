@@ -29,6 +29,7 @@ fn project_config_with_min_free_memory(min_free_memory_mb: u64) -> ProjectConfig
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
         resources: ResourcesConfig {
+            memory_max_mb: Some(1024),
             min_free_memory_mb,
             ..Default::default()
         },
@@ -214,6 +215,7 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
     unsafe { std::env::remove_var("CSA_SESSION_ID") };
     let project_root = tmp.path();
     let global = state_dir_error_global_config();
+    let config = project_config_with_min_free_memory(1);
     let executor = Executor::Opencode {
         model_override: None,
         agent: None,
@@ -232,7 +234,7 @@ async fn state_dir_cap_failure_persists_result_for_fresh_spawn() {
         Some("fresh-state-dir-cap".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         None,
         None, // subtree_pin (#1741)
         Some("run"),
@@ -362,6 +364,7 @@ async fn resumed_pre_run_failure_clears_admission_projection() {
     let tmp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
+    let config = project_config_with_min_free_memory(1);
     let executor = Executor::Opencode {
         model_override: None,
         agent: None,
@@ -399,7 +402,7 @@ fail_policy = "closed"
         Some("resume-pre-run-failure".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         None,
         None, // subtree_pin (#1741)
         Some("run"),
@@ -461,6 +464,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
     let global = state_dir_error_global_config();
+    let config = project_config_with_min_free_memory(1);
     let executor = Executor::Opencode {
         model_override: None,
         agent: None,
@@ -521,7 +525,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
         Some("resume-state-dir-cap".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         None,
         None, // subtree_pin (#1741)
         Some("run"),

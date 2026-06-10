@@ -411,6 +411,9 @@ mod tests {
         // a bare token: exact equality after trimming stays the precision guard.
         assert!(!verdict_token_pass_or_clean("PASS: rate is 100%"));
         assert!(!verdict_token_fail("FAIL_SAFE:"));
+        assert!(!verdict_token_fail(
+            "FAIL  The PR has a prose sentence after the token"
+        ));
         assert!(!verdict_token_pass_or_clean("CLEAN_UP:"));
     }
 

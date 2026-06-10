@@ -1,4 +1,4 @@
-// NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
+// NOTE #1858: path-included; avoid crate:: and binary-only methods.
 use super::super::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use super::*;
 use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
@@ -7,7 +7,6 @@ use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySu
 use proptest::prelude::*;
 use std::path::PathBuf;
 use tempfile::tempdir;
-
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
@@ -32,11 +31,14 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
             },
         );
     }
-
     ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),
-        resources: ResourcesConfig::default(),
+        resources: ResourcesConfig {
+            memory_max_mb: Some(1024),
+            min_free_memory_mb: 1,
+            ..Default::default()
+        },
         acp: Default::default(),
         tools: tool_map,
         review: None,

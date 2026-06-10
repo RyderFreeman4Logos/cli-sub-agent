@@ -21,7 +21,21 @@ pub(super) fn enforce_final_verdict_consistency(
 ) -> Result<(), anyhow::Error> {
     let prose_signals = review_prose_signals(session_dir)?;
     let findings_file = load_findings_toml_from_output(session_dir)?.unwrap_or_default();
-    let findings_file = if findings_file.findings.is_empty() && !prose_signals.findings.is_empty() {
+    let extraction_confirmed_empty = findings_file.findings.is_empty()
+        && session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER)
+            .exists();
+    let synthetic_empty = findings_file.findings.is_empty()
+        && session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER)
+            .exists();
+    let skip_prose_override = extraction_confirmed_empty || synthetic_empty;
+    let findings_file = if findings_file.findings.is_empty()
+        && !prose_signals.findings.is_empty()
+        && !skip_prose_override
+    {
         let findings_file = FindingsFile {
             findings: prose_signals.findings.clone(),
         };
@@ -37,12 +51,14 @@ pub(super) fn enforce_final_verdict_consistency(
     };
 
     let findings_counts = severity_counts_from_review_findings(&findings_file.findings);
-    artifact.severity_counts =
-        reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
-    artifact.severity_counts = reconcile_counts_with_prose(
-        artifact.severity_counts.clone(),
-        &prose_signals.severity_counts,
-    );
+    if !skip_prose_override {
+        artifact.severity_counts =
+            reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
+        artifact.severity_counts = reconcile_counts_with_prose(
+            artifact.severity_counts.clone(),
+            &prose_signals.severity_counts,
+        );
+    }
 
     let prose_grade = highest_prose_severity_grade(session_dir);
 
@@ -78,6 +94,7 @@ pub(super) fn enforce_final_verdict_consistency(
     }
 
     if artifact.decision == ReviewDecision::Pass
+        && !skip_prose_override
         && (resume_to_fix
             || blocking_prose
             || blocking_structured

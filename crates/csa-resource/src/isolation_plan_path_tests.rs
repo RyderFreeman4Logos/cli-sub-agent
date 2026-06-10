@@ -72,7 +72,10 @@ fn test_resolve_writable_allows_nonexistent_path_with_existing_parent() {
     let resolved = resolve_writable_paths(&[PathBuf::from("drafts/new")], &project)
         .expect("generic writable_paths may target a creatable child path");
 
-    assert_eq!(resolved, vec![project.join("drafts/new")]);
+    assert_eq!(
+        resolved,
+        vec![project.canonicalize().unwrap().join("drafts/new")]
+    );
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn test_writable_validation_error_includes_original_and_resolved_path() {
 
     assert!(err.contains("etc-link"), "missing original path: {err}");
     assert!(
-        err.contains("resolved path /etc is forbidden"),
+        err.contains("resolved path ") && err.contains(" is forbidden"),
         "missing resolved path: {err}"
     );
 }

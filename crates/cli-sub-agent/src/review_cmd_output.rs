@@ -4,7 +4,7 @@ use std::{fs, str::FromStr};
 use anyhow::Result;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
-use csa_session::{Finding, ReviewVerdictArtifact, Severity, write_review_verdict};
+use csa_session::{Finding, FindingsFile, ReviewVerdictArtifact, Severity, write_review_verdict};
 use tracing::{debug, warn};
 
 #[path = "review_cmd_output_artifacts.rs"]
@@ -228,38 +228,41 @@ fn derive_review_verdict_artifact(
     let prose_signals = review_prose_signals(session_dir)?;
     let mut synthetic_empty_findings_counts = None;
     if let Some(findings_file) = load_findings_toml_from_output(session_dir)? {
-        let severity_counts = reconcile_counts_with_prose(
-            severity_counts_for_findings_toml(&findings_file, zero_severity_counts),
-            &prose_signals.severity_counts,
-        );
+        let raw_severity_counts =
+            severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
 
-        // Detect synthetic-empty findings.toml: the sidecar marker is written by
-        // persist_review_findings_toml when TOML extraction failed (#1045 round 3).
         let synthetic_marker = session_dir
             .join("output")
             .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
         let is_synthetic = synthetic_marker.exists();
 
-        // Synthetic-empty + zero counts → fall through to full.md chain (#1045 r3).
+        // Synthetic-empty check uses RAW counts (before prose reconciliation).
+        // Prose severity extraction can produce phantom counts from descriptive
+        // text, which would prevent this fast path from firing (#2002).
         if is_synthetic
             && findings_file.findings.is_empty()
-            && severity_counts_are_zero(&severity_counts)
+            && severity_counts_are_zero(&raw_severity_counts)
         {
             if let Some(artifact) =
                 cross_check_json_for_blocking(session_dir, meta, prose_signals.blocking_summary)?
             {
                 return Ok(artifact);
             }
-            synthetic_empty_findings_counts = Some(severity_counts.clone());
+            synthetic_empty_findings_counts = Some(raw_severity_counts.clone());
             // Synthetic-empty + no blocking JSON → fall through to full.md chain.
             debug!(
                 session_id = %meta.session_id,
                 "Synthetic-empty findings.toml detected; falling through to full.md fallback chain"
             );
         } else {
-            // Non-synthetic (trusted) or non-empty findings.toml: cross-check
-            // review-findings.json for the empty case (round 2 logic), then return.
-            if findings_file.findings.is_empty() && severity_counts_are_zero(&severity_counts) {
+            let severity_counts =
+                reconcile_counts_with_prose(raw_severity_counts, &prose_signals.severity_counts);
+            let extraction_confirmed_empty =
+                findings_extraction_confirmed_empty(session_dir, &findings_file);
+
+            if findings_file.findings.is_empty()
+                && (severity_counts_are_zero(&severity_counts) || extraction_confirmed_empty)
+            {
                 if let Some(artifact) = cross_check_json_for_blocking(
                     session_dir,
                     meta,
@@ -267,14 +270,12 @@ fn derive_review_verdict_artifact(
                 )? {
                     return Ok(artifact);
                 }
-                // No blocking JSON findings, but JSON may have low-only counts.
-                // Preserve them so downstream telemetry sees the low count (#1048 M1).
                 if let Some(json_counts) =
                     json_severity_counts_if_present(session_dir, zero_severity_counts)?
                 {
                     let decision = derive_decision_from_severity_counts(
                         &json_counts,
-                        false, // JSON has findings (low-only)
+                        false,
                         None,
                         ReviewDecision::from_str(&meta.decision).ok(),
                         || Ok(prose_signals.blocking_summary),
@@ -282,6 +283,15 @@ fn derive_review_verdict_artifact(
                         || review_contains_prose_fail_conclusion(session_dir),
                     )?;
                     return Ok(verdict_from_meta(meta, decision, json_counts));
+                }
+                if extraction_confirmed_empty {
+                    let structured_counts =
+                        severity_counts_for_findings_toml(&findings_file, zero_severity_counts);
+                    return Ok(verdict_from_meta(
+                        meta,
+                        ReviewDecision::Pass,
+                        structured_counts,
+                    ));
                 }
             }
 
@@ -365,6 +375,14 @@ fn derive_review_verdict_artifact(
         findings,
         Vec::new(),
     ))
+}
+
+fn findings_extraction_confirmed_empty(session_dir: &Path, findings_file: &FindingsFile) -> bool {
+    findings_file.findings.is_empty()
+        && session_dir
+            .join("output")
+            .join(super::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER)
+            .exists()
 }
 
 fn infer_review_verdict_from_full_output(
