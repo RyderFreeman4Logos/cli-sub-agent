@@ -258,10 +258,16 @@ extra_readable = ["/tmp/foo.json"]
 
         cfg.sanitize_legacy_xdg_runtime_root();
 
-        assert_eq!(cfg.extra_writable, vec![app_dir.clone(), just_dir.clone()]);
+        let expected_app_dir = comparable_path(&app_dir);
+        let expected_just_dir = comparable_path(&just_dir);
+
+        assert_eq!(
+            cfg.extra_writable,
+            vec![expected_app_dir.clone(), expected_just_dir.clone()]
+        );
         assert_eq!(
             cfg.tool_writable_overrides.get("codex"),
-            Some(&vec![app_dir, just_dir])
+            Some(&vec![expected_app_dir, expected_just_dir])
         );
     }
 

@@ -662,6 +662,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         agent: None,
         thinking_budget: None,
     };
+    let config = low_resource_project_config();
     let execution = execute_with_session_and_meta(
         &executor,
         &ToolName::Opencode,
@@ -672,7 +673,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         Some("contract-e2e".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         Some(&extra_env),
         None, // subtree_pin (#1741)
         None,
@@ -736,6 +737,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         agent: None,
         thinking_budget: None,
     };
+    let config = low_resource_project_config();
     let execution = execute_with_session_and_meta_with_parent_source(
         &executor,
         &ToolName::Opencode,
@@ -746,7 +748,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         Some("review-session".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         Some(&extra_env),
         None,
         false,

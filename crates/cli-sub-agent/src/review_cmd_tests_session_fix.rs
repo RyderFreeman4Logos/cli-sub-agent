@@ -312,11 +312,7 @@ fn review_session_fix_rejects_tier_fallback_when_recorded_result_tool_missing_fr
 
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("must use the original review tool 'codex'"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("tier/model routing resolved 'gemini-cli'"),
+        msg.contains("codex") && msg.contains("not a candidate"),
         "unexpected error: {msg}"
     );
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
@@ -365,12 +361,9 @@ fn review_session_fix_runtime_resolution_rejects_tier_fallback_to_non_recorded_t
     .expect_err("runtime selection must enforce recorded session tool after tier routing");
 
     let msg = format!("{err:#}");
+    // Since #1994, the fail-fast fires at tier resolution level (not session-fix level).
     assert!(
-        msg.contains("must use the original review tool 'codex'"),
-        "unexpected error: {msg}"
-    );
-    assert!(
-        msg.contains("tier/model routing resolved 'gemini-cli'"),
+        msg.contains("codex") && msg.contains("not a candidate"),
         "unexpected error: {msg}"
     );
 }

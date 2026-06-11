@@ -206,7 +206,7 @@ fn test_debate_tool_plus_tier_resolves_requested_tool_from_tier() {
 }
 
 #[test]
-fn test_debate_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() {
+fn test_debate_tool_plus_tier_rejects_tool_missing_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
@@ -214,7 +214,8 @@ fn test_debate_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() 
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli", "codex"],
     );
-    let result = resolve_debate_tool(
+    // Since #1994, non-candidate --tool pins fail fast instead of selecting another tier tool.
+    let err = resolve_debate_tool(
         Some(ToolName::Codex),
         None,
         Some(&cfg),
@@ -224,14 +225,12 @@ fn test_debate_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() 
         false,
         Some("quality"),
         false,
-    );
-
-    let (tool, mode, model_spec) = result.expect("missing preferred tool should not hard-fail");
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(mode, DebateMode::Heterogeneous);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
+    )
+    .expect_err("non-candidate --tool pin must fail fast since #1994");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("codex") && msg.contains("not a candidate"),
+        "error should name the rejected tool: {msg}"
     );
 }
 

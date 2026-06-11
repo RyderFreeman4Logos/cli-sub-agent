@@ -148,8 +148,8 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/pipeline_tests_tail.rs"
 kind = "test"
-baseline_tokens = 8106
-baseline_lines = 785
+baseline_tokens = 8122
+baseline_lines = 787
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
@@ -188,10 +188,10 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_execute.rs"
 kind = "source"
-baseline_tokens = 11348
-baseline_lines = 915
+baseline_tokens = 11600
+baseline_lines = 933
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+rationale = "pre-existing monolith debt; +18 lines for tier fallback diagnostics (#1999, #1987)"
 
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_execute_tests.rs"
@@ -276,8 +276,8 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_tests_tail.rs"
 kind = "test"
-baseline_tokens = 10101
-baseline_lines = 922
+baseline_tokens = 10132
+baseline_lines = 923
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
@@ -556,8 +556,8 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/csa-executor/src/transport_gemini_acp_runtime_tests_tail.rs"
 kind = "test"
-baseline_tokens = 9939
-baseline_lines = 797
+baseline_tokens = 10062
+baseline_lines = 803
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 

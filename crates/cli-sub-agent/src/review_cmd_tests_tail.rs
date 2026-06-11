@@ -675,6 +675,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
     let global = GlobalConfig::default();
+    let project_config = project_config_with_enabled_tools(&["opencode"]);
     let result = execute_review(
         ToolName::Opencode,
         "scope=uncommitted mode=review-only security=auto".to_string(),
@@ -686,7 +687,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         None,  // thinking
         "review: stale-session-regression".to_string(),
         project_dir.path(),
-        None,
+        Some(&project_config),
         &global,
         None,
         ReviewRoutingMetadata {

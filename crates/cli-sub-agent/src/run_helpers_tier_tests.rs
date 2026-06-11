@@ -375,27 +375,29 @@ fn resolve_preferred_tool_from_tier_soft_reorders_enabled_candidate() {
 }
 
 #[test]
-fn resolve_preferred_tool_from_tier_non_candidate_proceeds_without_error() {
+fn resolve_preferred_tool_from_tier_rejects_non_candidate_pin() {
     let _tool_availability = assume_tier_tools_available();
-    // opencode is enabled but NOT a tier candidate. The pin is ignored with a
-    // warning and resolution proceeds with the tier default (#1791 preserved).
-    // The disabled fail-fast (#1836) must NOT fire here — opencode is absent
-    // from the tier, not disabled within it.
+    // opencode is enabled but NOT a tier candidate. Since #1994, non-candidate
+    // pins fail fast instead of silently substituting a different tool.
     let cfg = config_with_tier(
         "tier-4-critical",
         vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
         &["gemini-cli", "opencode"],
     );
     let preference_order = vec!["opencode".to_string()];
-    let resolution = super::resolve_preferred_tool_from_tier(
+    let err = super::resolve_preferred_tool_from_tier(
         "tier-4-critical",
         &cfg,
         None,
         &preference_order,
         &[],
     )
-    .expect("non-candidate pin must proceed with tier default, not error");
-    assert_eq!(resolution.tool, ToolName::GeminiCli);
+    .expect_err("non-candidate pin must fail fast since #1994");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("opencode") && msg.contains("not a candidate"),
+        "error should name the rejected tool: {msg}"
+    );
 }
 
 /// End-to-end wiring guard: the `csa run` resolution entry point routes an
@@ -713,7 +715,7 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
 }
 
 #[test]
-fn resolve_tool_and_model_tier_with_tool_uses_tier_when_preferred_tool_missing() {
+fn resolve_tool_and_model_tier_with_tool_rejects_missing_tool_candidate() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
@@ -723,19 +725,17 @@ fn resolve_tool_and_model_tier_with_tool_uses_tier_when_preferred_tool_missing()
         ],
         &["gemini-cli", "codex", "claude-code"],
     );
-
-    let result = super::resolve_tool_and_model(super::RoutingRequest {
+    let err = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
         config: Some(&cfg),
         tier: Some("quality"),
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
-    });
-
-    let (tool, model_spec, _) = result.expect("missing preferred tool should not hard-fail");
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
+    })
+    .expect_err("non-candidate --tool pin must fail fast since #1994");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("codex") && msg.contains("not a candidate"),
+        "error should name the rejected tool: {msg}"
     );
 }
 

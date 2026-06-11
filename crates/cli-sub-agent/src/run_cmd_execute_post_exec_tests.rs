@@ -79,7 +79,11 @@ fn init_clean_git_repo(project_root: &Path) {
     run(&["init", "--initial-branch", "main"]);
     run(&["config", "user.name", "CSA Test"]);
     run(&["config", "user.email", "csa-test@example.com"]);
-    std::fs::write(project_root.join(".gitignore"), "cache/\nstate/\n").expect("write gitignore");
+    std::fs::write(
+        project_root.join(".gitignore"),
+        "cache/\nstate/\nLibrary/\n",
+    )
+    .expect("write gitignore");
     std::fs::write(project_root.join("tracked.txt"), "initial\n").expect("write tracked file");
     run(&["add", ".gitignore", "tracked.txt"]);
     run(&["commit", "-m", "initial"]);

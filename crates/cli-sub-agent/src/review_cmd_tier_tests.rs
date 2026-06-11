@@ -282,7 +282,7 @@ fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
 }
 
 #[test]
-fn test_review_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() {
+fn test_review_tool_plus_tier_rejects_tool_missing_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
@@ -290,7 +290,8 @@ fn test_review_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() 
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli", "codex"],
     );
-    let result = resolve_review_tool(
+    // Since #1994, non-candidate --tool pins fail fast instead of selecting another tier tool.
+    let err = resolve_review_tool(
         Some(ToolName::Codex),
         None,
         Some(&cfg),
@@ -300,13 +301,12 @@ fn test_review_tool_plus_tier_warns_and_uses_tier_when_tool_missing_from_tier() 
         false,
         Some("quality"),
         false,
-    );
-
-    let (tool, model_spec) = result.expect("missing preferred tool should not hard-fail");
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
+    )
+    .expect_err("non-candidate --tool pin must fail fast since #1994");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("codex") && msg.contains("not a candidate"),
+        "error should name the rejected tool: {msg}"
     );
 }
 

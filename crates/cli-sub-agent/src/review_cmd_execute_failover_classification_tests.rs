@@ -166,3 +166,46 @@ An unexpected critical error occurred:Error: ENOSPC: no space left on device, re
         "a completed structured review must not be reclassified as reviewer-tool unavailable"
     );
 }
+
+#[test]
+fn classify_review_failover_reason_detects_gemini_initial_stall() {
+    let stderr = "\
+[csa-heartbeat] tool still running: elapsed=594s idle=589s idle-timeout=600s
+gemini_legacy_initial_stall: no stdout within 600s";
+    let execution = execution_with(
+        "",
+        stderr,
+        "gemini_legacy_initial_stall: no stdout within 600s",
+        137,
+    );
+
+    let failure = classify_review_failover_reason(
+        ToolName::GeminiCli,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        &execution,
+        None,
+        Some(std::time::Duration::from_secs(602)),
+    )
+    .expect("Gemini initial stall must fall back to the next reviewer (#1987)");
+
+    assert_eq!(failure.reason, "gemini_stall_timeout");
+    assert_eq!(failure.quota_exhausted, None);
+}
+
+#[test]
+fn classify_review_failover_reason_detects_gemini_idle_timeout() {
+    let stderr = "idle_timeout: gemini-cli produced no output for 600s";
+    let execution = execution_with("", stderr, "", 137);
+
+    let failure = classify_review_failover_reason(
+        ToolName::GeminiCli,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        &execution,
+        None,
+        Some(std::time::Duration::from_secs(602)),
+    )
+    .expect("Gemini idle timeout must fall back to the next reviewer (#1987)");
+
+    assert_eq!(failure.reason, "gemini_stall_timeout");
+    assert_eq!(failure.quota_exhausted, None);
+}

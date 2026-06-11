@@ -83,21 +83,20 @@ fn build_memory_section_for_resolved_backend(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env_lock::ScopedTestEnvVar;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use csa_memory::{MemoryEntry, MemorySource, MemoryStore};
+    use std::path::PathBuf;
     use tempfile::tempdir;
     use ulid::Ulid;
 
     #[test]
     fn auto_backend_fallback_injects_legacy_memory_when_resolved_legacy() {
         let temp = tempdir().expect("create tempdir");
-        let _state = ScopedTestEnvVar::set("XDG_STATE_HOME", temp.path().join("state"));
-        let memory_dir = temp
-            .path()
-            .join("state")
-            .join("cli-sub-agent")
-            .join("memory");
-        let store = MemoryStore::new(memory_dir);
+        let _env_lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let state_home = temp.path().join("state");
+        let _home = ScopedEnvVarRestore::set("HOME", temp.path());
+        let _state = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+        let store = MemoryStore::new(PathBuf::new());
         let now = chrono::Utc::now();
         store
             .append(&MemoryEntry {

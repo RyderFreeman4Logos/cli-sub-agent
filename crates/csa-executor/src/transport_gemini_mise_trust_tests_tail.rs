@@ -69,7 +69,7 @@ fn probe_host_mise_trust_db_returns_matched_trust_target_when_project_root_is_tr
 
     assert_eq!(
         probe_host_mise_trust_db(&project_root),
-        Some(project_root.clone())
+        Some(canonicalize_if_exists(&project_root))
     );
 }
 
@@ -141,7 +141,7 @@ fn probe_host_mise_trust_db_accepts_trusted_project_with_dot_mise_toml() {
 
     assert_eq!(
         probe_host_mise_trust_db(&project_root),
-        Some(project_root.clone())
+        Some(canonicalize_if_exists(&project_root))
     );
 }
 
@@ -168,7 +168,7 @@ fn probe_host_mise_trust_db_accepts_trusted_project_with_dot_mise_config_toml() 
 
     assert_eq!(
         probe_host_mise_trust_db(&project_root),
-        Some(project_root.clone())
+        Some(canonicalize_if_exists(&project_root))
     );
 }
 
@@ -206,7 +206,7 @@ fn prepare_gemini_acp_runtime_synthesizes_mise_trusted_config_paths_from_host_db
 
     assert_eq!(
         env.get("MISE_TRUSTED_CONFIG_PATHS"),
-        Some(&project_root.to_string_lossy().into_owned()),
+        Some(&canonicalize_if_exists(&project_root).to_string_lossy().into_owned()),
         "runtime should synthesize trust only from the host mise DB when the user already trusted this project"
     );
 }

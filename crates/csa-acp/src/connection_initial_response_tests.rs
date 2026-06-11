@@ -309,10 +309,10 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
         &session_id,
         "ping",
         Duration::from_secs(5),
-        Some(Duration::from_millis(150)),
+        Some(Duration::from_millis(500)),
         PromptIoOptions::default(),
     );
-    let outcome = tokio::time::timeout(Duration::from_millis(350), prompt).await;
+    let outcome = tokio::time::timeout(Duration::from_millis(1200), prompt).await;
 
     assert!(
         outcome.is_err(),

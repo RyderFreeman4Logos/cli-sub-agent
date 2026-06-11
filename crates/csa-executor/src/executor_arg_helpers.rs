@@ -587,7 +587,9 @@ mod tests {
         let dirs = gemini_include_directories(None, prompt, Some(project.path()));
 
         assert!(
-            dirs.iter().any(|d| Path::new(d) == project_path),
+            dirs.iter()
+                .filter_map(|d| fs::canonicalize(Path::new(d)).ok())
+                .any(|d| d == project_path),
             "project root must still be included, got: {dirs:?}"
         );
         assert!(

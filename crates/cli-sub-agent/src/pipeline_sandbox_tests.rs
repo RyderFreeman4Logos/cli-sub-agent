@@ -12,6 +12,18 @@ fn current_project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
 }
 
+fn comparable_test_path(path: &Path) -> PathBuf {
+    csa_resource::isolation_plan::canonicalize_through_existing_ancestors(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn contains_equivalent_path(paths: &[PathBuf], expected: &Path) -> bool {
+    let expected = comparable_test_path(expected);
+    paths
+        .iter()
+        .any(|path| comparable_test_path(path) == expected)
+}
+
 struct CurrentDirGuard {
     original: PathBuf,
 }
@@ -354,9 +366,7 @@ writable_paths = ["/tmp"]
 
     // /tmp should be in the writable paths.
     assert!(
-        ctx.isolation_plan
-            .writable_paths
-            .contains(&PathBuf::from("/tmp")),
+        contains_equivalent_path(&ctx.isolation_plan.writable_paths, Path::new("/tmp")),
         "writable_paths should contain /tmp, got: {:?}",
         ctx.isolation_plan.writable_paths
     );
@@ -640,20 +650,20 @@ writable_paths = ["/tmp/restricted-only"]
     // But CSA state paths should still be present.
     if let Ok(project_state_root) = csa_session::manager::get_session_root(&project_root) {
         assert!(
-            writable.contains(&project_state_root),
+            contains_equivalent_path(writable, &project_state_root),
             "CSA state root must survive REPLACE semantics"
         );
     }
     if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
         assert!(
-            writable.contains(&slots),
+            contains_equivalent_path(writable, &slots),
             "slots dir must survive REPLACE semantics"
         );
     }
 
     // Per-tool restricted path should also be present.
     assert!(
-        writable.contains(&PathBuf::from("/tmp/restricted-only")),
+        contains_equivalent_path(writable, Path::new("/tmp/restricted-only")),
         "per-tool writable path should be present"
     );
 }
