@@ -569,6 +569,10 @@ mod tests_workflows;
 mod tests_pr_bot;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_pr_bot_2014.rs"]
+mod tests_pr_bot_2014;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_chunked.rs"]
 mod tests_chunked;
 
