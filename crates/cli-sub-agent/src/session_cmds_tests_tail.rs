@@ -449,7 +449,7 @@ fn ensure_terminal_result_for_dead_active_session_preserves_session_with_recent_
 
 #[cfg(unix)]
 #[test]
-fn handle_session_wait_returns_on_terminal_result_before_daemon_exit() {
+fn handle_session_wait_defers_terminal_result_until_daemon_exit() {
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
@@ -494,19 +494,17 @@ fn handle_session_wait_returns_on_terminal_result_before_daemon_exit() {
     .unwrap();
 
     assert_eq!(exit_code, 0);
+    let status = child
+        .try_wait()
+        .unwrap()
+        .expect("terminal result.toml should wait until the live daemon exits");
+    assert!(status.success());
     assert!(
-        child.try_wait().unwrap().is_none(),
-        "terminal result.toml should complete wait before delayed daemon stdout is written"
-    );
-    assert!(
-        !std::fs::read_to_string(&stdout_path)
+        std::fs::read_to_string(&stdout_path)
             .unwrap_or_default()
             .contains("CSA:NEXT_STEP"),
-        "wait should not wait for post-result stdout once terminal result.toml exists"
+        "wait should keep polling long enough to preserve post-result daemon stdout"
     );
-
-    let status = child.wait().unwrap();
-    assert!(status.success());
 }
 
 #[cfg(unix)]
