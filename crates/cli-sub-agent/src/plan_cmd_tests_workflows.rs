@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use weave::compiler::plan_from_toml;
 
+use crate::plan_cmd::extract_bash_code_block;
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
@@ -277,8 +279,15 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
         .iter()
         .find(|step| step.id == 13)
         .expect("missing mktd save step");
+    let extracted_save_script =
+        extract_bash_code_block(&save_step.prompt).expect("mktd save step must have bash block");
     let pattern = std::fs::read_to_string(workspace_root().join("patterns/mktd/PATTERN.md"))
         .expect("read mktd pattern");
+
+    assert!(
+        extracted_save_script.contains(r#"csa todo persist -t "${TODO_TS}""#),
+        "mktd Save TODO bash extraction must not stop at markdown fence literals in sed expressions"
+    );
 
     for (name, content) in [
         ("PATTERN.md", pattern.as_str()),

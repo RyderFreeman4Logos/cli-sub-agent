@@ -69,6 +69,29 @@ fn reduce_bash_env_for_spawn_keeps_referenced_step_runtime_vars() {
 }
 
 #[test]
+fn extract_bash_code_block_ignores_markdown_fence_literals_inside_script() {
+    let prompt = r#"Run this:
+```bash
+set -euo pipefail
+EPIC_PLAN=$(printf '%s\n' "${FINAL_TODO}" | sed -n '/^```epic-plan.toml$/,/^```$/p' | sed '1d;$d')
+printf '%s\n' "${EPIC_PLAN}"
+```
+Afterward text.
+"#;
+
+    let script = extract_bash_code_block(prompt).expect("bash block should parse");
+
+    assert!(
+        script.contains("epic-plan.toml"),
+        "script should preserve the sed expression containing markdown fences"
+    );
+    assert!(
+        script.contains(r#"printf '%s\n' "${EPIC_PLAN}""#),
+        "script must not be truncated at the fence literal"
+    );
+}
+
+#[test]
 fn clean_step_output_extracts_codex_json_event_stream_text() {
     let output = [
             r#"{"type":"thread.started","thread_id":"thread_1"}"#,
