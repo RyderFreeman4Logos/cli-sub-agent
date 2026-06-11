@@ -84,6 +84,19 @@ pub fn detect_rate_limit(
     let stderr_lower = stderr.to_ascii_lowercase();
     let stdout_lower = stdout.to_ascii_lowercase();
     let combined_lower = format!("{stderr_lower}\n{stdout_lower}");
+    if matches!(tool_name, "gemini-cli" | "antigravity-cli")
+        && let Some(pattern) = csa_core::gemini::detect_permanent_quota_exhaustion_pattern(stderr)
+    {
+        return Some(RateLimitDetected {
+            tool: tool_name.to_string(),
+            matched_pattern: pattern.to_string(),
+            reason: "QUOTA_EXHAUSTED".to_string(),
+            advance_to_next_model: true,
+            quota_exhausted: true,
+            model_spec: model_spec.map(String::from),
+        });
+    }
+
     for pattern in patterns_for_tool(tool_name)
         .iter()
         .chain(failover_patterns_for_tool(tool_name).iter())

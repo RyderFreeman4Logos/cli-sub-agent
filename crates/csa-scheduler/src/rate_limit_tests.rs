@@ -618,7 +618,7 @@ fn test_gemini_retry_chain_exhausted_triggers_tier_failover() {
 fn test_quota_exhausted_true_for_permanent_quota_patterns() {
     let quota_patterns = [
         ("gemini-cli", "daily quota limit reached"),
-        ("gemini-cli", "monthly spending cap reached"),
+        ("gemini-cli", "quota_exhausted billing cap"),
         ("codex", "usage_limit_exceeded for this period"),
         ("codex", "Error: usage limit exceeded"),
         ("codex", "daily quota exhausted"),

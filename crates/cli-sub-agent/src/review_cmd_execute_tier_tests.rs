@@ -146,7 +146,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
 
     std::fs::write(
         bin_dir.join("gemini"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached\\n\" >&2\nexit 1\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'gemini-cli 1.0.0\\n'\n  exit 0\nfi\nprintf \"reason: 'QUOTA_EXHAUSTED'\\n\" >&2\nexit 1\n",
     )
     .unwrap();
     std::fs::write(
@@ -640,7 +640,8 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
     assert_eq!(result.forced_decision, Some(ReviewDecision::Unavailable));
     let failure_reason = result.failure_reason.expect("failure_reason");
     assert!(
-        failure_reason.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh=QUOTA_EXHAUSTED")
+        failure_reason.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh="),
+        "failure_reason should include the Gemini attempt: {failure_reason}"
     );
     assert!(failure_reason.contains("codex/openai/gpt-5.4/high=HTTP 401"));
     assert!(failure_reason.contains("claude-code/anthropic/claude-sonnet/high=HTTP 403"));

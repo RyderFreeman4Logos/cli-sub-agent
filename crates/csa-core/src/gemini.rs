@@ -27,8 +27,12 @@ pub const RATE_LIMIT_PATTERNS: &[&str] = &[
     "too many requests",
 ];
 
-pub const PERMANENT_QUOTA_EXHAUSTION_PATTERNS: &[&str] =
-    &["monthly spending cap", "monthly cap", "spending cap"];
+pub const PERMANENT_QUOTA_EXHAUSTION_PATTERNS: &[&str] = &[
+    "monthly spending cap",
+    "monthly cap",
+    "spending cap",
+    "quota_exhausted_billing",
+];
 
 const PERMANENT_QUOTA_EXHAUSTION_CONTEXT_PATTERNS: &[&str] = &[
     "billing cap",
@@ -98,6 +102,12 @@ mod tests {
         assert_eq!(
             detect_permanent_quota_exhaustion_pattern(
                 "status: RESOURCE_EXHAUSTED; reason: QUOTA_EXHAUSTED; billing hard limit reached"
+            ),
+            Some("quota_exhausted_billing")
+        );
+        assert_eq!(
+            detect_permanent_quota_exhaustion_pattern(
+                "tool_exhausted: gemini-cli permanent quota exhaustion detected (matched 'quota_exhausted_billing')"
             ),
             Some("quota_exhausted_billing")
         );
