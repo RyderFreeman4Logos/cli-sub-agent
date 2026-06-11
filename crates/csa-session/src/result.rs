@@ -165,11 +165,28 @@ pub struct UncommittedChanges {
     pub insertions: u64,
     /// Best-effort deleted line count from `git diff --numstat HEAD`.
     pub deletions: u64,
+    /// Approximate token count of the changed diff payload.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub approx_diff_tokens: usize,
     /// First changed paths, capped to keep `result.toml` compact.
     pub files: Vec<String>,
     /// Number of paths omitted from `files` due to the cap.
     #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub truncated: usize,
+}
+
+impl UncommittedChanges {
+    pub fn changed_lines(&self) -> u64 {
+        self.insertions.saturating_add(self.deletions)
+    }
+}
+
+/// Caller-visible warning emitted when a writer session leaves a large changed surface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LargeDiffWarningReport {
+    pub changed_files: usize,
+    pub changed_lines: u64,
+    pub approx_diff_tokens: usize,
 }
 
 /// Structured result of a session execution.
@@ -241,6 +258,10 @@ pub struct SessionResult {
     /// committing. Omitted for clean sessions and read-only session kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncommitted_changes: Option<UncommittedChanges>,
+    /// Structured large-diff warning data derived from `uncommitted_changes`.
+    /// Omitted when the dirty surface stays below the configured warning thresholds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub large_diff_warning: Option<LargeDiffWarningReport>,
     /// Structured detail of a failed post-exec verification gate (#1726).
     /// Present ONLY when the gate (e.g. `just pre-commit`) failed, so an SA
     /// orchestrator can diagnose the failing step/test from `result.toml`
@@ -386,8 +407,14 @@ mod tests {
                 file_count: 7,
                 insertions: 240,
                 deletions: 12,
+                approx_diff_tokens: 1_024,
                 files: vec!["src/lib.rs".to_string()],
                 truncated: 6,
+            }),
+            large_diff_warning: Some(LargeDiffWarningReport {
+                changed_files: 7,
+                changed_lines: 252,
+                approx_diff_tokens: 1_024,
             }),
             manager_fields: Default::default(),
         };
@@ -402,7 +429,15 @@ mod tests {
         assert_eq!(changes.file_count, 7);
         assert_eq!(changes.insertions, 240);
         assert_eq!(changes.deletions, 12);
+        assert_eq!(changes.changed_lines(), 252);
+        assert_eq!(changes.approx_diff_tokens, 1_024);
         assert_eq!(changes.truncated, 6);
+        let warning = loaded
+            .large_diff_warning
+            .expect("large_diff_warning should roundtrip");
+        assert_eq!(warning.changed_files, 7);
+        assert_eq!(warning.changed_lines, 252);
+        assert_eq!(warning.approx_diff_tokens, 1_024);
     }
 
     #[test]

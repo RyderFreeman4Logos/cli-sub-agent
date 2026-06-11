@@ -1,13 +1,19 @@
 //! Writer-session dirty-worktree signal for `csa run`.
 
+use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
+use csa_config::{RunLargeDiffWarningConfig, RunLargeDiffWarningMode};
 use tracing::warn;
 
 const MAX_UNCOMMITTED_FILES: usize = 20;
+const DIFF_BYTES_PER_TOKEN: usize = 4;
+const DIFF_TOKEN_READ_BUF_BYTES: usize = 16 * 1024;
 const REQUIRE_COMMIT_REASON: &str =
     "writer session ended with uncommitted changes (--require-commit set)";
+const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
 
 pub(crate) fn is_writer_session(sa_mode: bool, task_type: Option<&str>) -> bool {
     !sa_mode && matches!(task_type, Some("run"))
@@ -20,11 +26,25 @@ pub(crate) fn effective_writer_must_commit(
     cli_require_commit || config.is_some_and(|cfg| cfg.run.writer_must_commit)
 }
 
+#[cfg(test)]
 pub(crate) fn summarize_uncommitted_changes(
     porcelain: &str,
     numstat: &str,
 ) -> Option<csa_session::UncommittedChanges> {
-    let paths = changed_paths_from_porcelain(porcelain);
+    summarize_uncommitted_changes_with_stats(porcelain, numstat, 0, 0, None)
+}
+
+fn summarize_uncommitted_changes_with_stats(
+    porcelain: &str,
+    numstat: &str,
+    extra_insertions: u64,
+    approx_diff_tokens: usize,
+    path_filter: Option<&BTreeSet<String>>,
+) -> Option<csa_session::UncommittedChanges> {
+    let mut paths = changed_paths_from_porcelain(porcelain);
+    if let Some(filter) = path_filter {
+        paths.retain(|path| filter.contains(path));
+    }
     if paths.is_empty() {
         return None;
     }
@@ -39,35 +59,108 @@ pub(crate) fn summarize_uncommitted_changes(
 
     Some(csa_session::UncommittedChanges {
         file_count,
-        insertions,
+        insertions: insertions.saturating_add(extra_insertions),
         deletions,
+        approx_diff_tokens,
         files,
         truncated,
     })
 }
 
-pub(crate) fn record_writer_uncommitted_changes(
+pub(crate) fn large_diff_warning_report(
+    changes: &csa_session::UncommittedChanges,
+    config: &RunLargeDiffWarningConfig,
+) -> Option<csa_session::LargeDiffWarningReport> {
+    if !config.enabled || config.mode != RunLargeDiffWarningMode::Warn {
+        return None;
+    }
+    let changed_lines = changes.changed_lines();
+    let exceeds_files = config.changed_files > 0 && changes.file_count > config.changed_files;
+    let exceeds_lines = config.changed_lines > 0 && changed_lines > config.changed_lines;
+    let exceeds_tokens =
+        config.approx_diff_tokens > 0 && changes.approx_diff_tokens > config.approx_diff_tokens;
+    if !(exceeds_files || exceeds_lines || exceeds_tokens) {
+        return None;
+    }
+    Some(csa_session::LargeDiffWarningReport {
+        changed_files: changes.file_count,
+        changed_lines,
+        approx_diff_tokens: changes.approx_diff_tokens,
+    })
+}
+
+pub(crate) fn format_large_diff_warning_block(
+    warning: &csa_session::LargeDiffWarningReport,
+) -> String {
+    format!(
+        "<!-- CSA:LARGE_DIFF_WARNING changed_files={} changed_lines={} approx_diff_tokens={} -->\n{}\n<!-- CSA:LARGE_DIFF_WARNING:END -->",
+        warning.changed_files,
+        warning.changed_lines,
+        warning.approx_diff_tokens,
+        LARGE_DIFF_WARNING_TEXT
+    )
+}
+
+pub(crate) fn record_run_dirty(
+    project_root: &Path,
+    session_id: Option<&str>,
+    result: &mut csa_process::ExecutionResult,
+    changed_paths: Option<&[String]>,
+    cli_require_commit: bool,
+    config: Option<&csa_config::ProjectConfig>,
+) -> Option<csa_session::LargeDiffWarningReport> {
+    let sa_mode = std::env::var(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
+        .ok()
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+        .unwrap_or(false);
+    let large_diff_config = config
+        .map(|cfg| cfg.run.large_diff_warning.clone())
+        .unwrap_or_default();
+    record_writer_uncommitted_changes_with_config(
+        project_root,
+        session_id,
+        result,
+        sa_mode,
+        effective_writer_must_commit(cli_require_commit, config),
+        changed_paths,
+        &large_diff_config,
+    )
+}
+
+fn record_writer_uncommitted_changes_with_config(
     project_root: &Path,
     session_id: Option<&str>,
     result: &mut csa_process::ExecutionResult,
     sa_mode: bool,
     require_commit: bool,
-) {
+    changed_paths: Option<&[String]>,
+    large_diff_config: &RunLargeDiffWarningConfig,
+) -> Option<csa_session::LargeDiffWarningReport> {
     if !is_writer_session(sa_mode, Some("run")) {
-        return;
+        return None;
     }
-    let Some(session_id) = session_id else {
-        return;
-    };
-    let Some(changes) = collect_uncommitted_changes(project_root) else {
-        return;
-    };
+    let session_id = session_id?;
+    let token_threshold = tracked_diff_token_threshold(large_diff_config);
+    let changes = collect_uncommitted_changes_with_token_threshold(project_root, token_threshold)?;
+    let warning_changes = changed_paths
+        .map(|paths| {
+            collect_uncommitted_changes_for_changed_paths_with_token_threshold(
+                project_root,
+                paths,
+                token_threshold,
+            )
+        })
+        .unwrap_or_else(|| Some(changes.clone()));
+    let warning = warning_changes
+        .as_ref()
+        .and_then(|changes| large_diff_warning_report(changes, large_diff_config));
 
     match csa_session::load_result(project_root, session_id) {
         Ok(Some(mut session_result)) => {
             apply_uncommitted_changes_to_result(
                 &mut session_result,
                 changes.clone(),
+                warning.clone(),
                 require_commit,
             );
             if let Err(err) = csa_session::save_result(project_root, session_id, &session_result) {
@@ -102,34 +195,17 @@ pub(crate) fn record_writer_uncommitted_changes(
         result.stderr_output.push_str(REQUIRE_COMMIT_REASON);
         result.stderr_output.push('\n');
     }
-}
-
-pub(crate) fn record_run_dirty(
-    project_root: &Path,
-    session_id: Option<&str>,
-    result: &mut csa_process::ExecutionResult,
-    cli_require_commit: bool,
-    config: Option<&csa_config::ProjectConfig>,
-) {
-    let sa_mode = std::env::var(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
-        .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
-        .unwrap_or(false);
-    record_writer_uncommitted_changes(
-        project_root,
-        session_id,
-        result,
-        sa_mode,
-        effective_writer_must_commit(cli_require_commit, config),
-    );
+    warning
 }
 
 pub(crate) fn apply_uncommitted_changes_to_result(
     result: &mut csa_session::SessionResult,
     changes: csa_session::UncommittedChanges,
+    large_diff_warning: Option<csa_session::LargeDiffWarningReport>,
     require_commit: bool,
 ) {
     result.uncommitted_changes = Some(changes);
+    result.large_diff_warning = large_diff_warning;
     if require_commit {
         result.exit_code = 1;
         result.status = csa_session::SessionResult::status_from_exit_code(1);
@@ -160,35 +236,67 @@ pub(crate) fn format_uncommitted_warning(changes: &csa_session::UncommittedChang
 /// Returns `0` when `project_root` is not a git worktree or the tree is clean.
 /// Any git/IO failure is non-fatal (fail-open), matching the rest of the guard.
 pub(crate) fn working_tree_changed_lines(project_root: &Path) -> usize {
-    let tracked = collect_uncommitted_changes(project_root)
-        .map(|changes| changes.insertions.saturating_add(changes.deletions) as usize)
-        .unwrap_or(0);
-    tracked.saturating_add(untracked_non_ignored_lines(project_root))
+    collect_uncommitted_changes_with_filter(project_root, None, None)
+        .map(|changes| usize::try_from(changes.changed_lines()).unwrap_or(usize::MAX))
+        .unwrap_or(0)
 }
 
-/// Sum of line counts across untracked, non-ignored files, delegating to the
-/// shared bounded scanner in [`crate::untracked_size`] so this writer guard and
-/// the `csa review` diff-size report (#1818) share one enumeration
-/// (`git ls-files --others --exclude-standard`) and one bounded per-file line
-/// counter rather than duplicating either.
-///
-/// The per-file read is bounded (streamed through a fixed buffer, never slurped)
-/// and the number of files scanned is capped at
-/// [`crate::untracked_size::MAX_UNTRACKED_FILES`]; beyond the cap the running
-/// total is already far above `TRIVIAL_DIFF_MAX_LINES`, so the
-/// trivial-vs-substantial outcome the guard cares about is unchanged. Non-regular
-/// entries (symlinks, FIFOs, sockets, devices) and unreadable files contribute
-/// `0`. Returns `0` when `project_root` is not a git worktree or git fails
-/// (fail-open), matching the rest of the guard.
-fn untracked_non_ignored_lines(project_root: &Path) -> usize {
-    crate::untracked_size::list_untracked(project_root)
-        .paths
-        .iter()
-        .map(|path| crate::untracked_size::count_file_lines(path))
-        .sum()
-}
-
+#[cfg(test)]
 fn collect_uncommitted_changes(project_root: &Path) -> Option<csa_session::UncommittedChanges> {
+    collect_uncommitted_changes_with_token_threshold(
+        project_root,
+        default_tracked_diff_token_threshold(),
+    )
+}
+
+fn collect_uncommitted_changes_with_token_threshold(
+    project_root: &Path,
+    token_threshold: usize,
+) -> Option<csa_session::UncommittedChanges> {
+    collect_uncommitted_changes_with_filter(project_root, None, Some(token_threshold))
+}
+
+#[cfg(test)]
+fn collect_uncommitted_changes_for_changed_paths(
+    project_root: &Path,
+    changed_paths: &[String],
+) -> Option<csa_session::UncommittedChanges> {
+    let filter = changed_paths
+        .iter()
+        .filter(|path| !path.is_empty())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if filter.is_empty() {
+        return None;
+    }
+    collect_uncommitted_changes_with_filter(
+        project_root,
+        Some(&filter),
+        Some(default_tracked_diff_token_threshold()),
+    )
+}
+
+fn collect_uncommitted_changes_for_changed_paths_with_token_threshold(
+    project_root: &Path,
+    changed_paths: &[String],
+    token_threshold: usize,
+) -> Option<csa_session::UncommittedChanges> {
+    let filter = changed_paths
+        .iter()
+        .filter(|path| !path.is_empty())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if filter.is_empty() {
+        return None;
+    }
+    collect_uncommitted_changes_with_filter(project_root, Some(&filter), Some(token_threshold))
+}
+
+fn collect_uncommitted_changes_with_filter(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+    tracked_token_threshold: Option<usize>,
+) -> Option<csa_session::UncommittedChanges> {
     if !super::git::is_git_worktree(project_root) {
         return None;
     }
@@ -206,9 +314,138 @@ fn collect_uncommitted_changes(project_root: &Path) -> Option<csa_session::Uncom
     if porcelain.is_empty() {
         return None;
     }
-    let numstat =
-        run_git_capture(project_root, &["diff", "--numstat", "HEAD", "--"]).unwrap_or_default();
-    summarize_uncommitted_changes(&porcelain, &numstat)
+    let numstat = run_git_diff_capture(project_root, &["diff", "--numstat", "HEAD"], path_filter)
+        .unwrap_or_default();
+    let untracked = match path_filter {
+        Some(filter) => crate::untracked_size::untracked_diff_size_for_paths(project_root, filter),
+        None => crate::untracked_size::untracked_diff_size(project_root),
+    };
+    let untracked_lines = u64::try_from(untracked.lines).unwrap_or(u64::MAX);
+    let approx_diff_tokens = estimate_changed_surface_tokens(
+        project_root,
+        path_filter,
+        &untracked,
+        tracked_token_threshold,
+    );
+    summarize_uncommitted_changes_with_stats(
+        &porcelain,
+        &numstat,
+        untracked_lines,
+        approx_diff_tokens,
+        path_filter,
+    )
+}
+
+fn estimate_changed_surface_tokens(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+    untracked: &crate::untracked_size::UntrackedDiffSize,
+    tracked_token_threshold: Option<usize>,
+) -> usize {
+    let untracked_bytes = usize::try_from(untracked.bytes).unwrap_or(usize::MAX);
+    let untracked_tokens = untracked_bytes / DIFF_BYTES_PER_TOKEN;
+    let Some(token_threshold) = tracked_token_threshold else {
+        return untracked_tokens;
+    };
+    if untracked_tokens > token_threshold {
+        return untracked_tokens;
+    }
+
+    let remaining_threshold = token_threshold.saturating_sub(untracked_tokens);
+    let tracked_tokens =
+        estimate_tracked_diff_tokens(project_root, path_filter, remaining_threshold)
+            .unwrap_or_default();
+    untracked_tokens.saturating_add(tracked_tokens)
+}
+
+fn tracked_diff_token_threshold(config: &RunLargeDiffWarningConfig) -> usize {
+    if config.approx_diff_tokens > 0 {
+        config.approx_diff_tokens
+    } else {
+        default_tracked_diff_token_threshold()
+    }
+}
+
+fn default_tracked_diff_token_threshold() -> usize {
+    RunLargeDiffWarningConfig::default().approx_diff_tokens
+}
+
+struct TrackedDiffTokenEstimate {
+    tokens: usize,
+    cap_reached: bool,
+}
+
+fn estimate_tracked_diff_tokens(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+    token_threshold: usize,
+) -> Option<usize> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(project_root)
+        .args(["diff", "--no-ext-diff", "--no-color", "HEAD"])
+        .arg("--")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(filter) = path_filter {
+        command.args(filter);
+    }
+
+    let mut child = command.spawn().ok()?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+
+    let estimate = estimate_diff_stream_tokens(stdout, token_threshold)?;
+    if estimate.cap_reached {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Some(token_threshold.saturating_add(1));
+    }
+
+    let status = child.wait().ok()?;
+    status.success().then_some(estimate.tokens)
+}
+
+fn estimate_diff_stream_tokens<R: Read>(
+    mut reader: R,
+    token_threshold: usize,
+) -> Option<TrackedDiffTokenEstimate> {
+    let byte_limit = tracked_diff_byte_limit(token_threshold);
+    let mut bytes_read = 0usize;
+    let mut buffer = [0u8; DIFF_TOKEN_READ_BUF_BYTES];
+
+    while bytes_read < byte_limit {
+        let remaining = byte_limit.saturating_sub(bytes_read);
+        let read_len = remaining.min(buffer.len());
+        let n = reader.read(&mut buffer[..read_len]).ok()?;
+        if n == 0 {
+            return Some(TrackedDiffTokenEstimate {
+                tokens: diff_bytes_to_approx_tokens(bytes_read),
+                cap_reached: false,
+            });
+        }
+        bytes_read = bytes_read.saturating_add(n);
+    }
+
+    Some(TrackedDiffTokenEstimate {
+        tokens: token_threshold.saturating_add(1),
+        cap_reached: true,
+    })
+}
+
+fn tracked_diff_byte_limit(token_threshold: usize) -> usize {
+    token_threshold
+        .saturating_mul(DIFF_BYTES_PER_TOKEN)
+        .saturating_add(1)
+}
+
+fn diff_bytes_to_approx_tokens(bytes: usize) -> usize {
+    bytes.saturating_add(DIFF_BYTES_PER_TOKEN - 1) / DIFF_BYTES_PER_TOKEN
 }
 
 fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
@@ -218,6 +455,23 @@ fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
         .args(args)
         .output()
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_git_diff_capture(
+    project_root: &Path,
+    args: &[&str],
+    path_filter: Option<&BTreeSet<String>>,
+) -> Option<String> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(project_root).args(args).arg("--");
+    if let Some(filter) = path_filter {
+        command.args(filter);
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -276,220 +530,5 @@ fn parse_numstat_totals(numstat: &str) -> (u64, u64) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn writer_predicate_excludes_sa_mode_and_read_only_kinds() {
-        assert!(is_writer_session(false, Some("run")));
-        assert!(!is_writer_session(true, Some("run")));
-        assert!(!is_writer_session(false, Some("review")));
-        assert!(!is_writer_session(false, Some("debate")));
-        assert!(!is_writer_session(false, Some("recon")));
-        assert!(!is_writer_session(false, None));
-    }
-
-    #[test]
-    fn summarize_uncommitted_changes_returns_none_for_clean_status() {
-        assert!(summarize_uncommitted_changes("", "").is_none());
-    }
-
-    #[test]
-    fn summarize_uncommitted_changes_counts_files_and_numstat() {
-        let porcelain = " M crates/a.rs\0A  crates/b.rs\0?? notes/todo.md\0";
-        let numstat = "10\t2\tcrates/a.rs\n5\t0\tcrates/b.rs\n-\t-\tassets/blob.bin\n";
-
-        let changes = summarize_uncommitted_changes(porcelain, numstat)
-            .expect("dirty porcelain should produce changes");
-
-        assert_eq!(changes.file_count, 3);
-        assert_eq!(changes.insertions, 15);
-        assert_eq!(changes.deletions, 2);
-        assert_eq!(
-            changes.files,
-            vec![
-                "crates/a.rs".to_string(),
-                "crates/b.rs".to_string(),
-                "notes/todo.md".to_string()
-            ]
-        );
-        assert_eq!(changes.truncated, 0);
-    }
-
-    #[test]
-    fn summarize_uncommitted_changes_caps_file_list() {
-        let porcelain = (0..25)
-            .map(|idx| format!("?? file-{idx}.txt\0"))
-            .collect::<String>();
-
-        let changes = summarize_uncommitted_changes(&porcelain, "")
-            .expect("dirty porcelain should produce changes");
-
-        assert_eq!(changes.file_count, 25);
-        assert_eq!(changes.files.len(), MAX_UNCOMMITTED_FILES);
-        assert_eq!(changes.truncated, 5);
-    }
-
-    #[test]
-    fn apply_uncommitted_changes_warn_only_preserves_success() {
-        let mut result = session_result("success", 0);
-        let changes = csa_session::UncommittedChanges {
-            file_count: 1,
-            insertions: 2,
-            deletions: 0,
-            files: vec!["src/lib.rs".to_string()],
-            truncated: 0,
-        };
-
-        apply_uncommitted_changes_to_result(&mut result, changes, false);
-
-        assert_eq!(result.status, "success");
-        assert_eq!(result.exit_code, 0);
-        assert!(result.uncommitted_changes.is_some());
-        assert!(result.warnings.is_empty());
-    }
-
-    #[test]
-    fn apply_uncommitted_changes_require_commit_flips_to_failure() {
-        let mut result = session_result("success", 0);
-        let changes = csa_session::UncommittedChanges {
-            file_count: 1,
-            insertions: 2,
-            deletions: 0,
-            files: vec!["src/lib.rs".to_string()],
-            truncated: 0,
-        };
-
-        apply_uncommitted_changes_to_result(&mut result, changes, true);
-
-        assert_eq!(result.status, "failure");
-        assert_eq!(result.exit_code, 1);
-        assert_eq!(result.summary, REQUIRE_COMMIT_REASON);
-        assert!(result.uncommitted_changes.is_some());
-    }
-
-    #[test]
-    fn effective_writer_must_commit_respects_cli_and_config_precedence() {
-        assert!(!effective_writer_must_commit(false, None));
-
-        let config_true: csa_config::ProjectConfig =
-            toml::from_str("[run]\nwriter_must_commit = true\n").unwrap();
-        assert!(effective_writer_must_commit(false, Some(&config_true)));
-
-        let config_false: csa_config::ProjectConfig =
-            toml::from_str("[run]\nwriter_must_commit = false\n").unwrap();
-        assert!(effective_writer_must_commit(true, Some(&config_false)));
-    }
-
-    fn session_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
-        let now = chrono::Utc::now();
-        csa_session::SessionResult {
-            post_exec_gate: None,
-            status: status.to_string(),
-            exit_code,
-            summary: "done".to_string(),
-            tool: "codex".to_string(),
-            original_tool: None,
-            fallback_tool: None,
-            fallback_reason: None,
-            started_at: now,
-            completed_at: now,
-            events_count: 0,
-            artifacts: Vec::new(),
-            ..Default::default()
-        }
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .expect("git command should execute");
-        assert!(
-            output.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    /// A throwaway git repo with one commit so `HEAD` exists. Hooks and GPG
-    /// signing are disabled so the test stays hermetic regardless of the host's
-    /// global git config.
-    fn init_repo_with_initial_commit() -> tempfile::TempDir {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let root = temp.path();
-        run_git(root, &["init", "-q"]);
-        run_git(root, &["config", "user.email", "test@example.com"]);
-        run_git(root, &["config", "user.name", "Test User"]);
-        run_git(root, &["config", "commit.gpgsign", "false"]);
-        run_git(
-            root,
-            &["config", "core.hooksPath", "/nonexistent-csa-hooks"],
-        );
-        std::fs::write(root.join("seed.txt"), "seed\n").expect("write seed");
-        run_git(root, &["add", "seed.txt"]);
-        run_git(root, &["commit", "-q", "-m", "initial"]);
-        temp
-    }
-
-    #[test]
-    fn working_tree_changed_lines_counts_untracked_non_ignored_files() {
-        let temp = init_repo_with_initial_commit();
-        let root = temp.path();
-        // Substantial NEW work composed ENTIRELY of untracked files: `git diff
-        // HEAD` sees nothing, so the pre-fix measure would have returned 0.
-        let body: String = (0..50).map(|i| format!("line {i}\n")).collect();
-        std::fs::write(root.join("new_module.rs"), &body).unwrap();
-
-        let measured = working_tree_changed_lines(root);
-        assert!(
-            measured >= 50,
-            "untracked-file lines must count toward the size measure, got {measured}"
-        );
-    }
-
-    #[test]
-    fn working_tree_changed_lines_combines_tracked_and_untracked() {
-        let temp = init_repo_with_initial_commit();
-        let root = temp.path();
-        // Modify a tracked file (appears in `git diff HEAD`)...
-        std::fs::write(root.join("seed.txt"), "seed\nedit-a\nedit-b\n").unwrap();
-        // ...and add an untracked file (does not).
-        std::fs::write(root.join("extra.txt"), "u1\nu2\nu3\nu4\n").unwrap();
-
-        // 2 tracked insertions + 4 untracked lines = 6, all counted, none double.
-        assert_eq!(working_tree_changed_lines(root), 6);
-    }
-
-    #[test]
-    fn working_tree_changed_lines_excludes_gitignored_files() {
-        let temp = init_repo_with_initial_commit();
-        let root = temp.path();
-        // Commit `.gitignore` so it is tracked-and-clean, not itself an untracked
-        // file that would count.
-        std::fs::write(root.join(".gitignore"), "build/\n*.log\n").unwrap();
-        run_git(root, &["add", ".gitignore"]);
-        run_git(root, &["commit", "-q", "-m", "add gitignore"]);
-
-        // Large ignored content must not inflate the measure.
-        std::fs::create_dir_all(root.join("build")).unwrap();
-        let big: String = (0..500).map(|i| format!("artifact {i}\n")).collect();
-        std::fs::write(root.join("build/out.txt"), &big).unwrap();
-        std::fs::write(root.join("debug.log"), &big).unwrap();
-
-        assert_eq!(
-            working_tree_changed_lines(root),
-            0,
-            "ignored files must not inflate the writer-guard size measure"
-        );
-    }
-
-    #[test]
-    fn working_tree_changed_lines_zero_for_non_git_dir() {
-        let temp = tempfile::tempdir().unwrap();
-        assert_eq!(working_tree_changed_lines(temp.path()), 0);
-    }
-}
+#[path = "run_cmd_uncommitted_tests.rs"]
+mod tests;

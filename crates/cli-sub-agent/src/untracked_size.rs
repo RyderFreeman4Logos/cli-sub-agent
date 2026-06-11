@@ -17,6 +17,7 @@
 //! number of files scanned is itself capped. Any single unreadable/race-deleted
 //! file is tolerated (skipped), never fatal.
 
+use std::collections::BTreeSet;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -64,6 +65,21 @@ pub(crate) struct UntrackedDiffSize {
 /// result when `project_root` is not a git worktree or has no untracked files
 /// (git failure is fail-open, never fatal).
 pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
+    untracked_diff_size_with_filter(project_root, None)
+}
+
+/// Size only untracked files whose repo-relative path appears in `path_filter`.
+pub(crate) fn untracked_diff_size_for_paths(
+    project_root: &Path,
+    path_filter: &BTreeSet<String>,
+) -> UntrackedDiffSize {
+    untracked_diff_size_with_filter(project_root, Some(path_filter))
+}
+
+fn untracked_diff_size_with_filter(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+) -> UntrackedDiffSize {
     let listing = list_untracked(project_root);
 
     let mut out = UntrackedDiffSize {
@@ -76,6 +92,11 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     let mut uncounted_files = 0usize; // large + binary: sized but not line-counted
 
     for path in &listing.paths {
+        if let Some(filter) = path_filter
+            && !untracked_path_matches_filter(project_root, path, filter)
+        {
+            continue;
+        }
         match classify_untracked_file(path) {
             FileClass::Text {
                 lines,
@@ -117,31 +138,14 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     out
 }
 
-/// Count newline-delimited lines in `path` with bounded memory and IO, for the
-/// review-aware writer guard (#1842), whose size measure only needs a single
-/// running total (trivial vs substantial), not the richer per-file
-/// classification the review report needs.
-///
-/// Only regular files are opened: `path` comes from an untracked-worktree
-/// enumeration that can legitimately surface symlinks, FIFOs, sockets, or device
-/// nodes, and opening those could follow a link or block indefinitely. Streams
-/// through a fixed buffer counting `\n`, bounded by [`MAX_LINE_SCAN_BYTES`]; a
-/// final line lacking a trailing newline still counts. Fail-open: a non-regular
-/// path or any IO error (including a missing/race-deleted file) yields `0` so a
-/// transient failure cannot abort the guard.
-pub(crate) fn count_file_lines(path: &Path) -> usize {
-    if regular_file_meta(path).is_none() {
-        return 0;
-    }
-    let Ok(file) = std::fs::File::open(path) else {
-        return 0;
-    };
-    // `usize::MAX` line cap: the guard never wants a per-file line ceiling, only
-    // the byte ceiling, preserving the pre-extraction behavior exactly (a huge
-    // file still contributes its first 1 MiB of lines = substantial work).
-    scan_file_bounded(file, usize::MAX)
-        .map(|scan| scan.lines)
-        .unwrap_or(0)
+fn untracked_path_matches_filter(
+    project_root: &Path,
+    path: &Path,
+    path_filter: &BTreeSet<String>,
+) -> bool {
+    let rel_path = path.strip_prefix(project_root).unwrap_or(path);
+    let rel = rel_path.to_string_lossy();
+    path_filter.contains(rel.as_ref())
 }
 
 /// A bounded enumeration of untracked, non-ignored working-tree paths.

@@ -131,6 +131,12 @@ long_poll_seconds = 240
 # overrides it.
 # [run]
 # writer_must_commit = false
+# [run.large_diff_warning]
+# enabled = true
+# changed_files = 5
+# changed_lines = 500
+# approx_diff_tokens = 8000
+# mode = "warn"
 # [run.post_exec_gate]
 # enabled = true
 # command = "just pre-commit"

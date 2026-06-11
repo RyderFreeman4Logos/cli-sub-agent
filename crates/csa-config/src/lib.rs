@@ -37,6 +37,7 @@ pub use config::{
     TierStrategy, ToolConfig, ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions,
     VcsConfig,
 };
+pub use config_session::{RunLargeDiffWarningConfig, RunLargeDiffWarningMode};
 pub type MergedConfig = ProjectConfig;
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;

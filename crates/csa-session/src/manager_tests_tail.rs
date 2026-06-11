@@ -490,6 +490,26 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
         "last_item".to_string(),
         toml::Value::String("old work".to_string()),
     );
+    table.insert(
+        "uncommitted_changes".to_string(),
+        toml::toml! {
+            file_count = 7
+            insertions = 240
+            deletions = 12
+            approx_diff_tokens = 1024
+            files = ["src/lib.rs"]
+        }
+        .into(),
+    );
+    table.insert(
+        "large_diff_warning".to_string(),
+        toml::toml! {
+            changed_files = 7
+            changed_lines = 252
+            approx_diff_tokens = 1024
+        }
+        .into(),
+    );
     std::fs::write(&result_path, toml::to_string_pretty(&persisted).unwrap()).unwrap();
 
     save_result_in(
@@ -505,6 +525,8 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
     assert!(!persisted.contains("artifacts"));
     assert!(!persisted.contains("kill_hint"));
     assert!(!persisted.contains("last_item"));
+    assert!(!persisted.contains("uncommitted_changes"));
+    assert!(!persisted.contains("large_diff_warning"));
 
     let loaded = load_result_in(td.path(), &state.meta_session_id)
         .unwrap()
@@ -513,6 +535,8 @@ fn test_save_result_clears_stale_optional_runtime_fields() {
     assert!(loaded.artifacts.is_empty());
     assert!(loaded.kill_hint.is_none());
     assert!(loaded.last_item.is_none());
+    assert!(loaded.uncommitted_changes.is_none());
+    assert!(loaded.large_diff_warning.is_none());
 }
 
 #[test]

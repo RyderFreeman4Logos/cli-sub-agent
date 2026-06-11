@@ -36,10 +36,11 @@ pub(super) fn emit_run_result_output(
     output_format: OutputFormat,
     executed_session_id: Option<&str>,
     result: &ExecutionResult,
+    large_diff_warning: Option<&csa_session::LargeDiffWarningReport>,
 ) -> Result<()> {
     match output_format {
         OutputFormat::Text => {
-            print!("{}", result.output);
+            print!("{}", render_run_text_output(result, large_diff_warning));
             if executed_session_id.is_none()
                 && result.exit_code != 0
                 && result.exit_signal.is_some()
@@ -72,12 +73,47 @@ pub(super) fn emit_run_result_output(
             }
         }
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(result)?;
+            let json = render_run_json_output(result, large_diff_warning)?;
             println!("{json}");
         }
     }
 
     Ok(())
+}
+
+pub(super) fn render_run_json_output(
+    result: &ExecutionResult,
+    large_diff_warning: Option<&csa_session::LargeDiffWarningReport>,
+) -> Result<String> {
+    let mut value = serde_json::to_value(result)?;
+    if let Some(warning) = large_diff_warning
+        && let serde_json::Value::Object(fields) = &mut value
+    {
+        fields.insert(
+            "large_diff_warning".to_string(),
+            serde_json::to_value(warning)?,
+        );
+        fields.insert(
+            "large_diff_warning_block".to_string(),
+            serde_json::Value::String(crate::run_cmd::format_large_diff_warning_block(warning)),
+        );
+    }
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+pub(super) fn render_run_text_output(
+    result: &ExecutionResult,
+    large_diff_warning: Option<&csa_session::LargeDiffWarningReport>,
+) -> String {
+    let mut output = result.output.clone();
+    if let Some(warning) = large_diff_warning {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&crate::run_cmd::format_large_diff_warning_block(warning));
+        output.push('\n');
+    }
+    output
 }
 
 #[cfg(test)]
@@ -120,5 +156,92 @@ mod tests {
         assert_eq!(json["exit_signal"], serde_json::json!(9));
         assert!(json["kill_hint"].is_string());
         assert!(json["resource_diagnostics"].is_string());
+    }
+
+    #[test]
+    fn run_text_output_appends_large_diff_warning_block() {
+        let result = ExecutionResult {
+            output: "done\n".to_string(),
+            summary: "done".to_string(),
+            exit_code: 0,
+            ..Default::default()
+        };
+        let warning = csa_session::LargeDiffWarningReport {
+            changed_files: 9,
+            changed_lines: 1_420,
+            approx_diff_tokens: 18_000,
+        };
+
+        let rendered = render_run_text_output(&result, Some(&warning));
+
+        assert!(rendered.starts_with("done\n"));
+        assert!(rendered.contains(
+            "<!-- CSA:LARGE_DIFF_WARNING changed_files=9 changed_lines=1420 approx_diff_tokens=18000 -->"
+        ));
+        assert!(rendered.contains("<!-- CSA:LARGE_DIFF_WARNING:END -->"));
+    }
+
+    #[test]
+    fn run_text_output_omits_large_diff_warning_when_absent() {
+        let result = ExecutionResult {
+            output: "done\n".to_string(),
+            summary: "done".to_string(),
+            exit_code: 0,
+            ..Default::default()
+        };
+
+        let rendered = render_run_text_output(&result, None);
+
+        assert_eq!(rendered, "done\n");
+    }
+
+    #[test]
+    fn run_json_output_includes_large_diff_warning_data_and_block() {
+        let result = ExecutionResult {
+            output: "done\n".to_string(),
+            summary: "done".to_string(),
+            exit_code: 0,
+            ..Default::default()
+        };
+        let warning = csa_session::LargeDiffWarningReport {
+            changed_files: 9,
+            changed_lines: 1_420,
+            approx_diff_tokens: 18_000,
+        };
+
+        let rendered = render_run_json_output(&result, Some(&warning))
+            .expect("run JSON output should serialize");
+        let json: serde_json::Value =
+            serde_json::from_str(&rendered).expect("run JSON output should parse");
+
+        assert_eq!(json["output"], serde_json::json!("done\n"));
+        assert_eq!(json["large_diff_warning"]["changed_files"], 9);
+        assert_eq!(json["large_diff_warning"]["changed_lines"], 1_420);
+        assert_eq!(json["large_diff_warning"]["approx_diff_tokens"], 18_000);
+        let block = json["large_diff_warning_block"]
+            .as_str()
+            .expect("large_diff_warning_block should be a string");
+        assert!(block.contains(
+            "<!-- CSA:LARGE_DIFF_WARNING changed_files=9 changed_lines=1420 approx_diff_tokens=18000 -->"
+        ));
+        assert!(block.contains("<!-- CSA:LARGE_DIFF_WARNING:END -->"));
+    }
+
+    #[test]
+    fn run_json_output_omits_large_diff_warning_when_absent() {
+        let result = ExecutionResult {
+            output: "done\n".to_string(),
+            summary: "done".to_string(),
+            exit_code: 0,
+            ..Default::default()
+        };
+
+        let rendered =
+            render_run_json_output(&result, None).expect("run JSON output should serialize");
+        let json: serde_json::Value =
+            serde_json::from_str(&rendered).expect("run JSON output should parse");
+
+        assert!(json.get("large_diff_warning").is_none());
+        assert!(json.get("large_diff_warning_block").is_none());
     }
 }

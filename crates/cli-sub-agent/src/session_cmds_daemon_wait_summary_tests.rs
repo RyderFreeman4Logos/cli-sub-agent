@@ -209,6 +209,7 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
         warnings: vec!["fix loop did not engage: head_unchanged_worktree_clean".to_string()],
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: Default::default(),
     };
 
@@ -335,9 +336,11 @@ fn compact_summary_includes_writer_uncommitted_warning() {
             file_count: 7,
             insertions: 240,
             deletions: 12,
+            approx_diff_tokens: 1_024,
             files: vec!["src/lib.rs".to_string()],
             truncated: 6,
         }),
+        large_diff_warning: None,
         manager_fields: Default::default(),
     };
 
@@ -346,6 +349,41 @@ fn compact_summary_includes_writer_uncommitted_warning() {
     assert!(summary.contains(
         "⚠ writer session ended with 7 uncommitted files (+240/-12) — work NOT committed"
     ));
+    assert!(
+        !summary.contains("CSA:LARGE_DIFF_WARNING"),
+        "small/unspecified large-diff warning must stay absent"
+    );
+}
+
+#[test]
+fn compact_summary_includes_large_diff_warning_block() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let warning = csa_session::LargeDiffWarningReport {
+        changed_files: 9,
+        changed_lines: 1_420,
+        approx_diff_tokens: 18_000,
+    };
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "done".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        events_count: 0,
+        artifacts: Vec::new(),
+        large_diff_warning: Some(warning.clone()),
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITLARGEDIFF", &result);
+
+    assert!(summary.contains(&crate::run_cmd::format_large_diff_warning_block(&warning)));
 }
 
 #[test]

@@ -79,7 +79,10 @@ pub use post_exec_gate_report::{
 };
 pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};
-pub use result::{SessionArtifact, SessionManagerFields, SessionResult, UncommittedChanges};
+pub use result::{
+    LargeDiffWarningReport, SessionArtifact, SessionManagerFields, SessionResult,
+    UncommittedChanges,
+};
 pub use review_artifact::{
     Finding, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewDiffSize,
     ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,

@@ -431,6 +431,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -511,6 +512,7 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {

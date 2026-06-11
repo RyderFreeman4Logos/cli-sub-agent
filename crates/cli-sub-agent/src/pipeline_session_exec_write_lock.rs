@@ -346,6 +346,7 @@ mod tests {
                 warnings: Vec::new(),
                 raw_process_exit_code: None,
                 uncommitted_changes: None,
+                large_diff_warning: None,
                 post_exec_gate: None,
                 manager_fields: Default::default(),
             },

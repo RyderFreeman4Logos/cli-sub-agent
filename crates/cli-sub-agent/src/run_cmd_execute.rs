@@ -619,12 +619,13 @@ pub(crate) async fn handle_run(
     let mut result = loop_outcome.result;
     let current_tool = loop_outcome.current_tool;
     let executed_session_id = loop_outcome.executed_session_id;
-    let changed_paths = loop_outcome.changed_paths;
+    let session_id = executed_session_id.as_deref();
     let fork_resolution = loop_outcome.fork_resolution;
-    super::uncommitted::record_run_dirty(
+    let warning = super::uncommitted::record_run_dirty(
         &project_root,
-        executed_session_id.as_deref(),
+        session_id,
         &mut result,
+        loop_outcome.changed_paths.as_deref(),
         require_commit,
         config.as_ref(),
     );
@@ -637,10 +638,10 @@ pub(crate) async fn handle_run(
         apply_post_exec_gate_after_success_with_runner(
             &project_root,
             &gate_prompt_text,
-            executed_session_id.as_deref(),
+            session_id,
             config.as_ref(),
             PostExecGateApplyOptions {
-                changed_paths: changed_paths.as_deref(),
+                changed_paths: loop_outcome.changed_paths.as_deref(),
                 extra_env: post_exec_gate_env,
                 no_post_exec_gate,
                 planning_only: skill.as_deref() == Some("mktd"),
@@ -656,7 +657,7 @@ pub(crate) async fn handle_run(
             .ok_or_else(|| anyhow::anyhow!("fork-call parent session is unresolved"))?;
         handle_fork_call_resume(
             &project_root,
-            executed_session_id.as_deref(),
+            session_id,
             &parent_session_id,
             &current_tool,
             return_target.is_some(),
@@ -688,8 +689,9 @@ pub(crate) async fn handle_run(
     emit_run_result_output(
         &project_root,
         output_format,
-        executed_session_id.as_deref(),
+        session_id,
         &result,
+        warning.as_ref(),
     )?;
 
     Ok(result.exit_code)

@@ -23,6 +23,7 @@ fn test_save_result_persists_manager_fields_sidecar() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {

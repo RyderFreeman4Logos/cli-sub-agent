@@ -179,25 +179,6 @@ fn classify_skips_fifo_without_blocking() {
 }
 
 #[test]
-fn count_file_lines_matches_exact_partial_and_missing() {
-    let temp = tempfile::tempdir().unwrap();
-
-    let with_nl = temp.path().join("with_nl.txt");
-    std::fs::write(&with_nl, "x\ny\nz\n").unwrap();
-    assert_eq!(count_file_lines(&with_nl), 3);
-
-    let no_nl = temp.path().join("no_nl.txt");
-    std::fs::write(&no_nl, "x\ny\nz").unwrap();
-    assert_eq!(count_file_lines(&no_nl), 3);
-
-    let empty = temp.path().join("empty.txt");
-    std::fs::write(&empty, "").unwrap();
-    assert_eq!(count_file_lines(&empty), 0);
-
-    assert_eq!(count_file_lines(&temp.path().join("missing.txt")), 0);
-}
-
-#[test]
 fn untracked_diff_size_counts_exact_small_files() {
     let temp = init_repo();
     let root = temp.path();
@@ -214,6 +195,22 @@ fn untracked_diff_size_counts_exact_small_files() {
         "exact small files need no estimated/capped note, got {:?}",
         size.notes
     );
+}
+
+#[test]
+fn untracked_diff_size_for_paths_counts_only_matching_files() {
+    let temp = init_repo();
+    let root = temp.path();
+    std::fs::write(root.join("a.txt"), "1\n2\n3\n").unwrap();
+    std::fs::write(root.join("b.txt"), "4\n5\n").unwrap();
+    let filter = std::collections::BTreeSet::from(["b.txt".to_string()]);
+
+    let size = untracked_diff_size_for_paths(root, &filter);
+
+    assert_eq!(size.files, 1);
+    assert_eq!(size.lines, 2);
+    assert_eq!(size.bytes, 4);
+    assert!(size.notes.is_empty());
 }
 
 #[test]
