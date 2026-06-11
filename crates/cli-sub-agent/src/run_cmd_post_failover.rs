@@ -15,7 +15,9 @@ use csa_scheduler::FallbackChain;
 
 #[path = "run_cmd_post_failover_availability.rs"]
 mod failover_availability;
-use failover_availability::decide_available_failover;
+use failover_availability::{
+    FailoverAvailabilityRequest, FailoverAvailabilityState, decide_available_failover,
+};
 
 /// Outcome of rate-limit failover evaluation.
 pub(crate) enum RateLimitAction {
@@ -345,16 +347,20 @@ pub(crate) fn evaluate_rate_limit_failover(
     );
 
     let action = decide_available_failover(
-        tool_name_str,
-        "default",
-        resolved_tier_name,
-        task_needs_edit,
-        session_state.as_ref(),
-        tried_tools,
-        tried_specs,
-        &exhausted_providers,
-        cfg,
-        &rate_limit.matched_pattern,
+        FailoverAvailabilityRequest {
+            failed_tool: tool_name_str,
+            task_type: "default",
+            resolved_tier_name,
+            task_needs_edit,
+            session_state: session_state.as_ref(),
+            exhausted_providers: &exhausted_providers,
+            config: cfg,
+            original_error: &rate_limit.matched_pattern,
+        },
+        FailoverAvailabilityState {
+            tried_tools,
+            tried_specs,
+        },
     )?;
 
     match action {
@@ -583,16 +589,20 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     );
 
     let action = decide_available_failover(
-        tool_name_str,
-        "default",
-        resolved_tier_name,
-        task_needs_edit,
-        session_state.as_ref(),
-        tried_tools,
-        tried_specs,
-        &exhausted_providers,
-        cfg,
-        &failover_signal.matched_pattern,
+        FailoverAvailabilityRequest {
+            failed_tool: tool_name_str,
+            task_type: "default",
+            resolved_tier_name,
+            task_needs_edit,
+            session_state: session_state.as_ref(),
+            exhausted_providers: &exhausted_providers,
+            config: cfg,
+            original_error: &failover_signal.matched_pattern,
+        },
+        FailoverAvailabilityState {
+            tried_tools,
+            tried_specs,
+        },
     )?;
 
     match action {

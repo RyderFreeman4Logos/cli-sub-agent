@@ -56,7 +56,8 @@ pub(crate) use tier_bypass_gate::{
 };
 pub(crate) use tier_resolution::{
     TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
-    evaluate_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
+    evaluate_tier_models, resolve_preferred_tool_from_tier,
+    resolve_runtime_available_tier_fallback, resolve_tool_from_tier,
 };
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
@@ -440,12 +441,12 @@ pub(crate) fn resolve_tool_and_model(
             Err(e) if csa_scheduler::is_no_writable_tier_tool_error(&e) => return Err(e),
             _ => {}
         }
-        // Fallback: original non-rotating selection.
-        if let Some((tool_name_str, tier_model_spec)) =
-            cfg.resolve_tier_tool_filtered("default", needs_edit)
+        // Fallback: original non-rotating selection, but keep runtime
+        // availability aligned with the rotated path.
+        if let Some(resolution) =
+            resolve_runtime_available_tier_fallback(cfg, "default", needs_edit)
         {
-            let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), resolved_model));
+            return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
         }
     }
 
@@ -572,6 +573,10 @@ mod tests_tail;
 #[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_tier_runtime_tests.rs"]
+mod tier_runtime_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_tier_force_tests.rs"]

@@ -5,19 +5,41 @@ use tracing::warn;
 
 use super::RateLimitAction;
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct FailoverAvailabilityRequest<'a> {
+    pub failed_tool: &'a str,
+    pub task_type: &'a str,
+    pub resolved_tier_name: Option<&'a str>,
+    pub task_needs_edit: Option<bool>,
+    pub session_state: Option<&'a csa_session::MetaSessionState>,
+    pub exhausted_providers: &'a [ModelFamily],
+    pub config: &'a ProjectConfig,
+    pub original_error: &'a str,
+}
+
+pub(super) struct FailoverAvailabilityState<'a> {
+    pub tried_tools: &'a mut Vec<String>,
+    pub tried_specs: &'a mut Vec<String>,
+}
+
 pub(super) fn decide_available_failover(
-    failed_tool: &str,
-    task_type: &str,
-    resolved_tier_name: Option<&str>,
-    task_needs_edit: Option<bool>,
-    session_state: Option<&csa_session::MetaSessionState>,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    exhausted_providers: &[ModelFamily],
-    config: &ProjectConfig,
-    original_error: &str,
+    request: FailoverAvailabilityRequest<'_>,
+    state: FailoverAvailabilityState<'_>,
 ) -> Result<RateLimitAction> {
+    let FailoverAvailabilityRequest {
+        failed_tool,
+        task_type,
+        resolved_tier_name,
+        task_needs_edit,
+        session_state,
+        exhausted_providers,
+        config,
+        original_error,
+    } = request;
+    let FailoverAvailabilityState {
+        tried_tools,
+        tried_specs,
+    } = state;
+
     let max_candidates = config
         .tiers
         .values()

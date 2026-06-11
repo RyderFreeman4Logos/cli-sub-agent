@@ -1,6 +1,25 @@
 use super::ProjectConfig;
 
 impl ProjectConfig {
+    /// Resolve the canonical tier name for a task type.
+    ///
+    /// Uses `tier_mapping[task_type]` first, then falls back to tier3-compatible
+    /// names for legacy configs. The returned tier may still be absent if
+    /// `tier_mapping` points at a missing tier; callers should look it up in
+    /// `tiers` and treat absence as no match.
+    pub fn resolve_tier_name_for_task(&self, task_type: &str) -> Option<&str> {
+        if let Some(mapped) = self.tier_mapping.get(task_type) {
+            return Some(mapped.as_str());
+        }
+        if self.tiers.contains_key("tier3") {
+            return Some("tier3");
+        }
+        self.tiers
+            .keys()
+            .find(|k| k.starts_with("tier-3-") || k.starts_with("tier3"))
+            .map(String::as_str)
+    }
+
     /// Try parsing `selector` as a compound `<tier>-<tool>` form.
     ///
     /// Splits on `-` boundaries from the rightmost segment outward so that

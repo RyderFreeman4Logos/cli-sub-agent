@@ -91,6 +91,17 @@ pub(crate) fn collect_available_tier_models(
     evaluate_tier_models(tier_name, config, skip_specs).0
 }
 
+pub(crate) fn resolve_runtime_available_tier_fallback(
+    config: &ProjectConfig,
+    task_type: &str,
+    needs_edit: bool,
+) -> Option<TierToolResolution> {
+    let tier_name = config.resolve_tier_name_for_task(task_type)?;
+    collect_available_tier_models(tier_name, config, &[])
+        .into_iter()
+        .find(|resolution| !needs_edit || config.is_tool_write_capable(resolution.tool.as_str()))
+}
+
 pub(crate) fn collect_preferred_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
