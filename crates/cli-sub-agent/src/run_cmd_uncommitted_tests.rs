@@ -293,6 +293,29 @@ fn large_diff_warning_changed_paths_counts_large_file_after_untracked_cap() {
 }
 
 #[test]
+fn large_diff_warning_changed_paths_preserves_boundary_whitespace_in_untracked_paths() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    let leading_path = " leading-large.txt";
+    let trailing_path = "trailing-large.txt ";
+    let large_bytes = (default_tracked_diff_token_threshold() + 1) * DIFF_BYTES_PER_TOKEN;
+    for path in [leading_path, trailing_path] {
+        std::fs::write(root.join(path), vec![b'x'; large_bytes]).unwrap();
+    }
+
+    let changed_paths = vec![leading_path.to_string(), trailing_path.to_string()];
+    let changes = collect_uncommitted_changes_for_changed_paths(root, &changed_paths)
+        .expect("filtered untracked files with boundary whitespace should count");
+
+    assert_eq!(changes.file_count, 2);
+    assert_eq!(changes.files, changed_paths);
+    assert!(
+        large_diff_warning_report(&changes, &RunLargeDiffWarningConfig::default()).is_some(),
+        "filtered large paths with boundary whitespace should trigger the warning"
+    );
+}
+
+#[test]
 fn effective_writer_must_commit_respects_cli_and_config_precedence() {
     assert!(!effective_writer_must_commit(false, None));
 

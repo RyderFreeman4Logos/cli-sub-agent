@@ -534,7 +534,7 @@ fn parse_porcelain_path(entry: &str) -> Option<String> {
     if chars.next()? != ' ' {
         return None;
     }
-    let path = entry.get(3..)?.trim();
+    let path = entry.get(3..)?;
     (!path.is_empty()).then(|| path.to_string())
 }
 
