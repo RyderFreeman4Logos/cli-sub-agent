@@ -7,6 +7,9 @@ use csa_session::SessionArtifact;
 
 use super::StepResult;
 
+#[path = "plan_cmd_failure_detail.rs"]
+mod failure_detail;
+
 const PR_BOT_WORKFLOW_NAME: &str = "pr-bot";
 const WEAVE_LOCK: &str = "weave.lock";
 const CSA_PLAN_STATE_PREFIX: &str = ".csa/state/plan/";
@@ -70,6 +73,9 @@ impl PlanFailureReport {
                 "; failed_step={} exit_code={}",
                 step.step_id, step.exit_code
             ));
+            if let Some(detail) = step.actionable_failure_detail() {
+                line.push_str(&format!(" detail={detail}"));
+            }
         }
         line
     }
@@ -84,6 +90,9 @@ impl PlanFailureReport {
                 "Failed step: {} ({}) exited {}",
                 step.step_id, step.title, step.exit_code
             ));
+            if let Some(detail) = step.actionable_failure_detail() {
+                lines.push(format!("Failure detail: {detail}"));
+            }
         }
         if let Some(recovery) = &self.recovery {
             lines.push(format!("Recovery status: {}", recovery.status.as_str()));
@@ -133,6 +142,19 @@ impl PlanFailureReport {
         }
 
         details
+    }
+}
+
+impl FailedPlanStep {
+    fn actionable_failure_detail(&self) -> Option<String> {
+        self.stderr_excerpt
+            .as_deref()
+            .and_then(failure_detail::select_actionable_failure_line)
+            .or_else(|| {
+                self.error
+                    .as_deref()
+                    .and_then(failure_detail::select_actionable_failure_line)
+            })
     }
 }
 

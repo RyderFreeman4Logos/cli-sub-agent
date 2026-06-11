@@ -387,15 +387,40 @@ pub(super) fn is_stale_session_error(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn extract_bash_code_block(prompt: &str) -> Option<&str> {
-    let start_patterns = ["```bash\n", "```sh\n", "```\n"];
-    for pattern in &start_patterns {
-        if let Some(start_idx) = prompt.find(pattern) {
-            let code_start = start_idx + pattern.len();
-            if let Some(end_idx) = prompt[code_start..].find("```") {
-                let code = &prompt[code_start..code_start + end_idx];
+    let mut search_start = 0;
+    while let Some(fence_offset) = prompt[search_start..].find("```") {
+        let fence_start = search_start + fence_offset;
+        let line_start = prompt[..fence_start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        if !prompt[line_start..fence_start]
+            .chars()
+            .all(char::is_whitespace)
+        {
+            search_start = fence_start + "```".len();
+            continue;
+        }
+
+        let open_line_end_offset = prompt[fence_start..].find('\n')?;
+        let open_line_end = fence_start + open_line_end_offset;
+        let language = prompt[fence_start + "```".len()..open_line_end].trim();
+        if !matches!(language, "" | "bash" | "sh") {
+            search_start = open_line_end + 1;
+            continue;
+        }
+
+        let code_start = open_line_end + 1;
+        let mut line_start = code_start;
+        for line in prompt[code_start..].split_inclusive('\n') {
+            let line_end = line_start + line.len();
+            if line.trim_end_matches('\n').trim() == "```" {
+                let code = &prompt[code_start..line_start];
                 return Some(code.trim());
             }
+            line_start = line_end;
         }
+
+        return None;
     }
     None
 }

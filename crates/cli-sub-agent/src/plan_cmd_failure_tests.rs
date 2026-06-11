@@ -107,6 +107,51 @@ fn persisted_failure_output_redacts_step_secrets() {
 }
 
 #[test]
+fn failure_summary_surfaces_actionable_step_stderr() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some("Exit code 1".to_string()),
+        output: None,
+        session_id: None,
+        command: Some("csa plan run patterns/mktd/workflow.toml".to_string()),
+        stderr: Some(
+            [
+                "✓ PASS   Step 7 - Phase 2 — DRAFT TODO",
+                "✗ FAIL   Step 13 - Save TODO (0.02s) — Exit code 2",
+                "ERROR: TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause.",
+                "Error: 1 step(s) failed (1 execution, 0 unsupported-skip)",
+            ]
+            .join("\n"),
+        ),
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    assert!(
+        summary_line.contains("detail=ERROR: TODO artifact has an open task"),
+        "result summary should include actionable stderr detail: {summary_line}"
+    );
+    assert!(
+        summary_section.contains("Failure detail: ERROR: TODO artifact has an open task"),
+        "structured summary section should include actionable stderr detail: {summary_section}"
+    );
+}
+
+#[test]
 fn recovery_ignores_untracked_plan_journal_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");
