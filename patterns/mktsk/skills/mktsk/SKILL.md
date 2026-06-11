@@ -14,14 +14,51 @@ triggers:
 
 # mktsk: Make Task -- Plan-to-Execution Bridge
 
-## MANDATORY: Main Agent Execution
+## MANDATORY: Main Agent / Orchestrator Execution
 
-**mktsk MUST be executed by the main agent (Claude Code).**
-Do NOT delegate to `csa plan run --pattern mktsk` or `csa run --skill mktsk`.
+**mktsk MUST be executed by the main agent/orchestrator.**
+Do NOT delegate mktsk bookkeeping to `csa plan run --pattern mktsk` or
+`csa run --skill mktsk`.
 
-**Why**: mktsk requires Claude Code tools (TaskCreate, TaskUpdate, TaskGet, TaskList)
-for progress tracking across auto-compaction. CSA subprocesses cannot use these tools,
-making task persistence impossible.
+**Why**: mktsk owns progress tracking across auto-compaction. CSA subprocesses
+cannot update the caller's task list, so delegating mktsk bookkeeping makes
+task persistence impossible. Implementation work for individual registered
+items may still be delegated when the pattern's executor policy says so.
+
+## Task Tool Adapter
+
+Use the host agent's native task-list tool. The pattern uses Claude Code tool
+names as operation names; adapt them instead of assuming Claude-only tools:
+
+| Host | Create task | Update task | List/resume |
+|------|-------------|-------------|-------------|
+| Claude Code | `TaskCreate` | `TaskUpdate` | `TaskGet` / `TaskList` |
+| Hermes | `todo` tool | `todo` tool | `todo` tool |
+| Codex | `update_plan` | `update_plan` | current plan state |
+
+Hermes agents exposed through `~/.hermes/skills` must use the `todo` tool as
+the `TaskCreate` / `TaskUpdate` / `TaskList` equivalent. Codex and Hermes must
+translate task operations to their host tools rather than inventing or invoking
+Claude-only tool names.
+
+If the current host has no durable task-list equivalent, stop and ask the user
+which tracking tool to use before executing mktsk.
+
+## Hermes Exposure
+
+Keep the source of truth in this repository:
+
+```text
+patterns/mktsk/skills/mktsk
+```
+
+Expose it to Hermes with a symlink from the Hermes skill directory:
+
+```text
+~/.hermes/skills/software-development/mktsk -> patterns/mktsk/skills/mktsk
+```
+
+Do not copy or maintain a separate `~/.hermes` version of this skill.
 
 ## Execution Protocol
 
@@ -30,8 +67,8 @@ step by step. You are executing directly — every step runs in your context.
 
 Modes:
 - Default: parse a TODO plan from `path=...`, `timestamp=...`, or the latest mktd output.
-- `--from-issues`: read open GitHub issues and register one ordered TaskCreate
-  task per issue.
+- `--from-issues`: read open GitHub issues and register one ordered task-list
+  entry per issue.
 
 For `csa` commands within pattern steps (e.g., `csa review --diff`), add
 `--sa-mode true` when operating under SA mode.
@@ -45,7 +82,7 @@ This is the while-waiting checklist. When you background a `csa session wait` vi
 2. For deferred MEDIUM findings from prior rounds, queue issue-template drafts locally and batch filing later when the review cluster is clear.
 3. Read the next sprint task or issue to preload context for the next non-conflicting step.
 4. Check existing issues for possible duplicate-of candidates for findings already queued.
-5. Clean up stale TaskCreate or TaskUpdate entries.
+5. Clean up stale task-list entries.
 
 **Do NOT**:
 - Start new `csa run` or `csa review` sessions that could race on git branch or checkout state with the waiting one (single-checkout sequential rule, AGENTS.md 028).
@@ -62,7 +99,7 @@ If there is no useful parallel work available, return control and wait for the n
 | `/mktsk` | Execute the most recent TODO plan for the current branch |
 | `/mktsk path=./plans/feature.md` | Execute tasks from a specific plan file |
 | `/mktsk timestamp=01JK...` | Execute tasks from a csa todo by timestamp |
-| `/mktsk --from-issues` | Create an ordered TaskCreate backlog from all open issues |
+| `/mktsk --from-issues` | Create an ordered task-list backlog from all open issues |
 
 ## Integration
 
@@ -74,7 +111,7 @@ If there is no useful parallel work available, return control and wait for the n
 ## Done Criteria
 
 1. All TODO items executed and verified via `DONE WHEN` conditions.
-2. All tasks marked complete via TaskUpdate.
+2. All tasks marked complete through the host task-list adapter.
 3. Branch pushed to remote.
 4. PR created (or reused).
 5. **pr-bot completed** — this is a SEPARATE gate from PR creation. NEVER mark

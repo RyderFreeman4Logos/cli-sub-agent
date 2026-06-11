@@ -11,6 +11,22 @@ version = "0.3.0"
 Execute TODO plans or open GitHub issues as deterministic serial checklists.
 Strict order: implement -> verify -> review -> commit -> next.
 
+**Task tool adapter:** mktsk is run by the main agent/orchestrator, which must
+translate task-list operations to the current host:
+
+| Host | Create task | Update task | List/resume |
+|------|-------------|-------------|-------------|
+| Claude Code | `TaskCreate` | `TaskUpdate` | `TaskGet` / `TaskList` |
+| Hermes | `todo` tool | `todo` tool | `todo` tool |
+| Codex | `update_plan` | `update_plan` | current plan state |
+
+The step text uses Claude Code names as canonical operation names. Hermes uses
+its `todo` tool as the `TaskCreate` / `TaskUpdate` / `TaskList` equivalent, and
+Codex/Hermes must adapt to host task-list tools rather than assuming
+Claude-only tool names. mktsk bookkeeping itself must not be delegated to CSA
+subprocesses; implementation work for individual registered items may still be
+delegated by executor tag.
+
 ## Step 1: Resolve Input
 
 Choose exactly one mode:
@@ -62,9 +78,18 @@ Output the normalized numbered task list before registration.
 
 ## Step 2: Register Tasks
 
-TODO.md is a read-only planning artifact. Progress tracking uses TaskCreate/TaskUpdate.
+TODO.md is a read-only planning artifact. Progress tracking uses the host
+task-list adapter.
 
-Register each parsed TODO item or issue candidate via TaskCreate.
+Task adapter mapping:
+- Claude Code: `TaskCreate` creates, `TaskUpdate` updates, `TaskGet` /
+  `TaskList` resume.
+- Hermes: use the `todo` tool as the `TaskCreate` / `TaskUpdate` /
+  `TaskList` equivalent.
+- Codex: use `update_plan` for task registration and status updates.
+
+Register each parsed TODO item or issue candidate via TaskCreate or the host
+equivalent.
 
 Each TODO task MUST include:
 - stable item id
@@ -81,7 +106,8 @@ Each issue task MUST include:
   dependency links, and a mechanically verifiable `DONE WHEN`
 - enough context to start work without rereading the full issue body
 
-Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate status.
+Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate or
+the host equivalent.
 
 **MANDATORY publish-phase task decomposition** (when Step 6 applies):
 The publish pipeline MUST be registered as **separate, individually tracked tasks**:
@@ -96,13 +122,16 @@ dedicated task for it, agents consistently skip it after PR creation.
 ## Step 3: Execute Tasks Serially
 
 Execute tasks strictly in order. Do not parallelize implementation work.
+mktsk bookkeeping stays in the main agent/orchestrator. Do not delegate
+task-list registration, status updates, or resume state to a CSA subprocess.
 
 Before each task: use TaskUpdate to set status to `in_progress`.
+Use the host equivalent when TaskUpdate is not available.
 
 Treat each task as an atomic transaction:
 1. Execute exactly one item.
 2. Run verification/review.
-3. Use TaskUpdate to set status to `completed`.
+3. Use TaskUpdate or the host equivalent to set status to `completed`.
 4. Persist checkpoint before next item.
 
 Dispatch policy by executor tag:
@@ -117,13 +146,14 @@ Dispatch policy by executor tag:
 Checkpoint policy (mandatory):
 - Use `.csa/state/mktsk/checkpoint.json` as progress checkpoint.
 - Write latest completed item id after each completed item.
-- On interruption, resume from TaskList status and checkpoint state.
+- On interruption, resume from TaskList or host task-list status and checkpoint
+  state.
 
 After each item:
 1. Run quality gates (`just fmt`, `just clippy`, `just test`).
 2. Run `csa review --diff`.
 3. Apply fixes if review reports blocking issues.
-4. Use TaskUpdate to mark the task as `completed`.
+4. Use TaskUpdate or the host equivalent to mark the task as `completed`.
 
 ## Step 4: Compact Context (Conditional)
 
@@ -145,7 +175,7 @@ just test
 git status --short
 ```
 
-Ensure all registered TaskCreate entries from the selected mode are completed.
+Ensure all registered task-list entries from the selected mode are completed.
 
 ## Step 6: Publish Transaction
 
