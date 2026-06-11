@@ -243,6 +243,19 @@ line_count() {
     printf '%s\n' "$lines"
 }
 
+byte_count() {
+    local file="$1"
+    local bytes
+    if ! bytes="$(wc -c <"$file" 2>/dev/null)"; then
+        die "failed to count bytes for $file"
+    fi
+    bytes="$(printf '%s' "$bytes" | tr -d '[:space:]')"
+    case "$bytes" in
+        ''|*[!0-9]*) die "unparsable byte count for $file: $bytes" ;;
+    esac
+    printf '%s\n' "$bytes"
+}
+
 token_count() {
     local file="$1"
     local output
@@ -313,7 +326,11 @@ while IFS= read -r -d '' file; do
 
     checked=$((checked + 1))
     lines="$(line_count "$file")"
-    tokens="$(token_count "$file")"
+    bytes="$(byte_count "$file")"
+    tokens=0
+    if [ -n "${baseline_tokens[$file]+set}" ] || [ "$lines" -gt "$line_threshold" ] || [ "$bytes" -gt "$token_threshold" ]; then
+        tokens="$(token_count "$file")"
+    fi
     kind="$(classify_kind "$file")"
 
     over_limit=false
