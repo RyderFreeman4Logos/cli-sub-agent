@@ -96,7 +96,8 @@ where
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
-            && !session_has_terminal_process(&session_dir)
+            && (completion.is_legacy_complete_marker()
+                || !session_has_terminal_process(&session_dir))
         {
             let refreshed_result = refresh_result_for_wait(
                 effective_root,

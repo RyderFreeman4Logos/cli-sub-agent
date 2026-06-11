@@ -29,9 +29,10 @@ use crate::startup_env::StartupSubtreeEnv;
 const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
 pub(crate) use completion::{
     DaemonCompletionPacket, daemon_completion_exists, daemon_completion_result,
-    finalize_daemon_completion_if_present, load_daemon_completion_packet,
-    persist_daemon_completion_from_env, persist_daemon_completion_from_env_with_reason,
-    retire_session_from_daemon_completion, seed_daemon_session_env,
+    finalize_daemon_completion_if_present, legacy_complete_marker_is_valid,
+    load_daemon_completion_packet, persist_daemon_completion_from_env,
+    persist_daemon_completion_from_env_with_reason, retire_session_from_daemon_completion,
+    seed_daemon_session_env,
 };
 #[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;
@@ -239,7 +240,8 @@ pub(crate) fn handle_session_attach_with_prompt(
         }
 
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
-            && !session_has_terminal_process(&session_dir)
+            && (completion.is_legacy_complete_marker()
+                || !session_has_terminal_process(&session_dir))
         {
             // Drain remaining stdout.
             loop {
@@ -392,6 +394,7 @@ fn clear_attach_reactivation_artifacts(session_dir: &Path) -> Result<()> {
     // The daemon will create fresh stdout.log/stderr.log/output.log at spawn.
     for path in [
         session_dir.join("daemon-completion.toml"),
+        session_dir.join(".complete"),
         session_dir.join("result.toml"),
         csa_session::contract_result_path(session_dir),
         csa_session::legacy_user_result_path(session_dir),
@@ -607,3 +610,6 @@ mod session_cmds_daemon_routing_proptest;
 #[cfg(test)]
 #[path = "session_cmds_daemon_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "session_cmds_daemon_2016_tests.rs"]
+mod tests_2016;

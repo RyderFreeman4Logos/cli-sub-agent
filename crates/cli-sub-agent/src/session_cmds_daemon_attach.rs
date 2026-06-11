@@ -254,7 +254,7 @@ pub(super) fn resolve_attach_terminal_exit(
     output_log_visible: bool,
 ) -> Result<i32> {
     if let Some(completion) = load_daemon_completion_packet(session_dir)?
-        && !session_has_terminal_process(session_dir)
+        && (completion.is_legacy_complete_marker() || !session_has_terminal_process(session_dir))
     {
         emit_failure_summary_for_empty_output(session_dir, output_streamed, output_log_visible);
         return Ok(completion.exit_code);
