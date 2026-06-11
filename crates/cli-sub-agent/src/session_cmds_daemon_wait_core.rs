@@ -194,12 +194,14 @@ where
             }
         }
 
-        if let Some(result) = load_completed_daemon_result_with_fallback(
-            effective_root,
-            &resolved.session_id,
-            &session_dir,
-            is_cross_project,
-        )? {
+        if !session_has_terminal_process(&session_dir)
+            && let Some(result) = load_completed_daemon_result_with_fallback(
+                effective_root,
+                &resolved.session_id,
+                &session_dir,
+                is_cross_project,
+            )?
+        {
             let streamed_output = emit_wait_terminal_output(
                 &session_dir,
                 &resolved.session_id,

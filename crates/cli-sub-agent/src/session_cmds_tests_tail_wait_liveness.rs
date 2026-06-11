@@ -127,7 +127,7 @@ fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_p
 
 #[cfg(target_os = "linux")]
 #[test]
-fn handle_session_wait_exits_on_terminal_result_even_when_daemon_pid_still_alive() {
+fn handle_session_wait_defers_terminal_result_while_daemon_pid_still_alive() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -192,8 +192,7 @@ fn handle_session_wait_exits_on_terminal_result_even_when_daemon_pid_still_alive
     let exit_code = wait_result.expect("wait should succeed");
     assert_eq!(exit_code, 0);
     assert_eq!(
-        emitted_completion,
-        Some((session_id, "success".to_string(), 0, false)),
-        "terminal result.toml should complete wait despite stale/live daemon liveness signals"
+        emitted_completion, None,
+        "live daemon sessions must not emit terminal completion from an intermediate result.toml"
     );
 }

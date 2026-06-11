@@ -32,6 +32,31 @@ impl Drop for EnvVarGuard {
 }
 
 #[cfg(target_os = "linux")]
+fn read_process_start_time_ticks(pid: u32) -> u64 {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = std::fs::read_to_string(stat_path).expect("read /proc stat");
+    let close_paren = content.rfind(')').expect("stat comm terminator");
+    let after_comm = &content[close_paren + 1..];
+    let mut parts = after_comm.split_whitespace();
+    parts.next().expect("state");
+    parts.next().expect("ppid");
+    parts.next().expect("pgrp");
+    for _ in 0..16 {
+        parts.next().expect("intermediate stat field");
+    }
+    parts
+        .next()
+        .expect("starttime")
+        .parse::<u64>()
+        .expect("starttime parse")
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_pid_record(pid: u32) -> String {
+    format!("{pid} {}\n", read_process_start_time_ticks(pid))
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn handle_session_wait_completes_terminal_result_with_stale_daemon_pid() {
     let td = tempdir().unwrap();
@@ -96,6 +121,109 @@ fn handle_session_wait_completes_terminal_result_with_stale_daemon_pid() {
     assert_eq!(
         emitted_completion,
         Some((session_id, "success".to_string(), 0, false))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn handle_session_wait_ignores_intermediate_success_result_while_daemon_pid_alive() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-intermediate-success-live-daemon"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: "intermediate self-report success".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .unwrap();
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("0.2")
+        .spawn()
+        .unwrap();
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        format!("{} 0\n", child.id()),
+    )
+    .unwrap();
+    assert!(
+        !csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir),
+        "start-time mismatch must make daemon.pid stale"
+    );
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .unwrap();
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let session_dir_for_writer = session_dir.clone();
+    let failure_result = SessionResult {
+        summary: "POST-EXEC GATE FAILED (exit=1, step=just find-monolith-files)".to_string(),
+        ..make_result("failure", 1)
+    };
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let encoded = toml::to_string_pretty(&failure_result).unwrap();
+        std::fs::write(session_dir_for_writer.join("result.toml"), encoded).unwrap();
+        std::fs::write(
+            session_dir_for_writer.join("daemon-completion.toml"),
+            "exit_code = 1\nstatus = \"failure\"\n",
+        )
+        .unwrap();
+    });
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let wait_result = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(5),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    );
+
+    writer.join().unwrap();
+    child.wait().ok();
+
+    let exit_code = wait_result.unwrap();
+    assert_eq!(
+        exit_code, 1,
+        "wait must not return the intermediate success while daemon gates are still running"
+    );
+    assert_eq!(
+        emitted_completion,
+        Some((session_id, "failure".to_string(), 1, false))
     );
 }
 
