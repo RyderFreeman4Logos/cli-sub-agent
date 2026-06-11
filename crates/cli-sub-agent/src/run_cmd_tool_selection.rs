@@ -13,7 +13,7 @@ use weave::parser::AgentConfig;
 
 use crate::cli::ReturnTarget;
 use crate::run_helpers::{
-    detect_parent_tool, is_tool_binary_available_for_config, parse_tool_name, read_prompt,
+    detect_parent_tool, is_tool_runtime_available_for_config, parse_tool_name, read_prompt,
     resolve_tool, resolve_tool_and_model,
 };
 use crate::skill_resolver::{self, ResolvedSkill};
@@ -271,13 +271,14 @@ pub(crate) fn resolve_tool_by_strategy(
 fn collect_enabled_tools(
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_hint: Option<&str>,
 ) -> Vec<ToolName> {
     if let Some(cfg) = config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| {
                 cfg.is_tool_auto_selectable(t.as_str())
-                    && is_tool_binary_available_for_config(t.as_str(), Some(cfg))
+                    && is_tool_runtime_available_for_config(t.as_str(), Some(cfg), model_hint)
             })
             .copied()
             .collect();
@@ -307,7 +308,7 @@ fn resolve_heterogeneous_preferred(
 
     if let Some(parent_str) = parent_tool_name.as_deref() {
         let parent_tool = parse_tool_name(parent_str)?;
-        let enabled_tools = collect_enabled_tools(config, global_config);
+        let enabled_tools = collect_enabled_tools(config, global_config, model_spec);
         let heterogeneous_candidates =
             resolve_heterogeneous_candidates(&parent_tool, &enabled_tools);
 
@@ -422,7 +423,7 @@ fn resolve_heterogeneous_strict(
 
     if let Some(parent_str) = parent_tool_name.as_deref() {
         let parent_tool = parse_tool_name(parent_str)?;
-        let enabled_tools = collect_enabled_tools(config, global_config);
+        let enabled_tools = collect_enabled_tools(config, global_config, model_spec);
 
         match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
             Some(tool) => resolve_tool_and_model(crate::run_helpers::RoutingRequest {

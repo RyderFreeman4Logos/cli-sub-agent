@@ -62,8 +62,9 @@ pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
 pub(crate) use token_parse::{extract_cost, extract_number};
 pub(crate) use tool_availability::{
-    ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
-    resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
+    ToolBinaryAvailability, is_tool_binary_available_for_config,
+    is_tool_runtime_available_for_config, resolved_claude_code_transport, resolved_codex_transport,
+    resolved_tool_binary_name, tool_binary_availability, tool_runtime_availability,
 };
 
 #[cfg(test)]
@@ -73,8 +74,7 @@ pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
 #[cfg(test)]
 pub(crate) const TEST_ASSUME_TOOLS_AVAILABLE_ENV: &str = "CSA_TEST_ASSUME_TOOLS_AVAILABLE";
 
-/// Reject the contradictory routing combination where a direct tool request
-/// also asks both to use and ignore tier routing.
+/// Reject direct-tool routing that both uses and ignores tiers.
 pub(crate) fn validate_tool_tier_override_flags(
     explicit_tool_requested: bool,
     tier: Option<&str>,
@@ -392,9 +392,7 @@ pub(crate) fn resolve_tool_and_model(
                 model_name_for_tier_validation(resolved_model.as_deref()),
             )?;
         }
-        // Pre-spawn compatibility check: catch known-incompatible model/tool combinations
-        // before a session is spawned (e.g. o4-mini with codex ChatGPT accounts).
-        // Skipped when the model matches the tool's configured default_model.
+        // Catch known-incompatible model/tool combinations before spawning.
         if let Some(ref m) = resolved_model {
             let configured_default =
                 config.and_then(|cfg| cfg.tool_default_model(tool_name.as_str()));
@@ -403,13 +401,12 @@ pub(crate) fn resolve_tool_and_model(
         return Ok((tool_name, None, resolved_model));
     }
 
-    // Case 3: neither tool nor model_spec → use round-robin tier-based selection.
-    // When --force is active, bypass tiers and pick any installed+enabled tool.
+    // Case 3: no tool/model_spec; use tiers, or --force any enabled runtime.
     if force {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
             let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
-            if enabled && is_tool_binary_available_for_config(name, config) {
+            if enabled && is_tool_runtime_available_for_config(name, config, None) {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
             }
@@ -426,13 +423,24 @@ pub(crate) fn resolve_tool_and_model(
                 .map(|c| c.resolve_alias(m))
                 .unwrap_or_else(|| m.to_string())
         });
-        // Round-robin rotation; write-restriction errors propagate, I/O errors fall through.
+        // Round-robin rotation; write-restriction errors propagate.
         match csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit) {
-            Ok(Some((s, spec))) => return Ok((parse_tool_name(&s)?, Some(spec), resolved_model)),
+            Ok(Some((s, spec)))
+                if is_tool_runtime_available_for_config(&s, Some(cfg), Some(&spec)) =>
+            {
+                return Ok((parse_tool_name(&s)?, Some(spec), resolved_model));
+            }
+            Ok(Some((s, spec))) => {
+                tracing::warn!(
+                    tool = %s,
+                    model_spec = %spec,
+                    "Skipping rotated tier candidate because the tool is not executable"
+                );
+            }
             Err(e) if csa_scheduler::is_no_writable_tier_tool_error(&e) => return Err(e),
             _ => {}
         }
-        // Fallback: original non-rotating selection (also respects write restrictions)
+        // Fallback: original non-rotating selection.
         if let Some((tool_name_str, tier_model_spec)) =
             cfg.resolve_tier_tool_filtered("default", needs_edit)
         {
@@ -441,15 +449,14 @@ pub(crate) fn resolve_tool_and_model(
         }
     }
 
-    // Fallback: minimal-init configs with empty tiers — pick any auto-selectable installed tool.
-    // Only activates when tiers are empty to avoid silently bypassing configured tier mappings.
+    // Minimal configs with empty tiers may pick any auto-selectable runtime.
     if let Some(cfg) = config
         && cfg.tiers.is_empty()
     {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
             if cfg.is_tool_auto_selectable(name)
-                && is_tool_binary_available_for_config(name, Some(cfg))
+                && is_tool_runtime_available_for_config(name, Some(cfg), None)
             {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));

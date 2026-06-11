@@ -63,6 +63,7 @@ fn is_post_run_commit_policy_gate_failure_reason(reason: &str) -> bool {
 pub(crate) fn apply_post_run_commit_policy(
     result: &mut csa_process::ExecutionResult,
     output_format: &OutputFormat,
+    recovery_tool: Option<&str>,
     require_commit_on_mutation: bool,
     git_commit_attempted: bool,
     commit_guard: Option<&PostRunCommitGuard>,
@@ -80,6 +81,7 @@ pub(crate) fn apply_post_run_commit_policy(
         commit_guard,
         enforce_closed_policy,
         commit_ref_update_failed,
+        recovery_tool,
     );
 
     if enforce_closed_policy {
@@ -115,6 +117,7 @@ pub(crate) fn apply_post_run_commit_policy(
 pub(crate) struct PostSessionCommitPolicyArgs<'a> {
     pub(crate) output_format: &'a OutputFormat,
     pub(crate) prompt: &'a str,
+    pub(crate) tool_name: &'a str,
     pub(crate) require_commit_on_mutation: bool,
     pub(crate) commit_guard: Option<&'a PostRunCommitGuard>,
     pub(crate) policy_evaluation_failed: bool,
@@ -132,6 +135,7 @@ pub(crate) fn apply_post_session_commit_policies(
     apply_post_run_commit_policy(
         result,
         args.output_format,
+        Some(args.tool_name),
         args.require_commit_on_mutation,
         git_commit_attempted,
         args.commit_guard,
@@ -296,6 +300,7 @@ pub(crate) fn format_post_run_commit_guard_message(
     guard: &PostRunCommitGuard,
     enforce_closed_policy: bool,
     commit_ref_update_failed: bool,
+    recovery_tool: Option<&str>,
 ) -> String {
     let severity = if enforce_closed_policy {
         "ERROR"
@@ -311,10 +316,12 @@ pub(crate) fn format_post_run_commit_guard_message(
     };
 
     let mut lines = vec![format!("{severity}: csa run completed but {reason}.")];
-    lines.push(
-        "Next step: run `csa run --skill commit \"<scope>\"` and continue with PR/review workflow."
-            .to_string(),
-    );
+    let recovery_command = recovery_tool
+        .map(|tool| format!("csa run --tool {tool} --skill commit \"<scope>\""))
+        .unwrap_or_else(|| "csa run --skill commit \"<scope>\"".to_string());
+    lines.push(format!(
+        "Next step: run `{recovery_command}` and continue with PR/review workflow."
+    ));
     if !guard.changed_paths.is_empty() {
         lines.push(format!("Changed paths: {}", guard.changed_paths.join(", ")));
     }

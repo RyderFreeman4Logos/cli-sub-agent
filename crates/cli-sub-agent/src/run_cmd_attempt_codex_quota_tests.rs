@@ -65,6 +65,13 @@ fn assert_retry_to(action: RateLimitAction, expected_tool: &str, expected_spec: 
     }
 }
 
+fn assume_tools_available() -> crate::test_env_lock::ScopedTestEnvVar {
+    crate::test_env_lock::ScopedTestEnvVar::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    )
+}
+
 fn codex_spark_quota_result() -> ExecutionResult {
     ExecutionResult {
         output: String::new(),
@@ -80,6 +87,7 @@ fn codex_spark_quota_result() -> ExecutionResult {
 
 #[test]
 fn explicit_tool_in_tier_codex_model_scoped_quota_tries_next_codex_model() {
+    let _assume = assume_tools_available();
     let config = make_config(
         "tier-3-complex",
         &[
@@ -127,6 +135,7 @@ fn explicit_tool_in_tier_codex_model_scoped_quota_tries_next_codex_model() {
 
 #[test]
 fn codex_model_scoped_quota_result_tries_next_codex_model() {
+    let _assume = assume_tools_available();
     let config = make_config(
         "tier-3-complex",
         &[
@@ -167,7 +176,54 @@ fn codex_model_scoped_quota_result_tries_next_codex_model() {
 }
 
 #[test]
+fn codex_model_scoped_quota_skips_unconfigured_openai_compat_fallback() {
+    let _assume = assume_tools_available();
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let config = make_config(
+        "tier-3-complex",
+        &[
+            "codex/openai/gpt-5.3-codex-spark/xhigh",
+            "openai-compat/openai/gpt-5/high",
+            "codex/openai/gpt-5.5/xhigh",
+        ],
+    );
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
+
+    let action = evaluate_error_rate_limit_failover(
+        "codex",
+        r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        true,
+        Some("tier-3-complex"),
+        None,
+        None,
+        true,
+        "recover from codex rate limit",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(action, "codex", "codex/openai/gpt-5.5/xhigh");
+    assert!(tried_specs.contains(&"openai-compat/openai/gpt-5/high".to_string()));
+    assert_eq!(fallback_chain.len(), 1);
+}
+
+#[test]
 fn codex_provider_quota_ignores_model_hint_quoted_outside_stderr() {
+    let _assume = assume_tools_available();
     let config = make_config(
         "tier-3-complex",
         &[
@@ -221,6 +277,7 @@ fn codex_provider_quota_ignores_model_hint_quoted_outside_stderr() {
 
 #[test]
 fn codex_model_scoped_quota_explains_when_no_fallback_candidate_exists() {
+    let _assume = assume_tools_available();
     let config = make_config(
         "tier-3-complex",
         &["codex/openai/gpt-5.3-codex-spark/xhigh"],

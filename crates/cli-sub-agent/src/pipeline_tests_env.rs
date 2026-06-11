@@ -85,6 +85,43 @@ fn build_merged_env_disables_gemini_direct_launch_in_tests() {
 }
 
 #[test]
+fn build_merged_env_injects_openai_compat_http_config() {
+    let mut cfg = test_config_with_node_heap_limit(None);
+    cfg.tools.insert(
+        "openai-compat".to_string(),
+        csa_config::ToolConfig {
+            base_url: Some("http://localhost:8317".to_string()),
+            api_key: Some("test-key".to_string()),
+            default_model: Some("local-model".to_string()),
+            ..Default::default()
+        },
+    );
+
+    let merged = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "openai-compat",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
+
+    assert_eq!(
+        merged.get("OPENAI_COMPAT_BASE_URL").map(String::as_str),
+        Some("http://localhost:8317")
+    );
+    assert_eq!(
+        merged.get("OPENAI_COMPAT_API_KEY").map(String::as_str),
+        Some("test-key")
+    );
+    assert_eq!(
+        merged.get("OPENAI_COMPAT_MODEL").map(String::as_str),
+        Some("local-model")
+    );
+}
+
+#[test]
 fn build_merged_env_appends_node_options_when_existing_value_present() {
     let cfg = test_config_with_node_heap_limit(Some(2048));
     let mut extra_env = HashMap::new();

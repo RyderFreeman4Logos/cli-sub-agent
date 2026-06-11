@@ -178,7 +178,7 @@ fn ordered_global_candidates(
         if config.is_some_and(|cfg| !cfg.is_tool_auto_selectable(tool.as_str())) {
             continue;
         }
-        if !crate::run_helpers::is_tool_binary_available_for_config(tool.as_str(), config) {
+        if !crate::run_helpers::is_tool_runtime_available_for_config(tool.as_str(), config, None) {
             continue;
         }
         ordered.push((tool, None));

@@ -13,6 +13,10 @@ use csa_config::ProjectConfig;
 use csa_core::types::{FallbackAttempt, ModelFamily, ToolName, provider_for_tool_name};
 use csa_scheduler::FallbackChain;
 
+#[path = "run_cmd_post_failover_availability.rs"]
+mod failover_availability;
+use failover_availability::decide_available_failover;
+
 /// Outcome of rate-limit failover evaluation.
 pub(crate) enum RateLimitAction {
     /// No rate limit detected; break with result.
@@ -340,7 +344,7 @@ pub(crate) fn evaluate_rate_limit_failover(
         Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
-    let action = csa_scheduler::decide_failover(
+    let action = decide_available_failover(
         tool_name_str,
         "default",
         resolved_tier_name,
@@ -351,23 +355,18 @@ pub(crate) fn evaluate_rate_limit_failover(
         &exhausted_providers,
         cfg,
         &rate_limit.matched_pattern,
-    );
+    )?;
 
     match action {
-        csa_scheduler::FailoverAction::RetryInSession {
-            new_tool,
-            new_model_spec,
-            session_id: _,
-        }
-        | csa_scheduler::FailoverAction::RetrySiblingSession {
+        RateLimitAction::Retry {
             new_tool,
             new_model_spec,
         } => {
             warn!(
                 from_tool = %tool_name_str,
                 from_spec = %current_model_spec.unwrap_or("none"),
-                to_tool = %new_tool,
-                to_spec = %new_model_spec,
+                to_tool = %new_tool.as_str(),
+                to_spec = %new_model_spec.as_deref().unwrap_or("none"),
                 quota_exhausted = rate_limit.quota_exhausted,
                 reason = %rate_limit.reason,
                 "[csa-failover] intra-tier failover"
@@ -379,13 +378,12 @@ pub(crate) fn evaluate_rate_limit_failover(
                 quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
-            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
-                new_tool: tool,
-                new_model_spec: Some(new_model_spec),
+                new_tool,
+                new_model_spec,
             })
         }
-        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+        RateLimitAction::ExhaustedFailovers { reason } => {
             warn!(
                 reason = %reason,
                 quota_exhausted = rate_limit.quota_exhausted,
@@ -403,6 +401,7 @@ pub(crate) fn evaluate_rate_limit_failover(
             }
             Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
+        RateLimitAction::NoRateLimit => Ok(RateLimitAction::NoRateLimit),
     }
 }
 
@@ -583,7 +582,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
-    let action = csa_scheduler::decide_failover(
+    let action = decide_available_failover(
         tool_name_str,
         "default",
         resolved_tier_name,
@@ -594,23 +593,18 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         &exhausted_providers,
         cfg,
         &failover_signal.matched_pattern,
-    );
+    )?;
 
     match action {
-        csa_scheduler::FailoverAction::RetryInSession {
-            new_tool,
-            new_model_spec,
-            session_id: _,
-        }
-        | csa_scheduler::FailoverAction::RetrySiblingSession {
+        RateLimitAction::Retry {
             new_tool,
             new_model_spec,
         } => {
             warn!(
                 from_tool = %tool_name_str,
                 from_spec = %current_model_spec.unwrap_or("none"),
-                to_tool = %new_tool,
-                to_spec = %new_model_spec,
+                to_tool = %new_tool.as_str(),
+                to_spec = %new_model_spec.as_deref().unwrap_or("none"),
                 quota_exhausted = failover_signal.quota_exhausted,
                 reason = %failover_signal.reason,
                 "[csa-failover] intra-tier failover (transport error)"
@@ -622,13 +616,12 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
-            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
-                new_tool: tool,
-                new_model_spec: Some(new_model_spec),
+                new_tool,
+                new_model_spec,
             })
         }
-        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+        RateLimitAction::ExhaustedFailovers { reason } => {
             warn!(
                 reason = %reason,
                 quota_exhausted = failover_signal.quota_exhausted,
@@ -646,6 +639,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
             }
             Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
+        RateLimitAction::NoRateLimit => Ok(RateLimitAction::NoRateLimit),
     }
 }
 

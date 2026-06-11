@@ -168,9 +168,9 @@ fn format_post_run_commit_guard_message_includes_next_step_and_paths() {
         ],
     };
 
-    let message = format_post_run_commit_guard_message(&guard, false, false);
+    let message = format_post_run_commit_guard_message(&guard, false, false, Some("codex"));
     assert!(message.contains("WARNING"));
-    assert!(message.contains("csa run --skill commit"));
+    assert!(message.contains("csa run --tool codex --skill commit"));
     assert!(message.contains("Cargo.lock"));
     assert!(message.contains("uncommitted workspace mutations"));
 }
@@ -211,7 +211,14 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, false, Some(&guard));
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        false,
+        Some(&guard),
+    );
 
     assert_eq!(result.exit_code, 1);
     assert_eq!(result.summary, "ok");
@@ -243,7 +250,14 @@ fn apply_post_run_commit_policy_keeps_success_when_policy_disabled() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, false, false, Some(&guard));
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        false,
+        false,
+        Some(&guard),
+    );
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.summary, "ok");
@@ -266,7 +280,14 @@ fn apply_post_run_commit_policy_fails_when_commit_attempt_left_head_unchanged() 
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, false, true, Some(&guard));
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        false,
+        true,
+        Some(&guard),
+    );
 
     assert_eq!(result.exit_code, 1);
     assert_eq!(

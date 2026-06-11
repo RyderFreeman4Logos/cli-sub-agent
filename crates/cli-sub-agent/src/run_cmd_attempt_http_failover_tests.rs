@@ -75,8 +75,16 @@ fn assert_no_rate_limit(action: RateLimitAction) {
     }
 }
 
+fn assume_tools_available() -> crate::test_env_lock::ScopedTestEnvVar {
+    crate::test_env_lock::ScopedTestEnvVar::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    )
+}
+
 #[test]
 fn evaluate_error_rate_limit_failover_retries_on_gemini_http_400_init_failure() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -115,6 +123,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_http_400_init_failure() 
 
 #[test]
 fn evaluate_error_rate_limit_failover_skips_http_400_after_init_window() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -154,6 +163,7 @@ fn evaluate_error_rate_limit_failover_skips_http_400_after_init_window() {
 
 #[test]
 fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -199,6 +209,7 @@ fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
 
 #[test]
 fn evaluate_rate_limit_failover_skips_http_500_after_init_window() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",

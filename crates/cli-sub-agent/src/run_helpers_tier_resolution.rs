@@ -3,7 +3,7 @@ use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use tracing::warn;
 
-use super::{is_tool_binary_available_for_config, parse_tool_name};
+use super::{is_tool_runtime_available_for_config, parse_tool_name};
 use crate::failover_trace::{FailoverSkipKind, TierModelExclusion};
 
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ pub(crate) fn evaluate_tier_models(
             });
             continue;
         }
-        if !is_tool_binary_available_for_config(tool_str, Some(config)) {
+        if !is_tool_runtime_available_for_config(tool_str, Some(config), Some(spec)) {
             excluded.push(TierModelExclusion {
                 model_spec: spec.clone(),
                 tool: Some(tool),
