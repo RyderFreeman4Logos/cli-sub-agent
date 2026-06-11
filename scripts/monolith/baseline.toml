@@ -188,10 +188,10 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_execute.rs"
 kind = "source"
-baseline_tokens = 11348
-baseline_lines = 915
+baseline_tokens = 11600
+baseline_lines = 933
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+rationale = "pre-existing monolith debt; +18 lines for tier fallback diagnostics (#1999, #1987)"
 
 [[files]]
 path = "crates/cli-sub-agent/src/review_cmd_execute_tests.rs"

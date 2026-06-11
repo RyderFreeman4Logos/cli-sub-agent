@@ -374,7 +374,17 @@ pub(super) fn evaluate_post_attempt_retry(
             annotate_failover_exhaustion(request.exec_result, &reason);
             Ok(PostAttemptAction::Break(request.exec_changed_paths))
         }
-        RateLimitAction::NoRateLimit => Ok(PostAttemptAction::Break(request.exec_changed_paths)),
+        RateLimitAction::NoRateLimit => {
+            if request.exec_result.exit_code != 0 && request.tier_auto_select {
+                warn!(
+                    tool = %request.tool_name,
+                    exit_code = request.exec_result.exit_code,
+                    summary = %request.exec_result.summary,
+                    "Run failed but not classified as rate-limit/failover-eligible; no tier fallback attempted"
+                );
+            }
+            Ok(PostAttemptAction::Break(request.exec_changed_paths))
+        }
     }
 }
 

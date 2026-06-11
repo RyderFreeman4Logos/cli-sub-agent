@@ -108,6 +108,8 @@ fn classify_gemini_cli_runtime_error_text(
         "gemini_cli_crash"
     } else if is_gemini_reviewer_http_400_failure(&lower) {
         "HTTP 400"
+    } else if is_gemini_initial_stall_or_idle_timeout(&lower) {
+        "gemini_stall_timeout"
     } else {
         return None;
     };
@@ -148,6 +150,13 @@ fn is_gemini_reviewer_http_400_failure(lower: &str) -> bool {
         || lower.contains("status 400")
         || lower.contains("http 400")
         || lower.contains("400 bad request")
+}
+
+fn is_gemini_initial_stall_or_idle_timeout(lower: &str) -> bool {
+    lower.contains("initial_stall")
+        || lower.contains("legacy_initial_stall")
+        || lower.contains("no stdout within")
+        || (lower.contains("idle_timeout") && lower.contains("gemini"))
 }
 
 pub(super) fn build_gemini_api_key_retry_env(

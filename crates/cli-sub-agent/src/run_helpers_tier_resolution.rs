@@ -144,8 +144,9 @@ pub(crate) fn collect_preferred_tier_models(
 /// (`[tools.<name>].enabled = false`) cannot be honored and FAILS FAST (#1836)
 /// rather than silently substituting the tier default — a silent substitution
 /// would also violate the `--no-failover` contract by running a different tool
-/// than the one pinned. A pin naming a tool that is simply NOT a tier candidate
-/// keeps the pre-existing warn-and-proceed behavior (#1791).
+/// than the one pinned. A pin naming a tool that is NOT a tier candidate also
+/// FAILS FAST (#1994) — silently proceeding with a different tool caused the
+/// operator to believe their preferred tool was running when it was not.
 pub(crate) fn resolve_preferred_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
@@ -158,13 +159,11 @@ pub(crate) fn resolve_preferred_tool_from_tier(
     }
     let (available, excluded) = evaluate_tier_models(tier_name, config, skip_specs);
 
-    // #1836: an explicit `--tool` pin that names a tier candidate which is
-    // disabled in config must fail fast. Honoring the pin is impossible (the
-    // tool is gated off), so error instead of falling through to the tier
-    // default — that fall-through ran a different, enabled tool than the one
-    // named, breaking the `--no-failover` contract. Enabled candidates (handled
-    // by the soft-reorder below, #1749) and non-candidates (warn-and-proceed,
-    // #1791) are deliberately left untouched.
+    // #1836: a `--tool` pin that names a disabled tier candidate must fail
+    // fast. Honoring the pin is impossible (the tool is gated off), so error
+    // instead of falling through to the tier default. Enabled candidates are
+    // handled by the soft-reorder below (#1749); non-candidates are rejected by
+    // the next loop with a tier-candidate error (#1994).
     for preferred_tool in preference_order {
         let is_enabled_candidate = available
             .iter()
@@ -191,13 +190,12 @@ pub(crate) fn resolve_preferred_tool_from_tier(
             ignored_tier_tool_preference_warning(tier_name, preferred_tool, &available)
         {
             let suggestions = config.suggest_compatible_alternatives(preferred_tool, tier_name);
-            warn!(
-                tier = tier_name,
-                tool = preferred_tool,
-                suggestions = %suggestions,
-                "Preferred tool is not an enabled tier candidate; ignoring preference"
+            anyhow::bail!(
+                "--tool {preferred_tool} is not a candidate of tier '{tier_name}' \
+                 (candidates: {suggestions}). Either add a {preferred_tool} model to the \
+                 tier's models list or use --force-ignore-tier-setting to bypass tier routing. \
+                 Detail: {warning}"
             );
-            eprintln!("{warning}");
         }
     }
 
@@ -320,5 +318,39 @@ mod tests {
         );
 
         assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn resolve_preferred_tool_from_tier_rejects_non_candidate() {
+        use super::resolve_preferred_tool_from_tier;
+        use crate::review_cmd::tests::project_config_with_enabled_tools;
+        use csa_config::{TierStrategy, config::TierConfig};
+
+        let mut config = project_config_with_enabled_tools(&["gemini-cli"]);
+        config.tiers.insert(
+            "test-tier".to_string(),
+            TierConfig {
+                description: "test".to_string(),
+                models: vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()],
+                strategy: TierStrategy::default(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+
+        let err = resolve_preferred_tool_from_tier(
+            "test-tier",
+            &config,
+            None,
+            &["openai-compat".to_string()],
+            &[],
+        )
+        .expect_err("--tool openai-compat must fail when not in tier candidates (#1994)");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("openai-compat") && msg.contains("not a candidate"),
+            "error should name the rejected tool and explain why: {msg}"
+        );
     }
 }

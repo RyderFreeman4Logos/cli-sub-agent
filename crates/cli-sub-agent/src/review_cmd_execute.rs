@@ -259,6 +259,14 @@ pub(crate) async fn execute_review_with_tier_filter(
         no_failover,
         tier_preference_order: &tier_preference_order,
     });
+    if tier_fallback_enabled && candidates.len() <= 1 {
+        warn!(
+            tier = ?tier_name,
+            initial_tool = %tool,
+            candidate_count = candidates.len(),
+            "Tier fallback enabled but only one candidate resolved; failover will not be possible"
+        );
+    }
     warn_if_fast_mode_has_no_codex_review_candidate(
         effective_fast_mode,
         warn_no_codex_fast_mode,
@@ -571,6 +579,16 @@ pub(crate) async fn execute_review_with_tier_filter(
             status_reason.as_deref(),
             Some(attempt_started_at.elapsed()),
         );
+
+        if execution.execution.exit_code != 0 && failure_reason.is_none() && tier_fallback_enabled {
+            warn!(
+                tool = %attempt_tool,
+                exit_code = execution.execution.exit_code,
+                summary = %execution.execution.summary,
+                candidates = candidates.len(),
+                "Review failed but not classified as failover-eligible; no tier fallback will be attempted"
+            );
+        }
 
         if tier_fallback_enabled
             && candidates.len() > 1
