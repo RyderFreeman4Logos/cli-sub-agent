@@ -316,6 +316,47 @@ fn large_diff_warning_changed_paths_preserves_boundary_whitespace_in_untracked_p
 }
 
 #[test]
+fn large_diff_warning_changed_paths_treats_tracked_pathspec_magic_as_literal() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    let magic_path = ":(glob)large.rs";
+    std::fs::write(root.join(magic_path), "seed\n").unwrap();
+    run_git_literal_pathspecs(root, &["add", "--", magic_path]);
+    run_git(root, &["commit", "-q", "-m", "add magic path"]);
+
+    let token_threshold = 10;
+    let long_line = "x".repeat(tracked_diff_byte_limit(token_threshold) * 4);
+    std::fs::write(root.join(magic_path), format!("seed\n{long_line}\n")).unwrap();
+
+    let changes = collect_uncommitted_changes_for_changed_paths_with_token_threshold(
+        root,
+        &[magic_path.to_string()],
+        token_threshold,
+    )
+    .expect("filtered tracked path with pathspec magic should count");
+
+    assert_eq!(changes.file_count, 1);
+    assert_eq!(changes.files, vec![magic_path.to_string()]);
+    assert_eq!(changes.insertions, 1);
+    assert_eq!(changes.deletions, 0);
+    assert_eq!(changes.approx_diff_tokens, token_threshold + 1);
+
+    let warning = large_diff_warning_report(
+        &changes,
+        &RunLargeDiffWarningConfig {
+            enabled: true,
+            changed_files: 100,
+            changed_lines: 100,
+            approx_diff_tokens: token_threshold,
+            mode: RunLargeDiffWarningMode::Warn,
+        },
+    )
+    .expect("large literal tracked path should trip token threshold");
+
+    assert_eq!(warning.approx_diff_tokens, token_threshold + 1);
+}
+
+#[test]
 fn effective_writer_must_commit_respects_cli_and_config_precedence() {
     assert!(!effective_writer_must_commit(false, None));
 
@@ -368,6 +409,22 @@ fn run_git(root: &Path, args: &[&str]) {
         .arg("-C")
         .arg(root)
         .args(args)
+        .output()
+        .expect("git command should execute");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_git_literal_pathspecs(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_LITERAL_PATHSPECS", "1")
         .output()
         .expect("git command should execute");
     assert!(

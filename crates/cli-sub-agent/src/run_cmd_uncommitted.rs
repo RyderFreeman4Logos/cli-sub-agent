@@ -418,6 +418,7 @@ fn estimate_tracked_diff_tokens(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if let Some(filter) = path_filter {
+        command.env("GIT_LITERAL_PATHSPECS", "1");
         command.args(filter);
     }
 
@@ -497,6 +498,7 @@ fn run_git_diff_capture(
     let mut command = Command::new("git");
     command.arg("-C").arg(project_root).args(args).arg("--");
     if let Some(filter) = path_filter {
+        command.env("GIT_LITERAL_PATHSPECS", "1");
         command.args(filter);
     }
     let output = command.output().ok()?;
