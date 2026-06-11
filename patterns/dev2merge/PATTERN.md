@@ -112,8 +112,8 @@ Short-circuit no-op runs before branch validation:
   the current branch.
 - Ancestor success without a merged PR means a fresh branch and continues.
 
-Runs without `--issue` skip the issue check. Any skip prints
-`dev2merge: ... nothing to do`, sets `DEV2MERGE_SKIP=true`, and exits 0.
+`--issue` absent skips issue lookup. Skips print
+`dev2merge: ... nothing to do`, set `DEV2MERGE_SKIP=true`, exit 0.
 Issue and PR lookup failures fail open.
 
 ```bash
@@ -134,13 +134,13 @@ fi
 
 BRANCH="$(git branch --show-current)"
 [ -n "${BRANCH}" ] && [ "${BRANCH}" != "HEAD" ] || exit 0
-DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)"
 [ -n "${DEFAULT_BRANCH}" ] || DEFAULT_BRANCH="main"
 [ -z "$(git status --porcelain)" ] || exit 0
 
 if git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
   MERGED_PR="$(gh pr list --head "${BRANCH}" --state merged --json number -q '.[0].number' 2>/dev/null || true)"
-  [ -n "${MERGED_PR}" ] && skip "dev2merge: branch ${BRANCH} already merged via PR #${MERGED_PR} and HEAD is ancestor of ${DEFAULT_BRANCH} — nothing to do"
+  if [ -n "${MERGED_PR}" ]; then skip "dev2merge: branch ${BRANCH} already merged via PR #${MERGED_PR}; HEAD is ancestor of ${DEFAULT_BRANCH} — nothing to do"; fi
 fi
 ```
 

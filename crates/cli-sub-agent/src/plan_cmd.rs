@@ -565,6 +565,10 @@ mod tests_manual_handoff;
 mod tests_workflows;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_dev2merge_2031.rs"]
+mod tests_dev2merge_2031;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_pr_bot.rs"]
 mod tests_pr_bot;
 
