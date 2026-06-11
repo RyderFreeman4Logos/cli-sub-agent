@@ -277,6 +277,22 @@ test_tokenizer_unparsable_fails_closed() {
         run_checker "$repo" "$baseline" --scope all
 }
 
+test_small_unbaselined_file_skips_tokenizer() {
+    local repo bin_dir baseline
+    repo="$(new_tmp_dir)"
+    bin_dir="$(new_tmp_dir)"
+    setup_repo "$repo"
+    write_fake_csa "$bin_dir"
+    mkdir -p "$repo/src"
+    printf 'x\n' >"$repo/src/small.rs"
+    baseline="$repo/baseline.toml"
+    printf '' >"$baseline"
+    git -C "$repo" add src/small.rs
+    git -C "$repo" commit -q -m init
+
+    CSA_FAKE_FAIL=1 PATH="$bin_dir:$PATH" run_checker "$repo" "$baseline" --scope all >/dev/null
+}
+
 test_new_over_budget_test_file_hard_fails() {
     local repo bin_dir baseline
     repo="$(new_tmp_dir)"
@@ -301,6 +317,7 @@ test_empty_issue_hard_fails
 test_report_all_lists_multiple_offenders
 test_tokenizer_unavailable_fails_closed
 test_tokenizer_unparsable_fails_closed
+test_small_unbaselined_file_skips_tokenizer
 test_new_over_budget_test_file_hard_fails
 test_new_over_budget_markdown_file_hard_fails_across_scopes
 

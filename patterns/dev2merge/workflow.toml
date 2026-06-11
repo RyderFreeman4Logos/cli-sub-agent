@@ -146,7 +146,7 @@ DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's
 
 if git merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
   MERGED_PR="$(gh pr list --head "${BRANCH}" --state merged --json number -q '.[0].number' 2>/dev/null || true)"
-  [ -n "${MERGED_PR}" ] && skip "dev2merge: branch ${BRANCH} already merged via PR #${MERGED_PR} and HEAD is ancestor of ${DEFAULT_BRANCH} — nothing to do"
+  if [ -n "${MERGED_PR}" ]; then skip "dev2merge: branch ${BRANCH} already merged via PR #${MERGED_PR}; HEAD is ancestor of ${DEFAULT_BRANCH} — nothing to do"; fi
 fi
 ```'''
 on_fail = "abort"
