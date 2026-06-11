@@ -232,12 +232,23 @@ pub(crate) fn format_uncommitted_warning(changes: &csa_session::UncommittedChang
 /// non-ignored lines closes that gap. `.gitignore` is honored (build artifacts do
 /// not inflate the count), and git state is never mutated to measure it (no
 /// `git add`, no intent-to-add).
+/// If untracked sizing proves the line total is only a lower bound (large,
+/// binary, capped, or truncated files), this returns `usize::MAX` so the caller's
+/// size gate fails toward the full guard instead of treating an unknown exact
+/// line count as trivial.
 ///
 /// Returns `0` when `project_root` is not a git worktree or the tree is clean.
 /// Any git/IO failure is non-fatal (fail-open), matching the rest of the guard.
 pub(crate) fn working_tree_changed_lines(project_root: &Path) -> usize {
-    collect_uncommitted_changes_with_filter(project_root, None, None)
-        .map(|changes| usize::try_from(changes.changed_lines()).unwrap_or(usize::MAX))
+    collect_uncommitted_changes_with_filter_and_untracked_size(project_root, None, None)
+        .map(|(changes, untracked)| {
+            let changed_lines = usize::try_from(changes.changed_lines()).unwrap_or(usize::MAX);
+            if untracked.lower_bound {
+                usize::MAX
+            } else {
+                changed_lines
+            }
+        })
         .unwrap_or(0)
 }
 
@@ -297,6 +308,22 @@ fn collect_uncommitted_changes_with_filter(
     path_filter: Option<&BTreeSet<String>>,
     tracked_token_threshold: Option<usize>,
 ) -> Option<csa_session::UncommittedChanges> {
+    collect_uncommitted_changes_with_filter_and_untracked_size(
+        project_root,
+        path_filter,
+        tracked_token_threshold,
+    )
+    .map(|(changes, _)| changes)
+}
+
+fn collect_uncommitted_changes_with_filter_and_untracked_size(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+    tracked_token_threshold: Option<usize>,
+) -> Option<(
+    csa_session::UncommittedChanges,
+    crate::untracked_size::UntrackedDiffSize,
+)> {
     if !super::git::is_git_worktree(project_root) {
         return None;
     }
@@ -327,13 +354,14 @@ fn collect_uncommitted_changes_with_filter(
         &untracked,
         tracked_token_threshold,
     );
-    summarize_uncommitted_changes_with_stats(
+    let changes = summarize_uncommitted_changes_with_stats(
         &porcelain,
         &numstat,
         untracked_lines,
         approx_diff_tokens,
         path_filter,
-    )
+    )?;
+    Some((changes, untracked))
 }
 
 fn estimate_changed_surface_tokens(

@@ -363,6 +363,20 @@ fn working_tree_changed_lines_counts_untracked_non_ignored_files() {
 }
 
 #[test]
+fn working_tree_changed_lines_treats_large_uncounted_untracked_file_as_substantial() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    let long_line = format!("{}\n", "x".repeat(64 * 1024));
+    std::fs::write(root.join("large.txt"), long_line.repeat(17)).unwrap();
+
+    let measured = working_tree_changed_lines(root);
+    assert!(
+        measured > 10,
+        "lower-bound untracked size must not look trivial to the writer guard, got {measured}"
+    );
+}
+
+#[test]
 fn working_tree_changed_lines_combines_tracked_and_untracked() {
     let temp = init_repo_with_initial_commit();
     let root = temp.path();

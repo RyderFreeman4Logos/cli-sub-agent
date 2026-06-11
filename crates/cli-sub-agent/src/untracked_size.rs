@@ -52,11 +52,13 @@ pub(crate) const MAX_UNTRACKED_FILES: usize = 1_000;
 /// counted). `notes` is empty when every counted total is exact; otherwise it
 /// carries human-readable markers stating which totals are a lower bound
 /// (capped, binary/large, or truncated), so a reader is never misled into
-/// treating an estimate as exact.
+/// treating an estimate as exact. `lower_bound` is the structured equivalent of
+/// those notes for callers that need a boolean gate instead of report text.
 pub(crate) struct UntrackedDiffSize {
     pub(crate) files: usize,
     pub(crate) lines: usize,
     pub(crate) bytes: u64,
+    pub(crate) lower_bound: bool,
     pub(crate) notes: Vec<String>,
 }
 
@@ -86,6 +88,7 @@ fn untracked_diff_size_with_filter(
         files: 0,
         lines: 0,
         bytes: 0,
+        lower_bound: false,
         notes: Vec::new(),
     };
     let mut capped_files = 0usize;
@@ -120,17 +123,20 @@ fn untracked_diff_size_with_filter(
     }
 
     if uncounted_files > 0 {
+        out.lower_bound = true;
         out.notes.push(format!(
             "{uncounted_files} untracked file(s) not line-counted (binary or > {} MiB); changed-line total is a lower bound",
             MAX_LINE_SCAN_BYTES >> 20
         ));
     }
     if capped_files > 0 {
+        out.lower_bound = true;
         out.notes.push(format!(
             "{capped_files} untracked file(s) line-counted up to {MAX_LINES_PER_FILE} lines (capped); changed-line total is a lower bound"
         ));
     }
     if listing.truncated {
+        out.lower_bound = true;
         out.notes.push(format!(
             "untracked scan truncated: sized the first {MAX_UNTRACKED_FILES} untracked files (the working tree has more, not enumerated); totals are a lower bound"
         ));

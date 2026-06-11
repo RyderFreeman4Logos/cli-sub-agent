@@ -190,6 +190,7 @@ fn untracked_diff_size_counts_exact_small_files() {
     assert_eq!(size.files, 2);
     assert_eq!(size.lines, 5);
     assert_eq!(size.bytes, 6 + 4);
+    assert!(!size.lower_bound);
     assert!(
         size.notes.is_empty(),
         "exact small files need no estimated/capped note, got {:?}",
@@ -248,6 +249,7 @@ fn untracked_diff_size_marks_large_and_binary_without_inflating_lines() {
 
     assert_eq!(size.files, 3, "all three regular files are sized");
     assert_eq!(size.lines, 2, "only the exact text file contributes lines");
+    assert!(size.lower_bound);
     assert_eq!(
         size.notes.len(),
         1,
