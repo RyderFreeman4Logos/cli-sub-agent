@@ -764,15 +764,15 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "patterns/pr-bot/PATTERN.md"
 kind = "doc"
-baseline_tokens = 33758
-baseline_lines = 2280
+baseline_tokens = 34027
+baseline_lines = 2307
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for PR title default derivation (#2050); no-growth ratchet"
 
 [[files]]
 path = "patterns/pr-bot/workflow.toml"
 kind = "config"
-baseline_tokens = 36819
-baseline_lines = 2774
+baseline_tokens = 37088
+baseline_lines = 2801
 issue = "1880"
-rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
+rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for PR title default derivation (#2050); no-growth ratchet"

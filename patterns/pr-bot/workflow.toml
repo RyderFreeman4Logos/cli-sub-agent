@@ -722,6 +722,32 @@ fi
 set -euo pipefail
 PR_WAS_EXISTING=false
 
+derive_default_pr_title() {
+  local branch_title title
+  title="$(git log -1 --pretty=%s 2>/dev/null || true)"
+  title="$(printf '%s\n' "${title}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sed -n '1p')"
+  if [ -n "${title}" ]; then
+    printf '%s\n' "${title}"
+    return 0
+  fi
+
+  branch_title="$(
+    printf '%s\n' "${WORKFLOW_BRANCH}" \
+      | sed -E 's#[-/_]+# #g; s#[[:space:]]+# #g; s#^[[:space:]]+##; s#[[:space:]]+$##' \
+      | sed -n '1p'
+  )"
+  if [ -z "${branch_title}" ]; then
+    branch_title="Update ${WORKFLOW_BRANCH}"
+  fi
+  printf '%s\n' "${branch_title}" | awk '{ print toupper(substr($0, 1, 1)) substr($0, 2) }'
+}
+
+PR_TITLE="${PR_TITLE:-}"
+if [ -z "${PR_TITLE}" ]; then
+  PR_TITLE="$(derive_default_pr_title)"
+  echo "INFO: PR_TITLE unset; using derived title: ${PR_TITLE}" >&2
+fi
+
 # --- Early-push detection: warn if branch was already pushed before review ---
 if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
   echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
@@ -911,6 +937,7 @@ REPO="${REPO_SLUG}"
 echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
 echo "CSA_VAR:PR_WAS_EXISTING=$PR_WAS_EXISTING"
+echo "CSA_VAR:PR_TITLE=$PR_TITLE"
 echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
 ```'''
 on_fail = "abort"

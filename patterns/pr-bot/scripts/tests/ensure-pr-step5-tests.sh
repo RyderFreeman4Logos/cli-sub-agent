@@ -48,6 +48,9 @@ run_case() {
   local workflow_branch="${8:-fix/1171}"
   local expected_list_head="${9:-${workflow_branch}}"
   local expected_create_head="${10:-test-owner:${workflow_branch}}"
+  local expected_title="${11:-Fix 1171}"
+  local pr_title_mode="${12:-set}"
+  local git_head_subject="${13-Fix 1171}"
   local case_dir="${TMP_ROOT}/${case_name}"
   local bin_dir="${case_dir}/bin"
   local stdout_file="${case_dir}/stdout.txt"
@@ -62,22 +65,28 @@ run_case() {
 
   set +e
   (
-    PATH="${bin_dir}:${PATH}" \
-    GIT_STUB_STATE_DIR="${case_dir}" \
-    GIT_STUB_BRANCH_PUSHED="${branch_pushed}" \
-    GIT_STUB_SOURCE_OWNER="test-owner" \
-    GH_STUB_STATE_DIR="${case_dir}" \
-    GH_STUB_SCENARIO="${scenario}" \
-    GH_STUB_EXPECTED_LIST_HEAD="${expected_list_head}" \
-    GH_STUB_EXPECTED_CREATE_HEAD="${expected_create_head}" \
-    GH_STUB_EXPECTED_BASE="main" \
-    REVIEW_COMPLETED="true" \
-    REMOTE_NAME="origin" \
-    WORKFLOW_BRANCH="${workflow_branch}" \
-    REPO_SLUG="test-owner/test-repo" \
-    DEFAULT_BRANCH="main" \
-    PR_TITLE="Fix 1171" \
-    PR_BODY="Body" \
+    export PATH="${bin_dir}:${PATH}"
+    export GIT_STUB_STATE_DIR="${case_dir}"
+    export GIT_STUB_BRANCH_PUSHED="${branch_pushed}"
+    export GIT_STUB_SOURCE_OWNER="test-owner"
+    export GIT_STUB_HEAD_SUBJECT="${git_head_subject}"
+    export GH_STUB_STATE_DIR="${case_dir}"
+    export GH_STUB_SCENARIO="${scenario}"
+    export GH_STUB_EXPECTED_LIST_HEAD="${expected_list_head}"
+    export GH_STUB_EXPECTED_CREATE_HEAD="${expected_create_head}"
+    export GH_STUB_EXPECTED_BASE="main"
+    export GH_STUB_EXPECTED_TITLE="${expected_title}"
+    export REVIEW_COMPLETED="true"
+    export REMOTE_NAME="origin"
+    export WORKFLOW_BRANCH="${workflow_branch}"
+    export REPO_SLUG="test-owner/test-repo"
+    export DEFAULT_BRANCH="main"
+    export PR_BODY="Body"
+    if [ "${pr_title_mode}" = "unset" ]; then
+      unset PR_TITLE
+    else
+      export PR_TITLE="${expected_title}"
+    fi
     "${script_path}" >"${stdout_file}" 2>"${stderr_file}"
   )
   rc=$?
@@ -111,6 +120,8 @@ run_case "branch-pushed-create" "true" "create-success" "0" "101" "1"
 run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
 run_case "lookup-hits-merged-noop" "true" "merged" "0" "909" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
+run_case "unset-title-derives-head" "true" "create-success" "0" "101" "1" "PR_TITLE unset; using derived title: fix(pr-bot): derive title" "fix/1171" "fix/1171" "test-owner:fix/1171" "fix(pr-bot): derive title" "unset" "fix(pr-bot): derive title"
+run_case "unset-title-falls-back-to-branch" "true" "create-success" "0" "101" "1" "PR_TITLE unset; using derived title: Topic custom title" "topic/custom_title" "topic/custom_title" "test-owner:topic/custom_title" "Topic custom title" "unset" ""
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "stale-list-create-race-recovery" "true" "stale-already-exists" "0" "808" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple PRs found for test-owner:fix/1171"
