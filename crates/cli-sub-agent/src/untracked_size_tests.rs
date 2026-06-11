@@ -35,6 +35,42 @@ fn init_repo() -> tempfile::TempDir {
     temp
 }
 
+#[cfg(unix)]
+fn make_pathspec_echo_git(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_git = root.join("git");
+    std::fs::write(
+        &fake_git,
+        r#"#!/bin/sh
+set -eu
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+count_file="$dir/git-count"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+after_separator=0
+for arg in "$@"; do
+    if [ "$after_separator" -eq 1 ]; then
+        printf '%s\000' "$arg"
+    fi
+    if [ "$arg" = "--" ]; then
+        after_separator=1
+    fi
+done
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_git).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_git, perms).unwrap();
+    fake_git
+}
+
 #[test]
 fn classify_counts_exact_small_text_file() {
     let temp = tempfile::tempdir().unwrap();
@@ -245,6 +281,53 @@ fn untracked_diff_size_for_paths_checks_filtered_paths_after_global_cap() {
         !size.notes.iter().any(|note| note.contains("truncated")),
         "filtered path sizing must not inherit the global untracked cap note, got {:?}",
         size.notes
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_untracked_listing_batches_many_pathspecs_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let fake_git = make_pathspec_echo_git(temp.path());
+    let filter = (0..64)
+        .map(|i| format!("new-{i:04}.rs"))
+        .collect::<BTreeSet<_>>();
+
+    let listing = list_filtered_untracked_with_git(&root, &filter, fake_git.as_os_str());
+
+    assert_eq!(listing.paths.len(), filter.len());
+    assert!(!listing.truncated);
+    let count = std::fs::read_to_string(temp.path().join("git-count")).unwrap();
+    assert_eq!(
+        count, "1",
+        "filtered sizing must batch pathspecs into one git call"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_untracked_listing_caps_many_pathspecs_before_git() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let fake_git = make_pathspec_echo_git(temp.path());
+    let filter = (0..(MAX_UNTRACKED_FILES + 25))
+        .map(|i| format!("new-{i:04}.rs"))
+        .collect::<BTreeSet<_>>();
+
+    let listing = list_filtered_untracked_with_git(&root, &filter, fake_git.as_os_str());
+
+    assert_eq!(listing.paths.len(), MAX_UNTRACKED_FILES);
+    assert!(
+        listing.truncated,
+        "oversized filtered path sets must be marked lower-bound/truncated"
+    );
+    let count = std::fs::read_to_string(temp.path().join("git-count")).unwrap();
+    assert_eq!(
+        count, "1",
+        "filtered sizing must not spawn once per changed path"
     );
 }
 
