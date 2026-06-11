@@ -51,7 +51,10 @@ pub use global::{
     ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, TierPolicyConfig,
     ToolSelection,
 };
-pub use global_caller_hints::{CallerHintsConfig, DEFAULT_CODEX_SESSION_WAIT_YIELD_MS};
+pub use global_caller_hints::{
+    CallerHintsConfig, DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC,
+    DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC, DEFAULT_CODEX_SESSION_WAIT_YIELD_MS,
+};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use memory::{MemoryBackend, MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};

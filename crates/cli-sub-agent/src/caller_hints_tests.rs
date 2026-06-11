@@ -161,6 +161,29 @@ fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
 }
 
 #[test]
+fn codex_yield_hint_prefers_mcp_wait_and_keeps_shell_fallback_yield() {
+    let hint = crate::process_tree::format_codex_yield_hint(450_000);
+
+    assert!(hint.contains("mcp_tool=\"csa_session_wait\""), "{hint}");
+    assert!(hint.contains("tool_timeout_sec=7200"), "{hint}");
+    assert!(hint.contains("timeout_seconds=6900"), "{hint}");
+    assert!(
+        hint.contains("outer tool_timeout_sec: 7200") && hint.contains("timeout_seconds: 6900"),
+        "{hint}"
+    );
+    assert!(
+        hint.contains("Prefer the CSA MCP tool csa_session_wait"),
+        "{hint}"
+    );
+    assert!(hint.contains("Shell fallback only"), "{hint}");
+    assert!(hint.contains("yield_time_ms: 450000"), "{hint}");
+    assert!(
+        !hint.contains("prompt-cache TTL") && !hint.contains("24h"),
+        "hint must not claim undocumented Codex cache TTLs: {hint}"
+    );
+}
+
+#[test]
 fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(RUN_CMD_DAEMON_SRC);
     assert_eq!(blocks.len(), 1, "run_cmd_daemon emits one CALLER_HINT");

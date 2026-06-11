@@ -108,8 +108,9 @@ frequent_poll_seconds = 60
 long_poll_seconds = 240
 
 # Parent-tool caller hints.
-# Codex shell calls should pass this `yield_time_ms` for `csa session wait`.
-# The default 300000 ms (5 minutes) is conservative for OpenAI in-memory prompt-cache TTL retention.
+# Codex callers should prefer the CSA MCP `csa_session_wait` tool with a long
+# tool timeout (default hint: 7200 seconds). This shell yield is kept for
+# fallback `csa session wait` calls when MCP is unavailable.
 # [caller_hints]
 # codex_session_wait_yield_ms = 300000
 

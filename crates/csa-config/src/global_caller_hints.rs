@@ -8,6 +8,14 @@ use crate::paths;
 
 /// Default Codex shell `yield_time_ms` recommended for `csa session wait`.
 pub const DEFAULT_CODEX_SESSION_WAIT_YIELD_MS: u64 = 300_000;
+/// Default Codex MCP tool timeout to recommend for `csa_session_wait`.
+pub const DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC: u64 = 7_200;
+/// Default internal MCP `csa_session_wait.timeout_seconds` cap.
+///
+/// This must stay below `DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC` so
+/// the server can return an alive/re-wait result before the caller's MCP tool
+/// deadline cancels the request.
+pub const DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC: u64 = 6_900;
 
 /// Configuration for hints emitted to parent tool callers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

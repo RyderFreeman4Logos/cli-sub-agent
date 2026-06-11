@@ -14,6 +14,12 @@ fn test_caller_hints_defaults_parse_when_section_omitted() {
         config.caller_hints.codex_session_wait_yield_ms,
         DEFAULT_CODEX_SESSION_WAIT_YIELD_MS
     );
+    assert_eq!(DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC, 7_200);
+    assert_eq!(DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC, 6_900);
+    assert!(
+        DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC
+            > DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC
+    );
 }
 
 #[test]
