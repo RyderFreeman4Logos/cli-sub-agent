@@ -48,7 +48,15 @@ on_fail = "abort"
 id = 2
 title = "Register Tasks"
 prompt = """
-Register each parsed TODO item or issue candidate via TaskCreate.
+TODO.md is a read-only planning artifact. Progress tracking uses the host
+task-list adapter.
+
+Task adapter mapping:
+- Claude Code: TaskCreate creates, TaskUpdate updates, TaskGet/TaskList resume.
+- Hermes: use the todo tool as the TaskCreate/TaskUpdate/TaskList equivalent.
+- Codex: use update_plan for task registration and status updates.
+
+Register each parsed TODO item or issue candidate via TaskCreate or the host equivalent.
 
 Each TODO task must include:
 - stable item id
@@ -63,7 +71,7 @@ Each issue task must include:
 - description with the issue URL or #<number>, key constraint summary, dependency links, and DONE WHEN
 - enough context to start work without rereading the full issue body
 
-Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate.
+Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate or the host equivalent.
 
 MANDATORY publish-phase task decomposition (when publish is not skipped):
 The publish pipeline MUST be registered as SEPARATE tasks:
@@ -82,10 +90,12 @@ id = 3
 title = "Execute Checklist Serially"
 prompt = """
 Execute the normalized tasks strictly in order.
+mktsk bookkeeping stays in the main agent/orchestrator. Do not delegate task-list
+registration, status updates, or resume state to a CSA subprocess.
 Treat each task as an atomic transaction:
 1) execute exactly one item
 2) run quality gates/review
-3) persist completion via TaskUpdate immediately
+3) persist completion via TaskUpdate or the host equivalent immediately
 4) write progress checkpoint before moving to next item
 
 Dispatch by executor tag:
@@ -101,14 +111,14 @@ Dispatch by executor tag:
 Checkpoint policy (mandatory):
 - Use `.csa/state/mktsk/checkpoint.json` as progress checkpoint.
 - Update checkpoint after each completed item with latest completed item id.
-- If interrupted, resume from TaskList status and checkpoint state.
+- If interrupted, resume from TaskList or host task-list status and checkpoint state.
 
 After each item:
 1) just fmt
 2) just clippy
 3) just test
 4) SID=$(csa review --diff) && csa session wait --session "$SID"
-5) mark the TaskCreate entry as completed via TaskUpdate
+5) mark the task-list entry as completed via TaskUpdate or the host equivalent
 
 ## Execution Tasks
 ${STEP_2_OUTPUT}"""
