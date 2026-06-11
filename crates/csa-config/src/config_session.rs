@@ -48,8 +48,72 @@ impl PostExecGateConfig {
     }
 }
 
+pub const DEFAULT_RUN_LARGE_DIFF_WARNING_CHANGED_FILES: usize = 5;
+pub const DEFAULT_RUN_LARGE_DIFF_WARNING_CHANGED_LINES: u64 = 500;
+pub const DEFAULT_RUN_LARGE_DIFF_WARNING_APPROX_TOKENS: usize = 8_000;
+
+const fn default_run_large_diff_warning_enabled() -> bool {
+    true
+}
+
+const fn default_run_large_diff_warning_changed_files() -> usize {
+    DEFAULT_RUN_LARGE_DIFF_WARNING_CHANGED_FILES
+}
+
+const fn default_run_large_diff_warning_changed_lines() -> u64 {
+    DEFAULT_RUN_LARGE_DIFF_WARNING_CHANGED_LINES
+}
+
+const fn default_run_large_diff_warning_approx_tokens() -> usize {
+    DEFAULT_RUN_LARGE_DIFF_WARNING_APPROX_TOKENS
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunLargeDiffWarningMode {
+    #[default]
+    Warn,
+}
+
+/// Caller-visible warning policy for writer sessions that leave a large diff.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunLargeDiffWarningConfig {
+    #[serde(default = "default_run_large_diff_warning_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_run_large_diff_warning_changed_files")]
+    pub changed_files: usize,
+    #[serde(default = "default_run_large_diff_warning_changed_lines")]
+    pub changed_lines: u64,
+    #[serde(default = "default_run_large_diff_warning_approx_tokens")]
+    pub approx_diff_tokens: usize,
+    #[serde(default)]
+    pub mode: RunLargeDiffWarningMode,
+}
+
+impl Default for RunLargeDiffWarningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_run_large_diff_warning_enabled(),
+            changed_files: default_run_large_diff_warning_changed_files(),
+            changed_lines: default_run_large_diff_warning_changed_lines(),
+            approx_diff_tokens: default_run_large_diff_warning_approx_tokens(),
+            mode: RunLargeDiffWarningMode::Warn,
+        }
+    }
+}
+
+impl RunLargeDiffWarningConfig {
+    pub fn is_default(&self) -> bool {
+        self.enabled == default_run_large_diff_warning_enabled()
+            && self.changed_files == default_run_large_diff_warning_changed_files()
+            && self.changed_lines == default_run_large_diff_warning_changed_lines()
+            && self.approx_diff_tokens == default_run_large_diff_warning_approx_tokens()
+            && self.mode == RunLargeDiffWarningMode::Warn
+    }
+}
+
 /// Run-command behavior (`[run]` in config).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunConfig {
     /// Allow `csa run` to work on protected base branches.
     ///
@@ -62,6 +126,8 @@ pub struct RunConfig {
     pub writer_must_commit: bool,
     #[serde(default)]
     pub post_exec_gate: PostExecGateConfig,
+    #[serde(default)]
+    pub large_diff_warning: RunLargeDiffWarningConfig,
 }
 
 impl RunConfig {
@@ -69,6 +135,7 @@ impl RunConfig {
         !self.allow_base_branch_working
             && !self.writer_must_commit
             && self.post_exec_gate.is_default()
+            && self.large_diff_warning.is_default()
     }
 }
 
@@ -494,6 +561,10 @@ impl VcsConfig {
             && self.snapshot_trigger == SnapshotTrigger::PostRun
     }
 }
+
+#[cfg(test)]
+#[path = "config_tests_run_large_diff.rs"]
+mod run_large_diff_tests;
 
 #[cfg(test)]
 mod vcs_config_tests {

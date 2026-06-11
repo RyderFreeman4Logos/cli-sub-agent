@@ -133,6 +133,9 @@ pub(crate) fn render_wait_result_summary(
     if let Some(changes) = result.uncommitted_changes.as_ref() {
         lines.push(crate::run_cmd::format_uncommitted_warning(changes));
     }
+    if let Some(warning) = result.large_diff_warning.as_ref() {
+        lines.push(crate::run_cmd::format_large_diff_warning_block(warning));
+    }
 
     for warning in &result.warnings {
         lines.push(format!("Warning: {warning}"));
@@ -214,6 +217,7 @@ fn render_wait_result_json(
         "review_verdict": read_review_verdict_label(session_dir, result),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
+        "large_diff_warning": result.large_diff_warning.as_ref(),
         "warnings": result.warnings,
         "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
             .and_then(|text| compact_wait_summary_text(&text)),

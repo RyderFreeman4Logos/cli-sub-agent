@@ -466,6 +466,23 @@ mod tests {
         );
     }
 
+    /// #2040 regression: untracked files above the line-scan byte cap are sized
+    /// as bytes-only lower bounds, but still represent substantial writer work.
+    #[test]
+    fn build_guard_full_for_resume_with_large_untracked_text_work() {
+        let temp = init_repo_with_commit();
+        let root = temp.path();
+        let long_line = format!("{}\n", "x".repeat(64 * 1024));
+        std::fs::write(root.join("large.txt"), long_line.repeat(17)).unwrap();
+
+        let guard = build_review_writer_guard(false, Some("run"), false, root)
+            .expect("resume writer with large untracked text work must receive a guard");
+        assert!(
+            guard.contains("<review-dimensions>"),
+            "large untracked text work must get the FULL guard, got: {guard}"
+        );
+    }
+
     #[test]
     fn build_guard_brief_for_resume_with_trivial_untracked_work() {
         let temp = init_repo_with_commit();

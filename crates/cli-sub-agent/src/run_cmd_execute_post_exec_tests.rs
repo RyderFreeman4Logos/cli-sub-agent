@@ -55,6 +55,7 @@ fn project_config_with_gate(gate: PostExecGateConfig) -> ProjectConfig {
         run: RunConfig {
             allow_base_branch_working: false,
             writer_must_commit: false,
+            large_diff_warning: Default::default(),
             post_exec_gate: gate,
         },
         execution: Default::default(),

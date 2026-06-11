@@ -339,6 +339,7 @@ mod tests {
             warnings: Vec::new(),
             raw_process_exit_code: None,
             uncommitted_changes: None,
+            large_diff_warning: None,
             manager_fields: crate::result::SessionManagerFields {
                 report: Some(
                     toml::toml! {

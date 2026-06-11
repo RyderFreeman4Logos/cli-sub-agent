@@ -17,6 +17,8 @@
 //! number of files scanned is itself capped. Any single unreadable/race-deleted
 //! file is tolerated (skipped), never fatal.
 
+use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -45,17 +47,24 @@ const READ_BUF_BYTES: usize = 16 * 1024; // 16 KiB
 /// an arbitrarily large number of files can never spin an unbounded loop.
 pub(crate) const MAX_UNTRACKED_FILES: usize = 1_000;
 
+/// Maximum total bytes of literal pathspec arguments passed to a filtered
+/// `git ls-files` call. This keeps filtered sizing below OS argument-vector
+/// limits even when the changed-path set contains unusually long names.
+const MAX_FILTERED_PATHSPEC_BYTES: usize = 128 * 1024;
+
 /// Aggregate size contribution of the untracked working-tree files, ready to be
 /// merged into a [`csa_session::ReviewDiffSize`]. `bytes` is the on-disk size of
 /// the scanned regular files (including large/binary ones, whose lines are not
 /// counted). `notes` is empty when every counted total is exact; otherwise it
 /// carries human-readable markers stating which totals are a lower bound
 /// (capped, binary/large, or truncated), so a reader is never misled into
-/// treating an estimate as exact.
+/// treating an estimate as exact. `lower_bound` is the structured equivalent of
+/// those notes for callers that need a boolean gate instead of report text.
 pub(crate) struct UntrackedDiffSize {
     pub(crate) files: usize,
     pub(crate) lines: usize,
     pub(crate) bytes: u64,
+    pub(crate) lower_bound: bool,
     pub(crate) notes: Vec<String>,
 }
 
@@ -64,12 +73,31 @@ pub(crate) struct UntrackedDiffSize {
 /// result when `project_root` is not a git worktree or has no untracked files
 /// (git failure is fail-open, never fatal).
 pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
-    let listing = list_untracked(project_root);
+    untracked_diff_size_with_filter(project_root, None)
+}
+
+/// Size only untracked files whose repo-relative path appears in `path_filter`.
+pub(crate) fn untracked_diff_size_for_paths(
+    project_root: &Path,
+    path_filter: &BTreeSet<String>,
+) -> UntrackedDiffSize {
+    untracked_diff_size_with_filter(project_root, Some(path_filter))
+}
+
+fn untracked_diff_size_with_filter(
+    project_root: &Path,
+    path_filter: Option<&BTreeSet<String>>,
+) -> UntrackedDiffSize {
+    let listing = match path_filter {
+        Some(filter) => list_filtered_untracked(project_root, filter),
+        None => list_untracked(project_root),
+    };
 
     let mut out = UntrackedDiffSize {
         files: 0,
         lines: 0,
         bytes: 0,
+        lower_bound: false,
         notes: Vec::new(),
     };
     let mut capped_files = 0usize;
@@ -99,17 +127,20 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     }
 
     if uncounted_files > 0 {
+        out.lower_bound = true;
         out.notes.push(format!(
             "{uncounted_files} untracked file(s) not line-counted (binary or > {} MiB); changed-line total is a lower bound",
             MAX_LINE_SCAN_BYTES >> 20
         ));
     }
     if capped_files > 0 {
+        out.lower_bound = true;
         out.notes.push(format!(
             "{capped_files} untracked file(s) line-counted up to {MAX_LINES_PER_FILE} lines (capped); changed-line total is a lower bound"
         ));
     }
     if listing.truncated {
+        out.lower_bound = true;
         out.notes.push(format!(
             "untracked scan truncated: sized the first {MAX_UNTRACKED_FILES} untracked files (the working tree has more, not enumerated); totals are a lower bound"
         ));
@@ -117,31 +148,109 @@ pub(crate) fn untracked_diff_size(project_root: &Path) -> UntrackedDiffSize {
     out
 }
 
-/// Count newline-delimited lines in `path` with bounded memory and IO, for the
-/// review-aware writer guard (#1842), whose size measure only needs a single
-/// running total (trivial vs substantial), not the richer per-file
-/// classification the review report needs.
-///
-/// Only regular files are opened: `path` comes from an untracked-worktree
-/// enumeration that can legitimately surface symlinks, FIFOs, sockets, or device
-/// nodes, and opening those could follow a link or block indefinitely. Streams
-/// through a fixed buffer counting `\n`, bounded by [`MAX_LINE_SCAN_BYTES`]; a
-/// final line lacking a trailing newline still counts. Fail-open: a non-regular
-/// path or any IO error (including a missing/race-deleted file) yields `0` so a
-/// transient failure cannot abort the guard.
-pub(crate) fn count_file_lines(path: &Path) -> usize {
-    if regular_file_meta(path).is_none() {
-        return 0;
+fn list_filtered_untracked(
+    project_root: &Path,
+    path_filter: &BTreeSet<String>,
+) -> UntrackedListing {
+    list_filtered_untracked_with_git(project_root, path_filter, OsStr::new("git"))
+}
+
+fn list_filtered_untracked_with_git(
+    project_root: &Path,
+    path_filter: &BTreeSet<String>,
+    git_program: &OsStr,
+) -> UntrackedListing {
+    let selection = filtered_pathspecs(project_root, path_filter);
+    if selection.pathspecs.is_empty() {
+        return UntrackedListing {
+            paths: Vec::new(),
+            truncated: selection.truncated,
+        };
     }
-    let Ok(file) = std::fs::File::open(path) else {
-        return 0;
+
+    let Ok(mut child) = Command::new(git_program)
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--others", "--exclude-standard", "-z", "--"])
+        .args(selection.pathspecs.iter().copied())
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return UntrackedListing {
+            paths: Vec::new(),
+            truncated: selection.truncated,
+        };
     };
-    // `usize::MAX` line cap: the guard never wants a per-file line ceiling, only
-    // the byte ceiling, preserving the pre-extraction behavior exactly (a huge
-    // file still contributes its first 1 MiB of lines = substantial work).
-    scan_file_bounded(file, usize::MAX)
-        .map(|scan| scan.lines)
-        .unwrap_or(0)
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return UntrackedListing {
+            paths: Vec::new(),
+            truncated: selection.truncated,
+        };
+    };
+
+    let (candidates, output_truncated) =
+        read_nul_delimited_capped(std::io::BufReader::new(stdout), MAX_UNTRACKED_FILES);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let mut rels = BTreeSet::new();
+    for candidate in candidates {
+        if path_filter.contains(candidate.as_str()) {
+            rels.insert(candidate);
+        }
+    }
+    UntrackedListing {
+        paths: rels.into_iter().map(|rel| project_root.join(rel)).collect(),
+        truncated: selection.truncated || output_truncated,
+    }
+}
+
+struct FilteredPathspecs<'a> {
+    pathspecs: Vec<&'a str>,
+    truncated: bool,
+}
+
+fn filtered_pathspecs<'a>(
+    project_root: &Path,
+    path_filter: &'a BTreeSet<String>,
+) -> FilteredPathspecs<'a> {
+    let mut pathspecs = Vec::new();
+    let mut pathspec_bytes = 0usize;
+    for (inspected, rel) in path_filter.iter().enumerate() {
+        if inspected == MAX_UNTRACKED_FILES {
+            return FilteredPathspecs {
+                pathspecs,
+                truncated: true,
+            };
+        }
+        if rel.is_empty() || rel.contains('\0') || is_directory_entry(project_root, rel) {
+            continue;
+        }
+        let next_bytes = pathspec_bytes.saturating_add(rel.len());
+        if next_bytes > MAX_FILTERED_PATHSPEC_BYTES {
+            return FilteredPathspecs {
+                pathspecs,
+                truncated: true,
+            };
+        }
+        pathspecs.push(rel.as_str());
+        pathspec_bytes = next_bytes;
+    }
+    FilteredPathspecs {
+        pathspecs,
+        truncated: false,
+    }
+}
+
+fn is_directory_entry(project_root: &Path, rel_path: &str) -> bool {
+    std::fs::symlink_metadata(project_root.join(rel_path))
+        .ok()
+        .is_some_and(|meta| meta.file_type().is_dir())
 }
 
 /// A bounded enumeration of untracked, non-ignored working-tree paths.

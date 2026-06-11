@@ -79,6 +79,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -111,6 +112,7 @@ fn sidecar_write_failure_leaves_envelope_unchanged() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {
@@ -172,6 +174,7 @@ fn sidecar_clear_failure_or_crash_leaves_envelope_consistent() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -247,6 +250,7 @@ fn sidecar_clear_happy_path_publishes_envelope_then_unlinks() {
         warnings: Vec::new(),
         raw_process_exit_code: None,
         uncommitted_changes: None,
+        large_diff_warning: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {

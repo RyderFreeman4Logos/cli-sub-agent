@@ -35,6 +35,42 @@ fn init_repo() -> tempfile::TempDir {
     temp
 }
 
+#[cfg(unix)]
+fn make_pathspec_echo_git(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_git = root.join("git");
+    std::fs::write(
+        &fake_git,
+        r#"#!/bin/sh
+set -eu
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+count_file="$dir/git-count"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+after_separator=0
+for arg in "$@"; do
+    if [ "$after_separator" -eq 1 ]; then
+        printf '%s\000' "$arg"
+    fi
+    if [ "$arg" = "--" ]; then
+        after_separator=1
+    fi
+done
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&fake_git).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_git, perms).unwrap();
+    fake_git
+}
+
 #[test]
 fn classify_counts_exact_small_text_file() {
     let temp = tempfile::tempdir().unwrap();
@@ -179,25 +215,6 @@ fn classify_skips_fifo_without_blocking() {
 }
 
 #[test]
-fn count_file_lines_matches_exact_partial_and_missing() {
-    let temp = tempfile::tempdir().unwrap();
-
-    let with_nl = temp.path().join("with_nl.txt");
-    std::fs::write(&with_nl, "x\ny\nz\n").unwrap();
-    assert_eq!(count_file_lines(&with_nl), 3);
-
-    let no_nl = temp.path().join("no_nl.txt");
-    std::fs::write(&no_nl, "x\ny\nz").unwrap();
-    assert_eq!(count_file_lines(&no_nl), 3);
-
-    let empty = temp.path().join("empty.txt");
-    std::fs::write(&empty, "").unwrap();
-    assert_eq!(count_file_lines(&empty), 0);
-
-    assert_eq!(count_file_lines(&temp.path().join("missing.txt")), 0);
-}
-
-#[test]
 fn untracked_diff_size_counts_exact_small_files() {
     let temp = init_repo();
     let root = temp.path();
@@ -209,10 +226,108 @@ fn untracked_diff_size_counts_exact_small_files() {
     assert_eq!(size.files, 2);
     assert_eq!(size.lines, 5);
     assert_eq!(size.bytes, 6 + 4);
+    assert!(!size.lower_bound);
     assert!(
         size.notes.is_empty(),
         "exact small files need no estimated/capped note, got {:?}",
         size.notes
+    );
+}
+
+#[test]
+fn untracked_diff_size_for_paths_counts_only_matching_files() {
+    let temp = init_repo();
+    let root = temp.path();
+    std::fs::write(root.join("a.txt"), "1\n2\n3\n").unwrap();
+    std::fs::write(root.join("b.txt"), "4\n5\n").unwrap();
+    let filter = std::collections::BTreeSet::from(["b.txt".to_string()]);
+
+    let size = untracked_diff_size_for_paths(root, &filter);
+
+    assert_eq!(size.files, 1);
+    assert_eq!(size.lines, 2);
+    assert_eq!(size.bytes, 4);
+    assert!(size.notes.is_empty());
+}
+
+#[test]
+fn untracked_diff_size_for_paths_checks_filtered_paths_after_global_cap() {
+    let temp = init_repo();
+    let root = temp.path();
+    for i in 0..=MAX_UNTRACKED_FILES {
+        std::fs::write(root.join(format!("aa-preexisting-{i:04}.txt")), "x\n").unwrap();
+    }
+    std::fs::write(
+        root.join("zz-large.txt"),
+        vec![b'x'; (MAX_LINE_SCAN_BYTES + 1) as usize],
+    )
+    .unwrap();
+    let filter = std::collections::BTreeSet::from(["zz-large.txt".to_string()]);
+
+    let size = untracked_diff_size_for_paths(root, &filter);
+
+    assert_eq!(size.files, 1);
+    assert_eq!(size.lines, 0, "large files are sized but not line-counted");
+    assert_eq!(size.bytes, MAX_LINE_SCAN_BYTES + 1);
+    assert!(size.lower_bound);
+    assert!(
+        size.notes
+            .iter()
+            .any(|note| note.contains("not line-counted")),
+        "large file should add a lower-bound note, got {:?}",
+        size.notes
+    );
+    assert!(
+        !size.notes.iter().any(|note| note.contains("truncated")),
+        "filtered path sizing must not inherit the global untracked cap note, got {:?}",
+        size.notes
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_untracked_listing_batches_many_pathspecs_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let fake_git = make_pathspec_echo_git(temp.path());
+    let filter = (0..64)
+        .map(|i| format!("new-{i:04}.rs"))
+        .collect::<BTreeSet<_>>();
+
+    let listing = list_filtered_untracked_with_git(&root, &filter, fake_git.as_os_str());
+
+    assert_eq!(listing.paths.len(), filter.len());
+    assert!(!listing.truncated);
+    let count = std::fs::read_to_string(temp.path().join("git-count")).unwrap();
+    assert_eq!(
+        count, "1",
+        "filtered sizing must batch pathspecs into one git call"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_untracked_listing_caps_many_pathspecs_before_git() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let fake_git = make_pathspec_echo_git(temp.path());
+    let filter = (0..(MAX_UNTRACKED_FILES + 25))
+        .map(|i| format!("new-{i:04}.rs"))
+        .collect::<BTreeSet<_>>();
+
+    let listing = list_filtered_untracked_with_git(&root, &filter, fake_git.as_os_str());
+
+    assert_eq!(listing.paths.len(), MAX_UNTRACKED_FILES);
+    assert!(
+        listing.truncated,
+        "oversized filtered path sets must be marked lower-bound/truncated"
+    );
+    let count = std::fs::read_to_string(temp.path().join("git-count")).unwrap();
+    assert_eq!(
+        count, "1",
+        "filtered sizing must not spawn once per changed path"
     );
 }
 
@@ -251,6 +366,7 @@ fn untracked_diff_size_marks_large_and_binary_without_inflating_lines() {
 
     assert_eq!(size.files, 3, "all three regular files are sized");
     assert_eq!(size.lines, 2, "only the exact text file contributes lines");
+    assert!(size.lower_bound);
     assert_eq!(
         size.notes.len(),
         1,

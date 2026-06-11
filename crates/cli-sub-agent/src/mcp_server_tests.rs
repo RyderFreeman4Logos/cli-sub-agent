@@ -264,10 +264,12 @@ fn get_tools_csa_session_wait_requires_session_id() {
 #[test]
 fn mcp_session_wait_default_cap_is_below_advertised_codex_tool_timeout() {
     assert_eq!(DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS, 6_900);
-    assert!(
-        DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS
-            < csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC
-    );
+    const {
+        assert!(
+            DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS
+                < csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC
+        );
+    }
 }
 
 #[tokio::test]
