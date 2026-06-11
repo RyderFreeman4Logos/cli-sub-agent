@@ -215,6 +215,40 @@ fn untracked_diff_size_for_paths_counts_only_matching_files() {
 }
 
 #[test]
+fn untracked_diff_size_for_paths_checks_filtered_paths_after_global_cap() {
+    let temp = init_repo();
+    let root = temp.path();
+    for i in 0..=MAX_UNTRACKED_FILES {
+        std::fs::write(root.join(format!("aa-preexisting-{i:04}.txt")), "x\n").unwrap();
+    }
+    std::fs::write(
+        root.join("zz-large.txt"),
+        vec![b'x'; (MAX_LINE_SCAN_BYTES + 1) as usize],
+    )
+    .unwrap();
+    let filter = std::collections::BTreeSet::from(["zz-large.txt".to_string()]);
+
+    let size = untracked_diff_size_for_paths(root, &filter);
+
+    assert_eq!(size.files, 1);
+    assert_eq!(size.lines, 0, "large files are sized but not line-counted");
+    assert_eq!(size.bytes, MAX_LINE_SCAN_BYTES + 1);
+    assert!(size.lower_bound);
+    assert!(
+        size.notes
+            .iter()
+            .any(|note| note.contains("not line-counted")),
+        "large file should add a lower-bound note, got {:?}",
+        size.notes
+    );
+    assert!(
+        !size.notes.iter().any(|note| note.contains("truncated")),
+        "filtered path sizing must not inherit the global untracked cap note, got {:?}",
+        size.notes
+    );
+}
+
+#[test]
 fn untracked_diff_size_excludes_gitignored_files() {
     let temp = init_repo();
     let root = temp.path();

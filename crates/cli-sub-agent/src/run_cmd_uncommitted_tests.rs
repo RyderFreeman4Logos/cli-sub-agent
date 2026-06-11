@@ -266,6 +266,33 @@ fn large_diff_warning_changed_paths_counts_filtered_untracked_file() {
 }
 
 #[test]
+fn large_diff_warning_changed_paths_counts_large_file_after_untracked_cap() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    for i in 0..=crate::untracked_size::MAX_UNTRACKED_FILES {
+        std::fs::write(root.join(format!("aa-preexisting-{i:04}.txt")), "x\n").unwrap();
+    }
+    let large_path = "zz-large.txt";
+    let large_bytes = (default_tracked_diff_token_threshold() + 1) * DIFF_BYTES_PER_TOKEN;
+    std::fs::write(root.join(large_path), vec![b'x'; large_bytes]).unwrap();
+
+    let changes = collect_uncommitted_changes_for_changed_paths(root, &[large_path.to_string()])
+        .expect("changed untracked file should count despite noisy worktree");
+
+    assert_eq!(changes.file_count, 1);
+    assert_eq!(changes.files, vec![large_path.to_string()]);
+    assert!(
+        changes.approx_diff_tokens > default_tracked_diff_token_threshold(),
+        "large changed file should exceed token warning threshold: {:?}",
+        changes
+    );
+    assert!(
+        large_diff_warning_report(&changes, &RunLargeDiffWarningConfig::default()).is_some(),
+        "filtered large changed path should trigger the warning"
+    );
+}
+
+#[test]
 fn effective_writer_must_commit_respects_cli_and_config_precedence() {
     assert!(!effective_writer_must_commit(false, None));
 

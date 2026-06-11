@@ -82,7 +82,10 @@ fn untracked_diff_size_with_filter(
     project_root: &Path,
     path_filter: Option<&BTreeSet<String>>,
 ) -> UntrackedDiffSize {
-    let listing = list_untracked(project_root);
+    let listing = match path_filter {
+        Some(filter) => list_filtered_untracked(project_root, filter),
+        None => list_untracked(project_root),
+    };
 
     let mut out = UntrackedDiffSize {
         files: 0,
@@ -95,11 +98,6 @@ fn untracked_diff_size_with_filter(
     let mut uncounted_files = 0usize; // large + binary: sized but not line-counted
 
     for path in &listing.paths {
-        if let Some(filter) = path_filter
-            && !untracked_path_matches_filter(project_root, path, filter)
-        {
-            continue;
-        }
         match classify_untracked_file(path) {
             FileClass::Text {
                 lines,
@@ -144,14 +142,55 @@ fn untracked_diff_size_with_filter(
     out
 }
 
-fn untracked_path_matches_filter(
+fn list_filtered_untracked(
     project_root: &Path,
-    path: &Path,
     path_filter: &BTreeSet<String>,
-) -> bool {
-    let rel_path = path.strip_prefix(project_root).unwrap_or(path);
-    let rel = rel_path.to_string_lossy();
-    path_filter.contains(rel.as_ref())
+) -> UntrackedListing {
+    let mut rels = BTreeSet::new();
+    for rel in path_filter {
+        if rel.is_empty() || rel.contains('\0') {
+            continue;
+        }
+        for candidate in list_untracked_for_path(project_root, rel) {
+            if path_filter.contains(candidate.as_str()) {
+                rels.insert(candidate);
+            }
+        }
+    }
+
+    UntrackedListing {
+        paths: rels.into_iter().map(|rel| project_root.join(rel)).collect(),
+        truncated: false,
+    }
+}
+
+fn list_untracked_for_path(project_root: &Path, rel_path: &str) -> Vec<String> {
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["ls-files", "--others", "--exclude-standard", "-z", "--"])
+        .arg(rel_path)
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Vec::new();
+    };
+
+    // A literal file path can yield only itself; a directory path may yield
+    // descendants, but `list_filtered_untracked` keeps only exact path matches.
+    // Reading one entry preserves the noisy-worktree bound for directory input.
+    let (rels, _) = read_nul_delimited_capped(std::io::BufReader::new(stdout), 1);
+    let _ = child.kill();
+    let _ = child.wait();
+    rels
 }
 
 /// A bounded enumeration of untracked, non-ignored working-tree paths.
