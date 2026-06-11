@@ -57,6 +57,17 @@ fn sandbox_pipeline_config_env(
     (sandbox, home, xdg_config_home)
 }
 
+fn low_resource_project_config() -> csa_config::ProjectConfig {
+    toml::from_str(
+        r#"
+[resources]
+memory_max_mb = 1024
+min_free_memory_mb = 1
+"#,
+    )
+    .expect("low-resource test config should parse")
+}
+
 #[test]
 fn determine_project_root_with_valid_path() {
     let tmp = tempfile::tempdir().unwrap();

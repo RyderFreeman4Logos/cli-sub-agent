@@ -127,6 +127,8 @@ async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
     let _daemon_session_dir = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_DIR", &parent_dir_str);
     let _daemon_project_root =
         ScopedEnvVarRestore::set("CSA_DAEMON_PROJECT_ROOT", &project_root_str);
+    let config = toml::from_str("[resources]\nmemory_max_mb = 1024\nmin_free_memory_mb = 1\n")
+        .expect("low-resource test config should parse");
 
     let step = PlanStep {
         id: 1,
@@ -143,7 +145,7 @@ async fn execute_step_csa_nested_plan_uses_fresh_child_session() {
     };
 
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, project_root, None, None, None).await;
+    let result = execute_step(&step, &vars, project_root, Some(&config), None, None).await;
 
     assert_eq!(
         result.exit_code, 0,

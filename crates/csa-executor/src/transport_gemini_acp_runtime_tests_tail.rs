@@ -751,6 +751,9 @@ fn prepare_gemini_acp_runtime_sets_shared_npm_cache_from_source_home() {
     let expected_npm_cache = source_home
         .join(".cache")
         .join(SHARED_NPM_CACHE_RELATIVE_PATH);
+    let expected_npm_cache =
+        csa_resource::isolation_plan::canonicalize_through_existing_ancestors(&expected_npm_cache)
+            .expect("canonicalize expected npm cache");
     assert_eq!(
         env.get("npm_config_cache"),
         Some(&expected_npm_cache.to_string_lossy().into_owned()),
@@ -788,6 +791,9 @@ fn prepare_gemini_acp_runtime_prefers_xdg_cache_home_for_shared_npm_cache() {
         .expect("prepare runtime");
 
     let expected_npm_cache = custom_cache.join(SHARED_NPM_CACHE_RELATIVE_PATH);
+    let expected_npm_cache =
+        csa_resource::isolation_plan::canonicalize_through_existing_ancestors(&expected_npm_cache)
+            .expect("canonicalize expected npm cache");
     assert_eq!(
         env.get("npm_config_cache"),
         Some(&expected_npm_cache.to_string_lossy().into_owned()),

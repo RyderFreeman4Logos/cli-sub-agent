@@ -21,9 +21,13 @@ async fn execute_with_session_and_meta_injects_global_pre_session_hook_output() 
 
     let project_root = temp.path();
     let config_path = csa_config::GlobalConfig::config_path().unwrap();
+    #[cfg(target_os = "macos")]
+    let expected_config_root = &home_dir;
+    #[cfg(not(target_os = "macos"))]
+    let expected_config_root = &xdg_config_home;
     assert!(
-        config_path.starts_with(&xdg_config_home),
-        "test config path must stay under temp XDG_CONFIG_HOME, got {}",
+        config_path.starts_with(expected_config_root),
+        "test config path must stay under temp config root, got {}",
         config_path.display()
     );
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -77,6 +81,7 @@ printf 'ok\n'
         agent: None,
         thinking_budget: None,
     };
+    let config = low_resource_project_config();
 
     let execution = execute_with_session_and_meta(
         &executor,
@@ -88,7 +93,7 @@ printf 'ok\n'
         Some("pre-session-hook".to_string()),
         None,
         project_root,
-        None,
+        Some(&config),
         Some(&extra_env),
         None, // subtree_pin (#1741)
         None,

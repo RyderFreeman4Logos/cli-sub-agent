@@ -21,8 +21,11 @@ pub(super) fn probe_host_mise_trust_db(project_root: &Path) -> Option<PathBuf> {
             continue;
         };
         let resolved_target = resolve_trust_db_symlink_target(&entry_path, &link_target);
-        if canonical_project_root.starts_with(&resolved_target) {
-            return Some(resolved_target);
+        let comparable_target = resolved_target
+            .canonicalize()
+            .unwrap_or_else(|_| resolved_target.clone());
+        if canonical_project_root.starts_with(&comparable_target) {
+            return Some(comparable_target);
         }
     }
 
