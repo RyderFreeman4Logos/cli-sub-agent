@@ -79,15 +79,19 @@ pub(crate) fn codex_yield_hint() -> String {
 }
 
 pub(crate) fn format_codex_yield_hint(yield_time_ms: u64) -> String {
+    let mcp_tool_timeout_sec = csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC;
+    let mcp_internal_timeout_sec = csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC;
     format!(
-        "\n<!-- CSA:CODEX_HINT yield_time_ms={ms} \
-         rule=\"You are running inside Codex. When calling 'csa session wait', \
-         pass yield_time_ms: {ms}. The default 300000 ms (5 minutes) is a conservative \
-         OpenAI in-memory prompt-cache TTL tradeoff: short high-frequency polling wastes \
-         tokens, while overly long waits can let the caller cache go cold. Do not manually \
-         poll every 10-30s; use this interval unless there is a concrete failure signal. \
-         Example tool call: shell({{ command: 'csa session wait --session <ID> --cd <PATH>', yield_time_ms: {ms} }})\" -->",
+        "\n<!-- CSA:CODEX_HINT mcp_tool=\"csa_session_wait\" tool_timeout_sec={mcp_tool_timeout_sec} timeout_seconds={mcp_internal_timeout_sec} yield_time_ms={ms} \
+         rule=\"You are running inside Codex. Prefer the CSA MCP tool csa_session_wait with outer tool_timeout_sec: {mcp_tool_timeout_sec} \
+         and csa_session_wait timeout_seconds: {mcp_internal_timeout_sec}; it blocks inside the MCP server and avoids repeated shell wakeups. \
+         Shell fallback only: call csa session wait in one shell tool call with yield_time_ms: {ms}. \
+         Do not manually poll every 10-30s or reissue shell waits while a wait is already running. \
+         Example MCP tool call: csa_session_wait({{ session_id: '<ID>', cd: '<PATH>', timeout_seconds: {mcp_internal_timeout_sec} }}) with outer tool_timeout_sec: {mcp_tool_timeout_sec}. \
+         Example shell fallback: shell({{ command: 'csa session wait --session <ID> --cd <PATH>', yield_time_ms: {ms} }})\" -->",
         ms = yield_time_ms,
+        mcp_tool_timeout_sec = mcp_tool_timeout_sec,
+        mcp_internal_timeout_sec = mcp_internal_timeout_sec,
     )
 }
 
@@ -336,28 +340,34 @@ mod tests {
     }
 
     #[test]
-    fn test_format_codex_yield_hint_describes_cache_tradeoff_and_polling_interval() {
+    fn test_format_codex_yield_hint_prefers_mcp_wait_with_shell_fallback() {
         let hint = format_codex_yield_hint(csa_config::DEFAULT_CODEX_SESSION_WAIT_YIELD_MS);
 
         assert!(hint.contains("CSA:CODEX_HINT"));
+        assert!(hint.contains("mcp_tool=\"csa_session_wait\""));
+        assert!(hint.contains("tool_timeout_sec=7200"));
+        assert!(hint.contains("timeout_seconds=6900"));
+        assert!(hint.contains("outer tool_timeout_sec: 7200"));
+        assert!(hint.contains("timeout_seconds: 6900"));
         assert!(hint.contains("yield_time_ms=300000"));
         assert!(hint.contains("yield_time_ms: 300000"));
-        assert!(hint.contains("default 300000 ms (5 minutes)"));
-        assert!(hint.contains("OpenAI in-memory prompt-cache TTL tradeoff"));
-        assert!(hint.contains("short high-frequency polling wastes"));
-        assert!(hint.contains("caller cache go cold"));
+        assert!(hint.contains("Prefer the CSA MCP tool csa_session_wait"));
+        assert!(hint.contains("avoids repeated shell wakeups"));
+        assert!(hint.contains("Shell fallback only"));
         assert!(hint.contains("Do not manually poll every"));
         assert!(hint.contains("10-30s"));
-        assert!(hint.contains("unless there is a concrete failure signal"));
     }
 
     #[test]
     fn test_format_codex_yield_hint_uses_configured_interval() {
         let hint = format_codex_yield_hint(450_000);
 
+        assert!(hint.contains("mcp_tool=\"csa_session_wait\""));
+        assert!(hint.contains("tool_timeout_sec=7200"));
+        assert!(hint.contains("timeout_seconds=6900"));
         assert!(hint.contains("yield_time_ms=450000"));
         assert!(hint.contains("yield_time_ms: 450000"));
-        assert!(hint.contains("default 300000 ms (5 minutes)"));
+        assert!(hint.contains("Shell fallback only"));
     }
 
     /// Verify that every `Executor::runtime_binary_name()` value is recognized

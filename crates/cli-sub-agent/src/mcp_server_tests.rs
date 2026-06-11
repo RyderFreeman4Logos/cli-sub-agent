@@ -1,8 +1,36 @@
 use super::*;
-use csa_session::{SessionPhase, ToolState, create_session, get_session_root, save_session};
+use csa_session::{
+    SessionPhase, SessionResult, ToolState, create_session, get_session_root, save_result,
+    save_session,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+
+#[cfg(target_os = "linux")]
+fn read_process_start_time_ticks(pid: u32) -> u64 {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = std::fs::read_to_string(stat_path).expect("read /proc stat");
+    let close_paren = content.rfind(')').expect("stat comm terminator");
+    let after_comm = &content[close_paren + 1..];
+    let mut parts = after_comm.split_whitespace();
+    parts.next().expect("state");
+    parts.next().expect("ppid");
+    parts.next().expect("pgrp");
+    for _ in 0..16 {
+        parts.next().expect("intermediate stat field");
+    }
+    parts
+        .next()
+        .expect("starttime")
+        .parse::<u64>()
+        .expect("starttime parse")
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_pid_record(pid: u32) -> String {
+    format!("{pid} {}\n", read_process_start_time_ticks(pid))
+}
 
 struct EnvVarGuard {
     key: &'static str,
@@ -85,7 +113,35 @@ fn seed_retired_runtime_session(project_root: &Path) -> (String, PathBuf) {
     (session.meta_session_id, runtime_dir)
 }
 
-// --- parse_tool_name tests ---
+fn seed_completed_session(
+    project_root: &Path,
+    status: &str,
+    exit_code: i32,
+    summary: &str,
+) -> String {
+    std::fs::create_dir_all(project_root).expect("create project root");
+    let mut session = create_session(project_root, Some("mcp wait test"), None, Some("codex"))
+        .expect("create session");
+    session.phase = SessionPhase::Retired;
+    save_session(&session).expect("save retired session");
+
+    let now = chrono::Utc::now();
+    save_result(
+        project_root,
+        &session.meta_session_id,
+        &SessionResult {
+            status: status.to_string(),
+            exit_code,
+            summary: summary.to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            ..Default::default()
+        },
+    )
+    .expect("save result");
+    session.meta_session_id
+}
 
 #[test]
 fn mcp_parse_tool_name_all_valid_tools() {
@@ -114,16 +170,10 @@ fn mcp_parse_tool_name_empty_errors() {
     assert!(parse_tool_name("").is_err());
 }
 
-// --- get_tools tests ---
-
 #[test]
 fn get_tools_returns_expected_tool_count() {
     let tools = get_tools();
-    assert_eq!(
-        tools.len(),
-        4,
-        "Expected 4 MCP tools (session_list, session_delete, gc, run)"
-    );
+    assert_eq!(tools.len(), 5, "MCP tool count changed");
 }
 
 #[test]
@@ -195,6 +245,175 @@ fn get_tools_csa_session_delete_requires_session_id() {
             .any(|v| v.as_str() == Some("session_id")),
         "csa_session_delete must require 'session_id' parameter"
     );
+}
+
+#[test]
+fn get_tools_csa_session_wait_requires_session_id() {
+    let tools = get_tools();
+    let wait_tool = tools.iter().find(|t| t.name == "csa_session_wait").unwrap();
+    let required = wait_tool.input_schema.get("required").unwrap();
+    let required_arr = required.as_array().unwrap();
+    assert!(
+        required_arr
+            .iter()
+            .any(|v| v.as_str() == Some("session_id")),
+        "csa_session_wait must require 'session_id' parameter"
+    );
+}
+
+#[test]
+fn mcp_session_wait_default_cap_is_below_advertised_codex_tool_timeout() {
+    assert_eq!(DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS, 6_900);
+    assert!(
+        DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS
+            < csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC
+    );
+}
+
+#[tokio::test]
+async fn mcp_session_wait_returns_nonzero_session_result_without_mcp_error() {
+    let tmp = tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path().join("project");
+    let session_id =
+        seed_completed_session(&project_root, "failure", 42, "focused test command failed");
+    let _cwd_guard = CurrentDirGuard::set(&project_root);
+    let state = McpServerState {
+        startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+    };
+
+    let response = handle_tool_call(
+        Some(serde_json::json!({
+            "name": "csa_session_wait",
+            "arguments": {
+                "session_id": session_id,
+                "timeout_seconds": 1
+            }
+        })),
+        &state,
+    )
+    .await
+    .expect("wait failure response");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("Status: failure"), "{text}");
+    assert!(text.contains("Exit code: 42"), "{text}");
+    assert!(
+        text.contains("Summary: focused test command failed"),
+        "{text}"
+    );
+    assert!(text.contains("MCP csa_session_wait exit_code=1"), "{text}");
+}
+
+#[tokio::test]
+async fn mcp_session_wait_json_returns_parseable_document_with_wait_exit_code() {
+    let tmp = tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path().join("project");
+    let session_id =
+        seed_completed_session(&project_root, "failure", 42, "focused test command failed");
+    let _cwd_guard = CurrentDirGuard::set(&project_root);
+    let state = McpServerState {
+        startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+    };
+
+    let response = handle_tool_call(
+        Some(serde_json::json!({
+            "name": "csa_session_wait",
+            "arguments": {
+                "session_id": session_id,
+                "timeout_seconds": 1,
+                "json": true
+            }
+        })),
+        &state,
+    )
+    .await
+    .expect("wait JSON response");
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    let parsed: serde_json::Value = serde_json::from_str(text).expect("valid wait JSON");
+    assert_eq!(parsed["exit_code"], serde_json::json!(42));
+    assert_eq!(parsed["mcp_wait_exit_code"], serde_json::json!(1));
+    assert!(!text.contains("MCP csa_session_wait exit_code="), "{text}");
+    assert!(!text.contains("CSA:SESSION_WAIT_COMPLETED"), "{text}");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn mcp_session_wait_alive_at_timeout_returns_rewait_content() {
+    let tmp = tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("create project root");
+    let session = create_session(
+        &project_root,
+        Some("mcp wait alive timeout test"),
+        None,
+        Some("codex"),
+    )
+    .expect("create active session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_root(&project_root)
+        .expect("session root")
+        .join("sessions")
+        .join(&session_id);
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(
+        csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir),
+        "daemon should be live"
+    );
+
+    let _cwd_guard = CurrentDirGuard::set(&project_root);
+    let state = McpServerState {
+        startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+    };
+
+    let response = handle_tool_call(
+        Some(serde_json::json!({
+            "name": "csa_session_wait",
+            "arguments": {
+                "session_id": session_id,
+                "timeout_seconds": 1
+            }
+        })),
+        &state,
+    )
+    .await
+    .expect("wait alive response");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let text = response
+        .get("content")
+        .and_then(|content| content.get(0))
+        .and_then(|entry| entry.get("text"))
+        .and_then(|text| text.as_str())
+        .expect("response text");
+    assert!(text.contains("status=alive"), "{text}");
+    assert!(text.contains("action=re-wait"), "{text}");
+    assert!(text.contains("Call csa_session_wait again"), "{text}");
+    assert!(text.contains("MCP csa_session_wait exit_code=0"), "{text}");
+    assert!(!text.contains("CSA:SESSION_WAIT_COMPLETED"), "{text}");
 }
 
 #[tokio::test]
@@ -434,8 +653,6 @@ fn direct_entry_resolved_timeout_preserves_pipeline_semantics() {
     );
 }
 
-// --- JSON-RPC protocol structure tests ---
-
 #[test]
 fn jsonrpc_request_parses_valid_initialize() {
     let json = r#"{"jsonrpc":"2.0","method":"initialize","id":1}"#;
@@ -502,7 +719,6 @@ fn jsonrpc_response_omits_null_fields() {
         id: None,
     };
     let json_str = serde_json::to_string(&response).unwrap();
-    // Neither result nor error should appear thanks to skip_serializing_if
     assert!(!json_str.contains("\"result\""));
     assert!(!json_str.contains("\"error\""));
 }

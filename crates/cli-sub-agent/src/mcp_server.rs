@@ -19,6 +19,9 @@ use run_tool::resolve_mcp_model_pin;
 #[cfg(test)]
 use run_tool::{direct_entry_resolved_timeout, parse_tool_name};
 
+const DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS: u64 =
+    csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC;
+
 /// MCP server implementation
 ///
 /// Exposes CSA session management as MCP tools over JSON-RPC 2.0 stdio protocol.
@@ -141,6 +144,45 @@ fn get_tools() -> Vec<McpToolDef> {
                     "session_id": {
                         "type": "string",
                         "description": "Session ULID or prefix to delete"
+                    }
+                },
+                "required": ["session_id"]
+            }),
+        },
+        McpToolDef {
+            name: "csa_session_wait".to_string(),
+            description: "Wait for a CSA session to complete and return its terminal summary"
+                .to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ULID or prefix to wait for"
+                    },
+                    "project_root": {
+                        "type": "string",
+                        "description": "Project root used to resolve the session (alias of cd)"
+                    },
+                    "cd": {
+                        "type": "string",
+                        "description": "Project root used to resolve the session"
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "Maximum wait duration before returning an alive/timeout result"
+                    },
+                    "memory_warn_mb": {
+                        "type": "number",
+                        "description": "Return early with exit code 33 if the session process tree exceeds this RSS limit"
+                    },
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "Return bounded stdout.log output instead of the compact summary"
+                    },
+                    "json": {
+                        "type": "boolean",
+                        "description": "Return the compact wait summary as JSON text"
                     }
                 },
                 "required": ["session_id"]
@@ -310,6 +352,7 @@ async fn handle_tool_call(params: Option<Value>, state: &McpServerState) -> Resu
     match name {
         "csa_session_list" => handle_session_list_tool(arguments).await,
         "csa_session_delete" => handle_session_delete_tool(arguments).await,
+        "csa_session_wait" => handle_session_wait_tool(arguments).await,
         "csa_gc" => handle_gc_tool(arguments, &state.startup_env).await,
         "csa_run" => handle_run_tool(arguments, &state.startup_env).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
@@ -425,6 +468,79 @@ async fn handle_session_delete_tool(args: Value) -> Result<Value> {
             }
         ]
     }))
+}
+
+async fn handle_session_wait_tool(args: Value) -> Result<Value> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .context("Missing session_id argument")?
+        .to_string();
+    let cd = match (
+        optional_string_arg(&args, "cd")?,
+        optional_string_arg(&args, "project_root")?,
+    ) {
+        (Some(cd), _) => Some(cd),
+        (None, project_root) => project_root,
+    };
+    let timeout_seconds = optional_u64_arg(&args, "timeout_seconds")?
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS);
+    let memory_warn_mb = optional_u64_arg(&args, "memory_warn_mb")?.filter(|mb| *mb > 0);
+    let verbose = optional_bool_arg(&args, "verbose")?.unwrap_or(false);
+    let json = optional_bool_arg(&args, "json")?.unwrap_or(false);
+    let output_mode = crate::session_cmds::SessionWaitOutputMode::from_flags(verbose, json);
+
+    let wait_output = tokio::task::spawn_blocking(move || {
+        crate::session_cmds::handle_session_wait_for_mcp(
+            session_id,
+            cd,
+            timeout_seconds,
+            memory_warn_mb,
+            output_mode,
+        )
+    })
+    .await
+    .context("MCP csa_session_wait worker task failed")??;
+
+    Ok(serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": wait_output.text
+            }
+        ]
+    }))
+}
+
+fn optional_string_arg(args: &Value, name: &str) -> Result<Option<String>> {
+    let Some(value) = args.get(name) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .with_context(|| format!("{name} must be a string"))
+}
+
+fn optional_u64_arg(args: &Value, name: &str) -> Result<Option<u64>> {
+    let Some(value) = args.get(name) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .map(Some)
+        .with_context(|| format!("{name} must be a positive integer"))
+}
+
+fn optional_bool_arg(args: &Value, name: &str) -> Result<Option<bool>> {
+    let Some(value) = args.get(name) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .with_context(|| format!("{name} must be a boolean"))
 }
 
 /// Handle csa_gc tool

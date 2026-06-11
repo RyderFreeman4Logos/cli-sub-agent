@@ -45,7 +45,9 @@ pub(crate) use wait::{
     handle_session_wait_with_hooks_and_sampler, synthesized_wait_next_step,
     try_acquire_session_wait_lock,
 };
-pub(crate) use wait::{SessionWaitOutputMode, handle_session_wait_with_options};
+pub(crate) use wait::{
+    SessionWaitOutputMode, handle_session_wait_for_mcp, handle_session_wait_with_options,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AttachPrimaryOutput {

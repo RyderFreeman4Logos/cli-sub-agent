@@ -32,6 +32,45 @@ fn stream_wait_output(session_dir: &Path) -> Result<bool> {
     Ok(bytes > 0)
 }
 
+pub(crate) fn render_wait_terminal_output(
+    session_dir: &Path,
+    session_id: &str,
+    result: Option<&csa_session::SessionResult>,
+    output_mode: SessionWaitOutputMode,
+) -> Result<Option<String>> {
+    if output_mode == SessionWaitOutputMode::Verbose {
+        let stdout_log = session_dir.join("stdout.log");
+        if !stdout_log.is_file() {
+            return Ok(None);
+        }
+        let log = read_wait_output_log(&stdout_log)?;
+        let Some(rendered) = render_wait_output_log(&log.raw, log.truncated) else {
+            return Ok(None);
+        };
+        if log.truncated {
+            return Ok(Some(format!(
+                "[csa] stdout.log exceeded {WAIT_OUTPUT_MAX_BYTES} bytes; showing bounded tail output\n{rendered}"
+            )));
+        }
+        return Ok(Some(rendered));
+    }
+
+    let Some(result) = result else {
+        return Ok(None);
+    };
+
+    let rendered = match output_mode {
+        SessionWaitOutputMode::CompactText => {
+            render_wait_result_summary(session_dir, session_id, result)
+        }
+        SessionWaitOutputMode::CompactJson => {
+            render_wait_result_json(session_dir, session_id, result)?
+        }
+        SessionWaitOutputMode::Verbose => unreachable!("handled above"),
+    };
+    Ok(Some(rendered))
+}
+
 pub(super) fn emit_wait_terminal_output(
     session_dir: &Path,
     session_id: &str,

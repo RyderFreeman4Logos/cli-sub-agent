@@ -25,6 +25,31 @@ use crate::session_cmds_daemon::{
     load_daemon_completion_packet, session_has_terminal_process,
 };
 
+type ReconcileEmitter<'a> =
+    Box<dyn FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome> + 'a>;
+type CompletionSignalEmitter<'a> = Box<dyn FnMut(&str, &str, i32, bool, bool) + 'a>;
+type MemorySampler<'a> = Box<dyn FnMut(&Path, &str) -> std::io::Result<u64> + 'a>;
+type MemoryWarnEmitter<'a> = Box<dyn FnMut(&str, u64, u64) + 'a>;
+type TerminalOutputEmitter<'a> = Box<
+    dyn FnMut(
+            &Path,
+            &str,
+            Option<&csa_session::SessionResult>,
+            super::SessionWaitOutputMode,
+        ) -> Result<bool>
+        + 'a,
+>;
+type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
+
+pub(crate) struct WaitEmitters<'a> {
+    pub(crate) reconcile_dead_active_session: ReconcileEmitter<'a>,
+    pub(crate) emit_completion_signal: CompletionSignalEmitter<'a>,
+    pub(crate) sample_session_tree_rss_mb: MemorySampler<'a>,
+    pub(crate) emit_memory_warn_marker: MemoryWarnEmitter<'a>,
+    pub(crate) emit_terminal_output: TerminalOutputEmitter<'a>,
+    pub(crate) emit_next_step: NextStepEmitter<'a>,
+}
+
 /// Core polling loop implementation for session wait.
 ///
 /// Handles lock acquisition, session resolution, completion detection,
@@ -39,11 +64,32 @@ pub(crate) fn handle_session_wait_with_hooks_and_sampler_output_mode<R, E, S, M>
     mut emit_memory_warn_marker: M,
 ) -> Result<i32>
 where
-    R: FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome>,
-    E: FnMut(&str, &str, i32, bool, bool),
-    S: FnMut(&Path, &str) -> std::io::Result<u64>,
-    M: FnMut(&str, u64, u64),
+    R: for<'a, 'b, 'c> FnMut(&'a Path, &'b str, &'c str) -> Result<WaitReconciliationOutcome>,
+    E: for<'a, 'b> FnMut(&'a str, &'b str, i32, bool, bool),
+    S: for<'a, 'b> FnMut(&'a Path, &'b str) -> std::io::Result<u64>,
+    M: for<'a> FnMut(&'a str, u64, u64),
 {
+    handle_session_wait_with_emitters(
+        session,
+        cd,
+        wait_options,
+        WaitEmitters {
+            reconcile_dead_active_session: Box::new(&mut reconcile_dead_active_session),
+            emit_completion_signal: Box::new(&mut emit_completion_signal),
+            sample_session_tree_rss_mb: Box::new(&mut sample_session_tree_rss_mb),
+            emit_memory_warn_marker: Box::new(&mut emit_memory_warn_marker),
+            emit_terminal_output: Box::new(emit_wait_terminal_output),
+            emit_next_step: Box::new(super::emit_wait_next_step_if_needed),
+        },
+    )
+}
+
+pub(crate) fn handle_session_wait_with_emitters(
+    session: String,
+    cd: Option<String>,
+    wait_options: WaitExecutionOptions,
+    mut emitters: WaitEmitters<'_>,
+) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     // For cross-project sessions, derive session_dir from the resolved sessions_dir
@@ -137,7 +183,7 @@ where
                         )
                     });
                 if loaded_result.is_none() {
-                    let reconciled = reconcile_dead_active_session(
+                    let reconciled = (emitters.reconcile_dead_active_session)(
                         effective_root,
                         &resolved.session_id,
                         "session wait",
@@ -154,17 +200,17 @@ where
                 }
             }
             if let Some(result) = loaded_result {
-                let streamed_output = emit_wait_terminal_output(
+                let streamed_output = (emitters.emit_terminal_output)(
                     &session_dir,
                     &resolved.session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
-                super::emit_wait_next_step_if_needed(&session_dir)?;
+                (emitters.emit_next_step)(&session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, Some(&result));
                 emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-                emit_completion_signal(
+                (emitters.emit_completion_signal)(
                     &resolved.session_id,
                     completion_status.as_ref(),
                     exit_code,
@@ -202,17 +248,17 @@ where
                 is_cross_project,
             )?
         {
-            let streamed_output = emit_wait_terminal_output(
+            let streamed_output = (emitters.emit_terminal_output)(
                 &session_dir,
                 &resolved.session_id,
                 Some(&result),
                 wait_options.output_mode,
             )?;
-            super::emit_wait_next_step_if_needed(&session_dir)?;
+            (emitters.emit_next_step)(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
             emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-            emit_completion_signal(
+            (emitters.emit_completion_signal)(
                 &resolved.session_id,
                 completion_status.as_ref(),
                 exit_code,
@@ -223,8 +269,11 @@ where
         }
 
         // Synthesize terminal result for dead Active sessions.
-        let reconciled =
-            reconcile_dead_active_session(effective_root, &resolved.session_id, "session wait")?;
+        let reconciled = (emitters.reconcile_dead_active_session)(
+            effective_root,
+            &resolved.session_id,
+            "session wait",
+        )?;
         if reconciled.result_became_available
             && let Some(result) = load_completed_daemon_result_with_fallback(
                 effective_root,
@@ -233,17 +282,17 @@ where
                 is_cross_project,
             )?
         {
-            let streamed_output = emit_wait_terminal_output(
+            let streamed_output = (emitters.emit_terminal_output)(
                 &session_dir,
                 &resolved.session_id,
                 Some(&result),
                 wait_options.output_mode,
             )?;
-            super::emit_wait_next_step_if_needed(&session_dir)?;
+            (emitters.emit_next_step)(&session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
             emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-            emit_completion_signal(
+            (emitters.emit_completion_signal)(
                 &resolved.session_id,
                 completion_status.as_ref(),
                 exit_code,
@@ -266,17 +315,17 @@ where
                 &session_dir,
                 is_cross_project,
             )? {
-                let streamed_output = emit_wait_terminal_output(
+                let streamed_output = (emitters.emit_terminal_output)(
                     &session_dir,
                     &resolved.session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
-                super::emit_wait_next_step_if_needed(&session_dir)?;
+                (emitters.emit_next_step)(&session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
                 emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-                emit_completion_signal(
+                (emitters.emit_completion_signal)(
                     &resolved.session_id,
                     completion_status.as_ref(),
                     exit_code,
@@ -305,10 +354,14 @@ where
         if let (Some(limit_mb), Some(sample_at)) = (memory_warn_mb, next_memory_sample_at)
             && std::time::Instant::now() >= sample_at
         {
-            match sample_session_tree_rss_mb(effective_root, &resolved.session_id) {
+            match (emitters.sample_session_tree_rss_mb)(effective_root, &resolved.session_id) {
                 Ok(actual_rss_mb) => {
                     if actual_rss_mb > limit_mb {
-                        emit_memory_warn_marker(&resolved.session_id, actual_rss_mb, limit_mb);
+                        (emitters.emit_memory_warn_marker)(
+                            &resolved.session_id,
+                            actual_rss_mb,
+                            limit_mb,
+                        );
                         return Ok(SESSION_WAIT_MEMORY_WARN_EXIT_CODE);
                     }
                     next_memory_sample_at = Some(

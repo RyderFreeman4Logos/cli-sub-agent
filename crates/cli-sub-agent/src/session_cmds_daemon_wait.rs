@@ -1,6 +1,7 @@
 use super::*;
 use chrono::Utc;
 use csa_config::GlobalConfig;
+use std::cell::RefCell;
 use std::time::{Duration, Instant, SystemTime};
 
 #[path = "session_cmds_daemon_wait_completion.rs"]
@@ -28,13 +29,19 @@ use result_loader::{
     load_completed_daemon_result_with_fallback, refresh_result_for_wait,
     suppress_pending_tier_failover_result,
 };
-use summary::emit_wait_terminal_output;
 #[cfg(test)]
 pub(crate) use summary::render_wait_result_summary;
+use summary::{emit_wait_terminal_output, render_wait_terminal_output};
 use types::WaitExecutionOptions;
 #[cfg(test)]
 pub(crate) use types::WaitLoopTiming;
 pub(crate) use types::{SessionWaitOutputMode, WaitBehavior, WaitReconciliationOutcome};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionWaitMcpOutput {
+    pub(crate) exit_code: i32,
+    pub(crate) text: String,
+}
 
 /// Wait for a daemon session to reach a terminal result.
 /// Exits 0 on session success, 1 on terminal session failure, 124 when the
@@ -89,6 +96,159 @@ pub(crate) fn handle_session_wait_with_options(
         },
         emit_wait_completion_signal,
     )
+}
+
+pub(crate) fn handle_session_wait_for_mcp(
+    session: String,
+    cd: Option<String>,
+    wait_timeout_secs: u64,
+    memory_warn_mb: Option<u64>,
+    output_mode: SessionWaitOutputMode,
+) -> Result<SessionWaitMcpOutput> {
+    let compact_json = output_mode == SessionWaitOutputMode::CompactJson;
+    let mut cached_memory_sampler: Option<csa_session::SessionTreeMemorySampler> = None;
+    let session_arg = session.clone();
+    let text = RefCell::new(String::new());
+    let exit_code = core::handle_session_wait_with_emitters(
+        session,
+        cd,
+        WaitExecutionOptions {
+            behavior: WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
+            output_mode,
+        },
+        core::WaitEmitters {
+            reconcile_dead_active_session: Box::new(|project_root, session_id, trigger| {
+                let reconciled =
+                    crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+                        project_root,
+                        session_id,
+                        trigger,
+                    )?;
+                Ok(WaitReconciliationOutcome {
+                    result_became_available: reconciled.result_became_available(),
+                    synthetic: reconciled.synthesized_failure(),
+                })
+            }),
+            emit_completion_signal: Box::new(
+                |session_id, status, exit_code, synthetic, _mirror_to_stdout| {
+                    if compact_json {
+                        return;
+                    }
+                    append_mcp_wait_line(
+                        &mut text.borrow_mut(),
+                        format!(
+                            "<!-- CSA:SESSION_WAIT_COMPLETED session={session_id} status={status} exit={exit_code} synthetic={synthetic} -->"
+                        ),
+                    );
+                },
+            ),
+            sample_session_tree_rss_mb: Box::new(|project_root, session_id| {
+                if cached_memory_sampler.is_none() {
+                    cached_memory_sampler = Some(csa_session::SessionTreeMemorySampler::new(
+                        project_root,
+                        session_id,
+                    )?);
+                }
+                cached_memory_sampler
+                    .as_ref()
+                    .expect("cached sampler initialized above")
+                    .sample_rss_mb()
+            }),
+            emit_memory_warn_marker: Box::new(|session_id, rss_mb, limit_mb| {
+                append_mcp_wait_line(
+                    &mut text.borrow_mut(),
+                    format!(
+                        "<!-- CSA:MEMORY_WARN session={session_id} rss_mb={rss_mb} limit_mb={limit_mb} -->"
+                    ),
+                );
+            }),
+            emit_terminal_output: Box::new(|session_dir, session_id, result, mode| {
+                let Some(rendered) =
+                    render_wait_terminal_output(session_dir, session_id, result, mode)?
+                else {
+                    return Ok(false);
+                };
+                append_mcp_wait_line(&mut text.borrow_mut(), rendered);
+                Ok(true)
+            }),
+            emit_next_step: Box::new(|session_dir| {
+                if compact_json {
+                    return Ok(());
+                }
+                if let Some(directive) = synthesized_wait_next_step(session_dir)? {
+                    append_mcp_wait_line(&mut text.borrow_mut(), directive);
+                }
+                Ok(())
+            }),
+        },
+    )?;
+
+    let mut text = text.into_inner();
+    if compact_json && inject_mcp_wait_exit_code_into_json(&mut text, exit_code)? {
+        return Ok(SessionWaitMcpOutput { exit_code, text });
+    }
+    append_mcp_wait_nonterminal_status_if_needed(
+        &mut text,
+        &session_arg,
+        wait_timeout_secs,
+        exit_code,
+    );
+    append_mcp_wait_line(
+        &mut text,
+        format!("MCP csa_session_wait exit_code={exit_code}"),
+    );
+    Ok(SessionWaitMcpOutput { exit_code, text })
+}
+
+fn inject_mcp_wait_exit_code_into_json(text: &mut String, exit_code: i32) -> Result<bool> {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+        return Ok(false);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Ok(false);
+    };
+    object.insert(
+        "mcp_wait_exit_code".to_string(),
+        serde_json::Value::from(exit_code),
+    );
+    *text = serde_json::to_string_pretty(&value)?;
+    Ok(true)
+}
+
+fn append_mcp_wait_nonterminal_status_if_needed(
+    text: &mut String,
+    session: &str,
+    wait_timeout_secs: u64,
+    exit_code: i32,
+) {
+    if text.contains("CSA:SESSION_WAIT_COMPLETED") || text.contains("CSA:MEMORY_WARN") {
+        return;
+    }
+
+    let status_line = if exit_code == completion::SESSION_WAIT_KV_WARM_EXIT_CODE {
+        format!(
+            "MCP csa_session_wait status=alive session_arg={session} timeout_seconds={wait_timeout_secs} action=re-wait; no terminal result yet. Call csa_session_wait again with a long tool_timeout_sec."
+        )
+    } else if exit_code == completion::SESSION_WAIT_TIMEOUT_EXIT_CODE {
+        format!(
+            "MCP csa_session_wait status=timeout session_arg={session} timeout_seconds={wait_timeout_secs}; no live daemon process or terminal result was available. Run csa session result for diagnostics."
+        )
+    } else {
+        format!(
+            "MCP csa_session_wait status=failed session_arg={session} exit_code={exit_code}; no terminal summary was emitted. Another wait may be active, or the session may need csa session result diagnostics."
+        )
+    };
+    append_mcp_wait_line(text, status_line);
+}
+
+fn append_mcp_wait_line(text: &mut String, line: impl AsRef<str>) {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(line.as_ref());
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
 }
 
 #[cfg(test)]
