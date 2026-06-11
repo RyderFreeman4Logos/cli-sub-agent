@@ -34,6 +34,9 @@ impl Drop for EnvVarGuard {
     }
 }
 
+#[path = "session_cmds_result_tests_2016.rs"]
+mod issue_2016;
+
 // ── display_structured_output tests ───────────────────────────────
 
 #[test]

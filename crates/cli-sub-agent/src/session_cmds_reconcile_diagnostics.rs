@@ -30,6 +30,11 @@ pub(super) fn synthetic_failure_diagnostics(
         "daemon_completion",
         &session_dir.join("daemon-completion.toml"),
     );
+    push_file_diagnostic(
+        &mut lines,
+        "legacy_complete",
+        &session_dir.join(".complete"),
+    );
     push_file_diagnostic(&mut lines, "daemon_pid", &session_dir.join("daemon.pid"));
     push_file_diagnostic(&mut lines, "output_log", &session_dir.join("output.log"));
     push_file_diagnostic(&mut lines, "stderr_log", &session_dir.join("stderr.log"));
@@ -46,6 +51,9 @@ pub(super) fn synthetic_failure_diagnostics(
 
     if let Some(packet) = read_daemon_completion_summary(session_dir) {
         lines.push(format!("daemon_completion_packet={packet}"));
+    }
+    if let Some(marker) = read_small_file_compact(&session_dir.join(".complete")) {
+        lines.push(format!("legacy_complete_marker={marker}"));
     }
     if let Some(pid_record) = read_small_file_compact(&session_dir.join("daemon.pid")) {
         lines.push(format!("daemon_pid_record={pid_record}"));

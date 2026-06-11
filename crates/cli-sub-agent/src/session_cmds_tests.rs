@@ -837,8 +837,6 @@ fn print_content_with_tail_no_panic_on_large_tail() {
     print_content_with_tail("line1\nline2\n", Some(100));
 }
 
-// ── CLI --summary/--section/--full flag parsing ───────────────────
-
 include!("session_cmds_tests_fork_tail.rs");
 
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
@@ -859,6 +857,8 @@ mod tail_tests_wait;
 mod tail_tests_wait_1951;
 #[path = "session_cmds_tests_tail_wait_2002.rs"]
 mod tail_tests_wait_2002;
+#[path = "session_cmds_tests_tail_wait_2016.rs"]
+mod tail_tests_wait_2016;
 #[path = "session_cmds_tests_tail_wait_liveness.rs"]
 mod tail_tests_wait_liveness;
 #[path = "session_cmds_tests_tail_wait_lock.rs"]

@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
+const LEGACY_COMPLETE_FILE: &str = ".complete";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DaemonCompletionPacket {
@@ -34,6 +35,10 @@ impl DaemonCompletionPacket {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
         }
+    }
+
+    pub(crate) fn is_legacy_complete_marker(&self) -> bool {
+        self.reason.as_deref() == Some("legacy_complete_marker")
     }
 }
 
@@ -87,6 +92,11 @@ pub(crate) fn persist_daemon_completion_from_env_with_reason(exit_code: i32, rea
 
 pub(crate) fn daemon_completion_exists(session_dir: &Path) -> bool {
     daemon_completion_path(session_dir).is_file()
+        || legacy_complete_marker_path(session_dir).is_file()
+}
+
+pub(crate) fn legacy_complete_marker_is_valid(session_dir: &Path) -> bool {
+    load_legacy_complete_marker_packet(session_dir).is_ok_and(|packet| packet.is_some())
 }
 
 pub(crate) fn load_daemon_completion_packet(
@@ -94,7 +104,7 @@ pub(crate) fn load_daemon_completion_packet(
 ) -> Result<Option<DaemonCompletionPacket>> {
     let path = daemon_completion_path(session_dir);
     if !path.is_file() {
-        return Ok(None);
+        return load_legacy_complete_marker_packet(session_dir);
     }
 
     let content = fs::read_to_string(&path)?;
@@ -105,10 +115,10 @@ pub(crate) fn load_daemon_completion_packet(
 pub(crate) fn finalize_daemon_completion_if_present(
     session_dir: &Path,
 ) -> Result<Option<SessionResult>> {
-    if load_daemon_completion_packet(session_dir)?.is_none() {
+    let Some(packet) = load_daemon_completion_packet(session_dir)? else {
         return Ok(None);
-    }
-    if super::session_has_terminal_process(session_dir) {
+    };
+    if !packet.is_legacy_complete_marker() && super::session_has_terminal_process(session_dir) {
         debug!(
             path = %daemon_completion_path(session_dir).display(),
             "Ignoring daemon completion packet while session process is still live"
@@ -118,6 +128,11 @@ pub(crate) fn finalize_daemon_completion_if_present(
     let session = load_session_state_from_dir(session_dir)?;
     let project_root = PathBuf::from(&session.project_path);
     crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+        &project_root,
+        &session.meta_session_id,
+        "daemon completion",
+    )?;
+    crate::session_cmds::retire_if_dead_with_result(
         &project_root,
         &session.meta_session_id,
         "daemon completion",
@@ -135,6 +150,31 @@ fn persist_daemon_completion(session_dir: &Path, packet: &DaemonCompletionPacket
 
 fn daemon_completion_path(session_dir: &Path) -> PathBuf {
     session_dir.join(DAEMON_COMPLETION_FILE)
+}
+
+fn legacy_complete_marker_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(LEGACY_COMPLETE_FILE)
+}
+
+fn load_legacy_complete_marker_packet(
+    session_dir: &Path,
+) -> Result<Option<DaemonCompletionPacket>> {
+    let path = legacy_complete_marker_path(session_dir);
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let exit_code = content.trim().parse::<i32>().with_context(|| {
+        format!(
+            "Failed to parse legacy completion marker {} as exit code",
+            path.display()
+        )
+    })?;
+    Ok(Some(DaemonCompletionPacket::from_exit_code_and_reason(
+        exit_code,
+        Some("legacy_complete_marker"),
+    )))
 }
 
 fn resolve_daemon_session_dir_from_env() -> Option<PathBuf> {
