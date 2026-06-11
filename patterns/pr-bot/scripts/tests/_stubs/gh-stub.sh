@@ -7,6 +7,7 @@ scenario="${GH_STUB_SCENARIO:?}"
 expected_list_head="${GH_STUB_EXPECTED_LIST_HEAD:?}"
 expected_create_head="${GH_STUB_EXPECTED_CREATE_HEAD:?}"
 expected_base="${GH_STUB_EXPECTED_BASE:?}"
+expected_title="${GH_STUB_EXPECTED_TITLE:-}"
 
 count_call() {
   local name="$1"
@@ -60,7 +61,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
   case "${scenario}" in
     create-success)
       if [ "${list_call}" -ge 2 ]; then
-        printf '[{"number":101,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n'
+        printf '[{"number":101,"baseRefName":"main","headRefName":"%s","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}]\n' "${expected_list_head}"
       else
         printf '[]\n'
       fi
@@ -134,7 +135,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
       ;;
     create-success)
       if [ -f "${state_dir}/pr-create-count" ] && [ "${view_call}" -ge 2 ]; then
-        printf '{"number":101,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+        printf '{"number":101,"baseRefName":"main","headRefName":"%s","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n' "${expected_list_head}"
       else
         exit 1
       fi
@@ -152,12 +153,17 @@ fi
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
   head_arg="$(arg_value "--head" "$@")"
   base_arg="$(arg_value "--base" "$@")"
+  title_arg="$(arg_value "--title" "$@")"
   if [ "${head_arg}" != "${expected_create_head}" ]; then
     echo "unexpected create --head: ${head_arg}" >&2
     exit 1
   fi
   if [ "${base_arg}" != "${expected_base}" ]; then
     echo "unexpected create --base: ${base_arg}" >&2
+    exit 1
+  fi
+  if [ -n "${expected_title}" ] && [ "${title_arg}" != "${expected_title}" ]; then
+    echo "unexpected create --title: ${title_arg}" >&2
     exit 1
   fi
   count_call pr-create >/dev/null

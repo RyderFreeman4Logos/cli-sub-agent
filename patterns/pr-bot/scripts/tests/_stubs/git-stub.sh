@@ -23,6 +23,11 @@ if [ "${1:-}" = "push" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "log" ] && [ "${2:-}" = "-1" ] && [ "${3:-}" = "--pretty=%s" ]; then
+  printf '%s\n' "${GIT_STUB_HEAD_SUBJECT-Fix 1171}"
+  exit 0
+fi
+
 if [ "${1:-}" = "remote" ] && [ "${2:-}" = "get-url" ] && [ "${3:-}" = "--push" ]; then
   printf 'git@github.com:%s/test-repo.git\n' "${source_owner}"
   exit 0
