@@ -2109,7 +2109,7 @@ OnFail: abort
 Merge and update the local default branch.
 
 ```bash
-# --- Hard gate: unconditional pre-merge check ---
+set -e
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
   echo "ERROR: Reached merge with unresolved fallback review issues."
   echo "This is a workflow violation. Aborting merge."
@@ -2135,7 +2135,7 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
 # --- Inline post-merge checkout (defense-in-depth for #1401) ---
 _SYNC_BRANCH="${DEFAULT_BRANCH:-}"
@@ -2170,7 +2170,7 @@ OnFail: abort
 First-pass clean review or Step 10.5 post-rebase success: merge the existing PR directly.
 
 ```bash
-# --- Hard gate: unconditional pre-merge check ---
+set -e
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
   echo "ERROR: Reached merge with unresolved fallback review issues."
   echo "This is a workflow violation. Aborting merge."
@@ -2192,7 +2192,7 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
 # --- Inline post-merge checkout (defense-in-depth for #1401) ---
 _SYNC_BRANCH="${DEFAULT_BRANCH:-}"
