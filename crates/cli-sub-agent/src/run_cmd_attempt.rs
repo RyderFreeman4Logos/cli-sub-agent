@@ -23,9 +23,9 @@ pub(crate) use types::{RunLoopCompletion, RunLoopOutcome, RunLoopRequest};
 #[path = "run_cmd_attempt_outcome.rs"]
 mod outcome;
 use outcome::{
-    AttemptErrorAction, AttemptErrorRequest, AttemptErrorState, AttemptRetryAction,
-    FailoverContextUpdate, PostAttemptAction, PostAttemptRequest, PostAttemptState,
-    evaluate_post_attempt_retry, handle_attempt_error,
+    AttemptErrorAction, AttemptErrorRequest, AttemptErrorState, AttemptRetryState,
+    PostAttemptAction, PostAttemptRequest, PostAttemptState, evaluate_post_attempt_retry,
+    handle_attempt_error,
 };
 #[path = "run_cmd_attempt_slot.rs"]
 mod slot;
@@ -446,6 +446,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         tier_auto_select: request.tier_auto_select,
                         failover_on_crash_enabled: request.failover_on_crash_enabled,
                         resolved_tier_name: request.resolved_tier_name,
+                        tier_failover_tool_filter: request.tier_failover_tool_filter,
                         ephemeral: request.ephemeral,
                         prompt_text: request.prompt_text,
                         config: request.config,
@@ -466,21 +467,17 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         return Ok(RunLoopCompletion::Exit(exit_code));
                     }
                     AttemptErrorAction::Error(error) => return Err(error),
-                    AttemptErrorAction::Retry(AttemptRetryAction::Retry {
-                        new_tool,
-                        new_model_spec,
-                        failover_context,
-                    }) => {
-                        if let FailoverContextUpdate::Replace(new_context) = failover_context {
-                            failover_context_addendum = new_context;
+                    AttemptErrorAction::Retry(action) => {
+                        AttemptRetryState {
+                            failover_context: &mut failover_context_addendum,
+                            tool: &mut current_tool,
+                            model_spec: &mut current_model_spec,
+                            model: &mut current_model,
+                            fork_resolution: &mut fork_resolution,
+                            effective_session: &mut effective_session_arg,
+                            is_fork,
                         }
-                        current_tool = new_tool;
-                        current_model_spec = new_model_spec;
-                        current_model = None;
-                        fork_resolution = None;
-                        if is_fork {
-                            effective_session_arg = None;
-                        }
+                        .apply(action);
                         continue;
                     }
                 },
@@ -500,6 +497,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 max_failover_attempts,
                 tier_auto_select: request.tier_auto_select,
                 resolved_tier_name: request.resolved_tier_name,
+                tier_failover_tool_filter: request.tier_failover_tool_filter,
                 executed_session_id: executed_session_id.as_deref(),
                 effective_session_arg: effective_session_arg.as_deref(),
                 ephemeral: request.ephemeral,
@@ -521,21 +519,17 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 pre_created_fork_session_id: &mut pre_created_fork_session_id,
             },
         )? {
-            PostAttemptAction::Retry(AttemptRetryAction::Retry {
-                new_tool,
-                new_model_spec,
-                failover_context,
-            }) => {
-                if let FailoverContextUpdate::Replace(new_context) = failover_context {
-                    failover_context_addendum = new_context;
+            PostAttemptAction::Retry(action) => {
+                AttemptRetryState {
+                    failover_context: &mut failover_context_addendum,
+                    tool: &mut current_tool,
+                    model_spec: &mut current_model_spec,
+                    model: &mut current_model,
+                    fork_resolution: &mut fork_resolution,
+                    effective_session: &mut effective_session_arg,
+                    is_fork,
                 }
-                current_tool = new_tool;
-                current_model_spec = new_model_spec;
-                current_model = None;
-                fork_resolution = None;
-                if is_fork {
-                    effective_session_arg = None;
-                }
+                .apply(action);
                 continue;
             }
             PostAttemptAction::Break(changed_paths) => break (exec_result, changed_paths),

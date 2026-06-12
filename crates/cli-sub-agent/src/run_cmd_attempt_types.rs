@@ -61,6 +61,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) tier_auto_select: bool,
     pub(crate) failover_on_crash_enabled: bool,
     pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) tier_failover_tool_filter: Option<ToolName>,
     pub(crate) context_load_options: Option<&'a ContextLoadOptions>,
     pub(crate) memory_injection: MemoryInjectionOptions,
     pub(crate) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,

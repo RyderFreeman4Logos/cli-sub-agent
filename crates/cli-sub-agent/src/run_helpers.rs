@@ -42,7 +42,9 @@ pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
 pub(crate) use basics::{
     detect_parent_tool, is_compress_command, parse_tool_name, resolve_tool, truncate_prompt,
 };
-pub(crate) use compound_tier::{apply_compound_tier_selector, apply_compound_tier_selector_arg};
+pub(crate) use compound_tier::{
+    apply_compound_tier_selector, apply_compound_tier_selector_arg, compound_tier_selects_tool,
+};
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 pub(crate) use executor::{build_executor, model_name_for_tier_validation};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;

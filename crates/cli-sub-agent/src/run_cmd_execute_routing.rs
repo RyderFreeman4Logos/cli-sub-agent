@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolSelectionStrategy;
+use csa_core::types::{ToolArg, ToolName, ToolSelectionStrategy};
+use weave::parser::AgentConfig;
 
 pub(super) fn resolve_run_no_failover(
     user_explicit_tool: bool,
@@ -14,6 +17,45 @@ pub(super) fn resolve_run_no_failover(
             && !active_tier
             && matches!(strategy, ToolSelectionStrategy::Explicit(_))
             && !allow_fallback)
+}
+
+pub(super) fn resolve_tier_failover_tool_filter(
+    user_explicit_tool: bool,
+    active_tier: bool,
+    resolved_tool_arg: &ToolArg,
+) -> Option<ToolName> {
+    if !user_explicit_tool || !active_tier {
+        return None;
+    }
+
+    match resolved_tool_arg {
+        ToolArg::Specific(tool) => Some(*tool),
+        ToolArg::Auto | ToolArg::AnyAvailable | ToolArg::Alias(_) => None,
+    }
+}
+
+pub(super) struct RunToolStrategySelection {
+    pub(super) strategy: ToolSelectionStrategy,
+    pub(super) tier_failover_tool_filter: Option<ToolName>,
+}
+
+pub(super) fn resolve_run_tool_strategy(
+    tool_arg: Option<ToolArg>,
+    tool_aliases: &HashMap<String, String>,
+    user_explicit_tool: bool,
+    active_tier: bool,
+) -> Result<RunToolStrategySelection> {
+    let resolved_tool_arg = tool_arg
+        .unwrap_or(ToolArg::Auto)
+        .resolve_alias(tool_aliases)
+        .map_err(anyhow::Error::msg)?;
+    let tier_failover_tool_filter =
+        resolve_tier_failover_tool_filter(user_explicit_tool, active_tier, &resolved_tool_arg);
+
+    Ok(RunToolStrategySelection {
+        strategy: resolved_tool_arg.into_strategy(),
+        tier_failover_tool_filter,
+    })
 }
 
 pub(super) fn resolve_run_tier_context(
@@ -46,6 +88,25 @@ pub(super) fn resolve_run_tier_context(
         failover_on_crash_enabled,
         resolved_tier_name,
     )
+}
+
+pub(super) fn resolve_run_fallback_tier_name(
+    skill_agent: Option<&AgentConfig>,
+    config: Option<&ProjectConfig>,
+) -> Option<String> {
+    skill_agent
+        .and_then(|agent| agent.tier.clone())
+        .or_else(|| {
+            config.and_then(|cfg| {
+                cfg.tier_mapping.get("default").cloned().or_else(|| {
+                    if cfg.tiers.contains_key("tier3") {
+                        Some("tier3".to_string())
+                    } else {
+                        cfg.tiers.keys().next().cloned()
+                    }
+                })
+            })
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

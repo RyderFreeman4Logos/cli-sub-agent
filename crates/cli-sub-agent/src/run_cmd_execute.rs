@@ -23,9 +23,9 @@ use crate::run_cmd_tool_selection::{
     resolve_tool_by_strategy,
 };
 use crate::run_helpers::{
-    apply_compound_tier_selector_arg, is_routing_conflict, resolve_positional_stdin_sentinel,
-    resolve_prompt_with_file, resolve_task_edit_requirement, tier_bypass_allowed, truncate_prompt,
-    warn_if_tier_without_tool,
+    apply_compound_tier_selector_arg, compound_tier_selects_tool, is_routing_conflict,
+    resolve_positional_stdin_sentinel, resolve_prompt_with_file, resolve_task_edit_requirement,
+    tier_bypass_allowed, truncate_prompt, warn_if_tier_without_tool,
 };
 use crate::run_helpers_branch_guard::{
     BranchGuardRuntime, evaluate_and_emit_refusal, observe_branch_state,
@@ -55,8 +55,8 @@ use post_exec_gate::{
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
     RunModelSelectionFlags, enforce_run_tier_bypass_gate, resolve_primary_writer_spec_for_run,
-    resolve_run_effective_tier, resolve_run_no_failover, resolve_run_subtree_pin_selection,
-    resolve_run_tier_context,
+    resolve_run_effective_tier, resolve_run_fallback_tier_name, resolve_run_no_failover,
+    resolve_run_subtree_pin_selection, resolve_run_tier_context, resolve_run_tool_strategy,
 };
 use run_cli_flags::{
     resolve_return_target, warn_deprecated_session_flags,
@@ -335,6 +335,7 @@ pub(crate) async fn handle_run(
         hint_difficulty.as_deref(),
         frontmatter_difficulty.as_deref(),
     )?;
+    user_explicit_tool |= compound_tier_selects_tool(effective_tier.as_deref(), config.as_ref());
 
     let (effective_tier, compounded_tool) = match apply_compound_tier_selector_arg(
         effective_tier,
@@ -378,12 +379,14 @@ pub(crate) async fn handle_run(
 
     warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
 
-    let strategy = skill_res
-        .tool
-        .unwrap_or(ToolArg::Auto)
-        .resolve_alias(&merged_aliases)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .into_strategy();
+    let tool_strategy = resolve_run_tool_strategy(
+        skill_res.tool.take(),
+        &merged_aliases,
+        user_explicit_tool,
+        effective_tier.is_some(),
+    )?;
+    let tier_failover_tool_filter = tool_strategy.tier_failover_tool_filter;
+    let strategy = tool_strategy.strategy;
     let effective_no_failover = resolve_run_no_failover(
         user_explicit_tool,
         effective_tier.is_some(),
@@ -518,17 +521,7 @@ pub(crate) async fn handle_run(
         is_fork,
     );
 
-    let fallback_tier_name = skill_agent.and_then(|a| a.tier.clone()).or_else(|| {
-        config.as_ref().and_then(|cfg| {
-            cfg.tier_mapping.get("default").cloned().or_else(|| {
-                if cfg.tiers.contains_key("tier3") {
-                    Some("tier3".to_string())
-                } else {
-                    cfg.tiers.keys().next().cloned()
-                }
-            })
-        })
-    });
+    let fallback_tier_name = resolve_run_fallback_tier_name(skill_agent, config.as_ref());
     let user_model_spec_explicit = model_spec.is_some();
     let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
         resolve_run_tier_context(
@@ -597,6 +590,7 @@ pub(crate) async fn handle_run(
         tier_auto_select,
         failover_on_crash_enabled,
         resolved_tier_name: resolved_tier_name.as_deref(),
+        tier_failover_tool_filter,
         context_load_options: context_load_options.as_ref(),
         memory_injection,
         pre_session_hook,

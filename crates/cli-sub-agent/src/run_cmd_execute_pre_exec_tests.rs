@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::tempdir;
 
+#[path = "run_cmd_execute_tier_failover_tests.rs"]
+mod tier_failover_tests;
+
 fn run_config_with_tier(
     tier_name: &str,
     models: Vec<&str>,
