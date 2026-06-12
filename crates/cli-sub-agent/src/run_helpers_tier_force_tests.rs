@@ -519,18 +519,20 @@ fn resolve_tool_and_model_force_ignore_tier_skipped_when_no_tiers_configured() {
         filesystem_sandbox: Default::default(),
     };
 
-    // When no tiers are configured, validation should be skipped
+    // Use an explicit tool so the test only exercises the no-tiers force-ignore
+    // validation path, not host-dependent auto-selection of installed tools.
     let result = super::resolve_tool_and_model(super::RoutingRequest {
+        tool: Some(ToolName::Codex),
         config: Some(&cfg),
         force_ignore_tier_setting: true, // force_ignore_tier_setting = true
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
-    // Should succeed because no tiers are configured, so validation is skipped
-    assert!(
-        result.is_ok(),
-        "No tiers configured should skip validation: {:?}",
-        result
-    );
+    let (tool, model_spec, model) =
+        result.expect("no tiers configured should skip force-ignore complete-spec validation");
+
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec, None);
+    assert_eq!(model, None);
 }
 
 #[test]
