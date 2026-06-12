@@ -601,20 +601,7 @@ impl ProjectConfig {
         task_type: &str,
         needs_edit: bool,
     ) -> Option<(String, String)> {
-        let tier_name = self
-            .tier_mapping
-            .get(task_type)
-            .map(String::as_str)
-            .or_else(|| {
-                if self.tiers.contains_key("tier3") {
-                    Some("tier3")
-                } else {
-                    self.tiers
-                        .keys()
-                        .find(|k| k.starts_with("tier-3-") || k.starts_with("tier3"))
-                        .map(String::as_str)
-                }
-            })?;
+        let tier_name = self.resolve_tier_name_for_task(task_type)?;
 
         let tier = self.tiers.get(tier_name)?;
 

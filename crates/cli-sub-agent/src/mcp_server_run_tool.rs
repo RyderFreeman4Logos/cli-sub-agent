@@ -109,6 +109,7 @@ pub(super) async fn handle_run_tool(
             model: None,
             thinking: None, // MCP server does not support --thinking
             config: config.as_ref(),
+            global_config: Some(&global_config),
             project_root: &project_root,
             force: false,                      // MCP server does not support --force
             force_override_user_config: false, // MCP server does not support --force-override-user-config

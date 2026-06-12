@@ -19,6 +19,8 @@ fn config_with_openai_compat_tiers(
             name.to_string(),
             ToolConfig {
                 enabled: name == "openai-compat",
+                base_url: (name == "openai-compat").then(|| "http://localhost:8317".to_string()),
+                api_key: (name == "openai-compat").then(|| "test-key".to_string()),
                 ..Default::default()
             },
         );

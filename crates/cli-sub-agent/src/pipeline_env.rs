@@ -79,6 +79,30 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
         );
     }
 
+    if tool_name == "openai-compat"
+        && let Some(cfg) = config
+        && let Some(tool_cfg) = cfg.tools.get("openai-compat")
+    {
+        if let Some(base_url) = tool_cfg
+            .base_url
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            merged_env
+                .entry("OPENAI_COMPAT_BASE_URL".to_string())
+                .or_insert_with(|| base_url.clone());
+        }
+        if let Some(api_key) = tool_cfg
+            .api_key
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            merged_env
+                .entry("OPENAI_COMPAT_API_KEY".to_string())
+                .or_insert_with(|| api_key.clone());
+        }
+    }
+
     merged_env.insert(
         csa_core::env::CSA_DEPTH_ENV_KEY.to_string(),
         current_depth.saturating_add(1).to_string(),

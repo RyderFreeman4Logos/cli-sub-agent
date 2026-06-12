@@ -9,9 +9,25 @@ use std::{path::Path, time::Duration};
 use anyhow::Result;
 use tracing::{info, warn};
 
-use csa_config::ProjectConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{FallbackAttempt, ModelFamily, ToolName, provider_for_tool_name};
 use csa_scheduler::FallbackChain;
+
+#[path = "run_cmd_post_failover_availability.rs"]
+mod failover_availability;
+#[path = "run_cmd_post_failover_detection.rs"]
+mod failover_detection;
+use failover_availability::{
+    FailoverAvailabilityRequest, FailoverAvailabilityState, decide_available_failover,
+};
+use failover_detection::{
+    TransportErrorFailoverKind, allows_init_failure_failover,
+    detect_transport_error_failover_signal, is_provider_wide_quota_exhaustion,
+};
+pub(crate) use failover_detection::{
+    detect_permanent_tool_exhaustion_result, detect_permanent_tool_exhaustion_text,
+    format_tool_exhausted_summary, is_permanent_tool_exhaustion_error,
+};
 
 /// Outcome of rate-limit failover evaluation.
 pub(crate) enum RateLimitAction {
@@ -26,201 +42,49 @@ pub(crate) enum RateLimitAction {
     },
 }
 
-#[derive(Clone, Copy)]
-enum TransportErrorFailoverKind {
-    RateLimit,
-    AcpCrashRetryExhausted,
-    GeminiRetryChainExhausted,
-    GeminiLegacyInitialStall,
+pub(crate) struct RateLimitFailoverRequest<'a> {
+    pub(crate) tool_name_str: &'a str,
+    pub(crate) exec_result: &'a csa_process::ExecutionResult,
+    pub(crate) attempts: usize,
+    pub(crate) max_failover_attempts: usize,
+    pub(crate) tried_tools: &'a mut Vec<String>,
+    pub(crate) tried_specs: &'a mut Vec<String>,
+    pub(crate) tier_auto_select: bool,
+    pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) executed_session_id: Option<&'a str>,
+    pub(crate) effective_session_arg: Option<&'a str>,
+    pub(crate) ephemeral: bool,
+    pub(crate) prompt_text: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) global_config: Option<&'a GlobalConfig>,
+    pub(crate) task_needs_edit: Option<bool>,
+    pub(crate) current_model_spec: Option<&'a str>,
+    pub(crate) fallback_chain: &'a mut FallbackChain,
+    pub(crate) attempt_elapsed: Option<Duration>,
 }
 
-struct TransportErrorFailoverSignal {
-    kind: TransportErrorFailoverKind,
-    matched_pattern: String,
-    reason: String,
-    quota_exhausted: bool,
-    requires_init_failure_window: bool,
-}
-
-pub(crate) fn format_tool_exhausted_summary(tool_name: &str, matched_pattern: &str) -> String {
-    format!(
-        "tool_exhausted: {tool_name} permanent quota exhaustion detected \
-         (matched '{matched_pattern}'); no retry or tool fallback attempted. \
-         Inspect the tool account billing/quota or choose another tool explicitly."
-    )
-}
-
-pub(crate) fn detect_permanent_tool_exhaustion_result(
-    tool_name_str: &str,
-    exec_result: &csa_process::ExecutionResult,
-    current_model_spec: Option<&str>,
-) -> Option<csa_scheduler::RateLimitDetected> {
-    // Only stderr_output is the provider's error channel; `summary`/`output`
-    // are agent stdout (reviewed/echoed content) and must not drive a permanent
-    // quota verdict (#1736).
-    detect_permanent_tool_exhaustion_text(
-        tool_name_str,
-        &exec_result.stderr_output,
-        exec_result.exit_code,
-        current_model_spec,
-    )
-}
-
-pub(crate) fn detect_permanent_tool_exhaustion_text(
-    tool_name_str: &str,
-    provider_error_channel: &str,
-    exit_code: i32,
-    current_model_spec: Option<&str>,
-) -> Option<csa_scheduler::RateLimitDetected> {
-    if exit_code == 0 {
-        return None;
-    }
-    // Permanent self-kill must come only from the provider error channel, never
-    // agent stdout/summary that may quote reviewed quota text (#1736).
-    csa_scheduler::detect_rate_limit(
-        tool_name_str,
-        provider_error_channel,
-        "",
-        exit_code,
-        current_model_spec,
-    )
-    .filter(|detected| detected.quota_exhausted)
-    .filter(|detected| {
-        is_provider_wide_quota_exhaustion(
-            tool_name_str,
-            detected.quota_exhausted,
-            provider_error_channel,
-        )
-    })
-}
-
-pub(crate) fn is_permanent_tool_exhaustion_error(
-    tool_name_str: &str,
-    error_message: &str,
-    current_model_spec: Option<&str>,
-) -> bool {
-    detect_transport_error_failover_signal(tool_name_str, error_message, current_model_spec)
-        .is_some_and(|signal| signal.quota_exhausted)
-}
-
-fn detect_transport_error_failover_signal(
-    tool_name_str: &str,
-    error_message: &str,
-    current_model_spec: Option<&str>,
-) -> Option<TransportErrorFailoverSignal> {
-    let error_lower = error_message.to_ascii_lowercase();
-
-    if error_lower.contains("acp crash retry exhausted")
-        || error_lower.contains("crash retry exhausted")
-    {
-        let matched_pattern = if error_lower.contains("acp crash retry exhausted") {
-            "acp crash retry exhausted"
-        } else {
-            "crash retry exhausted"
-        };
-        return Some(TransportErrorFailoverSignal {
-            kind: TransportErrorFailoverKind::AcpCrashRetryExhausted,
-            matched_pattern: matched_pattern.to_string(),
-            reason: "acp_crash_retry_exhausted".to_string(),
-            quota_exhausted: false,
-            requires_init_failure_window: false,
-        });
-    }
-
-    if error_lower.contains("gemini acp retry chain exhausted")
-        || error_lower.contains("retry chain exhausted")
-    {
-        let matched_pattern = if error_lower.contains("gemini acp retry chain exhausted") {
-            "gemini acp retry chain exhausted"
-        } else {
-            "retry chain exhausted"
-        };
-        return Some(TransportErrorFailoverSignal {
-            kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
-            matched_pattern: matched_pattern.to_string(),
-            reason: "gemini_retry_chain_exhausted".to_string(),
-            quota_exhausted: csa_core::gemini::detect_permanent_quota_exhaustion_pattern(
-                error_message,
-            )
-            .is_some(),
-            requires_init_failure_window: false,
-        });
-    }
-
-    if tool_name_str == "gemini-cli" && error_lower.contains("gemini_legacy_initial_stall") {
-        return Some(TransportErrorFailoverSignal {
-            kind: TransportErrorFailoverKind::GeminiLegacyInitialStall,
-            matched_pattern: "gemini_legacy_initial_stall".to_string(),
-            reason: "gemini_legacy_initial_stall".to_string(),
-            quota_exhausted: false,
-            requires_init_failure_window: false,
-        });
-    }
-
-    csa_scheduler::detect_rate_limit(
-        tool_name_str,
-        error_message,
-        "",
-        1, // synthetic non-zero exit code
-        current_model_spec,
-    )
-    .map(|rate_limit| {
-        let requires_init_failure_window = csa_scheduler::requires_init_failure_window(&rate_limit);
-        TransportErrorFailoverSignal {
-            kind: TransportErrorFailoverKind::RateLimit,
-            matched_pattern: rate_limit.matched_pattern,
-            reason: rate_limit.reason,
-            quota_exhausted: rate_limit.quota_exhausted,
-            requires_init_failure_window,
-        }
-    })
-}
-
-fn allows_init_failure_failover(
-    tool_name: &str,
-    reason: &str,
-    requires_init_failure_window: bool,
-    attempt_elapsed: Option<Duration>,
-) -> bool {
-    if !requires_init_failure_window {
-        return true;
-    }
-    let Some(elapsed) = attempt_elapsed else {
-        return true;
-    };
-    if csa_scheduler::within_init_failure_window(elapsed) {
-        warn!(
-            tool = %tool_name,
-            reason = %reason,
-            elapsed_ms = elapsed.as_millis(),
-            "[csa-failover] {tool_name} failed with {reason}, falling back to next tier model"
-        );
-        return true;
-    }
-    warn!(
-        tool = %tool_name,
-        reason = %reason,
-        elapsed_ms = elapsed.as_millis(),
-        "[csa-failover] HTTP failure occurred after initialization window; not attempting automatic tier fallback"
-    );
-    false
-}
-
-fn is_provider_wide_quota_exhaustion(
-    tool_name_str: &str,
-    quota_exhausted: bool,
-    provider_error_channel: &str,
-) -> bool {
-    quota_exhausted && !is_codex_model_scoped_usage_limit(tool_name_str, provider_error_channel)
-}
-
-fn is_codex_model_scoped_usage_limit(tool_name_str: &str, provider_error_channel: &str) -> bool {
-    if tool_name_str != "codex" {
-        return false;
-    }
-
-    let lower = provider_error_channel.to_ascii_lowercase();
-    lower.contains("usage limit") && lower.contains("switch to another model")
+pub(crate) struct ErrorRateLimitFailoverRequest<'a> {
+    pub(crate) tool_name_str: &'a str,
+    pub(crate) error_message: &'a str,
+    pub(crate) attempts: usize,
+    pub(crate) max_failover_attempts: usize,
+    pub(crate) tried_tools: &'a mut Vec<String>,
+    pub(crate) tried_specs: &'a mut Vec<String>,
+    pub(crate) tier_auto_select: bool,
+    pub(crate) failover_on_crash_enabled: bool,
+    pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) executed_session_id: Option<&'a str>,
+    pub(crate) effective_session_arg: Option<&'a str>,
+    pub(crate) ephemeral: bool,
+    pub(crate) prompt_text: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) global_config: Option<&'a GlobalConfig>,
+    pub(crate) task_needs_edit: Option<bool>,
+    pub(crate) current_model_spec: Option<&'a str>,
+    pub(crate) fallback_chain: &'a mut FallbackChain,
+    pub(crate) attempt_elapsed: Option<Duration>,
 }
 
 /// Check for 429 rate-limit signals and decide whether to failover.
@@ -231,27 +95,38 @@ fn is_codex_model_scoped_usage_limit(tool_name_str: &str, provider_error_channel
 /// `resolved_tier_name` and `tried_specs` enable intra-tier failover: when the
 /// caller is running under a named tier, we pass spec-level exclusion so that
 /// a different model within the same tier can be selected.
-#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_rate_limit_failover(
-    tool_name_str: &str,
-    exec_result: &csa_process::ExecutionResult,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
+    request: RateLimitFailoverRequest<'_>,
 ) -> Result<RateLimitAction> {
+    evaluate_rate_limit_failover_with_global_config(request)
+}
+
+pub(crate) fn evaluate_rate_limit_failover_with_global_config(
+    request: RateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let RateLimitFailoverRequest {
+        tool_name_str,
+        exec_result,
+        attempts,
+        max_failover_attempts,
+        tried_tools,
+        tried_specs,
+        tier_auto_select,
+        resolved_tier_name,
+        executed_session_id,
+        effective_session_arg,
+        ephemeral,
+        prompt_text,
+        project_root,
+        config,
+        global_config,
+        task_needs_edit,
+        current_model_spec,
+        fallback_chain,
+        attempt_elapsed,
+    } = request;
+
     let rate_limit = match csa_scheduler::detect_rate_limit(
         tool_name_str,
         &exec_result.stderr_output,
@@ -340,34 +215,34 @@ pub(crate) fn evaluate_rate_limit_failover(
         Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
-    let action = csa_scheduler::decide_failover(
-        tool_name_str,
-        "default",
-        resolved_tier_name,
-        task_needs_edit,
-        session_state.as_ref(),
-        tried_tools,
-        tried_specs,
-        &exhausted_providers,
-        cfg,
-        &rate_limit.matched_pattern,
-    );
+    let action = decide_available_failover(
+        FailoverAvailabilityRequest {
+            failed_tool: tool_name_str,
+            task_type: "default",
+            resolved_tier_name,
+            task_needs_edit,
+            session_state: session_state.as_ref(),
+            exhausted_providers: &exhausted_providers,
+            config: cfg,
+            global_config,
+            original_error: &rate_limit.matched_pattern,
+        },
+        FailoverAvailabilityState {
+            tried_tools,
+            tried_specs,
+        },
+    )?;
 
     match action {
-        csa_scheduler::FailoverAction::RetryInSession {
-            new_tool,
-            new_model_spec,
-            session_id: _,
-        }
-        | csa_scheduler::FailoverAction::RetrySiblingSession {
+        RateLimitAction::Retry {
             new_tool,
             new_model_spec,
         } => {
             warn!(
                 from_tool = %tool_name_str,
                 from_spec = %current_model_spec.unwrap_or("none"),
-                to_tool = %new_tool,
-                to_spec = %new_model_spec,
+                to_tool = %new_tool.as_str(),
+                to_spec = %new_model_spec.as_deref().unwrap_or("none"),
                 quota_exhausted = rate_limit.quota_exhausted,
                 reason = %rate_limit.reason,
                 "[csa-failover] intra-tier failover"
@@ -379,13 +254,12 @@ pub(crate) fn evaluate_rate_limit_failover(
                 quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
-            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
-                new_tool: tool,
-                new_model_spec: Some(new_model_spec),
+                new_tool,
+                new_model_spec,
             })
         }
-        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+        RateLimitAction::ExhaustedFailovers { reason } => {
             warn!(
                 reason = %reason,
                 quota_exhausted = rate_limit.quota_exhausted,
@@ -403,6 +277,7 @@ pub(crate) fn evaluate_rate_limit_failover(
             }
             Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
+        RateLimitAction::NoRateLimit => Ok(RateLimitAction::NoRateLimit),
     }
 }
 
@@ -440,28 +315,39 @@ fn collect_exhausted_providers(
 /// `ExecutionResult`. The error text is tested against the same rate-limit
 /// patterns used for normal exit-code-based detection.
 /// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
-#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn evaluate_error_rate_limit_failover(
-    tool_name_str: &str,
-    error_message: &str,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    failover_on_crash_enabled: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
+    request: ErrorRateLimitFailoverRequest<'_>,
 ) -> Result<RateLimitAction> {
+    evaluate_error_rate_limit_failover_with_global_config(request)
+}
+
+pub(crate) fn evaluate_error_rate_limit_failover_with_global_config(
+    request: ErrorRateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let ErrorRateLimitFailoverRequest {
+        tool_name_str,
+        error_message,
+        attempts,
+        max_failover_attempts,
+        tried_tools,
+        tried_specs,
+        tier_auto_select,
+        failover_on_crash_enabled,
+        resolved_tier_name,
+        executed_session_id,
+        effective_session_arg,
+        ephemeral,
+        prompt_text,
+        project_root,
+        config,
+        global_config,
+        task_needs_edit,
+        current_model_spec,
+        fallback_chain,
+        attempt_elapsed,
+    } = request;
+
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
         error_message,
@@ -583,34 +469,34 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         Some(tool_name_str).filter(|_| provider_wide_quota_exhaustion),
     );
 
-    let action = csa_scheduler::decide_failover(
-        tool_name_str,
-        "default",
-        resolved_tier_name,
-        task_needs_edit,
-        session_state.as_ref(),
-        tried_tools,
-        tried_specs,
-        &exhausted_providers,
-        cfg,
-        &failover_signal.matched_pattern,
-    );
+    let action = decide_available_failover(
+        FailoverAvailabilityRequest {
+            failed_tool: tool_name_str,
+            task_type: "default",
+            resolved_tier_name,
+            task_needs_edit,
+            session_state: session_state.as_ref(),
+            exhausted_providers: &exhausted_providers,
+            config: cfg,
+            global_config,
+            original_error: &failover_signal.matched_pattern,
+        },
+        FailoverAvailabilityState {
+            tried_tools,
+            tried_specs,
+        },
+    )?;
 
     match action {
-        csa_scheduler::FailoverAction::RetryInSession {
-            new_tool,
-            new_model_spec,
-            session_id: _,
-        }
-        | csa_scheduler::FailoverAction::RetrySiblingSession {
+        RateLimitAction::Retry {
             new_tool,
             new_model_spec,
         } => {
             warn!(
                 from_tool = %tool_name_str,
                 from_spec = %current_model_spec.unwrap_or("none"),
-                to_tool = %new_tool,
-                to_spec = %new_model_spec,
+                to_tool = %new_tool.as_str(),
+                to_spec = %new_model_spec.as_deref().unwrap_or("none"),
                 quota_exhausted = failover_signal.quota_exhausted,
                 reason = %failover_signal.reason,
                 "[csa-failover] intra-tier failover (transport error)"
@@ -622,13 +508,12 @@ pub(crate) fn evaluate_error_rate_limit_failover(
                 quota_exhausted: provider_wide_quota_exhaustion,
                 timestamp: chrono::Utc::now(),
             });
-            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
-                new_tool: tool,
-                new_model_spec: Some(new_model_spec),
+                new_tool,
+                new_model_spec,
             })
         }
-        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+        RateLimitAction::ExhaustedFailovers { reason } => {
             warn!(
                 reason = %reason,
                 quota_exhausted = failover_signal.quota_exhausted,
@@ -646,6 +531,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
             }
             Ok(RateLimitAction::ExhaustedFailovers { reason })
         }
+        RateLimitAction::NoRateLimit => Ok(RateLimitAction::NoRateLimit),
     }
 }
 

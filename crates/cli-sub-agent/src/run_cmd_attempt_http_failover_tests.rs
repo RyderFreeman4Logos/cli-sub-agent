@@ -1,5 +1,6 @@
 use crate::run_cmd_post::{
-    RateLimitAction, evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
+    ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
+    evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
 };
 use chrono::Utc;
 use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
@@ -75,8 +76,16 @@ fn assert_no_rate_limit(action: RateLimitAction) {
     }
 }
 
+fn assume_tools_available() -> crate::test_env_lock::ScopedTestEnvVar {
+    crate::test_env_lock::ScopedTestEnvVar::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    )
+}
+
 #[test]
 fn evaluate_error_rate_limit_failover_retries_on_gemini_http_400_init_failure() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -85,27 +94,28 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_http_400_init_failure() 
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini request failed: status: 400 Bad Request",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "do some work",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
-        &mut fallback_chain,
-        Some(Duration::from_secs(2)),
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: "Gemini request failed: status: 400 Bad Request",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "do some work",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: Some(Duration::from_secs(2)),
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/gpt-5.4/high");
@@ -115,6 +125,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_http_400_init_failure() 
 
 #[test]
 fn evaluate_error_rate_limit_failover_skips_http_400_after_init_window() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -123,27 +134,28 @@ fn evaluate_error_rate_limit_failover_skips_http_400_after_init_window() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini request failed after work started: status: 400 Bad Request",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "do some work",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
-        &mut fallback_chain,
-        Some(Duration::from_secs(31)),
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: "Gemini request failed after work started: status: 400 Bad Request",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "do some work",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: Some(Duration::from_secs(31)),
+    })
     .expect("evaluate failover");
 
     assert_no_rate_limit(action);
@@ -154,6 +166,7 @@ fn evaluate_error_rate_limit_failover_skips_http_400_after_init_window() {
 
 #[test]
 fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -170,26 +183,27 @@ fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_rate_limit_failover(
-        "gemini-cli",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
-        &mut fallback_chain,
-        Some(Duration::from_secs(2)),
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        exec_result: &exec_result,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: Some(Duration::from_secs(2)),
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/gpt-5.4/high");
@@ -199,6 +213,7 @@ fn evaluate_rate_limit_failover_retries_on_http_500_init_result() {
 
 #[test]
 fn evaluate_rate_limit_failover_skips_http_500_after_init_window() {
+    let _assume = assume_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "codex/openai/gpt-5.4/high",
@@ -215,26 +230,27 @@ fn evaluate_rate_limit_failover_skips_http_500_after_init_window() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_rate_limit_failover(
-        "gemini-cli",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
-        &mut fallback_chain,
-        Some(Duration::from_secs(31)),
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        exec_result: &exec_result,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: Some(Duration::from_secs(31)),
+    })
     .expect("evaluate failover");
 
     assert_no_rate_limit(action);

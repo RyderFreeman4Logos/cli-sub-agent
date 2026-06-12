@@ -2,12 +2,14 @@
 
 use anyhow::Result;
 
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 
 #[path = "run_helpers_atomic_commit.rs"]
 mod atomic_commit;
+#[path = "run_helpers_basics.rs"]
+mod basics;
 #[path = "run_helpers_compound_tier.rs"]
 mod compound_tier;
 #[path = "run_helpers_edit_requirement.rs"]
@@ -37,6 +39,9 @@ mod tool_availability;
 #[cfg(test)]
 pub(crate) use atomic_commit::atomic_commit_discipline_preamble;
 pub(crate) use atomic_commit::prepend_atomic_commit_discipline_to_prompt;
+pub(crate) use basics::{
+    detect_parent_tool, is_compress_command, parse_tool_name, resolve_tool, truncate_prompt,
+};
 pub(crate) use compound_tier::{apply_compound_tier_selector, apply_compound_tier_selector_arg};
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 pub(crate) use executor::{build_executor, model_name_for_tier_validation};
@@ -55,15 +60,24 @@ pub(crate) use tier_bypass_gate::{
     TierBypassGateCtx, TierBypassGateFlags, enforce_tier_bypass_gate,
 };
 pub(crate) use tier_resolution::{
-    TierToolResolution, collect_available_tier_models, collect_preferred_tier_models,
-    evaluate_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
+    TierToolResolution, collect_available_tier_models_with_global_config,
+    collect_preferred_tier_models_with_global_config, evaluate_tier_models,
+    resolve_preferred_tool_from_tier_with_global_config,
+    resolve_runtime_available_tier_fallback_with_global_config,
+    resolve_tool_from_tier_with_global_config,
+};
+#[cfg(test)]
+pub(crate) use tier_resolution::{
+    collect_preferred_tier_models, resolve_preferred_tool_from_tier, resolve_tool_from_tier,
 };
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
 pub(crate) use token_parse::{extract_cost, extract_number};
 pub(crate) use tool_availability::{
-    ToolBinaryAvailability, is_tool_binary_available_for_config, resolved_claude_code_transport,
+    ToolBinaryAvailability, is_tool_binary_available_for_config,
+    is_tool_runtime_available_for_config_with_env, resolved_claude_code_transport,
     resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
+    tool_runtime_availability_with_env,
 };
 
 #[cfg(test)]
@@ -73,8 +87,7 @@ pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
 #[cfg(test)]
 pub(crate) const TEST_ASSUME_TOOLS_AVAILABLE_ENV: &str = "CSA_TEST_ASSUME_TOOLS_AVAILABLE";
 
-/// Reject the contradictory routing combination where a direct tool request
-/// also asks both to use and ignore tier routing.
+/// Reject direct-tool routing that both uses and ignores tiers.
 pub(crate) fn validate_tool_tier_override_flags(
     explicit_tool_requested: bool,
     tier: Option<&str>,
@@ -187,6 +200,7 @@ pub(crate) fn resolve_tool_and_model(
         model,
         thinking,
         config,
+        global_config,
         project_root,
         force,
         force_override_user_config,
@@ -196,6 +210,11 @@ pub(crate) fn resolve_tool_and_model(
         tier_bypass_allowed,
         tool_is_auto_resolved,
     } = request;
+    let runtime_env_for_tool = |tool_name: &str| {
+        global_config.and_then(|cfg| {
+            cfg.build_execution_env(tool_name, csa_config::ExecutionEnvOptions::default())
+        })
+    };
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || tier_bypass_allowed;
     let exact_selection_active = model_spec.is_some();
@@ -310,9 +329,22 @@ pub(crate) fn resolve_tool_and_model(
     {
         let resolution = if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved) {
             let preference_order = [requested_tool.as_str().to_string()];
-            resolve_preferred_tool_from_tier(canonical_name, cfg, None, &preference_order, &[])?
-        } else if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, &[], &[])
-        {
+            resolve_preferred_tool_from_tier_with_global_config(
+                canonical_name,
+                cfg,
+                global_config,
+                None,
+                &preference_order,
+                &[],
+            )?
+        } else if let Some(resolution) = resolve_tool_from_tier_with_global_config(
+            canonical_name,
+            cfg,
+            global_config,
+            None,
+            &[],
+            &[],
+        ) {
             resolution
         } else {
             anyhow::bail!(
@@ -392,9 +424,7 @@ pub(crate) fn resolve_tool_and_model(
                 model_name_for_tier_validation(resolved_model.as_deref()),
             )?;
         }
-        // Pre-spawn compatibility check: catch known-incompatible model/tool combinations
-        // before a session is spawned (e.g. o4-mini with codex ChatGPT accounts).
-        // Skipped when the model matches the tool's configured default_model.
+        // Catch known-incompatible model/tool combinations before spawning.
         if let Some(ref m) = resolved_model {
             let configured_default =
                 config.and_then(|cfg| cfg.tool_default_model(tool_name.as_str()));
@@ -403,13 +433,20 @@ pub(crate) fn resolve_tool_and_model(
         return Ok((tool_name, None, resolved_model));
     }
 
-    // Case 3: neither tool nor model_spec → use round-robin tier-based selection.
-    // When --force is active, bypass tiers and pick any installed+enabled tool.
+    // Case 3: no tool/model_spec; use tiers, or --force any enabled runtime.
     if force {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
             let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
-            if enabled && is_tool_binary_available_for_config(name, config) {
+            let extra_env = runtime_env_for_tool(name);
+            if enabled
+                && is_tool_runtime_available_for_config_with_env(
+                    name,
+                    config,
+                    None,
+                    extra_env.as_ref(),
+                )
+            {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
             }
@@ -426,30 +463,53 @@ pub(crate) fn resolve_tool_and_model(
                 .map(|c| c.resolve_alias(m))
                 .unwrap_or_else(|| m.to_string())
         });
-        // Round-robin rotation; write-restriction errors propagate, I/O errors fall through.
+        // Round-robin rotation; write-restriction errors propagate.
         match csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit) {
-            Ok(Some((s, spec))) => return Ok((parse_tool_name(&s)?, Some(spec), resolved_model)),
+            Ok(Some((s, spec))) => {
+                let extra_env = runtime_env_for_tool(&s);
+                if is_tool_runtime_available_for_config_with_env(
+                    &s,
+                    Some(cfg),
+                    Some(&spec),
+                    extra_env.as_ref(),
+                ) {
+                    return Ok((parse_tool_name(&s)?, Some(spec), resolved_model));
+                }
+                tracing::warn!(
+                    tool = %s,
+                    model_spec = %spec,
+                    "Skipping rotated tier candidate because the tool is not executable"
+                );
+            }
             Err(e) if csa_scheduler::is_no_writable_tier_tool_error(&e) => return Err(e),
             _ => {}
         }
-        // Fallback: original non-rotating selection (also respects write restrictions)
-        if let Some((tool_name_str, tier_model_spec)) =
-            cfg.resolve_tier_tool_filtered("default", needs_edit)
-        {
-            let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), resolved_model));
+        // Fallback: original non-rotating selection, but keep runtime
+        // availability aligned with the rotated path.
+        if let Some(resolution) = resolve_runtime_available_tier_fallback_with_global_config(
+            cfg,
+            global_config,
+            "default",
+            needs_edit,
+        ) {
+            return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
         }
     }
 
-    // Fallback: minimal-init configs with empty tiers — pick any auto-selectable installed tool.
-    // Only activates when tiers are empty to avoid silently bypassing configured tier mappings.
+    // Minimal configs with empty tiers may pick any auto-selectable runtime.
     if let Some(cfg) = config
         && cfg.tiers.is_empty()
     {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
+            let extra_env = runtime_env_for_tool(name);
             if cfg.is_tool_auto_selectable(name)
-                && is_tool_binary_available_for_config(name, Some(cfg))
+                && is_tool_runtime_available_for_config_with_env(
+                    name,
+                    Some(cfg),
+                    None,
+                    extra_env.as_ref(),
+                )
             {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
@@ -462,92 +522,6 @@ pub(crate) fn resolve_tool_and_model(
         "No tool specified and no tier-based or auto-selectable tool available. \
          Use --tool, run 'csa init --full' to configure tiers, or install a tool."
     )
-}
-
-/// Check if a prompt is a context compress/compact command.
-pub(crate) fn is_compress_command(prompt: &str) -> bool {
-    let trimmed = prompt.trim();
-    trimmed == "/compress" || trimmed == "/compact" || trimmed.starts_with("/compact ")
-}
-
-/// Parse a tool name string to ToolName enum.
-pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
-    match name {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
-        "opencode" => Ok(ToolName::Opencode),
-        "codex" => Ok(ToolName::Codex),
-        "claude-code" => Ok(ToolName::ClaudeCode),
-        "openai-compat" => Ok(ToolName::OpenaiCompat),
-        "antigravity-cli" => Ok(ToolName::AntigravityCli),
-        _ => anyhow::bail!("Unknown tool: {name}"),
-    }
-}
-
-/// Truncate a string to max_len characters, adding "..." if truncated.
-///
-/// Uses character (not byte) counting to safely handle multi-byte UTF-8.
-pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max_len {
-        s.to_string()
-    } else {
-        // Find byte offset for the character at position (max_len - 3)
-        let truncate_at_chars = max_len.saturating_sub(3);
-        let byte_offset = s
-            .char_indices()
-            .nth(truncate_at_chars)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len());
-        let substring = &s[..byte_offset];
-
-        // Try to break at last space if possible
-        if let Some(last_space) = substring.rfind(' ')
-            && last_space > byte_offset / 2
-        {
-            return format!("{}...", &s[..last_space]);
-        }
-
-        format!("{substring}...")
-    }
-}
-
-/// Detect the parent tool context.
-///
-/// Resolution order:
-/// 1. `CSA_TOOL` environment variable (set by CSA when spawning children)
-/// 2. `CSA_PARENT_TOOL` environment variable (set for grandchild processes)
-/// 3. Process tree walking via `/proc` (Linux-only fallback)
-pub(crate) fn detect_parent_tool() -> Option<String> {
-    std::env::var("CSA_TOOL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("CSA_PARENT_TOOL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .or_else(crate::process_tree::detect_ancestor_tool)
-}
-
-/// Resolve parent tool context using detection result with global-config fallback.
-///
-/// Resolution order:
-/// 1. Detected parent tool from runtime context
-/// 2. `~/.config/cli-sub-agent/config.toml` `[defaults].tool`
-/// 3. None
-///
-/// The literal `"auto"` is the documented auto-select sentinel (see
-/// `csa-config::tool_selection`), NOT a concrete tool name. It is normalized to
-/// `None` here so callers that feed the result into `parse_tool_name` (the
-/// heterogeneous strategy arms) treat "no concrete parent" rather than bailing
-/// with `Unknown tool: auto`. Without this, a pinned SA-nested worker spawned in
-/// a detached process tree (no ancestor tool detectable) and a global
-/// `[defaults].tool = "auto"` would crash instead of honoring the inherited
-/// `--model-spec` pin (#1741).
-pub(crate) fn resolve_tool(detected: Option<String>, config: &GlobalConfig) -> Option<String> {
-    detected
-        .or_else(|| config.defaults.tool.clone())
-        .filter(|tool| tool.trim() != "auto" && !tool.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -565,6 +539,10 @@ mod tests_tail;
 #[cfg(test)]
 #[path = "run_helpers_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "run_helpers_tier_runtime_tests.rs"]
+mod tier_runtime_tests;
 
 #[cfg(test)]
 #[path = "run_helpers_tier_force_tests.rs"]

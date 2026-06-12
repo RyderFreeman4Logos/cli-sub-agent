@@ -1,9 +1,9 @@
 use anyhow::Result;
-use csa_config::ProjectConfig;
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use tracing::warn;
 
-use super::{is_tool_binary_available_for_config, parse_tool_name};
+use super::{is_tool_runtime_available_for_config_with_env, parse_tool_name};
 use crate::failover_trace::{FailoverSkipKind, TierModelExclusion};
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,15 @@ pub(crate) struct TierToolResolution {
 pub(crate) fn evaluate_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
+    skip_specs: &[String],
+) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
+    evaluate_tier_models_with_global_config(tier_name, config, None, skip_specs)
+}
+
+pub(crate) fn evaluate_tier_models_with_global_config(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
     skip_specs: &[String],
 ) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
     let mut included = Vec::new();
@@ -63,7 +72,14 @@ pub(crate) fn evaluate_tier_models(
             });
             continue;
         }
-        if !is_tool_binary_available_for_config(tool_str, Some(config)) {
+        let extra_env = global_config
+            .and_then(|cfg| cfg.build_execution_env(tool_str, ExecutionEnvOptions::default()));
+        if !is_tool_runtime_available_for_config_with_env(
+            tool_str,
+            Some(config),
+            Some(spec),
+            extra_env.as_ref(),
+        ) {
             excluded.push(TierModelExclusion {
                 model_spec: spec.clone(),
                 tool: Some(tool),
@@ -83,21 +99,56 @@ pub(crate) fn evaluate_tier_models(
 /// Available tier models in definition order. Thin wrapper over
 /// [`evaluate_tier_models`] that discards exclusion bookkeeping; behaviour is
 /// identical to the pre-#1714 filter.
-pub(crate) fn collect_available_tier_models(
+pub(crate) fn collect_available_tier_models_with_global_config(
     tier_name: &str,
     config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
     skip_specs: &[String],
 ) -> Vec<TierToolResolution> {
-    evaluate_tier_models(tier_name, config, skip_specs).0
+    evaluate_tier_models_with_global_config(tier_name, config, global_config, skip_specs).0
 }
 
+pub(crate) fn resolve_runtime_available_tier_fallback_with_global_config(
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    task_type: &str,
+    needs_edit: bool,
+) -> Option<TierToolResolution> {
+    let tier_name = config.resolve_tier_name_for_task(task_type)?;
+    collect_available_tier_models_with_global_config(tier_name, config, global_config, &[])
+        .into_iter()
+        .find(|resolution| !needs_edit || config.is_tool_write_capable(resolution.tool.as_str()))
+}
+
+#[cfg(test)]
 pub(crate) fn collect_preferred_tier_models(
     tier_name: &str,
     config: &ProjectConfig,
     preference_order: &[String],
     skip_specs: &[String],
 ) -> Vec<TierToolResolution> {
-    let available = collect_available_tier_models(tier_name, config, skip_specs);
+    collect_preferred_tier_models_with_global_config(
+        tier_name,
+        config,
+        None,
+        preference_order,
+        skip_specs,
+    )
+}
+
+pub(crate) fn collect_preferred_tier_models_with_global_config(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Vec<TierToolResolution> {
+    let available = collect_available_tier_models_with_global_config(
+        tier_name,
+        config,
+        global_config,
+        skip_specs,
+    );
     if preference_order.is_empty() {
         return available;
     }
@@ -147,6 +198,7 @@ pub(crate) fn collect_preferred_tier_models(
 /// than the one pinned. A pin naming a tool that is NOT a tier candidate also
 /// FAILS FAST (#1994) — silently proceeding with a different tool caused the
 /// operator to believe their preferred tool was running when it was not.
+#[cfg(test)]
 pub(crate) fn resolve_preferred_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
@@ -154,10 +206,29 @@ pub(crate) fn resolve_preferred_tool_from_tier(
     preference_order: &[String],
     skip_specs: &[String],
 ) -> Result<TierToolResolution> {
+    resolve_preferred_tool_from_tier_with_global_config(
+        tier_name,
+        config,
+        None,
+        parent_tool,
+        preference_order,
+        skip_specs,
+    )
+}
+
+pub(crate) fn resolve_preferred_tool_from_tier_with_global_config(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    parent_tool: Option<&str>,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Result<TierToolResolution> {
     if !config.tiers.contains_key(tier_name) {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     }
-    let (available, excluded) = evaluate_tier_models(tier_name, config, skip_specs);
+    let (available, excluded) =
+        evaluate_tier_models_with_global_config(tier_name, config, global_config, skip_specs);
 
     // #1836: a `--tool` pin that names a disabled tier candidate must fail
     // fast. Honoring the pin is impossible (the tool is gated off), so error
@@ -199,9 +270,14 @@ pub(crate) fn resolve_preferred_tool_from_tier(
         }
     }
 
-    if let Some(resolution) =
-        resolve_tool_from_tier(tier_name, config, parent_tool, preference_order, skip_specs)
-    {
+    if let Some(resolution) = resolve_tool_from_tier_with_global_config(
+        tier_name,
+        config,
+        global_config,
+        parent_tool,
+        preference_order,
+        skip_specs,
+    ) {
         return Ok(resolution);
     }
 
@@ -246,6 +322,7 @@ fn ignored_tier_tool_preference_warning(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
@@ -253,10 +330,34 @@ pub(crate) fn resolve_tool_from_tier(
     preference_order: &[String],
     skip_specs: &[String],
 ) -> Option<TierToolResolution> {
+    resolve_tool_from_tier_with_global_config(
+        tier_name,
+        config,
+        None,
+        parent_tool,
+        preference_order,
+        skip_specs,
+    )
+}
+
+pub(crate) fn resolve_tool_from_tier_with_global_config(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    parent_tool: Option<&str>,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Option<TierToolResolution> {
     let parent_family = parent_tool
         .and_then(|p| parse_tool_name(p).ok())
         .map(|t| t.model_family());
-    let available = collect_preferred_tier_models(tier_name, config, preference_order, skip_specs);
+    let available = collect_preferred_tier_models_with_global_config(
+        tier_name,
+        config,
+        global_config,
+        preference_order,
+        skip_specs,
+    );
     if available.is_empty() {
         return None;
     }

@@ -133,6 +133,7 @@ pub(super) async fn complete_session_execution(
             crate::run_cmd::PostSessionCommitPolicyArgs {
                 output_format: input.output_format,
                 prompt: input.prompt,
+                tool_name: input.executor.tool_name(),
                 require_commit_on_mutation,
                 commit_guard: commit_guard.as_ref(),
                 policy_evaluation_failed,

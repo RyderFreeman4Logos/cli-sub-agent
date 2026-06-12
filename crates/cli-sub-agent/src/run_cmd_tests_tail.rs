@@ -133,7 +133,14 @@ fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, false, Some(&guard));
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        false,
+        Some(&guard),
+    );
 
     assert_eq!(result.exit_code, 2);
     assert_eq!(result.summary, "tool failed");
@@ -225,7 +232,14 @@ fn apply_post_run_commit_policy_does_not_fail_closed_when_head_changed() {
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
-    apply_post_run_commit_policy(&mut result, &OutputFormat::Json, true, false, Some(&guard));
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        false,
+        Some(&guard),
+    );
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.summary, "ok");

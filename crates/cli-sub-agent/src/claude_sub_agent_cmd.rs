@@ -181,6 +181,7 @@ fn resolve_claude_sub_agent_tool_and_model(
         model: request.model,
         thinking: None, // claude-sub-agent does not support --thinking
         config: request.project_config,
+        global_config: Some(request.global_config),
         project_root: request.project_root,
         force: false,                      // claude-sub-agent does not support --force
         force_override_user_config: false, // claude-sub-agent does not support --force-override-user-config

@@ -5,7 +5,10 @@ use crate::run_cmd::attempt_support::{
     persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
 };
 use crate::run_cmd_model_pin::resolve_subtree_model_pin;
-use crate::run_cmd_post::{RateLimitAction, evaluate_error_rate_limit_failover};
+use crate::run_cmd_post::{
+    ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
+    evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
+};
 use crate::run_cmd_tool_selection::resolve_tool_by_strategy;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use anyhow::anyhow;
@@ -91,6 +94,9 @@ fn assert_no_rate_limit(action: RateLimitAction) {
         }
     }
 }
+
+#[path = "run_cmd_attempt_fallback_chain_tests.rs"]
+mod fallback_chain_tests;
 
 #[test]
 fn retry_subtree_pin_tracks_failover_attempt_model_spec() {
@@ -229,27 +235,28 @@ fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "claude-code",
-        "ACP crash retry exhausted (2 attempts) for claude-code. Last error: server shut down unexpectedly",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "investigate the crash",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("claude-code/anthropic/claude-sonnet/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "claude-code",
+        error_message: "ACP crash retry exhausted (2 attempts) for claude-code. Last error: server shut down unexpectedly",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "investigate the crash",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("claude-code/anthropic/claude-sonnet/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
@@ -264,27 +271,28 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: temporary auth failure",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: temporary auth failure",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
@@ -300,27 +308,28 @@ fn issue_1730_evaluate_error_rate_limit_failover_retries_on_gemini_legacy_initia
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "gemini_legacy_initial_stall: no stdout within 120s",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the stalled request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: "gemini_legacy_initial_stall: no stdout within 120s",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the stalled request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
@@ -359,27 +368,28 @@ fn full_anyhow_chain_preserves_quota_markers_and_fails_over_to_next_provider() {
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        &rendered,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the quota failure",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: &rendered,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the quota failure",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
@@ -407,27 +417,28 @@ fn evaluate_error_rate_limit_failover_skips_retry_exhaustion_without_active_tier
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: temporary auth failure",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false,
-        false,
-        None,
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        error_message: "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: temporary auth failure",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: false,
+        failover_on_crash_enabled: false,
+        resolved_tier_name: None,
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_no_rate_limit(action);
@@ -458,26 +469,27 @@ fn evaluate_rate_limit_failover_skips_rate_limit_without_active_tier_routing() {
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
-        "gemini-cli",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false,
-        None,
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        exec_result: &exec_result,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: false,
+        resolved_tier_name: None,
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_no_rate_limit(action);
@@ -514,26 +526,27 @@ fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider(
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
-        "gemini-cli",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "gemini-cli",
+        exec_result: &exec_result,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier3"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "debug the request",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("gemini-cli/google/gemini-2.5-pro/high"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
@@ -564,27 +577,28 @@ fn explicit_tool_in_tier_crash_triggers_failover() {
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "codex",
-        "ACP crash retry exhausted (2 attempts) for codex. Last error: child process exited unexpectedly",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex crash",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/o4-mini/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "codex",
+        error_message: "ACP crash retry exhausted (2 attempts) for codex. Last error: child process exited unexpectedly",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: false,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex crash",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/o4-mini/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(
@@ -606,27 +620,28 @@ fn explicit_tool_no_tier_crash_no_failover() {
     let mut tried_tools = Vec::new();
     let mut tried_specs = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "codex",
-        "ACP crash retry exhausted (2 attempts) for codex. Last error: child process exited unexpectedly",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false,
-        false,
-        None,
-        None,
-        None,
-        true,
-        "recover from codex crash",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/o4-mini/high"),
-        &mut vec![],
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "codex",
+        error_message: "ACP crash retry exhausted (2 attempts) for codex. Last error: child process exited unexpectedly",
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: false,
+        failover_on_crash_enabled: false,
+        resolved_tier_name: None,
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex crash",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/o4-mini/high"),
+        fallback_chain: &mut vec![],
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_no_rate_limit(action);
@@ -712,273 +727,5 @@ fn resolve_attempt_initial_response_timeout_disables_codex_watchdog_for_ephemera
     assert_eq!(
         codex_timeout, None,
         "ephemeral codex runs must translate the disabled sentinel before execute_in"
-    );
-}
-
-// --- fallback_chain population tests (#1346) ---
-
-#[test]
-fn evaluate_error_rate_limit_failover_populates_fallback_chain_on_transient_retry_chain() {
-    let config = make_failover_config(&[
-        "gemini-cli/google/gemini-2.5-pro/high",
-        "codex/openai/o4-mini/high",
-    ]);
-    let mut tried_tools = Vec::new();
-    let mut tried_specs = Vec::new();
-    let mut fallback_chain = Vec::new();
-
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: resource exhausted",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "do some work",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert!(
-        matches!(action, RateLimitAction::Retry { .. }),
-        "expected retry action"
-    );
-    assert_eq!(fallback_chain.len(), 1, "one attempt should be recorded");
-    let attempt = &fallback_chain[0];
-    assert_eq!(attempt.tool, "gemini-cli");
-    assert_eq!(
-        attempt.model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-2.5-pro/high")
-    );
-    assert!(
-        !attempt.quota_exhausted,
-        "retry chain exhaustion is not permanent quota exhaustion by itself"
-    );
-}
-
-#[test]
-fn evaluate_error_rate_limit_failover_continues_past_permanent_gemini_quota() {
-    // #1629: gemini-cli permanent quota (via retry chain exhaustion with
-    // QUOTA_EXHAUSTED tail) MUST fail over to codex (different provider).
-    let config = make_failover_config(&[
-        "gemini-cli/google/gemini-2.5-pro/high",
-        "codex/openai/o4-mini/high",
-    ]);
-    let mut tried_tools = Vec::new();
-    let mut tried_specs = Vec::new();
-    let mut fallback_chain = Vec::new();
-
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "Gemini ACP retry chain exhausted. Last error: status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "do some work",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
-    assert_eq!(tried_tools, vec!["gemini-cli".to_string()]);
-    assert_eq!(
-        tried_specs,
-        vec!["gemini-cli/google/gemini-2.5-pro/high".to_string()]
-    );
-    assert_eq!(
-        fallback_chain.len(),
-        1,
-        "gemini-cli quota attempt must be recorded for audit"
-    );
-    let entry = &fallback_chain[0];
-    assert_eq!(entry.tool, "gemini-cli");
-    assert!(entry.quota_exhausted, "entry must mark quota exhaustion");
-}
-
-#[test]
-fn evaluate_error_rate_limit_failover_no_failover_flag_prevents_fallback_chain_entry() {
-    let config = make_named_failover_config(
-        "tier-3-complex",
-        &[
-            "gemini-cli/google/gemini-2.5-pro/high",
-            "codex/openai/o4-mini/high",
-        ],
-    );
-    let mut tried_tools = Vec::new();
-    let mut tried_specs = Vec::new();
-    let mut fallback_chain = Vec::new();
-
-    // tier_auto_select=false suppresses rate-limit failover entirely (#1346);
-    // the caller observes NoRateLimit and no fallback_chain entry is recorded.
-    let action = evaluate_error_rate_limit_failover(
-        "gemini-cli",
-        "quota_exhausted for this account",
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        false, // tier_auto_select=false → no failover
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "do some work",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert_no_rate_limit(action);
-    assert!(
-        fallback_chain.is_empty(),
-        "no fallback_chain entry when failover is suppressed (#1346)"
-    );
-}
-
-// --- Same-provider quota-pool skip tests (#1629) ---
-
-#[test]
-fn evaluate_rate_limit_failover_gemini_quota_skips_antigravity_picks_codex() {
-    // tier-4-critical-style ordering: gemini-cli → antigravity-cli → codex.
-    // Both gemini-cli and antigravity-cli share Google's quota pool, so once
-    // gemini-cli is marked permanently exhausted, antigravity-cli MUST be
-    // skipped and codex (OpenAI) selected.
-    let config = make_failover_config(&[
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "antigravity-cli/google/gemini-3.1-pro/high",
-        "codex/openai/gpt-5.5/high",
-        "claude-code/anthropic/claude-sonnet-4-7/high",
-    ]);
-    let exec_result = ExecutionResult {
-        output: String::new(),
-        stderr_output:
-            "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached"
-                .to_string(),
-        summary: "daily quota for project exceeded".to_string(),
-        exit_code: 1,
-        peak_memory_mb: None,
-        ..Default::default()
-    };
-    let mut tried_tools = Vec::new();
-    let mut tried_specs = Vec::new();
-    let mut fallback_chain = Vec::new();
-
-    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
-        "gemini-cli",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert_retry_to(action, "codex", "codex/openai/gpt-5.5/high");
-}
-
-#[test]
-fn evaluate_rate_limit_failover_chained_google_pool_exhaustion_continues_past() {
-    // Simulate the second pass: gemini-cli was already attempted and recorded
-    // with quota_exhausted=true in fallback_chain. Now antigravity-cli (same
-    // Google pool) also hits quota. The decision must skip antigravity-cli
-    // (same provider) and pick codex.
-    let config = make_failover_config(&[
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "antigravity-cli/google/gemini-3.1-pro/high",
-        "codex/openai/gpt-5.5/high",
-    ]);
-    let exec_result = ExecutionResult {
-        output: String::new(),
-        stderr_output:
-            "status RESOURCE_EXHAUSTED reason QUOTA_EXHAUSTED monthly spending cap reached"
-                .to_string(),
-        summary: "Google quota pool exhausted".to_string(),
-        exit_code: 1,
-        peak_memory_mb: None,
-        ..Default::default()
-    };
-    let mut tried_tools = vec!["gemini-cli".to_string()];
-    let mut tried_specs = vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()];
-    let mut fallback_chain = vec![csa_core::types::FallbackAttempt {
-        tool: "gemini-cli".to_string(),
-        model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
-        skip_reason: "RESOURCE_EXHAUSTED".to_string(),
-        quota_exhausted: true,
-        timestamp: Utc::now(),
-    }];
-
-    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
-        "antigravity-cli",
-        &exec_result,
-        2,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier3"),
-        None,
-        None,
-        true,
-        "debug the request",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("antigravity-cli/google/gemini-3.1-pro/high"),
-        &mut fallback_chain,
-        None,
-    )
-    .expect("evaluate failover");
-
-    assert_retry_to(action, "codex", "codex/openai/gpt-5.5/high");
-    assert_eq!(
-        fallback_chain.len(),
-        2,
-        "both gemini-cli and antigravity-cli quota attempts must be recorded"
-    );
-    let antigravity_entry = &fallback_chain[1];
-    assert_eq!(antigravity_entry.tool, "antigravity-cli");
-    assert!(
-        antigravity_entry.quota_exhausted,
-        "antigravity-cli entry must mark quota exhaustion"
     );
 }

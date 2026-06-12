@@ -122,6 +122,7 @@ pub(crate) fn resolve_debate_selection(
                 model: None,
                 thinking: None, // thinking not relevant for debate command
                 config: project_config,
+                global_config: Some(global_config),
                 project_root,
                 force: false,
                 force_override_user_config,
@@ -167,13 +168,15 @@ pub(crate) fn resolve_debate_selection(
             && let Some(cfg) = project_config
         {
             let tier_preference_order = vec![tool.as_str().to_string()];
-            let resolution = crate::run_helpers::resolve_preferred_tool_from_tier(
-                tier,
-                cfg,
-                parent_tool,
-                &tier_preference_order,
-                &[],
-            )?;
+            let resolution =
+                crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
+                    tier,
+                    cfg,
+                    Some(global_config),
+                    parent_tool,
+                    &tier_preference_order,
+                    &[],
+                )?;
             return Ok(ResolvedDebateSelection {
                 tool: resolution.tool,
                 mode: DebateMode::Heterogeneous,
@@ -209,7 +212,12 @@ pub(crate) fn resolve_debate_selection(
         })?;
 
         let tier_tools = cfg.list_tools_in_tier(tier);
-        let filtered_tools = crate::run_helpers::collect_available_tier_models(tier, cfg, &[]);
+        let filtered_tools = crate::run_helpers::collect_available_tier_models_with_global_config(
+            tier,
+            cfg,
+            Some(global_config),
+            &[],
+        );
         maybe_guard_debate_narrowing(
             tier,
             &tier_tools,
@@ -217,9 +225,10 @@ pub(crate) fn resolve_debate_selection(
             global_config.debate.require_heterogeneous,
         )?;
 
-        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier(
+        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_global_config(
             tier,
             cfg,
+            Some(global_config),
             parent_tool,
             &tier_preference_order,
             &[],

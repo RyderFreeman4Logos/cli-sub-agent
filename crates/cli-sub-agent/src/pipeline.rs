@@ -386,8 +386,24 @@ pub(crate) async fn build_and_validate_executor(
         }
     }
 
-    // Check tool is installed
-    if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
+    if executor.tool_name() == "openai-compat" {
+        let model_hint = model_spec.or(model).or(default_model_resolved.as_deref());
+        let extra_env = configs.global.and_then(|cfg| {
+            cfg.build_execution_env(
+                executor.tool_name(),
+                csa_config::ExecutionEnvOptions::default(),
+            )
+        });
+        let availability = crate::run_helpers::tool_runtime_availability_with_env(
+            executor.tool_name(),
+            configs.project,
+            model_hint,
+            extra_env.as_ref(),
+        );
+        if let crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } = availability {
+            anyhow::bail!("OpenAI-compat is not configured.\n\n{hint}");
+        }
+    } else if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
             executor.tool_name(),
