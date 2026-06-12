@@ -11,6 +11,9 @@ use crate::startup_env::StartupSubtreeEnv;
 
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
+#[path = "run_cmd_daemon_review.rs"]
+mod review;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DaemonSpawnOptions {
     run_stdin_prompt: RunStdinPrompt,

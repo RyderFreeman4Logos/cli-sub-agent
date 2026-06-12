@@ -81,6 +81,26 @@ pub(crate) struct FixLoopContext<'a> {
     pub startup_env: &'a crate::startup_env::StartupSubtreeEnv,
 }
 
+pub(super) fn should_skip_for_readonly_tool(
+    config: Option<&ProjectConfig>,
+    tool: ToolName,
+    project_root: &Path,
+    review_session_ids: &[String],
+) -> bool {
+    if config.is_none_or(|cfg| cfg.can_tool_edit_existing(tool.as_str())) {
+        return false;
+    }
+    warn!(
+        tool = %tool,
+        "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
+    );
+    super::bug_class_pipeline::maybe_extract_recurring_bug_class_skills(
+        project_root,
+        review_session_ids,
+    );
+    true
+}
+
 /// Run fix rounds and return the final exit code.
 ///
 /// Each round resumes the review session with a fix prompt, then re-runs
@@ -443,7 +463,7 @@ fn persist_fix_final_artifacts_with_current_output(
     } else {
         remove_review_gate_marker_for_head(project_root, &final_meta);
     }
-    super::post_review::persist_review_failure_suggestion(project_root, &final_meta);
+    super::post_review::persist_review_failure_suggestion(project_root, &final_meta, None);
     outcome.post_consistency_decision
 }
 

@@ -204,9 +204,12 @@ fn has_resume_to_fix_suggestion(session_dir: &Path) -> Result<bool, anyhow::Erro
         .map_err(|error| anyhow::anyhow!("read {}: {error}", suggestion_path.display()))?;
     let value = toml::from_str::<toml::Value>(&contents)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", suggestion_path.display()))?;
-    Ok(value
+    let action = value
         .get("suggestion")
         .and_then(|suggestion| suggestion.get("action"))
-        .and_then(toml::Value::as_str)
-        == Some("resume_to_fix"))
+        .and_then(toml::Value::as_str);
+    Ok(matches!(
+        action,
+        Some("resume_to_fix" | "confirm_then_fix_finding")
+    ))
 }
