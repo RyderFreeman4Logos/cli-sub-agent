@@ -3,7 +3,7 @@ use super::{
     format_all_models_failed_reason_with_reset, opaque_total_exhaustion_message,
     ordered_tier_candidates, parse_backend_reset_duration,
 };
-use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ToolConfig, global::GlobalToolConfig};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -64,6 +64,31 @@ fn project_config_with_tier(
         },
     );
     cfg
+}
+
+fn global_config_preferring_openai_compat() -> GlobalConfig {
+    let mut global = GlobalConfig::default();
+    global.preferences.tool_priority = vec!["openai-compat".to_string()];
+    global
+}
+
+fn global_config_with_openai_compat_env() -> GlobalConfig {
+    let mut global = global_config_preferring_openai_compat();
+    global.tools.insert(
+        "openai-compat".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([
+                (
+                    "OPENAI_COMPAT_BASE_URL".to_string(),
+                    "http://localhost:8317".to_string(),
+                ),
+                ("OPENAI_COMPAT_API_KEY".to_string(), "test-key".to_string()),
+                ("OPENAI_COMPAT_MODEL".to_string(), "local-model".to_string()),
+            ]),
+            ..Default::default()
+        },
+    );
+    global
 }
 
 #[test]
@@ -127,6 +152,85 @@ fn no_tier_fallback_uses_global_tool_priority() {
         (ToolName::ClaudeCode, None),
         (ToolName::GeminiCli, None),
     ]));
+}
+
+#[test]
+fn no_tier_fallback_keeps_global_env_only_openai_compat() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let _availability = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let cfg = project_config_with_tier(
+        "quality",
+        &[
+            "openai-compat/openai/gpt-5/high",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["openai-compat", "codex"],
+    );
+    let global = global_config_with_openai_compat_env();
+
+    let candidates = ordered_tier_candidates(
+        ToolName::Codex,
+        None,
+        None,
+        Some(&cfg),
+        Some(&global),
+        true,
+        &[],
+    );
+
+    assert_eq!(
+        candidates.get(1),
+        Some(&(ToolName::OpenaiCompat, None)),
+        "global tool env must make openai-compat a valid non-tier fallback candidate"
+    );
+}
+
+#[test]
+fn no_tier_fallback_skips_unconfigured_openai_compat() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .blocking_lock_owned();
+    let _availability = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let cfg = project_config_with_tier(
+        "quality",
+        &[
+            "openai-compat/openai/gpt-5/high",
+            "codex/openai/gpt-5.4/high",
+        ],
+        &["openai-compat", "codex"],
+    );
+    let global = global_config_preferring_openai_compat();
+
+    let candidates = ordered_tier_candidates(
+        ToolName::Codex,
+        None,
+        None,
+        Some(&cfg),
+        Some(&global),
+        true,
+        &[],
+    );
+
+    assert!(
+        candidates
+            .iter()
+            .all(|(tool, _)| *tool != ToolName::OpenaiCompat),
+        "unconfigured openai-compat must be skipped before non-tier fallback routing"
+    );
 }
 
 #[test]

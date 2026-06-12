@@ -170,6 +170,7 @@ fn openai_compat_availability(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn tool_runtime_availability(
     tool_name: &str,
     config: Option<&ProjectConfig>,
@@ -248,14 +249,6 @@ pub(crate) fn is_tool_binary_available_for_config(
     config: Option<&ProjectConfig>,
 ) -> bool {
     tool_binary_availability(tool_name, config).is_available()
-}
-
-pub(crate) fn is_tool_runtime_available_for_config(
-    tool_name: &str,
-    config: Option<&ProjectConfig>,
-    model_hint: Option<&str>,
-) -> bool {
-    tool_runtime_availability(tool_name, config, model_hint).is_available()
 }
 
 pub(crate) fn is_tool_runtime_available_for_config_with_env(

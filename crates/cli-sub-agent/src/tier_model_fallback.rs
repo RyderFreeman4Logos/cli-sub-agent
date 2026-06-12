@@ -1,4 +1,4 @@
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{FallbackAttempt, ToolName};
 use csa_scheduler::RateLimitDetected;
 use std::path::Path;
@@ -179,7 +179,14 @@ fn ordered_global_candidates(
         if config.is_some_and(|cfg| !cfg.is_tool_auto_selectable(tool.as_str())) {
             continue;
         }
-        if !crate::run_helpers::is_tool_runtime_available_for_config(tool.as_str(), config, None) {
+        let extra_env =
+            global_config.build_execution_env(tool.as_str(), ExecutionEnvOptions::default());
+        if !crate::run_helpers::is_tool_runtime_available_for_config_with_env(
+            tool.as_str(),
+            config,
+            None,
+            extra_env.as_ref(),
+        ) {
             continue;
         }
         ordered.push((tool, None));

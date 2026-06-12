@@ -75,9 +75,9 @@ pub(crate) use token_parse::parse_token_usage;
 pub(crate) use token_parse::{extract_cost, extract_number};
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config,
-    is_tool_runtime_available_for_config, is_tool_runtime_available_for_config_with_env,
-    resolved_claude_code_transport, resolved_codex_transport, resolved_tool_binary_name,
-    tool_binary_availability, tool_runtime_availability_with_env,
+    is_tool_runtime_available_for_config_with_env, resolved_claude_code_transport,
+    resolved_codex_transport, resolved_tool_binary_name, tool_binary_availability,
+    tool_runtime_availability_with_env,
 };
 
 #[cfg(test)]
