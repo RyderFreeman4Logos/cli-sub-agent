@@ -273,8 +273,9 @@ fn daemon_completion_result_survives_state_save_failure() {
     let result = load_result(project, &session_id)
         .unwrap()
         .expect("daemon completion result must remain recoverable");
-    assert_eq!(result.status, "success");
-    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.raw_process_exit_code, Some(0));
     assert!(
         result.summary.contains("daemon completion recorded"),
         "unexpected daemon completion summary: {}",

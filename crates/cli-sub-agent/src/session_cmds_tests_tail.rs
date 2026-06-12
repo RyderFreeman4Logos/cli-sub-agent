@@ -3,6 +3,9 @@ use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+#[path = "session_cmds_tests_tail_daemon_completion.rs"]
+mod daemon_completion;
+
 #[cfg(unix)]
 fn wait_for_spawned_daemon_visibility(
     session_dir: &std::path::Path,
