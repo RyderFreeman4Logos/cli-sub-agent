@@ -9,13 +9,15 @@ use csa_process::ExecutionResult;
 use std::path::Path;
 
 use super::{
-    assert_no_rate_limit, assert_retry_to, make_failover_config, make_named_failover_config,
+    assert_no_rate_limit, assert_retry_to, assume_failover_tools_available, make_failover_config,
+    make_named_failover_config,
 };
 
 // --- fallback_chain population tests (#1346) ---
 
 #[test]
 fn evaluate_error_rate_limit_failover_populates_fallback_chain_on_transient_retry_chain() {
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -69,6 +71,7 @@ fn evaluate_error_rate_limit_failover_populates_fallback_chain_on_transient_retr
 fn evaluate_error_rate_limit_failover_continues_past_permanent_gemini_quota() {
     // #1629: gemini-cli permanent quota (via retry chain exhaustion with
     // QUOTA_EXHAUSTED tail) MUST fail over to codex (different provider).
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -171,6 +174,7 @@ fn evaluate_rate_limit_failover_gemini_quota_skips_antigravity_picks_codex() {
     // Both gemini-cli and antigravity-cli share Google's quota pool, so once
     // gemini-cli is marked permanently exhausted, antigravity-cli MUST be
     // skipped and codex (OpenAI) selected.
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "antigravity-cli/google/gemini-3.1-pro/high",
@@ -223,6 +227,7 @@ fn evaluate_rate_limit_failover_chained_google_pool_exhaustion_continues_past() 
     // with quota_exhausted=true in fallback_chain. Now antigravity-cli (same
     // Google pool) also hits quota. The decision must skip antigravity-cli
     // (same provider) and pick codex.
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
         "antigravity-cli/google/gemini-3.1-pro/high",

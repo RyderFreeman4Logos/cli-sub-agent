@@ -10,6 +10,7 @@ use crate::run_cmd_post::{
     evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
 };
 use crate::run_cmd_tool_selection::resolve_tool_by_strategy;
+use crate::test_env_lock::ScopedTestEnvVar;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use anyhow::anyhow;
 use chrono::Utc;
@@ -67,6 +68,10 @@ fn make_named_failover_config(tier_name: &str, models: &[&str]) -> ProjectConfig
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
+}
+
+fn assume_failover_tools_available() -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
 }
 
 fn assert_retry_to(action: RateLimitAction, expected_tool: &str, expected_spec: &str) {
@@ -228,6 +233,7 @@ fn build_failover_context_addendum_maps_claude_provider() {
 
 #[test]
 fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "claude-code/anthropic/claude-sonnet/high",
         "codex/openai/o4-mini/high",
@@ -264,6 +270,7 @@ fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
 
 #[test]
 fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion() {
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -300,6 +307,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
 
 #[test]
 fn issue_1730_evaluate_error_rate_limit_failover_retries_on_gemini_legacy_initial_stall() {
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -350,6 +358,7 @@ fn full_anyhow_chain_preserves_quota_markers_and_fails_over_to_next_provider() {
     // #1629: permanent quota exhaustion on gemini-cli (Google pool) MUST NOT
     // short-circuit failover; cross-provider alternatives (codex/OpenAI) still
     // count, and the gemini-cli quota attempt is recorded in fallback_chain.
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -508,6 +517,7 @@ fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider(
     // #1629: gemini-cli (Google pool) RESOURCE_EXHAUSTED MUST fail over to
     // codex (OpenAI pool) instead of stopping the chain. Same-provider tools
     // would be skipped; cross-provider alternatives proceed.
+    let _assume = assume_failover_tools_available();
     let config = make_failover_config(&[
         "gemini-cli/google/gemini-2.5-pro/high",
         "codex/openai/o4-mini/high",
@@ -567,6 +577,7 @@ fn evaluate_rate_limit_failover_continues_past_permanent_quota_to_next_provider(
 
 #[test]
 fn explicit_tool_in_tier_crash_triggers_failover() {
+    let _assume = assume_failover_tools_available();
     let config = make_named_failover_config(
         "tier-3-complex",
         &[
