@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
-use csa_config::ProjectConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use tracing::warn;
 
@@ -19,8 +19,9 @@ use super::super::resume::{
 };
 use crate::run_cmd_fork::cleanup_pre_created_fork_session;
 use crate::run_cmd_post::{
-    RateLimitAction, detect_permanent_tool_exhaustion_result, evaluate_error_rate_limit_failover,
-    evaluate_rate_limit_failover, is_permanent_tool_exhaustion_error,
+    RateLimitAction, detect_permanent_tool_exhaustion_result,
+    evaluate_error_rate_limit_failover_with_global_config,
+    evaluate_rate_limit_failover_with_global_config, is_permanent_tool_exhaustion_error,
 };
 use crate::run_cmd_tool_selection::take_next_runtime_fallback_tool;
 
@@ -64,6 +65,7 @@ pub(super) struct AttemptErrorRequest<'a> {
     pub(super) ephemeral: bool,
     pub(super) prompt_text: &'a str,
     pub(super) config: Option<&'a ProjectConfig>,
+    pub(super) global_config: &'a GlobalConfig,
     pub(super) task_needs_edit: Option<bool>,
     pub(super) attempt_elapsed: Duration,
 }
@@ -187,7 +189,7 @@ pub(super) fn handle_attempt_error(
         }));
     }
 
-    match evaluate_error_rate_limit_failover(
+    match evaluate_error_rate_limit_failover_with_global_config(
         request.tool_name,
         &full_error_chain,
         request.attempts,
@@ -203,6 +205,7 @@ pub(super) fn handle_attempt_error(
         request.prompt_text,
         request.project_root,
         request.config,
+        Some(request.global_config),
         request.task_needs_edit,
         request.current_model_spec,
         fallback_chain,
@@ -257,6 +260,7 @@ pub(super) struct PostAttemptRequest<'a> {
     pub(super) prompt_text: &'a str,
     pub(super) project_root: &'a Path,
     pub(super) config: Option<&'a ProjectConfig>,
+    pub(super) global_config: &'a GlobalConfig,
     pub(super) task_needs_edit: Option<bool>,
     pub(super) attempt_elapsed: Duration,
 }
@@ -332,7 +336,7 @@ pub(super) fn evaluate_post_attempt_retry(
         return Ok(PostAttemptAction::Break(request.exec_changed_paths));
     }
 
-    match evaluate_rate_limit_failover(
+    match evaluate_rate_limit_failover_with_global_config(
         request.tool_name,
         request.exec_result,
         request.attempts,
@@ -347,6 +351,7 @@ pub(super) fn evaluate_post_attempt_retry(
         request.prompt_text,
         request.project_root,
         request.config,
+        Some(request.global_config),
         request.task_needs_edit,
         request.current_model_spec,
         fallback_chain,

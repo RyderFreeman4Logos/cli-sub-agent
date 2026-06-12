@@ -52,9 +52,10 @@ fn collect_tier_reviewer_specs(
                     .as_ref()
                     .map(|review| &review.tool)
                     .unwrap_or(&global_config.review.tool);
-                crate::run_helpers::collect_preferred_tier_models(
+                crate::run_helpers::collect_preferred_tier_models_with_global_config(
                     tier_name,
                     cfg,
+                    Some(global_config),
                     &effective_selection.preference_order(),
                     &[],
                 )

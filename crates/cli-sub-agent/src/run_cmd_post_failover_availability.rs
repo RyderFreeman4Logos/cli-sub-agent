@@ -1,5 +1,5 @@
 use anyhow::Result;
-use csa_config::ProjectConfig;
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::ModelFamily;
 use tracing::warn;
 
@@ -13,6 +13,7 @@ pub(super) struct FailoverAvailabilityRequest<'a> {
     pub session_state: Option<&'a csa_session::MetaSessionState>,
     pub exhausted_providers: &'a [ModelFamily],
     pub config: &'a ProjectConfig,
+    pub global_config: Option<&'a GlobalConfig>,
     pub original_error: &'a str,
 }
 
@@ -33,6 +34,7 @@ pub(super) fn decide_available_failover(
         session_state,
         exhausted_providers,
         config,
+        global_config,
         original_error,
     } = request;
     let FailoverAvailabilityState {
@@ -77,10 +79,13 @@ pub(super) fn decide_available_failover(
             }
         };
 
-        match crate::run_helpers::tool_runtime_availability(
+        let extra_env = global_config
+            .and_then(|cfg| cfg.build_execution_env(&new_tool, ExecutionEnvOptions::default()));
+        match crate::run_helpers::tool_runtime_availability_with_env(
             &new_tool,
             Some(config),
             Some(&new_model_spec),
+            extra_env.as_ref(),
         ) {
             crate::run_helpers::ToolBinaryAvailability::Available { .. } => {
                 let tool = crate::run_helpers::parse_tool_name(&new_tool)?;

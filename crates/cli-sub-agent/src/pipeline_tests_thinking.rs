@@ -56,6 +56,62 @@ fn config_with_single_tier_model(
     }
 }
 
+fn global_openai_compat_env_config() -> GlobalConfig {
+    let mut global_config = GlobalConfig::default();
+    global_config.tools.insert(
+        "openai-compat".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([
+                (
+                    "OPENAI_COMPAT_BASE_URL".to_string(),
+                    "http://localhost:8317".to_string(),
+                ),
+                ("OPENAI_COMPAT_API_KEY".to_string(), "test-key".to_string()),
+                ("OPENAI_COMPAT_MODEL".to_string(), "local-model".to_string()),
+            ]),
+            ..Default::default()
+        },
+    );
+    global_config
+}
+
+#[tokio::test]
+async fn build_and_validate_executor_accepts_global_openai_compat_env() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .lock_owned()
+        .await;
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let cfg = config_with_single_tier_model(
+        "tier-3-complex",
+        "openai-compat",
+        "openai-compat/openai/gpt-5/high",
+    );
+    let global_config = global_openai_compat_env_config();
+
+    let result = build_and_validate_executor(
+        &ToolName::OpenaiCompat,
+        Some("openai-compat/openai/gpt-5/high"),
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: Some(&global_config),
+        },
+        true,
+        false,
+        false,
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "global openai-compat env should satisfy pre-spawn availability: {result:?}"
+    );
+}
+
 /// When project config has `thinking_lock` for a tool, the CLI `--thinking`
 /// value must be overridden. Verify via Executor's Debug representation.
 #[tokio::test]

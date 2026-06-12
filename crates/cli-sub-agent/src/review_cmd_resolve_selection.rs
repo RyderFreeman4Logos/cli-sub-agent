@@ -77,6 +77,7 @@ pub(crate) fn resolve_review_selection(
                 model: None,
                 thinking: None, // thinking not relevant for review command
                 config: project_config,
+                global_config: Some(global_config),
                 project_root,
                 force: false,
                 force_override_user_config,
@@ -124,9 +125,10 @@ pub(crate) fn resolve_review_selection(
             let resolution = if force_override_user_config {
                 force_resolve_review_tool_from_tier(tier, cfg, tool).map_or_else(
                     || {
-                        crate::run_helpers::resolve_preferred_tool_from_tier(
+                        crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
                             tier,
                             cfg,
+                            Some(global_config),
                             parent_tool,
                             &tier_preference_order,
                             &[],
@@ -135,9 +137,10 @@ pub(crate) fn resolve_review_selection(
                     Ok,
                 )?
             } else {
-                crate::run_helpers::resolve_preferred_tool_from_tier(
+                crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
                     tier,
                     cfg,
+                    Some(global_config),
                     parent_tool,
                     &tier_preference_order,
                     &[],
@@ -177,9 +180,10 @@ pub(crate) fn resolve_review_selection(
 
         let tier_tools = cfg.list_tools_in_tier(tier);
 
-        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier(
+        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_global_config(
             tier,
             cfg,
+            Some(global_config),
             parent_tool,
             &tier_preference_order,
             &[],
@@ -192,7 +196,12 @@ pub(crate) fn resolve_review_selection(
         }
 
         let available_tools_after_checks =
-            crate::run_helpers::collect_available_tier_models(tier, cfg, &[]);
+            crate::run_helpers::collect_available_tier_models_with_global_config(
+                tier,
+                cfg,
+                Some(global_config),
+                &[],
+            );
         let configured_tools: Vec<&str> = tier_tools
             .iter()
             .map(|(tool_name, _)| tool_name.as_str())

@@ -388,10 +388,17 @@ pub(crate) async fn build_and_validate_executor(
 
     if executor.tool_name() == "openai-compat" {
         let model_hint = model_spec.or(model).or(default_model_resolved.as_deref());
-        let availability = crate::run_helpers::tool_runtime_availability(
+        let extra_env = configs.global.and_then(|cfg| {
+            cfg.build_execution_env(
+                executor.tool_name(),
+                csa_config::ExecutionEnvOptions::default(),
+            )
+        });
+        let availability = crate::run_helpers::tool_runtime_availability_with_env(
             executor.tool_name(),
             configs.project,
             model_hint,
+            extra_env.as_ref(),
         );
         if let crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } = availability {
             anyhow::bail!("OpenAI-compat is not configured.\n\n{hint}");

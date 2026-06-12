@@ -24,10 +24,12 @@ use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
 mod failover;
 pub(crate) use failover::{
     RateLimitAction, detect_permanent_tool_exhaustion_result,
-    detect_permanent_tool_exhaustion_text, evaluate_error_rate_limit_failover,
-    evaluate_rate_limit_failover, format_tool_exhausted_summary,
+    detect_permanent_tool_exhaustion_text, evaluate_error_rate_limit_failover_with_global_config,
+    evaluate_rate_limit_failover_with_global_config, format_tool_exhausted_summary,
     is_permanent_tool_exhaustion_error,
 };
+#[cfg(test)]
+pub(crate) use failover::{evaluate_error_rate_limit_failover, evaluate_rate_limit_failover};
 
 /// Handle the fork-call parent resume protocol after child execution completes.
 ///

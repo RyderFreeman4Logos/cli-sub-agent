@@ -13,8 +13,7 @@ use weave::parser::AgentConfig;
 
 use crate::cli::ReturnTarget;
 use crate::run_helpers::{
-    detect_parent_tool, is_tool_runtime_available_for_config, parse_tool_name, read_prompt,
-    resolve_tool, resolve_tool_and_model,
+    detect_parent_tool, parse_tool_name, read_prompt, resolve_tool, resolve_tool_and_model,
 };
 use crate::skill_resolver::{self, ResolvedSkill};
 
@@ -184,6 +183,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 model,
                 thinking,
                 config,
+                global_config: Some(global_config),
                 force,
                 force_override_user_config,
                 needs_edit,
@@ -209,6 +209,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 model,
                 thinking,
                 config,
+                global_config: Some(global_config),
                 force,
                 force_override_user_config,
                 needs_edit,
@@ -277,8 +278,15 @@ fn collect_enabled_tools(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| {
+                let extra_env = global_config
+                    .build_execution_env(t.as_str(), csa_config::ExecutionEnvOptions::default());
                 cfg.is_tool_auto_selectable(t.as_str())
-                    && is_tool_runtime_available_for_config(t.as_str(), Some(cfg), model_hint)
+                    && crate::run_helpers::is_tool_runtime_available_for_config_with_env(
+                        t.as_str(),
+                        Some(cfg),
+                        model_hint,
+                        extra_env.as_ref(),
+                    )
             })
             .copied()
             .collect();
@@ -325,6 +333,7 @@ fn resolve_heterogeneous_preferred(
                     model,
                     thinking,
                     config,
+                    global_config: Some(global_config),
                     force,
                     force_override_user_config,
                     needs_edit,
@@ -355,6 +364,7 @@ fn resolve_heterogeneous_preferred(
                     model,
                     thinking,
                     config,
+                    global_config: Some(global_config),
                     force,
                     force_override_user_config,
                     needs_edit,
@@ -384,6 +394,7 @@ fn resolve_heterogeneous_preferred(
             model,
             thinking,
             config,
+            global_config: Some(global_config),
             force,
             force_override_user_config,
             needs_edit,
@@ -432,6 +443,7 @@ fn resolve_heterogeneous_strict(
                 model,
                 thinking,
                 config,
+                global_config: Some(global_config),
                 force,
                 force_override_user_config,
                 needs_edit,
@@ -460,6 +472,7 @@ fn resolve_heterogeneous_strict(
             model,
             thinking,
             config,
+            global_config: Some(global_config),
             force,
             force_override_user_config,
             needs_edit,

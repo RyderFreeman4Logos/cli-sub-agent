@@ -59,9 +59,10 @@ pub(crate) fn ordered_tier_candidates(
         ordered.push((initial_tool, Some(spec.to_string())));
     }
 
-    for resolution in crate::run_helpers::collect_preferred_tier_models(
+    for resolution in crate::run_helpers::collect_preferred_tier_models_with_global_config(
         tier_name,
         cfg,
+        global_config,
         tier_preference_order,
         &[],
     ) {

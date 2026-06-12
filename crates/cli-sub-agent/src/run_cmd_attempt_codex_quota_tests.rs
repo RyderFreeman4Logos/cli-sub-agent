@@ -1,8 +1,10 @@
 use crate::run_cmd_post::{
-    RateLimitAction, evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
+    RateLimitAction, evaluate_error_rate_limit_failover,
+    evaluate_error_rate_limit_failover_with_global_config, evaluate_rate_limit_failover,
 };
 use chrono::Utc;
-use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
+use csa_config::global::GlobalToolConfig;
+use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
 use csa_process::ExecutionResult;
 use std::{collections::HashMap, path::Path};
 
@@ -70,6 +72,25 @@ fn assume_tools_available() -> crate::test_env_lock::ScopedTestEnvVar {
         crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
         "1",
     )
+}
+
+fn global_openai_compat_env_config() -> GlobalConfig {
+    let mut global_config = GlobalConfig::default();
+    global_config.tools.insert(
+        "openai-compat".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([
+                (
+                    "OPENAI_COMPAT_BASE_URL".to_string(),
+                    "http://localhost:8317".to_string(),
+                ),
+                ("OPENAI_COMPAT_API_KEY".to_string(), "test-key".to_string()),
+                ("OPENAI_COMPAT_MODEL".to_string(), "local-model".to_string()),
+            ]),
+            ..Default::default()
+        },
+    );
+    global_config
 }
 
 fn codex_spark_quota_result() -> ExecutionResult {
@@ -219,6 +240,53 @@ fn codex_model_scoped_quota_skips_unconfigured_openai_compat_fallback() {
     assert_retry_to(action, "codex", "codex/openai/gpt-5.5/xhigh");
     assert!(tried_specs.contains(&"openai-compat/openai/gpt-5/high".to_string()));
     assert_eq!(fallback_chain.len(), 1);
+}
+
+#[test]
+fn codex_model_scoped_quota_uses_globally_configured_openai_compat_fallback() {
+    let _assume = assume_tools_available();
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let global_config = global_openai_compat_env_config();
+    let config = make_config(
+        "tier-3-complex",
+        &[
+            "codex/openai/gpt-5.3-codex-spark/xhigh",
+            "openai-compat/openai/gpt-5/high",
+            "codex/openai/gpt-5.5/xhigh",
+        ],
+    );
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+    let mut fallback_chain = Vec::new();
+
+    let action = evaluate_error_rate_limit_failover_with_global_config(
+        "codex",
+        r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        true,
+        true,
+        Some("tier-3-complex"),
+        None,
+        None,
+        true,
+        "recover from codex rate limit",
+        Path::new("."),
+        Some(&config),
+        Some(&global_config),
+        None,
+        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        &mut fallback_chain,
+        None,
+    )
+    .expect("evaluate failover");
+
+    assert_retry_to(action, "openai-compat", "openai-compat/openai/gpt-5/high");
+    assert!(tried_specs.contains(&"codex/openai/gpt-5.3-codex-spark/xhigh".to_string()));
 }
 
 #[test]
