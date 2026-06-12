@@ -134,6 +134,48 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
+    /// Show bounded liveness and recent operation state for a session
+    Peek {
+        /// Session ID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: Option<String>,
+
+        /// Number of recent operations to show
+        #[arg(short = 'n', default_value_t = 5)]
+        operations: usize,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Roll up session time, liveness gaps, token usage, and optional costs
+    Stats {
+        /// Include sessions accessed since this duration ago (e.g. "1h", "30m", "2d")
+        #[arg(long)]
+        since: String,
+
+        /// Include per-issue rollups
+        #[arg(long)]
+        by_issue: bool,
+
+        /// Include per-tool rollups
+        #[arg(long)]
+        by_tool: bool,
+
+        /// Include conservative cost rollups from recorded estimates only
+        #[arg(long)]
+        cost: bool,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// Show the last execution result for a session
     Result {
         /// Session ID or prefix (positional alternative to --session)

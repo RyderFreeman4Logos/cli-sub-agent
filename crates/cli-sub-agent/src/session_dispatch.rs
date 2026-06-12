@@ -98,6 +98,24 @@ pub(crate) fn dispatch(
             let _ = std::io::stderr().flush();
             std::process::exit(if alive { 0 } else { 1 });
         }
+        SessionCommands::Peek {
+            session_id,
+            session,
+            operations,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_peek(sid, Some(operations), cd, output_format)?;
+        }
+        SessionCommands::Stats {
+            since,
+            by_issue,
+            by_tool,
+            cost,
+            cd,
+        } => {
+            session_cmds::handle_session_stats(since, by_issue, by_tool, cost, cd, output_format)?;
+        }
         SessionCommands::Result {
             session_id,
             session,

@@ -54,6 +54,10 @@ pub(crate) use logs::{
     display_acp_events, display_daemon_spool_logs, display_log_files, print_content_with_tail,
 };
 
+#[path = "session_cmds_observe.rs"]
+mod observe;
+pub(crate) use observe::{handle_session_peek, handle_session_stats};
+
 /// Parse a human-friendly duration string (e.g., "1h", "30m", "2d") into
 /// a `chrono::Duration`. Supports `s` (seconds), `m` (minutes), `h` (hours),
 /// and `d` (days).
