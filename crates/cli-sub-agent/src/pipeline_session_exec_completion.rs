@@ -89,6 +89,7 @@ pub(super) async fn complete_session_execution(
         input.prompt,
         &input.effective_prompt,
         input.session_dir,
+        session.turn_count,
         result_file_cleared,
         &mut result,
     );

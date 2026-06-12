@@ -38,6 +38,8 @@ impl Drop for EnvVarGuard {
 mod daemon_completion;
 #[path = "session_cmds_result_tests_2016.rs"]
 mod issue_2016;
+#[path = "session_cmds_result_resume_wrapper_tests.rs"]
+mod resume_wrapper;
 
 // ── display_structured_output tests ───────────────────────────────
 

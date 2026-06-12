@@ -243,7 +243,7 @@ impl AcpTransport {
             );
             env.insert(
                 csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
-                csa_session::contract_result_path(&dir)
+                csa_session::next_turn_contract_result_path(&dir, session.turn_count)
                     .to_string_lossy()
                     .into_owned(),
             );
@@ -612,7 +612,7 @@ mod tests {
             .get(csa_session::RESULT_TOML_PATH_CONTRACT_ENV)
             .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present");
         assert!(
-            result_contract_path.ends_with("/output/result.toml"),
+            result_contract_path.ends_with("/output/turns/turn-000001/result.toml"),
             "result contract path should be recomputed after merge, got: {result_contract_path}"
         );
         assert!(

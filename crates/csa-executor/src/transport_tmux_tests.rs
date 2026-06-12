@@ -441,7 +441,7 @@ fn read_contract_result_returns_summary_when_present() {
     )
     .unwrap();
 
-    let result = try_read_contract_result(tmp.path());
+    let result = try_read_contract_result(tmp.path(), None);
     assert_eq!(result, Some("The task is done.".to_string()));
 }
 
@@ -456,14 +456,58 @@ fn read_contract_result_reads_nested_result_summary() {
     )
     .unwrap();
 
-    let result = try_read_contract_result(tmp.path());
+    let result = try_read_contract_result(tmp.path(), None);
     assert_eq!(result, Some("Nested result.".to_string()));
+}
+
+#[test]
+fn read_contract_result_reads_expected_turn_scoped_summary() {
+    let tmp = TempDir::new().unwrap();
+    let legacy_output = tmp.path().join("output");
+    fs::create_dir_all(&legacy_output).unwrap();
+    fs::write(
+        legacy_output.join("result.toml"),
+        "status = \"success\"\nsummary = \"Legacy result.\"\nexit_code = 0\n",
+    )
+    .unwrap();
+    let turn_output = tmp.path().join("output/turns/turn-000002");
+    fs::create_dir_all(&turn_output).unwrap();
+    fs::write(
+        turn_output.join("result.toml"),
+        "status = \"success\"\nsummary = \"Latest turn result.\"\nexit_code = 0\n",
+    )
+    .unwrap();
+
+    let result = try_read_contract_result(
+        tmp.path(),
+        Some(csa_session::turn_contract_result_artifact_path(2).as_str()),
+    );
+    assert_eq!(result, Some("Latest turn result.".to_string()));
+}
+
+#[test]
+fn read_contract_result_does_not_reuse_prior_turn_when_expected_turn_missing() {
+    let tmp = TempDir::new().unwrap();
+    let prior_turn_output = tmp.path().join("output/turns/turn-000001");
+    fs::create_dir_all(&prior_turn_output).unwrap();
+    fs::write(
+        prior_turn_output.join("result.toml"),
+        "status = \"success\"\nsummary = \"Prior turn result.\"\nexit_code = 0\n",
+    )
+    .unwrap();
+
+    let result = try_read_contract_result(
+        tmp.path(),
+        Some(csa_session::turn_contract_result_artifact_path(2).as_str()),
+    );
+
+    assert_eq!(result, None);
 }
 
 #[test]
 fn read_contract_result_returns_none_when_missing() {
     let tmp = TempDir::new().unwrap();
-    assert!(try_read_contract_result(tmp.path()).is_none());
+    assert!(try_read_contract_result(tmp.path(), None).is_none());
 }
 
 #[test]
@@ -473,7 +517,7 @@ fn read_contract_result_returns_none_when_no_summary_field() {
     fs::create_dir_all(&output).unwrap();
     fs::write(output.join("result.toml"), "status = \"success\"\n").unwrap();
 
-    assert!(try_read_contract_result(tmp.path()).is_none());
+    assert!(try_read_contract_result(tmp.path(), None).is_none());
 }
 
 // ── create_jsonl_audit_symlink ──────────────────────────────────────────

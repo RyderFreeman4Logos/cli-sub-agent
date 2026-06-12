@@ -1,13 +1,10 @@
 //! TmuxTransport — runs Claude Code inside a detached tmux session.
-//!
 //! ## Why tmux?
-//!
 //! Anthropic's interactive billing pool (unlimited) applies to terminal-based
 //! Claude Code sessions. The tmux transport wraps Claude in a real interactive
 //! terminal session so CSA usage is billed there rather than against Agent SDK
 //! credits (June 2026 cap). This is an **Experimental** transport — billing
 //! classification may change.
-//!
 //! ## Lifecycle
 //!
 //! 1. Snapshot existing `.jsonl` files in `~/.claude/projects/<escaped-path>/`
@@ -18,10 +15,9 @@
 //!    through tmux
 //! 5. Discover new JSONL: diff snapshot to find newly created `.jsonl` file
 //! 6. Tail JSONL until `type=system subtype=turn_duration` marker
-//! 7. Read output: prefer `output/result.toml` (if child wrote it), fall back to JSONL text
+//! 7. Read output: prefer expected turn `result.toml`; fall back to JSONL text
 //! 8. Symlink Claude JSONL → `<session_dir>/output/claude-conversation.jsonl` for audit
 //! 9. Kill tmux session on Drop (`TmuxCleanupGuard`)
-//!
 //! ## Limitations
 //!
 //! - Incompatible with bwrap/landlock filesystem sandbox (tmux spawns outside
@@ -279,30 +275,19 @@ async fn deliver_prompt(session_name: &str, prompt: &str, prompt_file_path: &Pat
 
 // ── Result contract ──────────────────────────────────────────────────────────
 
-/// Read the `output/result.toml` contract artifact if the child agent wrote one.
-/// Checks both top-level `summary` (canonical CSA `SessionResult` schema) and
-/// nested `[result].summary` for robustness. Returns `None` when the file is
-/// absent or contains neither variant so callers fall back to JSONL text.
-fn try_read_contract_result(session_dir: &Path) -> Option<String> {
-    let path = csa_session::contract_result_path(session_dir);
+/// Read the expected `result.toml`; return `None` so callers can use JSONL fallback.
+fn try_read_contract_result(session_dir: &Path, artifact: Option<&str>) -> Option<String> {
+    let path = artifact
+        .map(|artifact| session_dir.join(artifact))
+        .unwrap_or_else(|| csa_session::contract_result_path(session_dir));
     let contents = fs::read_to_string(&path).ok()?;
     let table: toml::Table = toml::from_str(&contents).ok()?;
-    let summary = table
-        .get("summary")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            table
-                .get("result")
-                .and_then(|v| v.as_table())
-                .and_then(|t| t.get("summary"))
-                .and_then(|v| v.as_str())
-        })
-        .map(String::from)?;
-    tracing::debug!(
-        path = %path.display(),
-        summary_len = summary.len(),
-        "tmux transport: read result.toml contract output"
-    );
+    let nested = table
+        .get("result")
+        .and_then(|v| v.as_table())
+        .and_then(|t| t.get("summary"));
+    let summary = table.get("summary").or(nested)?.as_str()?.to_string();
+    tracing::debug!(path = %path.display(), "tmux transport: read result.toml");
     Some(summary)
 }
 
@@ -495,11 +480,12 @@ impl TmuxTransport {
             _ => (None, None),
         };
 
-        let (merged_env, session_dir) = {
+        let (merged_env, session_dir, expected_result_artifact_path) = {
             let mut env = extra_env.cloned().unwrap_or_default();
             csa_core::env::scrub_subtree_contract_env_map(&mut env);
             csa_core::env::strip_git_push_authorization_keys(&mut env);
             let mut dir = None;
+            let mut expected_artifact_path = None;
             if let Some(session) = session {
                 env.insert("CSA_SESSION_ID".into(), session.meta_session_id.clone());
                 env.insert(
@@ -522,12 +508,17 @@ impl TmuxTransport {
                         "CSA_SESSION_DIR".into(),
                         session_dir_path.to_string_lossy().into_owned(),
                     );
+                    let artifact =
+                        csa_session::next_turn_contract_result_artifact_path(session.turn_count);
+                    let result_path = session_dir_path
+                        .join(&artifact)
+                        .to_string_lossy()
+                        .into_owned();
                     env.insert(
                         csa_session::RESULT_TOML_PATH_CONTRACT_ENV.into(),
-                        csa_session::contract_result_path(&session_dir_path)
-                            .to_string_lossy()
-                            .into_owned(),
+                        result_path,
                     );
+                    expected_artifact_path = Some(artifact);
                     dir = Some(session_dir_path);
                 }
                 if let Some(parent) = session.genealogy.parent_session_id.as_deref()
@@ -554,7 +545,7 @@ impl TmuxTransport {
                     "true".to_string(),
                 );
             }
-            (env, dir)
+            (env, dir, expected_artifact_path)
         };
 
         Self::spawn_tmux(
@@ -606,13 +597,10 @@ impl TmuxTransport {
             "tmux transport: turn complete"
         );
 
-        // Prefer result.toml written by the child agent (if session_dir is set
-        // and the prompt instructed Claude to write there). Fall back to JSONL
-        // text extraction when result.toml is absent.
-        let output_text = match &session_dir {
-            Some(dir) => try_read_contract_result(dir).unwrap_or(jsonl_fallback_text),
-            None => jsonl_fallback_text,
-        };
+        let output_text = session_dir
+            .as_deref()
+            .and_then(|dir| try_read_contract_result(dir, expected_result_artifact_path.as_deref()))
+            .unwrap_or(jsonl_fallback_text);
 
         // Symlink Claude's JSONL into the CSA session output dir so xurl/recall
         // can locate the conversation log by CSA session ID.

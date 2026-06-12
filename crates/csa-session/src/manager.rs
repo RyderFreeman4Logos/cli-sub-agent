@@ -24,6 +24,8 @@ mod manager_paths;
 mod manager_recovery;
 #[path = "manager_result.rs"]
 mod manager_result;
+#[path = "manager_resume_alias.rs"]
+mod manager_resume_alias;
 #[path = "manager_vcs.rs"]
 mod manager_vcs;
 
@@ -44,14 +46,22 @@ use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{
     CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
     SaveOptions, SessionResultView, SignalResultMetadata, clear_manager_sidecar,
-    contract_result_path, legacy_user_result_path, list_artifacts, load_result, load_result_view,
-    redact_result_sidecar_value, render_redacted_result_sidecar, save_result,
-    save_result_with_options, save_result_with_signal_metadata,
+    contract_result_path, existing_next_turn_contract_result_artifact_path,
+    existing_turn_contract_result_artifact_path, is_manager_result_artifact_path,
+    latest_manager_result_artifact_path, legacy_user_result_path, list_artifacts, load_result,
+    load_result_view, next_turn_contract_result_artifact_path, next_turn_contract_result_path,
+    observed_session_artifact, redact_result_sidecar_value, render_redacted_result_sidecar,
+    save_result, save_result_with_options, save_result_with_signal_metadata,
+    turn_contract_result_artifact_path, turn_contract_result_path,
 };
 #[cfg(test)]
 pub(crate) use manager_result::{
     list_artifacts_in, load_result_in, load_result_view_in, save_result_in,
     save_result_with_signal_metadata_in,
+};
+pub use manager_resume_alias::{
+    RESUME_TARGET_FILE_NAME, ResumeTargetResolution, read_resume_target_from_dir,
+    resolve_resume_target_from_dir, write_resume_target,
 };
 pub use manager_vcs::detect_git_head;
 use manager_vcs::{detect_change_id, detect_current_branch, detect_git_status_porcelain};
@@ -634,3 +644,6 @@ pub(crate) fn complete_session_in(
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "manager_tests_turn_results.rs"]
+mod turn_result_tests;

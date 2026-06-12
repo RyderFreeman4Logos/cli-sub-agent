@@ -2,9 +2,10 @@
 //!
 //! When a prompt contains the contract marker `csa_result_toml_path_contract=1`,
 //! the session output must contain the absolute path to a valid `result.toml`
-//! artifact inside the session directory. Accepted paths are the runtime
-//! session root (`result.toml`), the canonical output-sidecar
-//! (`output/result.toml`), or the legacy sidecar (`output/user-result.toml`).
+//! artifact inside the session directory. Accepted paths are the current
+//! turn-scoped sidecar (`output/turns/turn-N/result.toml`), the runtime session
+//! root (`result.toml`), the legacy canonical sidecar (`output/result.toml`), or
+//! the legacy user sidecar (`output/user-result.toml`).
 //! If the contract is violated the execution result is coerced to failure.
 
 use std::path::Path;
@@ -13,11 +14,13 @@ use tracing::warn;
 use csa_process::ExecutionResult;
 
 pub(crate) const RESULT_TOML_PATH_CONTRACT_MARKER: &str = "csa_result_toml_path_contract=1";
+pub(crate) const CURRENT_RESULT_ARTIFACT_FILE: &str = "current-result-artifact.toml";
 
 pub(crate) fn enforce_result_toml_path_contract(
     prompt: &str,
     _effective_prompt: &str,
     session_dir: &Path,
+    completed_turn_count: u32,
     result_file_cleared: bool,
     result: &mut ExecutionResult,
 ) {
@@ -27,10 +30,13 @@ pub(crate) fn enforce_result_toml_path_contract(
 
     if !result_file_cleared {
         let expected_path = session_dir.join("result.toml");
+        let expected_turn_path =
+            csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
         let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
         let reason = format!(
-            "contract violation: failed to clear pre-existing result artifacts '{}', '{}', and '{}' before execution; refusing to trust stale files",
+            "contract violation: failed to prepare result artifacts before execution (stale-file cleanup or parent mkdir): '{}', '{}', '{}', '{}'",
             expected_path.display(),
+            expected_turn_path.display(),
             csa_session::contract_result_path(session_dir).display(),
             legacy_output_path.display()
         );
@@ -52,9 +58,12 @@ pub(crate) fn enforce_result_toml_path_contract(
 
     let path_candidate = contract_result_toml_path_candidate(result);
     let expected_path = session_dir.join("result.toml");
+    let expected_turn_path =
+        csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
     let expected_contract_output_path = csa_session::contract_result_path(session_dir);
     let expected_user_result_path = csa_session::legacy_user_result_path(session_dir);
-    if path_matches_expected_contract_result(path_candidate, &expected_path)
+    if path_matches_expected_contract_result(path_candidate, &expected_turn_path)
+        || path_matches_expected_contract_result(path_candidate, &expected_path)
         || path_matches_expected_contract_result(path_candidate, &expected_contract_output_path)
         || path_matches_expected_contract_result(path_candidate, &expected_user_result_path)
     {
@@ -67,15 +76,34 @@ pub(crate) fn enforce_result_toml_path_contract(
     // emits a more specific diagnostic than the generic TOML-validity fallback
     // below so post-mortem readers can distinguish "trusted because status was
     // success" from "trusted because TOML parsed".
-    if result_artifact_status_is_success(&expected_contract_output_path) {
+    if result_artifact_status_is_success(&expected_turn_path) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted artifact with [result] status=\"success\" at '{}'",
+            expected_turn_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            artifact = %expected_turn_path.display(),
+            "Session output path did not match contract; accepting verified turn-scoped result.toml whose [result] status is success"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_turn_path);
+        return;
+    }
+
+    if result_artifact_status_is_success(&expected_contract_output_path) {
+        let warning = format!(
+            "contract warning: output/summary path mismatch; accepted legacy artifact with [result] status=\"success\" at '{}'",
             expected_contract_output_path.display()
         );
         warn!(
             summary = %result.summary,
             artifact = %expected_contract_output_path.display(),
-            "Session output path did not match contract; accepting verified output/result.toml whose [result] status is success"
+            "Session output path did not match contract; accepting verified legacy output/result.toml whose [result] status is success"
         );
         if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
             result.stderr_output.push('\n');
@@ -86,15 +114,34 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
-    if sidecar_result_fallback_is_valid(&expected_contract_output_path) {
+    if sidecar_result_fallback_is_valid(&expected_turn_path) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
+            expected_turn_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            fallback = %expected_turn_path.display(),
+            "Session output path did not match contract; accepting verified turn-scoped result.toml fallback"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_turn_path);
+        return;
+    }
+
+    if sidecar_result_fallback_is_valid(&expected_contract_output_path) {
+        let warning = format!(
+            "contract warning: output/summary path mismatch; accepted legacy fallback artifact '{}'",
             expected_contract_output_path.display()
         );
         warn!(
             summary = %result.summary,
             fallback = %expected_contract_output_path.display(),
-            "Session output path did not match contract; accepting verified output/result.toml fallback"
+            "Session output path did not match contract; accepting verified legacy output/result.toml fallback"
         );
         if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
             result.stderr_output.push('\n');
@@ -149,14 +196,16 @@ pub(crate) fn enforce_result_toml_path_contract(
 
     let reason = if path_candidate.is_empty() {
         format!(
-            "contract violation: expected existing absolute result path '{}', '{}', or '{}' in output/summary, but output and summary were empty",
+            "contract violation: expected existing absolute result path '{}', '{}', '{}', or '{}' in output/summary, but output and summary were empty",
+            expected_turn_path.display(),
             expected_path.display(),
             expected_contract_output_path.display(),
             expected_user_result_path.display()
         )
     } else {
         format!(
-            "contract violation: expected existing absolute result path '{}', '{}', or '{}' in output/summary, got '{path_candidate}'",
+            "contract violation: expected existing absolute result path '{}', '{}', '{}', or '{}' in output/summary, got '{path_candidate}'",
+            expected_turn_path.display(),
             expected_path.display(),
             expected_contract_output_path.display(),
             expected_user_result_path.display()
@@ -466,18 +515,98 @@ pub(super) fn clear_expected_result_toml(path: &Path) -> bool {
     }
 }
 
-pub(super) fn clear_expected_result_artifacts_for_prompt(prompt: &str, session_dir: &Path) -> bool {
+fn ensure_expected_result_parent_dir(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if let Err(err) = std::fs::create_dir_all(parent) {
+        warn!(
+            path = %path.display(),
+            parent = %parent.display(),
+            error = %err,
+            "Failed to create result.toml parent directory before execution"
+        );
+        return false;
+    }
+    true
+}
+
+pub(super) fn clear_expected_result_artifacts_for_prompt(
+    prompt: &str,
+    session_dir: &Path,
+    completed_turn_count: u32,
+) -> bool {
     let session_result_path = session_dir.join("result.toml");
     let session_cleared = clear_expected_result_toml(&session_result_path);
     if !prompt_requires_result_toml_path(prompt) {
+        clear_current_result_artifact_marker(session_dir);
         return session_cleared;
     }
 
+    let turn_output_path =
+        csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
+    let turn_output_parent_ready = ensure_expected_result_parent_dir(&turn_output_path);
     let contract_output_path = csa_session::contract_result_path(session_dir);
     let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
+    let turn_output_cleared = clear_expected_result_toml(&turn_output_path);
     let contract_output_cleared = clear_expected_result_toml(&contract_output_path);
     let legacy_output_cleared = clear_expected_result_toml(&legacy_output_path);
-    session_cleared && contract_output_cleared && legacy_output_cleared
+    let prepared = session_cleared
+        && turn_output_parent_ready
+        && turn_output_cleared
+        && contract_output_cleared
+        && legacy_output_cleared;
+    if prepared {
+        persist_current_result_artifact_marker(session_dir, completed_turn_count);
+    } else {
+        clear_current_result_artifact_marker(session_dir);
+    }
+    prepared
+}
+
+pub(crate) fn current_result_artifact_marker_path(session_dir: &Path) -> std::path::PathBuf {
+    session_dir.join(CURRENT_RESULT_ARTIFACT_FILE)
+}
+
+fn persist_current_result_artifact_marker(session_dir: &Path, completed_turn_count: u32) {
+    let artifact_path = csa_session::next_turn_contract_result_artifact_path(completed_turn_count);
+    let mut table = toml::Table::new();
+    table.insert(
+        "artifact_path".to_string(),
+        toml::Value::String(artifact_path),
+    );
+    let marker_path = current_result_artifact_marker_path(session_dir);
+    let contents = match toml::to_string_pretty(&table) {
+        Ok(contents) => contents,
+        Err(err) => {
+            warn!(
+                path = %marker_path.display(),
+                error = %err,
+                "Failed to serialize current result artifact marker"
+            );
+            return;
+        }
+    };
+    if let Err(err) = std::fs::write(&marker_path, contents) {
+        warn!(
+            path = %marker_path.display(),
+            error = %err,
+            "Failed to persist current result artifact marker"
+        );
+    }
+}
+
+fn clear_current_result_artifact_marker(session_dir: &Path) {
+    let marker_path = current_result_artifact_marker_path(session_dir);
+    match std::fs::remove_file(&marker_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(
+            path = %marker_path.display(),
+            error = %err,
+            "Failed to remove stale current result artifact marker"
+        ),
+    }
 }
 
 fn normalize_contract_path_candidate(path: &str) -> &str {

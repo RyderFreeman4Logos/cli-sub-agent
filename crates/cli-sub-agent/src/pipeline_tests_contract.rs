@@ -354,21 +354,82 @@ fn clear_expected_result_tomls_removes_all_stale_result_artifacts() {
     let output_dir = temp.path().join("output");
     fs::create_dir_all(&output_dir).unwrap();
     let session_result = temp.path().join("result.toml");
+    let turn_result = csa_session::next_turn_contract_result_path(temp.path(), 0);
     let output_result = output_dir.join("result.toml");
     let legacy_output_result = output_dir.join("user-result.toml");
     fs::write(&session_result, "status = \"stale\"\n").unwrap();
+    fs::create_dir_all(turn_result.parent().unwrap()).unwrap();
+    fs::write(&turn_result, "status = \"stale\"\n").unwrap();
     fs::write(&output_result, "status = \"stale\"\n").unwrap();
     fs::write(&legacy_output_result, "status = \"stale\"\n").unwrap();
 
     assert!(
         crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
             crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
-            temp.path()
+            temp.path(),
+            0
         )
     );
     assert!(!session_result.exists());
+    assert!(!turn_result.exists());
     assert!(!output_result.exists());
     assert!(!legacy_output_result.exists());
+}
+
+#[test]
+fn clear_expected_result_artifacts_records_current_turn_result_marker() {
+    let temp = tempfile::tempdir().unwrap();
+
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            temp.path(),
+            2
+        )
+    );
+
+    let marker_path =
+        crate::pipeline::result_contract::current_result_artifact_marker_path(temp.path());
+    let marker = std::fs::read_to_string(marker_path).expect("read current result marker");
+    assert!(
+        marker.contains("output/turns/turn-000003/result.toml"),
+        "marker must preserve the pre-run expected current turn artifact"
+    );
+}
+
+#[test]
+fn clear_expected_result_artifacts_creates_turn_result_parent_before_execution() {
+    let temp = tempfile::tempdir().unwrap();
+    let turn_result = csa_session::next_turn_contract_result_path(temp.path(), 0);
+    let turn_result_text = turn_result.display().to_string();
+    assert!(
+        turn_result_text.ends_with("output/turns/turn-000001/result.toml"),
+        "test must cover the nested turn-scoped result path, got: {turn_result_text}"
+    );
+    let turn_parent = turn_result.parent().expect("turn result has parent");
+    assert!(
+        !turn_parent.exists(),
+        "test setup should start before CSA creates the turn result parent"
+    );
+
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            temp.path(),
+            0
+        )
+    );
+
+    assert!(
+        turn_parent.is_dir(),
+        "pre-run result-contract setup must create the child-writable parent directory"
+    );
+    fs::write(&turn_result, "status = \"success\"\nsummary = \"done\"\n")
+        .expect("child can write directly to CSA_RESULT_TOML_PATH_CONTRACT");
+    assert!(
+        turn_result.is_file(),
+        "direct write to injected result contract path should succeed"
+    );
 }
 
 #[test]
@@ -379,14 +440,22 @@ fn clear_expected_result_artifacts_for_plain_prompt_preserves_sidecars() {
     let session_result = temp.path().join("result.toml");
     let output_result = output_dir.join("result.toml");
     let legacy_output_result = output_dir.join("user-result.toml");
+    let marker_path =
+        crate::pipeline::result_contract::current_result_artifact_marker_path(temp.path());
     fs::write(&session_result, "status = \"stale\"\n").unwrap();
     fs::write(&output_result, "status = \"preserve\"\n").unwrap();
     fs::write(&legacy_output_result, "status = \"preserve\"\n").unwrap();
+    fs::write(
+        &marker_path,
+        "artifact_path = \"output/turns/turn-000001/result.toml\"\n",
+    )
+    .unwrap();
 
     assert!(
         crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
             "plain follow-up without contract marker",
-            temp.path()
+            temp.path(),
+            0
         )
     );
     assert!(
@@ -400,6 +469,10 @@ fn clear_expected_result_artifacts_for_plain_prompt_preserves_sidecars() {
     assert!(
         legacy_output_result.exists(),
         "legacy sidecar must survive non-contract follow-up turns"
+    );
+    assert!(
+        !marker_path.exists(),
+        "plain prompts must clear stale current-turn markers"
     );
 }
 

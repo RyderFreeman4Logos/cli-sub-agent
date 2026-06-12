@@ -148,6 +148,29 @@ pub(super) async fn bootstrap_session(
         }
     }
 
+    if session_arg.is_some()
+        && let Some(wrapper_session_id) = startup_env.session_id()
+        && std::env::var("CSA_DAEMON_SESSION_ID").ok().as_deref() == Some(wrapper_session_id)
+        && wrapper_session_id != session.meta_session_id
+    {
+        csa_session::write_resume_target(
+            project_root,
+            wrapper_session_id,
+            &session.meta_session_id,
+        )
+        .with_context(|| {
+            format!(
+                "failed to persist resume wrapper alias {wrapper_session_id} -> {}",
+                session.meta_session_id
+            )
+        })?;
+        info!(
+            wrapper_session = %wrapper_session_id,
+            target_session = %session.meta_session_id,
+            "Persisted resume wrapper target"
+        );
+    }
+
     Ok(SessionBootstrap {
         session,
         resolved_provider_session_id,

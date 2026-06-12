@@ -44,6 +44,7 @@ garbage collection.
   |   |   +-- locks/              # Tool-level flock files
   |   |   +-- transcript.jsonl    # ACP event transcript
   |   |   +-- output/             # Execution artifacts
+  |   |   |   +-- turns/turn-000001/result.toml  # Turn-scoped manager report
   |   +-- 01JH4QWERT9876.../
   |   |   +-- state.toml
   |   |   +-- ...
@@ -69,6 +70,16 @@ Resume by ID, prefix, or the most recent session:
 csa run --sa-mode false --session 01JH4Q "continue implementation"
 csa run --sa-mode false --last "continue the most recent session"
 ```
+
+When a resumed daemon turn returns a wrapper ID, CSA records the worker target
+under the wrapper session. `csa session wait` and `csa session result` accept
+that returned ID and follow it to the actual worker result.
+
+Each resumed turn writes manager-facing reports to a turn-scoped artifact path:
+`output/turns/turn-000001/result.toml`, `output/turns/turn-000002/result.toml`,
+and so on. The root `result.toml` remains the runtime envelope for the latest
+turn and references the current turn-scoped report; earlier turn reports are not
+overwritten.
 
 ### 3. List
 

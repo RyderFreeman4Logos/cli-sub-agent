@@ -124,6 +124,140 @@ fn handle_session_wait_completes_terminal_result_with_stale_daemon_pid() {
     );
 }
 
+#[test]
+fn handle_session_wait_detects_turn_scoped_output_result_fallback() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-turn-scoped-result-fallback"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let turn_result_path = csa_session::turn_contract_result_path(&session_dir, 1);
+    std::fs::create_dir_all(turn_result_path.parent().expect("turn result parent"))
+        .expect("create turn result dir");
+    let turn_result = SessionResult {
+        summary: "turn-scoped result fallback".to_string(),
+        ..make_result("success", 0)
+    };
+    let turn_result_toml =
+        toml::to_string_pretty(&turn_result).expect("serialize turn-scoped result");
+    std::fs::write(&turn_result_path, turn_result_toml).expect("write turn-scoped result");
+    assert!(
+        !session_dir
+            .join(csa_session::result::RESULT_FILE_NAME)
+            .exists(),
+        "test setup requires missing root result.toml"
+    );
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should detect turn-scoped result fallback");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id, "success".to_string(), 0, false))
+    );
+}
+
+#[test]
+fn handle_session_wait_does_not_reuse_prior_turn_output_result_fallback() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let mut session = create_session(
+        project,
+        Some("wait-does-not-reuse-prior-turn-result"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.turn_count = 1;
+    save_session(&session).expect("save completed turn count");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let prior_turn_result_path = csa_session::turn_contract_result_path(&session_dir, 1);
+    std::fs::create_dir_all(prior_turn_result_path.parent().expect("turn result parent"))
+        .expect("create prior turn result dir");
+    let prior_turn_result = SessionResult {
+        summary: "prior turn result must not be reused".to_string(),
+        ..make_result("success", 0)
+    };
+    let prior_turn_result_toml =
+        toml::to_string_pretty(&prior_turn_result).expect("serialize prior turn result");
+    std::fs::write(&prior_turn_result_path, prior_turn_result_toml)
+        .expect("write prior turn result");
+    assert!(
+        !csa_session::turn_contract_result_path(&session_dir, 2).exists(),
+        "test setup requires missing expected turn 2 result"
+    );
+    assert!(
+        !session_dir
+            .join(csa_session::result::RESULT_FILE_NAME)
+            .exists(),
+        "test setup requires missing root result.toml"
+    );
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let _exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should not treat prior turn output as current completion");
+
+    assert_eq!(
+        emitted_completion, None,
+        "wait must not emit a success completion from turn 1 while waiting for turn 2"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn handle_session_wait_ignores_intermediate_success_result_while_daemon_pid_alive() {

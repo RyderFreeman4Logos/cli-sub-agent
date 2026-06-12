@@ -206,8 +206,11 @@ async fn prepare_session_runtime_inner(
     let tool_state =
         ensure_tool_state_initialized(session, input.executor, input.resolved_provider_session_id)
             .await?;
-    let result_file_cleared =
-        clear_expected_result_artifacts_for_prompt(input.prompt, input.session_dir);
+    let result_file_cleared = clear_expected_result_artifacts_for_prompt(
+        input.prompt,
+        input.session_dir,
+        session.turn_count,
+    );
     let execution_start_time = chrono::Utc::now();
     let sa_mode =
         std::env::var_os(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)

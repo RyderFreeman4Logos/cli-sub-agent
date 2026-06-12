@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
 const USER_RESULT_FILE_NAME: &str = "user-result.toml";
@@ -37,8 +37,22 @@ const RUNTIME_RESULT_KEYS: [&str; 22] = [
     "last_item",
 ];
 
+#[path = "manager_result_artifacts.rs"]
+mod manager_result_artifacts;
 #[path = "manager_result_spillover.rs"]
 mod manager_result_spillover;
+
+use manager_result_artifacts::{
+    collect_output_artifacts, referenced_manager_sidecar_artifact, remove_manager_result_artifacts,
+    select_manager_sidecar_artifact_path,
+};
+pub use manager_result_artifacts::{
+    contract_result_path, existing_next_turn_contract_result_artifact_path,
+    existing_turn_contract_result_artifact_path, is_manager_result_artifact_path,
+    latest_manager_result_artifact_path, legacy_user_result_path,
+    next_turn_contract_result_artifact_path, next_turn_contract_result_path,
+    observed_session_artifact, turn_contract_result_artifact_path, turn_contract_result_path,
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SaveOptions {
@@ -178,8 +192,15 @@ fn save_result_in_with_threshold(
 
     let mut persisted_result = result.clone();
     let requested_manager_sidecar = persisted_result.manager_fields.as_sidecar();
-    let preserve_existing_manager_sidecar = requested_manager_sidecar.is_some()
-        || (!options.clear_stale_manager_sidecar && manager_sidecar_exists(&session_dir));
+    let has_requested_manager_sidecar = requested_manager_sidecar.is_some();
+    let has_referenced_manager_sidecar =
+        referenced_manager_sidecar_artifact(&persisted_result).is_some();
+    let manager_sidecar_artifact_path =
+        select_manager_sidecar_artifact_path(&persisted_result, has_requested_manager_sidecar);
+    let preserve_existing_manager_sidecar = has_requested_manager_sidecar
+        || (!options.clear_stale_manager_sidecar
+            && has_referenced_manager_sidecar
+            && manager_sidecar_exists(&session_dir, &manager_sidecar_artifact_path));
     if has_custom_schema {
         let Some(contents) = existing_contents.as_deref() else {
             bail!("Expected existing result content when custom schema was detected");
@@ -190,6 +211,7 @@ fn save_result_in_with_threshold(
         &session_dir,
         &mut persisted_result,
         preserve_existing_manager_sidecar,
+        &manager_sidecar_artifact_path,
     )?;
     let manager_sidecar = if let Some(sidecar) = requested_manager_sidecar {
         Some(
@@ -204,23 +226,25 @@ fn save_result_in_with_threshold(
         manager_result_spillover::load_existing_manager_sidecar_for_publish(
             &session_dir,
             &mut persisted_result,
+            &manager_sidecar_artifact_path,
             spill_threshold_bytes,
         )?
     } else {
         None
     };
     if manager_sidecar.is_none() && preserve_existing_manager_sidecar {
-        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+        ensure_result_artifact(&mut persisted_result, &manager_sidecar_artifact_path);
     } else {
-        remove_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+        remove_manager_result_artifacts(&mut persisted_result);
     }
     let clear_manager_sidecar_after_publish =
         manager_sidecar.is_none() && options.clear_stale_manager_sidecar;
     if let Some(sidecar) = manager_sidecar.as_ref() {
         // Publish the sidecar before the envelope so the authoritative
         // envelope never points at a sidecar path that failed to write.
-        write_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH, sidecar)?;
-        ensure_result_artifact(&mut persisted_result, CONTRACT_RESULT_ARTIFACT_PATH);
+        write_result_sidecar(&session_dir, &manager_sidecar_artifact_path, sidecar)?;
+        remove_manager_result_artifacts(&mut persisted_result);
+        ensure_result_artifact(&mut persisted_result, &manager_sidecar_artifact_path);
     }
 
     let runtime_table = session_result_to_table(&persisted_result)?;
@@ -237,12 +261,12 @@ fn save_result_in_with_threshold(
         // Mirror round-7's write-path atomicity: on clear, publish the
         // envelope first so it never points at a sidecar that was deleted
         // before the new envelope became durable.
-        if let Err(err) = clear_manager_sidecar(&session_dir) {
+        if let Err(err) = clear_manager_sidecar_at(&session_dir, &manager_sidecar_artifact_path) {
             // NOTE: stale sidecar on disk is harmless. load_result_in gates the overlay
-            // on envelope.artifacts containing CONTRACT_RESULT_ARTIFACT_PATH (#956 Option A),
+            // on envelope.artifacts containing the selected manager sidecar path (#956 Option A),
             // so even if the unlink fails, the stale sidecar will be ignored on reload.
             tracing::warn!(
-                path = %contract_result_path(&session_dir).display(),
+                path = %session_dir.join(&manager_sidecar_artifact_path).display(),
                 error = %err,
                 "Failed to remove manager sidecar after envelope publication"
             );
@@ -251,12 +275,18 @@ fn save_result_in_with_threshold(
     Ok(())
 }
 
-fn manager_sidecar_exists(session_dir: &Path) -> bool {
-    session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH).exists()
+fn manager_sidecar_exists(session_dir: &Path, artifact_path: &str) -> bool {
+    session_dir.join(artifact_path).exists()
 }
 
 pub fn clear_manager_sidecar(session_dir: &Path) -> Result<()> {
-    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
+    let artifact_path = latest_manager_result_artifact_path(session_dir)
+        .unwrap_or_else(|| CONTRACT_RESULT_ARTIFACT_PATH.to_string());
+    clear_manager_sidecar_at(session_dir, &artifact_path)
+}
+
+fn clear_manager_sidecar_at(session_dir: &Path, artifact_path: &str) -> Result<()> {
+    let manager_sidecar_path = session_dir.join(artifact_path);
     if !manager_sidecar_path.exists() {
         return Ok(());
     }
@@ -300,21 +330,15 @@ fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<(
     })
 }
 
-pub fn contract_result_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH)
-}
-
-pub fn legacy_user_result_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(LEGACY_USER_RESULT_ARTIFACT_PATH)
-}
-
 fn retain_sidecar_result_artifacts_if_present(
     session_dir: &Path,
     result: &mut SessionResult,
     retain_contract_sidecar: bool,
+    manager_sidecar_artifact_path: &str,
 ) -> Result<()> {
+    remove_manager_result_artifacts(result);
     if retain_contract_sidecar {
-        retain_result_artifact_if_present(session_dir, result, CONTRACT_RESULT_ARTIFACT_PATH)?;
+        retain_result_artifact_if_present(session_dir, result, manager_sidecar_artifact_path)?;
     }
     retain_result_artifact_if_present(session_dir, result, LEGACY_USER_RESULT_ARTIFACT_PATH)?;
     Ok(())
@@ -348,12 +372,6 @@ fn ensure_result_artifact(result: &mut SessionResult, artifact_path: &str) {
         return;
     }
     result.artifacts.push(SessionArtifact::new(artifact_path));
-}
-
-fn remove_result_artifact(result: &mut SessionResult, artifact_path: &str) {
-    result
-        .artifacts
-        .retain(|artifact| artifact.path != artifact_path);
 }
 
 fn write_result_sidecar(
@@ -447,6 +465,7 @@ fn artifacts_value_matches_runtime_schema(value: &toml::Value) -> bool {
                 "line_count" | "size_bytes" => {
                     value.as_integer().map(|num| num >= 0).unwrap_or(false)
                 }
+                "display_only" => value.is_bool(),
                 _ => false,
             })
         }
@@ -523,7 +542,6 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
     validate_session_id(session_id)?;
     let session_dir = super::get_session_dir_in(base_dir, session_id);
     let result_path = session_dir.join(RESULT_FILE_NAME);
-    let manager_sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
     if !result_path.exists() {
         return Ok(None);
     }
@@ -531,14 +549,14 @@ pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option
         .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
     let mut result: SessionResult = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
-    let envelope_references_manager_sidecar = result
-        .artifacts
-        .iter()
-        .any(|artifact| artifact.path == CONTRACT_RESULT_ARTIFACT_PATH);
-    if envelope_references_manager_sidecar {
+    let manager_sidecar_artifact = referenced_manager_sidecar_artifact(&result);
+    let manager_sidecar_path = manager_sidecar_artifact
+        .map(|artifact| session_dir.join(artifact))
+        .unwrap_or_else(|| session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH));
+    if let Some(manager_sidecar_artifact) = manager_sidecar_artifact {
         let manager_sidecar = load_optional_result_sidecar(
             &session_dir,
-            CONTRACT_RESULT_ARTIFACT_PATH,
+            manager_sidecar_artifact,
         )
         .unwrap_or_else(|error| {
             tracing::warn!(
@@ -564,15 +582,12 @@ pub(crate) fn load_result_view_in(
         return Ok(None);
     };
     let session_dir = super::get_session_dir_in(base_dir, session_id);
-    let manager_sidecar = if envelope
-        .artifacts
-        .iter()
-        .any(|artifact| artifact.path == CONTRACT_RESULT_ARTIFACT_PATH)
-    {
-        load_optional_result_sidecar(&session_dir, CONTRACT_RESULT_ARTIFACT_PATH)?
-    } else {
-        None
-    };
+    let manager_sidecar =
+        if let Some(manager_sidecar_artifact) = referenced_manager_sidecar_artifact(&envelope) {
+            load_optional_result_sidecar(&session_dir, manager_sidecar_artifact)?
+        } else {
+            None
+        };
     Ok(Some(SessionResultView {
         envelope,
         manager_sidecar,
@@ -622,12 +637,7 @@ pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec
         return Ok(Vec::new());
     }
     let mut artifacts = Vec::new();
-    for entry in fs::read_dir(&output_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            artifacts.push(entry.file_name().to_string_lossy().to_string());
-        }
-    }
+    collect_output_artifacts(&output_dir, &output_dir, &mut artifacts)?;
     let transcript_path = output_dir.join(TRANSCRIPT_FILE_NAME);
     if transcript_path.is_file() && !artifacts.iter().any(|name| name == TRANSCRIPT_FILE_NAME) {
         artifacts.push(TRANSCRIPT_FILE_NAME.to_string());

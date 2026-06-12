@@ -163,7 +163,8 @@ csa session clean --days <N> [--dry-run] [--tool <TOOLS>] [--cd <DIR>]
 
 ### `csa session result`
 
-Show the last execution result.
+Show the last execution result. If the supplied ID is a resume wrapper returned
+by `csa run --session`, the command follows the wrapper to the worker result.
 
 ```bash
 csa session result --session <ID> [--json] [--cd <DIR>]
@@ -185,7 +186,9 @@ csa session is-alive --session <ID> [--cd <DIR>]
 
 ### `csa session artifacts`
 
-List artifacts in a session's output directory.
+List artifacts in a session's output directory, including resumed-turn manager
+reports under `turns/turn-000001/result.toml`, `turns/turn-000002/result.toml`,
+and later turn directories.
 
 ```bash
 csa session artifacts --session <ID> [--cd <DIR>]

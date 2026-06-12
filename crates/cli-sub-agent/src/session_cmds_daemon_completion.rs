@@ -500,6 +500,51 @@ mod tests {
     }
 
     #[test]
+    fn daemon_completion_result_marks_historical_turn_sidecar_display_only() -> Result<()> {
+        let tmp = tempdir()?;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let state_home = tmp.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home)?;
+        let _home_guard = ScopedEnvVarRestore::set("HOME", tmp.path());
+        let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+        let project = tmp.path();
+
+        let session = create_session(
+            project,
+            Some("daemon historical sidecar"),
+            None,
+            Some("codex"),
+        )?;
+        let session_id = session.meta_session_id;
+        let session_dir = get_session_dir(project, &session_id)?;
+        let stale_artifact = csa_session::turn_contract_result_artifact_path(1);
+        let stale_path = session_dir.join(&stale_artifact);
+        std::fs::create_dir_all(stale_path.parent().expect("stale turn parent"))?;
+        std::fs::write(
+            &stale_path,
+            "[report]\nwhat_was_done = \"stale daemon turn report\"\n",
+        )?;
+        let session = load_session(project, &session_id)?;
+        let packet = DaemonCompletionPacket::from_exit_code(0);
+
+        let result =
+            daemon_completion_result(project, &session_dir, &session, &packet, chrono::Utc::now());
+
+        assert!(
+            result.manager_fields.as_sidecar().is_none(),
+            "daemon-completion synthetic result must not own stale manager fields"
+        );
+        assert!(
+            result
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == stale_artifact && artifact.display_only),
+            "historical turn sidecar remains visible as display-only diagnostics"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn daemon_completion_result_explicitly_reports_no_tool_launch_metadata() -> Result<()> {
         let tmp = tempdir()?;
         let _env_lock = TEST_ENV_LOCK.blocking_lock();

@@ -35,6 +35,8 @@ pub(crate) use completion::{
     seed_daemon_session_env,
 };
 #[cfg(test)]
+pub(crate) use wait::parse_output_result_artifact_for_test;
+#[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;
 #[cfg(test)]
 pub(crate) use wait::resolve_wait_completion_status_and_exit;
