@@ -12,6 +12,7 @@ const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const LEGACY_COMPLETE_FILE: &str = ".complete";
+const MISSING_RESULT_TERMINATION_REASON: &str = "daemon_completion_missing_result";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DaemonCompletionPacket {
@@ -209,8 +210,19 @@ pub(crate) fn daemon_completion_result(
                 .map(|m| m.tool)
         })
         .unwrap_or_else(|| "unknown".to_string());
+    let tool_note = if tool_name == "unknown" {
+        "; no tool launch metadata was recorded"
+    } else {
+        ""
+    };
+    let effective = daemon_completion_effective_outcome(packet);
+    let missing_result_note = if effective.forced_missing_result_failure {
+        "; treating daemon completion as failure because result.toml was missing"
+    } else {
+        ""
+    };
     let summary_prefix = format!(
-        "daemon completion recorded status={} exit_code={}{} before result.toml was written; committed or staged work may be salvageable on the session branch",
+        "daemon completion recorded status={} exit_code={}{} before result.toml was written{missing_result_note}{tool_note}; committed or staged work may be salvageable on the session branch",
         packet.status,
         packet.exit_code,
         packet
@@ -222,8 +234,8 @@ pub(crate) fn daemon_completion_result(
 
     SessionResult {
         post_exec_gate: None,
-        status: packet.status.clone(),
-        exit_code: packet.exit_code,
+        status: effective.status,
+        exit_code: effective.exit_code,
         summary: crate::pipeline_post_exec::build_fallback_result_summary(
             session_dir,
             &summary_prefix,
@@ -239,7 +251,35 @@ pub(crate) fn daemon_completion_result(
             project_root,
             &session.meta_session_id,
         ),
+        raw_process_exit_code: effective.raw_process_exit_code,
         ..Default::default()
+    }
+}
+
+struct DaemonCompletionEffectiveOutcome {
+    status: String,
+    exit_code: i32,
+    raw_process_exit_code: Option<i32>,
+    forced_missing_result_failure: bool,
+}
+
+fn daemon_completion_effective_outcome(
+    packet: &DaemonCompletionPacket,
+) -> DaemonCompletionEffectiveOutcome {
+    if packet.status == "success" || packet.exit_code == 0 {
+        return DaemonCompletionEffectiveOutcome {
+            status: "failure".to_string(),
+            exit_code: 1,
+            raw_process_exit_code: (packet.exit_code != 1).then_some(packet.exit_code),
+            forced_missing_result_failure: true,
+        };
+    }
+
+    DaemonCompletionEffectiveOutcome {
+        status: packet.status.clone(),
+        exit_code: packet.exit_code,
+        raw_process_exit_code: None,
+        forced_missing_result_failure: false,
     }
 }
 
@@ -257,7 +297,7 @@ pub(crate) fn retire_session_from_daemon_completion(
         packet.reason.as_deref().map_or_else(
             || {
                 if packet.exit_code == 0 {
-                    "completed".to_string()
+                    MISSING_RESULT_TERMINATION_REASON.to_string()
                 } else {
                     "daemon_completion".to_string()
                 }
@@ -418,6 +458,74 @@ mod tests {
         let result = load_result(project, &session_id)?.expect("existing result should remain");
         assert_eq!(result.status, "success");
         assert_eq!(result.exit_code, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn daemon_completion_result_fails_closed_when_packet_claims_success() -> Result<()> {
+        let tmp = tempdir()?;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let state_home = tmp.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home)?;
+        let _home_guard = ScopedEnvVarRestore::set("HOME", tmp.path());
+        let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+        let project = tmp.path();
+
+        let session = create_session(
+            project,
+            Some("daemon-success-before-result"),
+            None,
+            Some("codex"),
+        )?;
+        let session_id = session.meta_session_id;
+        let session_dir = get_session_dir(project, &session_id)?;
+        let session = load_session(project, &session_id)?;
+        let packet = DaemonCompletionPacket::from_exit_code(0);
+
+        let result =
+            daemon_completion_result(project, &session_dir, &session, &packet, chrono::Utc::now());
+
+        assert_eq!(result.status, "failure");
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.raw_process_exit_code, Some(0));
+        assert_eq!(result.tool, "codex");
+        assert!(
+            result
+                .summary
+                .contains("treating daemon completion as failure"),
+            "summary should explain fail-closed conversion: {}",
+            result.summary
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn daemon_completion_result_explicitly_reports_no_tool_launch_metadata() -> Result<()> {
+        let tmp = tempdir()?;
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let state_home = tmp.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home)?;
+        let _home_guard = ScopedEnvVarRestore::set("HOME", tmp.path());
+        let _state_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", &state_home);
+        let project = tmp.path();
+
+        let session = create_session(project, Some("daemon-no-tool-before-result"), None, None)?;
+        let session_id = session.meta_session_id;
+        let session_dir = get_session_dir(project, &session_id)?;
+        let session = load_session(project, &session_id)?;
+        let packet = DaemonCompletionPacket::from_exit_code(0);
+
+        let result =
+            daemon_completion_result(project, &session_dir, &session, &packet, chrono::Utc::now());
+
+        assert_eq!(result.tool, "unknown");
+        assert!(
+            result
+                .summary
+                .contains("no tool launch metadata was recorded"),
+            "summary should make unknown tool explicit: {}",
+            result.summary
+        );
         Ok(())
     }
 }

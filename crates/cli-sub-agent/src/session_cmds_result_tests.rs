@@ -34,6 +34,8 @@ impl Drop for EnvVarGuard {
     }
 }
 
+#[path = "session_cmds_result_daemon_completion_tests.rs"]
+mod daemon_completion;
 #[path = "session_cmds_result_tests_2016.rs"]
 mod issue_2016;
 
