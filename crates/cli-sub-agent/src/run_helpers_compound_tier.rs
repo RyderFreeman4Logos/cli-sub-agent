@@ -17,6 +17,16 @@ fn resolve_alias_to_tool(alias_name: &str, cfg: &ProjectConfig) -> Option<ToolNa
     parse_tool_name(canonical).ok()
 }
 
+pub(crate) fn compound_tier_selects_tool(
+    tier: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+) -> bool {
+    tier.zip(project_config).is_some_and(|(tier_str, cfg)| {
+        cfg.resolve_tier_selector(tier_str).is_none()
+            && cfg.try_parse_compound_tier_tool(tier_str).is_some()
+    })
+}
+
 /// Apply compound `--tier <tier>-<tool>` parsing for `Option<ToolName>` callers.
 ///
 /// Used by `csa review` and `csa debate` where the CLI `--tool` is typed as

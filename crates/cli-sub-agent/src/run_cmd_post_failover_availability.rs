@@ -9,6 +9,7 @@ pub(super) struct FailoverAvailabilityRequest<'a> {
     pub failed_tool: &'a str,
     pub task_type: &'a str,
     pub resolved_tier_name: Option<&'a str>,
+    pub required_tool: Option<&'a str>,
     pub task_needs_edit: Option<bool>,
     pub session_state: Option<&'a csa_session::MetaSessionState>,
     pub exhausted_providers: &'a [ModelFamily],
@@ -30,6 +31,7 @@ pub(super) fn decide_available_failover(
         failed_tool,
         task_type,
         resolved_tier_name,
+        required_tool,
         task_needs_edit,
         session_state,
         exhausted_providers,
@@ -75,9 +77,32 @@ pub(super) fn decide_available_failover(
                 new_model_spec,
             } => (new_tool, new_model_spec),
             csa_scheduler::FailoverAction::ReportError { reason, .. } => {
-                return Ok(RateLimitAction::ExhaustedFailovers { reason });
+                return Ok(RateLimitAction::ExhaustedFailovers {
+                    reason: match required_tool {
+                        Some(tool) => explicit_tool_exhausted_reason(tool),
+                        None => reason,
+                    },
+                });
             }
         };
+
+        if let Some(required_tool) = required_tool
+            && new_tool != required_tool
+        {
+            warn!(
+                required_tool = %required_tool,
+                skipped_tool = %new_tool,
+                model_spec = %new_model_spec,
+                "[csa-failover] skipping cross-tool fallback candidate for explicit --tool tier run"
+            );
+            if !tried_tools.iter().any(|tool| tool == &new_tool) {
+                tried_tools.push(new_tool);
+            }
+            if !tried_specs.iter().any(|spec| spec == &new_model_spec) {
+                tried_specs.push(new_model_spec);
+            }
+            continue;
+        }
 
         let extra_env = global_config
             .and_then(|cfg| cfg.build_execution_env(&new_tool, ExecutionEnvOptions::default()));
@@ -112,6 +137,15 @@ pub(super) fn decide_available_failover(
     }
 
     Ok(RateLimitAction::ExhaustedFailovers {
-        reason: "no executable tier fallback candidates remain".to_string(),
+        reason: match required_tool {
+            Some(tool) => explicit_tool_exhausted_reason(tool),
+            None => "no executable tier fallback candidates remain".to_string(),
+        },
     })
+}
+
+fn explicit_tool_exhausted_reason(tool: &str) -> String {
+    format!(
+        "no executable {tool} fallback candidates remain; explicit --tool {tool} prevents cross-tool tier failover"
+    )
 }

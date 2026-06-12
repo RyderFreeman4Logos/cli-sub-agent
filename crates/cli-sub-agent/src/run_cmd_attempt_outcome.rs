@@ -17,7 +17,7 @@ use super::super::resume::{
     build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
     run_error_timeout_seconds, signal_interruption_exit_code, signal_name_from_exit_code,
 };
-use crate::run_cmd_fork::cleanup_pre_created_fork_session;
+use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
 use crate::run_cmd_post::{
     ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
     detect_permanent_tool_exhaustion_result, evaluate_error_rate_limit_failover_with_global_config,
@@ -44,6 +44,37 @@ pub(super) enum AttemptErrorAction {
     Error(anyhow::Error),
 }
 
+pub(super) struct AttemptRetryState<'a> {
+    pub(super) failover_context: &'a mut Option<String>,
+    pub(super) tool: &'a mut ToolName,
+    pub(super) model_spec: &'a mut Option<String>,
+    pub(super) model: &'a mut Option<String>,
+    pub(super) fork_resolution: &'a mut Option<ForkResolution>,
+    pub(super) effective_session: &'a mut Option<String>,
+    pub(super) is_fork: bool,
+}
+
+impl AttemptRetryState<'_> {
+    pub(super) fn apply(self, action: AttemptRetryAction) {
+        let AttemptRetryAction::Retry {
+            new_tool,
+            new_model_spec,
+            failover_context,
+        } = action;
+
+        if let FailoverContextUpdate::Replace(new_context) = failover_context {
+            *self.failover_context = new_context;
+        }
+        *self.tool = new_tool;
+        *self.model_spec = new_model_spec;
+        *self.model = None;
+        *self.fork_resolution = None;
+        if self.is_fork {
+            *self.effective_session = None;
+        }
+    }
+}
+
 pub(super) struct AttemptErrorRequest<'a> {
     pub(super) run_timeout_seconds: Option<u64>,
     pub(super) project_root: &'a Path,
@@ -62,6 +93,7 @@ pub(super) struct AttemptErrorRequest<'a> {
     pub(super) tier_auto_select: bool,
     pub(super) failover_on_crash_enabled: bool,
     pub(super) resolved_tier_name: Option<&'a str>,
+    pub(super) tier_failover_tool_filter: Option<ToolName>,
     pub(super) ephemeral: bool,
     pub(super) prompt_text: &'a str,
     pub(super) config: Option<&'a ProjectConfig>,
@@ -199,6 +231,7 @@ pub(super) fn handle_attempt_error(
         tier_auto_select: request.tier_auto_select,
         failover_on_crash_enabled: request.failover_on_crash_enabled,
         resolved_tier_name: request.resolved_tier_name,
+        tier_failover_tool_filter: request.tier_failover_tool_filter,
         executed_session_id: request.executed_session_id,
         effective_session_arg: request.effective_session_arg,
         ephemeral: request.ephemeral,
@@ -254,6 +287,7 @@ pub(super) struct PostAttemptRequest<'a> {
     pub(super) max_failover_attempts: usize,
     pub(super) tier_auto_select: bool,
     pub(super) resolved_tier_name: Option<&'a str>,
+    pub(super) tier_failover_tool_filter: Option<ToolName>,
     pub(super) executed_session_id: Option<&'a str>,
     pub(super) effective_session_arg: Option<&'a str>,
     pub(super) ephemeral: bool,
@@ -345,6 +379,7 @@ pub(super) fn evaluate_post_attempt_retry(
         tried_specs,
         tier_auto_select: request.tier_auto_select,
         resolved_tier_name: request.resolved_tier_name,
+        tier_failover_tool_filter: request.tier_failover_tool_filter,
         executed_session_id: request.executed_session_id,
         effective_session_arg: request.effective_session_arg,
         ephemeral: request.ephemeral,
