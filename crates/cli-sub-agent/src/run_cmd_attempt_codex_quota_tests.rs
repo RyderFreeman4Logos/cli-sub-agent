@@ -364,6 +364,7 @@ fn codex_model_scoped_quota_uses_globally_configured_openai_compat_fallback() {
 
 #[test]
 fn explicit_tool_in_tier_codex_quota_skips_globally_configured_openai_compat() {
+    let _assume = assume_tools_available();
     let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
     let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
     let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
