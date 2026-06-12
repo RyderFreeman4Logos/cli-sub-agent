@@ -85,7 +85,7 @@ fn build_merged_env_disables_gemini_direct_launch_in_tests() {
 }
 
 #[test]
-fn build_merged_env_injects_openai_compat_http_config() {
+fn build_merged_env_injects_openai_compat_http_config_without_model_env() {
     let mut cfg = test_config_with_node_heap_limit(None);
     cfg.tools.insert(
         "openai-compat".to_string(),
@@ -115,9 +115,9 @@ fn build_merged_env_injects_openai_compat_http_config() {
         merged.get("OPENAI_COMPAT_API_KEY").map(String::as_str),
         Some("test-key")
     );
-    assert_eq!(
-        merged.get("OPENAI_COMPAT_MODEL").map(String::as_str),
-        Some("local-model")
+    assert!(
+        !merged.contains_key("OPENAI_COMPAT_MODEL"),
+        "project default_model must stay on executor model_override path so explicit model specs win"
     );
 }
 

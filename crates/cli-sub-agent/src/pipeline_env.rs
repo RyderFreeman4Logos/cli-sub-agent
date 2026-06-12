@@ -101,15 +101,6 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
                 .entry("OPENAI_COMPAT_API_KEY".to_string())
                 .or_insert_with(|| api_key.clone());
         }
-        if let Some(default_model) = cfg
-            .tool_default_model("openai-compat")
-            .filter(|value| !value.trim().is_empty())
-        {
-            let resolved_model = cfg.resolve_alias(default_model);
-            merged_env
-                .entry("OPENAI_COMPAT_MODEL".to_string())
-                .or_insert(resolved_model);
-        }
     }
 
     merged_env.insert(

@@ -112,6 +112,53 @@ async fn build_and_validate_executor_accepts_global_openai_compat_env() {
     );
 }
 
+#[tokio::test]
+async fn openai_compat_model_spec_overrides_project_default_model() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .lock_owned()
+        .await;
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+
+    let mut cfg = config_with_single_tier_model(
+        "tier-3-complex",
+        "openai-compat",
+        "openai-compat/openai/gpt-5/high",
+    );
+    let tool = cfg
+        .tools
+        .get_mut("openai-compat")
+        .expect("openai-compat test tool config exists");
+    tool.base_url = Some("http://localhost:8317".to_string());
+    tool.api_key = Some("test-key".to_string());
+    tool.default_model = Some("local-default".to_string());
+
+    let exec = build_and_validate_executor(
+        &ToolName::OpenaiCompat,
+        Some("openai-compat/openai/gpt-5/high"),
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        true,
+        false,
+        true,
+    )
+    .await
+    .expect("project HTTP config plus explicit model spec should be valid");
+
+    match exec {
+        csa_executor::Executor::OpenaiCompat { model_override, .. } => {
+            assert_eq!(model_override.as_deref(), Some("gpt-5"));
+        }
+        other => panic!("expected openai-compat executor, got {other:?}"),
+    }
+}
+
 /// When project config has `thinking_lock` for a tool, the CLI `--thinking`
 /// value must be overridden. Verify via Executor's Debug representation.
 #[tokio::test]
