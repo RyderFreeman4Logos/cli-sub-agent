@@ -1,6 +1,7 @@
 use crate::run_cmd_post::{
-    RateLimitAction, evaluate_error_rate_limit_failover,
-    evaluate_error_rate_limit_failover_with_global_config, evaluate_rate_limit_failover,
+    ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
+    evaluate_error_rate_limit_failover, evaluate_error_rate_limit_failover_with_global_config,
+    evaluate_rate_limit_failover,
 };
 use chrono::Utc;
 use csa_config::global::GlobalToolConfig;
@@ -121,27 +122,28 @@ fn explicit_tool_in_tier_codex_model_scoped_quota_tries_next_codex_model() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "codex",
-        r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "codex",
+        error_message: r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex rate limit",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/gpt-5.5/xhigh");
@@ -169,26 +171,27 @@ fn codex_model_scoped_quota_result_tries_next_codex_model() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_rate_limit_failover(
-        "codex",
-        &codex_spark_quota_result(),
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "codex",
+        exec_result: &codex_spark_quota_result(),
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex rate limit",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/gpt-5.5/xhigh");
@@ -214,27 +217,28 @@ fn codex_model_scoped_quota_skips_unconfigured_openai_compat_fallback() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_error_rate_limit_failover(
-        "codex",
-        r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_error_rate_limit_failover(ErrorRateLimitFailoverRequest {
+        tool_name_str: "codex",
+        error_message: r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        failover_on_crash_enabled: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex rate limit",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/gpt-5.5/xhigh");
@@ -262,26 +266,28 @@ fn codex_model_scoped_quota_uses_globally_configured_openai_compat_fallback() {
     let mut fallback_chain = Vec::new();
 
     let action = evaluate_error_rate_limit_failover_with_global_config(
-        "codex",
-        r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        Some(&global_config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
+        ErrorRateLimitFailoverRequest {
+            tool_name_str: "codex",
+            error_message: r#"Internal error: {"message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at Jun 11th, 2026 7:42 AM."}"#,
+            attempts: 1,
+            max_failover_attempts: 4,
+            tried_tools: &mut tried_tools,
+            tried_specs: &mut tried_specs,
+            tier_auto_select: true,
+            failover_on_crash_enabled: true,
+            resolved_tier_name: Some("tier-3-complex"),
+            executed_session_id: None,
+            effective_session_arg: None,
+            ephemeral: true,
+            prompt_text: "recover from codex rate limit",
+            project_root: Path::new("."),
+            config: Some(&config),
+            global_config: Some(&global_config),
+            task_needs_edit: None,
+            current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+            fallback_chain: &mut fallback_chain,
+            attempt_elapsed: None,
+        },
     )
     .expect("evaluate failover");
 
@@ -312,26 +318,27 @@ fn codex_provider_quota_ignores_model_hint_quoted_outside_stderr() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_rate_limit_failover(
-        "codex",
-        &exec_result,
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "review a prompt that mentions switching models",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "codex",
+        exec_result: &exec_result,
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "review a prompt that mentions switching models",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     assert_retry_to(
@@ -354,26 +361,27 @@ fn codex_model_scoped_quota_explains_when_no_fallback_candidate_exists() {
     let mut tried_specs = Vec::new();
     let mut fallback_chain = Vec::new();
 
-    let action = evaluate_rate_limit_failover(
-        "codex",
-        &codex_spark_quota_result(),
-        1,
-        4,
-        &mut tried_tools,
-        &mut tried_specs,
-        true,
-        Some("tier-3-complex"),
-        None,
-        None,
-        true,
-        "recover from codex rate limit",
-        Path::new("."),
-        Some(&config),
-        None,
-        Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
-        &mut fallback_chain,
-        None,
-    )
+    let action = evaluate_rate_limit_failover(RateLimitFailoverRequest {
+        tool_name_str: "codex",
+        exec_result: &codex_spark_quota_result(),
+        attempts: 1,
+        max_failover_attempts: 4,
+        tried_tools: &mut tried_tools,
+        tried_specs: &mut tried_specs,
+        tier_auto_select: true,
+        resolved_tier_name: Some("tier-3-complex"),
+        executed_session_id: None,
+        effective_session_arg: None,
+        ephemeral: true,
+        prompt_text: "recover from codex rate limit",
+        project_root: Path::new("."),
+        config: Some(&config),
+        global_config: None,
+        task_needs_edit: None,
+        current_model_spec: Some("codex/openai/gpt-5.3-codex-spark/xhigh"),
+        fallback_chain: &mut fallback_chain,
+        attempt_elapsed: None,
+    })
     .expect("evaluate failover");
 
     match action {

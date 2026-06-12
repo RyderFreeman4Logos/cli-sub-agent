@@ -23,8 +23,9 @@ use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
 #[path = "run_cmd_post_failover.rs"]
 mod failover;
 pub(crate) use failover::{
-    RateLimitAction, detect_permanent_tool_exhaustion_result,
-    detect_permanent_tool_exhaustion_text, evaluate_error_rate_limit_failover_with_global_config,
+    ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
+    detect_permanent_tool_exhaustion_result, detect_permanent_tool_exhaustion_text,
+    evaluate_error_rate_limit_failover_with_global_config,
     evaluate_rate_limit_failover_with_global_config, format_tool_exhausted_summary,
     is_permanent_tool_exhaustion_error,
 };

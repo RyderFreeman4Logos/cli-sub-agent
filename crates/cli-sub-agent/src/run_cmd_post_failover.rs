@@ -42,6 +42,51 @@ pub(crate) enum RateLimitAction {
     },
 }
 
+pub(crate) struct RateLimitFailoverRequest<'a> {
+    pub(crate) tool_name_str: &'a str,
+    pub(crate) exec_result: &'a csa_process::ExecutionResult,
+    pub(crate) attempts: usize,
+    pub(crate) max_failover_attempts: usize,
+    pub(crate) tried_tools: &'a mut Vec<String>,
+    pub(crate) tried_specs: &'a mut Vec<String>,
+    pub(crate) tier_auto_select: bool,
+    pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) executed_session_id: Option<&'a str>,
+    pub(crate) effective_session_arg: Option<&'a str>,
+    pub(crate) ephemeral: bool,
+    pub(crate) prompt_text: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) global_config: Option<&'a GlobalConfig>,
+    pub(crate) task_needs_edit: Option<bool>,
+    pub(crate) current_model_spec: Option<&'a str>,
+    pub(crate) fallback_chain: &'a mut FallbackChain,
+    pub(crate) attempt_elapsed: Option<Duration>,
+}
+
+pub(crate) struct ErrorRateLimitFailoverRequest<'a> {
+    pub(crate) tool_name_str: &'a str,
+    pub(crate) error_message: &'a str,
+    pub(crate) attempts: usize,
+    pub(crate) max_failover_attempts: usize,
+    pub(crate) tried_tools: &'a mut Vec<String>,
+    pub(crate) tried_specs: &'a mut Vec<String>,
+    pub(crate) tier_auto_select: bool,
+    pub(crate) failover_on_crash_enabled: bool,
+    pub(crate) resolved_tier_name: Option<&'a str>,
+    pub(crate) executed_session_id: Option<&'a str>,
+    pub(crate) effective_session_arg: Option<&'a str>,
+    pub(crate) ephemeral: bool,
+    pub(crate) prompt_text: &'a str,
+    pub(crate) project_root: &'a Path,
+    pub(crate) config: Option<&'a ProjectConfig>,
+    pub(crate) global_config: Option<&'a GlobalConfig>,
+    pub(crate) task_needs_edit: Option<bool>,
+    pub(crate) current_model_spec: Option<&'a str>,
+    pub(crate) fallback_chain: &'a mut FallbackChain,
+    pub(crate) attempt_elapsed: Option<Duration>,
+}
+
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
@@ -50,29 +95,17 @@ pub(crate) enum RateLimitAction {
 /// `resolved_tier_name` and `tried_specs` enable intra-tier failover: when the
 /// caller is running under a named tier, we pass spec-level exclusion so that
 /// a different model within the same tier can be selected.
-#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) fn evaluate_rate_limit_failover(
-    tool_name_str: &str,
-    exec_result: &csa_process::ExecutionResult,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
+    request: RateLimitFailoverRequest<'_>,
 ) -> Result<RateLimitAction> {
-    evaluate_rate_limit_failover_with_global_config(
+    evaluate_rate_limit_failover_with_global_config(request)
+}
+
+pub(crate) fn evaluate_rate_limit_failover_with_global_config(
+    request: RateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let RateLimitFailoverRequest {
         tool_name_str,
         exec_result,
         attempts,
@@ -87,36 +120,13 @@ pub(crate) fn evaluate_rate_limit_failover(
         prompt_text,
         project_root,
         config,
-        None,
+        global_config,
         task_needs_edit,
         current_model_spec,
         fallback_chain,
         attempt_elapsed,
-    )
-}
+    } = request;
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_rate_limit_failover_with_global_config(
-    tool_name_str: &str,
-    exec_result: &csa_process::ExecutionResult,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    global_config: Option<&GlobalConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
-) -> Result<RateLimitAction> {
     let rate_limit = match csa_scheduler::detect_rate_limit(
         tool_name_str,
         &exec_result.stderr_output,
@@ -305,30 +315,17 @@ fn collect_exhausted_providers(
 /// `ExecutionResult`. The error text is tested against the same rate-limit
 /// patterns used for normal exit-code-based detection.
 /// Appends a `FallbackAttempt` to `fallback_chain` when a retry is triggered.
-#[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) fn evaluate_error_rate_limit_failover(
-    tool_name_str: &str,
-    error_message: &str,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    failover_on_crash_enabled: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
+    request: ErrorRateLimitFailoverRequest<'_>,
 ) -> Result<RateLimitAction> {
-    evaluate_error_rate_limit_failover_with_global_config(
+    evaluate_error_rate_limit_failover_with_global_config(request)
+}
+
+pub(crate) fn evaluate_error_rate_limit_failover_with_global_config(
+    request: ErrorRateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let ErrorRateLimitFailoverRequest {
         tool_name_str,
         error_message,
         attempts,
@@ -344,37 +341,13 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         prompt_text,
         project_root,
         config,
-        None,
+        global_config,
         task_needs_edit,
         current_model_spec,
         fallback_chain,
         attempt_elapsed,
-    )
-}
+    } = request;
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_error_rate_limit_failover_with_global_config(
-    tool_name_str: &str,
-    error_message: &str,
-    attempts: usize,
-    max_failover_attempts: usize,
-    tried_tools: &mut Vec<String>,
-    tried_specs: &mut Vec<String>,
-    tier_auto_select: bool,
-    failover_on_crash_enabled: bool,
-    resolved_tier_name: Option<&str>,
-    executed_session_id: Option<&str>,
-    effective_session_arg: Option<&str>,
-    ephemeral: bool,
-    prompt_text: &str,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    global_config: Option<&GlobalConfig>,
-    task_needs_edit: Option<bool>,
-    current_model_spec: Option<&str>,
-    fallback_chain: &mut FallbackChain,
-    attempt_elapsed: Option<Duration>,
-) -> Result<RateLimitAction> {
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
         error_message,
