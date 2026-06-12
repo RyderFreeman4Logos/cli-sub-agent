@@ -20,3 +20,40 @@ fn review_cli_parses_fast_but_more_cost_flag() {
 
     assert!(args.fast_but_more_cost);
 }
+
+#[test]
+fn review_cli_parses_fix_finding_prompt_flag() {
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--fix-finding",
+        "--session",
+        "01HREVIEWSESSION0000000000",
+        "--prompt",
+        "fix the confirmed finding",
+    ]);
+
+    assert!(args.fix_finding);
+    assert_eq!(args.session.as_deref(), Some("01HREVIEWSESSION0000000000"));
+    assert_eq!(args.prompt.as_deref(), Some("fix the confirmed finding"));
+}
+
+#[test]
+fn review_cli_rejects_fix_finding_without_session() {
+    let err =
+        parse_or_validate_review_error(&["csa", "review", "--fix-finding", "--prompt", "fix"]);
+    assert!(
+        err.to_string().contains("--fix-finding requires --session"),
+        "{err}"
+    );
+}
+
+#[test]
+fn review_cli_rejects_prompt_without_fix_finding() {
+    let err = parse_or_validate_review_error(&["csa", "review", "--diff", "--prompt", "fix"]);
+    assert!(
+        err.to_string()
+            .contains("--prompt is only valid with --fix-finding"),
+        "{err}"
+    );
+}

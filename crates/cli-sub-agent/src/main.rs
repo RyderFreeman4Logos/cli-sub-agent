@@ -505,6 +505,14 @@ async fn run() -> Result<()> {
             if !args.no_daemon && !args.daemon_child && args.session_id.is_none() {
                 review_cmd::validate_session_fix_before_daemon(&args)?;
             }
+            let review_daemon_options = if args.fix_finding {
+                run_cmd_daemon::DaemonSpawnOptions::for_review_fix_finding(
+                    args.prompt.as_deref(),
+                    args.prompt_file.as_deref(),
+                )
+            } else {
+                run_cmd_daemon::DaemonSpawnOptions::default()
+            };
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
                 args.no_daemon || args.check_verdict,
@@ -512,7 +520,7 @@ async fn run() -> Result<()> {
                 &args.session_id,
                 args.cd.as_deref(),
                 &mut startup_env,
-                run_cmd_daemon::DaemonSpawnOptions::default(),
+                review_daemon_options,
             )?;
             let result = review_cmd::handle_review(args, current_depth, &startup_env).await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);

@@ -587,8 +587,8 @@ fn persist_fix_final_artifacts_current_round_blocking_prose_blocks_exit_and_gate
         "review-verdict.json must keep the current-round blocking count"
     );
     assert!(
-        session_dir.join("output").join("suggestion.toml").exists(),
-        "suggestion.toml must follow the post-consistency fail decision"
+        !session_dir.join("output").join("suggestion.toml").exists(),
+        "failed fix convergence must not advertise unusable --fix-finding without exact route metadata"
     );
     let persisted_meta = read_review_meta(&session_dir);
     assert_eq!(persisted_meta.decision, final_decision.as_str());

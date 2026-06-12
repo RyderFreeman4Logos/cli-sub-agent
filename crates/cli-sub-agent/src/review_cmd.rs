@@ -38,10 +38,14 @@ mod diff_size;
 mod dirty_tree;
 #[path = "review_cmd_execute.rs"]
 mod execute;
+#[path = "review_cmd_failure_post.rs"]
+mod failure_post;
 #[path = "review_cmd_findings_toml.rs"]
 mod findings_toml;
 #[path = "review_cmd_fix.rs"]
 mod fix;
+#[path = "review_cmd_fix_finding.rs"]
+mod fix_finding;
 #[path = "review_cmd_flow.rs"]
 mod flow;
 #[path = "review_cmd_gate.rs"]
@@ -104,7 +108,11 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
-pub(crate) use session_fix::validate_session_fix_before_daemon;
+
+pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
+    session_fix::validate_session_fix_before_daemon(args)?;
+    fix_finding::validate_fix_finding_before_daemon(args)
+}
 
 pub(crate) async fn handle_review(
     mut args: ReviewArgs,
@@ -114,6 +122,10 @@ pub(crate) async fn handle_review(
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     if args.check_verdict {
         return check_verdict::handle_check_verdict(&project_root, &args);
+    }
+    if args.fix_finding {
+        return fix_finding::handle_fix_finding(args, &project_root, current_depth, startup_env)
+            .await;
     }
     validate_review_prompt_file(args.prompt_file.as_deref())?;
     let project_root_for_hooks = project_root.display().to_string();
@@ -469,28 +481,27 @@ pub(crate) async fn handle_review(
         );
         let is_cumulative_review = review_scope_is_cumulative(&scope);
         if !should_run_fix_loop(args.fix, decision) {
-            post_review::suggest_review_failure_fix(&project_root, &review_meta, &sanitized);
-            if verdict != CLEAN && !empty_output && !auth_prompt_failure && !is_cumulative_review {
-                crate::review_findings::accumulate_findings(&project_root, &sanitized);
-            }
-            let post_review_output = build_post_review_output(
-                &crate::pipeline::capture_observational_hook_output(
-                    csa_hooks::HookEvent::PostReview,
-                    &[
-                        ("session_id", result.execution.meta_session_id.as_str()),
-                        ("decision", decision.as_str()),
-                        ("verdict", verdict),
-                        ("scope", &scope),
-                        ("project_root", project_root_for_hooks.as_str()),
-                    ],
-                    &project_root,
-                ),
-                decision,
-                &scope,
-            );
-            emit_post_review_output(&post_review_output);
-            maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
-            return Ok(effective_exit_code);
+            return Ok(failure_post::handle_non_fix_failure(
+                failure_post::NonFixFailureContext {
+                    project_root: &project_root,
+                    project_root_for_hooks: project_root_for_hooks.as_str(),
+                    review_meta: &review_meta,
+                    result: &result,
+                    initial_tool: tool,
+                    resolved_model_spec: resolved_model_spec.as_deref(),
+                    review_model: review_model.as_deref(),
+                    review_thinking: review_thinking.as_deref(),
+                    sanitized: &sanitized,
+                    decision,
+                    verdict,
+                    scope: &scope,
+                    effective_exit_code,
+                    empty_output,
+                    auth_prompt_failure,
+                    is_cumulative_review,
+                    review_session_ids: &review_session_ids,
+                },
+            ));
         }
 
         let effective_fix_tool = result.executed_tool;
@@ -499,15 +510,12 @@ pub(crate) async fn handle_review(
                 .then(|| resolved_model_spec.clone())
                 .flatten()
         });
-        let tool_can_edit = config
-            .as_ref()
-            .is_none_or(|cfg| cfg.can_tool_edit_existing(effective_fix_tool.as_str()));
-        if !tool_can_edit {
-            warn!(
-                tool = %effective_fix_tool,
-                "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
-            );
-            maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
+        if fix::should_skip_for_readonly_tool(
+            config.as_ref(),
+            effective_fix_tool,
+            &project_root,
+            &review_session_ids,
+        ) {
             return Ok(effective_exit_code);
         }
         let scope_for_hook = scope.clone();

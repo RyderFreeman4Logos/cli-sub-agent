@@ -34,6 +34,11 @@ impl std::fmt::Display for ReviewMode {
         .args(["diff", "commit", "range", "files"])
         .multiple(false)
 ))]
+#[command(group(
+    ArgGroup::new("fix_finding_prompt")
+        .args(["prompt", "prompt_file"])
+        .multiple(false)
+))]
 pub struct ReviewArgs {
     /// Check that the current branch HEAD has a passing full-diff review verdict.
     ///
@@ -118,8 +123,12 @@ pub struct ReviewArgs {
     pub files: Option<String>,
 
     /// Review-and-fix mode (apply fixes directly)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "fix_finding")]
     pub fix: bool,
+
+    /// Apply a caller-confirmed review finding by resuming the exact failed review session.
+    #[arg(long, conflicts_with_all = ["fix", "check_verdict"])]
+    pub fix_finding: bool,
 
     /// Maximum fix iterations when --fix is enabled (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..))]
@@ -230,8 +239,13 @@ pub struct ReviewArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_readable: Vec<PathBuf>,
 
+    /// Caller-confirmed fix prompt text for --fix-finding.
+    #[arg(long, value_name = "PROMPT", conflicts_with = "prompt_file")]
+    pub prompt: Option<String>,
+
     /// Read supplementary prompt/context from a file path (bypasses shell quoting issues).
-    /// Review treats this as a path; stdin sentinels are not resolved.
+    /// For --fix-finding, use `-` or `/dev/stdin` to read the caller-confirmed prompt from stdin.
+    /// Regular review treats this as a path; stdin sentinels are not resolved.
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,
 
@@ -305,6 +319,27 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
         return Err(clap::Error::raw(
             clap::error::ErrorKind::ArgumentConflict,
             "--single conflicts with --reviewers > 1",
+        ));
+    }
+
+    if args.fix_finding && args.session.is_none() {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "--fix-finding requires --session <failed-review-session-id>",
+        ));
+    }
+
+    if !args.fix_finding && args.prompt.is_some() {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--prompt is only valid with --fix-finding",
+        ));
+    }
+
+    if args.fix_finding && args.requested_reviewers() > 1 {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--fix-finding resumes one exact reviewer session and conflicts with --reviewers > 1",
         ));
     }
 
