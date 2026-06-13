@@ -23,10 +23,11 @@ pub(super) fn resolve_report_spill_threshold_bytes(project_path: &Path) -> u64 {
 pub(super) fn load_existing_manager_sidecar_for_publish(
     session_dir: &Path,
     result: &mut SessionResult,
+    manager_sidecar_artifact_path: &str,
     spill_threshold_bytes: u64,
 ) -> Result<Option<toml::Value>> {
-    let sidecar_path = session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH);
-    match load_optional_result_sidecar(session_dir, CONTRACT_RESULT_ARTIFACT_PATH) {
+    let sidecar_path = session_dir.join(manager_sidecar_artifact_path);
+    match load_optional_result_sidecar(session_dir, manager_sidecar_artifact_path) {
         Ok(Some(sidecar)) => Ok(Some(prepare_manager_sidecar_for_publish(
             session_dir,
             result,
@@ -257,6 +258,7 @@ fn upsert_session_artifact(
     }
     result.artifacts.push(SessionArtifact {
         path: artifact_path.to_string(),
+        display_only: false,
         line_count: None,
         size_bytes,
     });
@@ -478,7 +480,10 @@ mod tests {
             started_at: now,
             completed_at: now,
             events_count: 1,
-            artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
+            artifacts: vec![
+                SessionArtifact::new("output/acp-events.jsonl"),
+                SessionArtifact::new(CONTRACT_RESULT_ARTIFACT_PATH),
+            ],
             ..Default::default()
         };
         save_result_in_with_threshold(

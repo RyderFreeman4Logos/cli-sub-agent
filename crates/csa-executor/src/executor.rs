@@ -487,7 +487,7 @@ impl Executor {
                 cmd.env("CSA_SESSION_DIR", dir.to_string_lossy().into_owned());
                 cmd.env(
                     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
-                    csa_session::contract_result_path(&dir)
+                    csa_session::next_turn_contract_result_path(&dir, session.turn_count)
                         .to_string_lossy()
                         .into_owned(),
                 );

@@ -142,13 +142,8 @@ fn result_toml_path_contract_fails_closed_when_preclear_failed() {
         ..Default::default()
     };
 
-    enforce_result_toml_path_contract(
-        "CSA_RESULT_TOML_PATH_CONTRACT=1",
-        "",
-        temp.path(),
-        false,
-        &mut result,
-    );
+    let env = "CSA_RESULT_TOML_PATH_CONTRACT=1";
+    enforce_result_toml_path_contract(env, "", temp.path(), 0, false, &mut result);
 
     assert_eq!(result.exit_code, 1);
     assert!(

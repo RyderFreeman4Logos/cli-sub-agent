@@ -521,7 +521,7 @@ fn merge_artifacts(artifacts: &mut Vec<SessionArtifact>, artifact_names: Vec<Str
     for name in artifact_names {
         let path = format!("output/{name}");
         if seen.insert(path.clone()) {
-            artifacts.push(SessionArtifact::new(path));
+            artifacts.push(csa_session::observed_session_artifact(path));
             changed = true;
         }
     }
@@ -674,6 +674,10 @@ fn is_cjk(ch: char) -> bool {
 fn truncate_summary(line: &str) -> String {
     line.chars().take(SUMMARY_MAX_CHARS).collect()
 }
+
+#[cfg(test)]
+#[path = "session_observability_result_artifact_tests.rs"]
+mod result_artifact_tests;
 
 #[cfg(test)]
 mod tests {

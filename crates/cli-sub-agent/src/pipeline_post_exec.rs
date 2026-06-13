@@ -297,14 +297,12 @@ pub(crate) async fn process_execution_result(
         }
         EffectiveOutcome::ExitCodeAuthoritative => {}
     }
-    // No-op exit gate: detect sa-mode sessions that reported success but
-    // produced zero useful work (single turn, no tool calls, very short
-    // elapsed time).  Rewrite status to failure so orchestrators retry.
+    // No-op gate: fail short successful SA-mode runs with no tool calls/output.
     let elapsed_secs = (execution_end_time - ctx.execution_start_time).num_seconds();
     if ctx.sa_mode
         && ctx.task_type.is_none_or(|t| t == "run")
         && result.exit_code == 0
-        && !result_sidecar::status_is_success(&ctx.session_dir)
+        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
         && session.turn_count <= 1
         && !ctx.has_tool_calls
         && !has_meaningful_reasoning_output
@@ -362,7 +360,7 @@ pub(crate) async fn process_execution_result(
     }
     if result.exit_code == 0
         && ctx.task_type == Some("run")
-        && !result_sidecar::status_is_success(&ctx.session_dir)
+        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
         && session.turn_count <= 1
         && !ctx.has_tool_calls
         && !has_meaningful_reasoning_output
@@ -404,6 +402,11 @@ pub(crate) async fn process_execution_result(
         result,
     );
     audit::maybe_record_repo_write_audit(&ctx, session, &mut session_result);
+    result_sidecar::ensure_turn_scoped_manager_artifact(
+        &ctx.session_dir,
+        session.turn_count,
+        &mut session_result,
+    );
     if let Err(e) = crate::session_kill_diagnostics::save_result_with_signal_diagnostic(
         ctx.project_root,
         session,

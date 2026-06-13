@@ -697,7 +697,7 @@ fn enforce_result_toml_contract_now(
     session_dir: &std::path::Path,
     result: &mut ExecutionResult,
 ) {
-    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, true, result);
+    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, 0, true, result);
 }
 
 #[path = "pipeline_tests_contract.rs"]

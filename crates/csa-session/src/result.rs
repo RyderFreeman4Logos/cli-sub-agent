@@ -12,6 +12,12 @@ pub const RESULT_FILE_NAME: &str = "result.toml";
 pub struct SessionArtifact {
     /// Artifact path relative to session dir (e.g., "output/acp-events.jsonl")
     pub path: String,
+    /// True when the artifact was discovered for display/diagnostics only.
+    ///
+    /// Display-only manager result artifacts must not drive manager sidecar
+    /// overlay or write-target selection.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub display_only: bool,
     /// Optional number of lines (used by transcript JSONL artifacts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_count: Option<u64>,
@@ -24,6 +30,16 @@ impl SessionArtifact {
     pub fn new(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
+            display_only: false,
+            line_count: None,
+            size_bytes: None,
+        }
+    }
+
+    pub fn display_only(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            display_only: true,
             line_count: None,
             size_bytes: None,
         }
@@ -32,6 +48,7 @@ impl SessionArtifact {
     pub fn with_stats(path: impl Into<String>, line_count: u64, size_bytes: u64) -> Self {
         Self {
             path: path.into(),
+            display_only: false,
             line_count: Some(line_count),
             size_bytes: Some(size_bytes),
         }

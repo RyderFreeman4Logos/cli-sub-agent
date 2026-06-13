@@ -56,7 +56,7 @@ pub(crate) fn collect_fallback_result_artifacts(
     match csa_session::list_artifacts(project_root, session_id) {
         Ok(artifact_names) => artifact_names
             .into_iter()
-            .map(|name| SessionArtifact::new(format!("output/{name}")))
+            .map(|name| csa_session::observed_session_artifact(format!("output/{name}")))
             .collect(),
         Err(err) => {
             warn!(
@@ -239,4 +239,98 @@ pub(super) fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Opti
     }
 
     Some(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_session_sandbox::ScopedSessionSandbox;
+    use anyhow::Result;
+    use std::fs;
+
+    #[test]
+    fn collect_fallback_result_artifacts_marks_manager_results_display_only() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root)?;
+        let session = csa_session::create_session(
+            &project_root,
+            Some("fallback artifact ownership"),
+            None,
+            Some("codex"),
+        )?;
+        let session_dir = csa_session::get_session_dir(&project_root, &session.meta_session_id)?;
+        let turn_artifact = csa_session::turn_contract_result_artifact_path(1);
+        let turn_path = session_dir.join(&turn_artifact);
+        fs::create_dir_all(turn_path.parent().expect("turn parent"))?;
+        fs::write(&turn_path, "[report]\nwhat_was_done = \"prior turn\"\n")?;
+        fs::create_dir_all(session_dir.join("output"))?;
+        fs::write(session_dir.join("output").join("acp-events.jsonl"), "{}\n")?;
+
+        let artifacts = collect_fallback_result_artifacts(&project_root, &session.meta_session_id);
+
+        assert!(
+            artifacts
+                .iter()
+                .any(|artifact| artifact.path == turn_artifact && artifact.display_only),
+            "recursively discovered turn result sidecars must be display-only"
+        );
+        assert!(
+            artifacts.iter().any(|artifact| {
+                artifact.path == "output/acp-events.jsonl" && !artifact.display_only
+            }),
+            "ordinary fallback artifacts remain owned artifacts"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn post_exec_fallback_does_not_overlay_historical_turn_sidecar() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root)?;
+        let mut session = csa_session::create_session(
+            &project_root,
+            Some("fallback stale turn sidecar"),
+            None,
+            Some("codex"),
+        )?;
+        let session_dir = csa_session::get_session_dir(&project_root, &session.meta_session_id)?;
+        let stale_artifact = csa_session::turn_contract_result_artifact_path(1);
+        let stale_path = session_dir.join(&stale_artifact);
+        fs::create_dir_all(stale_path.parent().expect("stale turn parent"))?;
+        fs::write(
+            &stale_path,
+            r#"
+[report]
+what_was_done = "stale turn one manager report"
+"#,
+        )?;
+
+        ensure_terminal_result_on_post_exec_error(
+            &project_root,
+            &mut session,
+            "codex",
+            chrono::Utc::now(),
+            &anyhow::anyhow!("child exited before current result"),
+        );
+
+        let loaded = csa_session::load_result(&project_root, &session.meta_session_id)?
+            .expect("fallback result should be saved");
+        assert_eq!(loaded.status, "failure");
+        assert!(
+            loaded.manager_fields.as_sidecar().is_none(),
+            "fallback result must not overlay stale manager fields from a historical turn"
+        );
+        assert!(
+            loaded
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == stale_artifact && artifact.display_only),
+            "historical turn sidecar remains visible as a display-only diagnostic"
+        );
+        Ok(())
+    }
 }

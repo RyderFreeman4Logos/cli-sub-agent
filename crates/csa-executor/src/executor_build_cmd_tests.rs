@@ -113,8 +113,8 @@ fn test_build_command_sets_csa_session_dir() {
         .expect("CSA_RESULT_TOML_PATH_CONTRACT should have a value");
     let result_contract_path = result_contract_path.to_string_lossy();
     assert!(
-        result_contract_path.ends_with("/output/result.toml"),
-        "contract path should target the session output/result.toml artifact, got: {result_contract_path}"
+        result_contract_path.ends_with("/output/turns/turn-000001/result.toml"),
+        "bad result path: {result_contract_path}"
     );
     assert!(
         result_contract_path.contains("01HTEST000000000000000000"),
@@ -277,8 +277,8 @@ fn test_build_command_reserved_session_paths_override_extra_env() {
         .expect("CSA_RESULT_TOML_PATH_CONTRACT should have a value")
         .to_string_lossy();
     assert!(
-        result_contract_path.ends_with("/output/result.toml"),
-        "reserved result contract path should override extra_env, got: {result_contract_path}"
+        result_contract_path.ends_with("/output/turns/turn-000001/result.toml"),
+        "bad result path: {result_contract_path}"
     );
     assert!(
         result_contract_path.contains("01HTEST000000000000000000"),

@@ -1,5 +1,5 @@
 #[test]
-fn test_save_result_preserves_existing_contract_result_artifact_when_output_result_exists() {
+fn test_save_result_preserves_existing_contract_result_artifact_when_envelope_references_it() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
     let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
@@ -20,7 +20,10 @@ fn test_save_result_preserves_existing_contract_result_artifact_when_output_resu
         started_at: now,
         completed_at: now,
         events_count: 1,
-        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        artifacts: vec![
+            crate::result::SessionArtifact::new("output/acp-events.jsonl"),
+            crate::result::SessionArtifact::new(manager_result::CONTRACT_RESULT_ARTIFACT_PATH),
+        ],
         ..Default::default()
     };
     save_result_in(

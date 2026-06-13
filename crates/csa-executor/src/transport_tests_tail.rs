@@ -346,8 +346,8 @@ fn test_acp_build_env_includes_csa_session_dir() {
         .get("CSA_RESULT_TOML_PATH_CONTRACT")
         .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present in env");
     assert!(
-        result_contract_path.ends_with("/output/result.toml"),
-        "contract path should point to output/result.toml, got: {result_contract_path}"
+        result_contract_path.ends_with("/output/turns/turn-000001/result.toml"),
+        "bad result path: {result_contract_path}"
     );
     assert!(
         result_contract_path.contains("01HTEST000000000000000000"),
@@ -419,7 +419,7 @@ fn test_acp_build_env_reserved_session_paths_override_extra_env() {
         .get("CSA_RESULT_TOML_PATH_CONTRACT")
         .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present");
     assert!(
-        result_contract_path.ends_with("/output/result.toml"),
+        result_contract_path.ends_with("/output/turns/turn-000001/result.toml"),
         "reserved result contract path should override extra_env, got: {result_contract_path}"
     );
     assert!(

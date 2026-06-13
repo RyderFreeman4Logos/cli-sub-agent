@@ -822,18 +822,14 @@ fn session_logs_cli_events_defaults_to_false() {
     }
 }
 
-// ── print_content_with_tail tests ─────────────────────────────────
-
 #[test]
 fn print_content_with_tail_no_panic_on_empty() {
-    // Should not panic on empty content
     print_content_with_tail("", None);
     print_content_with_tail("", Some(5));
 }
 
 #[test]
 fn print_content_with_tail_no_panic_on_large_tail() {
-    // Tail larger than line count should not panic
     print_content_with_tail("line1\nline2\n", Some(100));
 }
 
@@ -865,3 +861,7 @@ mod tail_tests_wait_liveness;
 mod tail_tests_wait_lock;
 #[path = "session_cmds_tests_tail_wait_regression.rs"]
 mod tail_tests_wait_regression;
+#[path = "session_cmds_tests_tail_wait_2105.rs"]
+mod w;
+#[path = "session_cmds_tests_tail_wait_resume_wrapper.rs"]
+mod wait_resume;

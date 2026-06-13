@@ -299,19 +299,14 @@ fn handle_session_wait_maps_output_result_timeout_to_terminal_failure() {
     .expect("create session");
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).expect("session dir");
-    let output_dir = session_dir.join("output");
-    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    let output_result_path = csa_session::turn_contract_result_path(&session_dir, 1);
+    std::fs::create_dir_all(output_result_path.parent().expect("parent")).expect("mkdir");
     let output_result = SessionResult {
-        summary: "tool execution timed out".to_string(),
+        summary: "timeout".to_string(),
         ..make_result("timeout", 124)
     };
-    let output_result_toml =
-        toml::to_string_pretty(&output_result).expect("serialize output result");
-    std::fs::write(
-        output_dir.join(csa_session::result::RESULT_FILE_NAME),
-        output_result_toml,
-    )
-    .expect("write output result");
+    let output_result_toml = toml::to_string_pretty(&output_result).expect("serialize");
+    std::fs::write(&output_result_path, output_result_toml).expect("write");
 
     let mut emitted_completion: Option<(String, String, i32, bool)> = None;
     let exit_code = handle_session_wait_with_hooks(

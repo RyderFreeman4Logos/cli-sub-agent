@@ -97,15 +97,23 @@ pub use manager::{
     RepoWriteAudit, SaveOptions, SignalResultMetadata, clear_manager_sidecar, complete_session,
     compute_repo_write_audit, contract_result_path, create_session, create_session_fresh,
     create_session_with_daemon_env, decode_session_created_at, delete_session,
-    delete_session_from_root, detect_git_head, find_sessions, get_session_dir,
-    get_session_dir_global, get_session_root, legacy_user_result_path,
-    list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
-    list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
-    list_sessions_readonly, load_metadata, load_result, load_result_view, load_session,
-    load_session_global_exact, redact_result_sidecar_value, render_redacted_result_sidecar,
+    delete_session_from_root, detect_git_head, existing_next_turn_contract_result_artifact_path,
+    existing_turn_contract_result_artifact_path, find_sessions, get_session_dir,
+    get_session_dir_global, get_session_root, is_manager_result_artifact_path,
+    latest_manager_result_artifact_path, legacy_user_result_path, list_all_project_session_roots,
+    list_all_sessions, list_all_sessions_all_projects, list_artifacts, list_sessions,
+    list_sessions_from_root, list_sessions_from_root_readonly, list_sessions_readonly,
+    load_metadata, load_result, load_result_view, load_session, load_session_global_exact,
+    next_turn_contract_result_artifact_path, next_turn_contract_result_path,
+    observed_session_artifact, redact_result_sidecar_value, render_redacted_result_sidecar,
     resolve_fork_source, resolve_resume_session, save_result, save_result_with_options,
-    save_result_with_signal_metadata, save_session, save_session_in, update_last_accessed,
+    save_result_with_signal_metadata, save_session, save_session_in,
+    turn_contract_result_artifact_path, turn_contract_result_path, update_last_accessed,
     validate_tool_access, write_audit_warning_artifact,
+};
+pub use manager::{
+    RESUME_TARGET_FILE_NAME, ResumeTargetResolution, read_resume_target_from_dir,
+    resolve_resume_target_from_dir, write_resume_target,
 };
 
 pub use manager::ResumeSessionResolution;

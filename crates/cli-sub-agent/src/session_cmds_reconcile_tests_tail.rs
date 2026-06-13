@@ -87,6 +87,56 @@ fn tail_backdate_tree(path: &std::path::Path, seconds_ago: u64) {
     tail_set_file_mtime_seconds_ago(path, seconds_ago);
 }
 
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_marks_historical_turn_sidecar_display_only() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("reconcile historical sidecar"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let stale_artifact = csa_session::turn_contract_result_artifact_path(1);
+    let stale_path = session_dir.join(&stale_artifact);
+    fs::create_dir_all(stale_path.parent().expect("stale turn parent")).unwrap();
+    fs::write(
+        &stale_path,
+        "[report]\nwhat_was_done = \"stale reconcile turn report\"\n",
+    )
+    .unwrap();
+    tail_backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session wait")
+            .unwrap();
+
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("result should be synthesized");
+    assert!(
+        result.manager_fields.as_sidecar().is_none(),
+        "dead-session synthetic result must not overlay stale manager fields"
+    );
+    assert!(
+        result
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == stale_artifact && artifact.display_only),
+        "historical turn sidecar remains visible as display-only diagnostics"
+    );
+}
+
 #[test]
 fn ensure_terminal_result_for_dead_active_session_writes_unpushed_commit_sidecar() {
     let td = tempdir().expect("tempdir");
