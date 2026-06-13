@@ -360,7 +360,10 @@ fn daemon_child_startup_env_uses_preassigned_session_context() {
             csa_core::env::CSA_SESSION_ID_ENV_KEY,
             parent_session_id.clone(),
         ),
-        (csa_core::env::CSA_SESSION_DIR_ENV_KEY, parent_session_dir),
+        (
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            parent_session_dir.clone(),
+        ),
     ]));
 
     let effective = daemon_child_startup_env(
@@ -376,6 +379,11 @@ fn daemon_child_startup_env_uses_preassigned_session_context() {
         .to_string();
     assert_eq!(effective.session_id(), Some(actual_session_id.as_str()));
     assert_eq!(effective.session_dir(), Some(expected_session_dir.as_str()));
+    assert_eq!(effective.parent_session(), Some(parent_session_id.as_str()));
+    assert_eq!(
+        effective.parent_session_dir(),
+        Some(parent_session_dir.as_str())
+    );
 }
 
 #[test]
