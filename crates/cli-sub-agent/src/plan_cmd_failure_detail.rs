@@ -26,6 +26,7 @@ fn is_low_signal_failure_line(line: &str) -> bool {
         || line.starts_with("Exit code ")
         || (line.starts_with("Error: ") && line.contains(" step(s) failed"))
         || line.starts_with("stderr (last ")
+        || line.starts_with("stdout (last ")
         || line == "```text"
         || line == "```"
 }

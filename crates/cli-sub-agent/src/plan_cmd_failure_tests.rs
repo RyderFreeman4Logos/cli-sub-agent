@@ -152,6 +152,78 @@ fn failure_summary_surfaces_actionable_step_stderr() {
 }
 
 #[test]
+fn failure_summary_surfaces_mktd_stdout_for_post_2082_issue_body_shape() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some(
+            [
+                "Exit code 1",
+                "stderr (last 20 lines):",
+                "ERROR: mktd did not produce a TODO for branch fix/2086-require-commit-openai-fallback.",
+                "stdout (last 20 lines):",
+                "## Command",
+                "```bash",
+                "csa run --tool codex --tier tier-2-standard --allow-fallback --require-commit --prompt-file /dev/stdin",
+                "```",
+                "## Observed",
+                "```text",
+                "WARNING: csa run completed but run left uncommitted workspace mutations compared to start.",
+                "ERROR csa::pipeline: Tool 'openai-compat' is not installed.",
+                "Error: Tool 'openai-compat' is not installed or not in PATH",
+                "```",
+                "Error: 1 step(s) failed (1 execution, 0 unsupported-skip)",
+            ]
+            .join("\n"),
+        ),
+        output: None,
+        session_id: None,
+        command: Some("timeout -k 30 1800 csa plan run --sa-mode true patterns/mktd/workflow.toml --var FEATURE='Plan dev2merge for branch fix/2086'".to_string()),
+        stderr: Some(
+            "ERROR: mktd did not produce a TODO for branch fix/2086-require-commit-openai-fallback."
+                .to_string(),
+        ),
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+    let details_section = report.render_details_section();
+
+    assert!(
+        summary_line.contains("detail=Error: Tool 'openai-compat' is not installed or not in PATH"),
+        "result summary should prefer concrete child mktd stdout over generic Step 7 gate text: {summary_line}"
+    );
+    assert!(
+        summary_section.contains(
+            "Failure detail: Error: Tool 'openai-compat' is not installed or not in PATH"
+        ),
+        "structured summary should expose concrete child mktd stdout detail: {summary_section}"
+    );
+    assert!(
+        summary_section.contains("Recovery hint: Inspect the mktd failure detail above"),
+        "structured summary should include an actionable mktd recovery hint: {summary_section}"
+    );
+    assert!(
+        details_section.contains("stdout (last 20 lines):")
+            && details_section.contains("--prompt-file /dev/stdin")
+            && details_section.contains("openai-compat"),
+        "details should preserve the post-#2082 issue-body shape and child failure context: {details_section}"
+    );
+}
+
+#[test]
 fn recovery_ignores_untracked_plan_journal_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");

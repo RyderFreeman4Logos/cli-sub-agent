@@ -52,3 +52,40 @@ async fn execute_step_failure_reports_stderr_tail() {
         "structured stderr excerpt must keep the same tail as the error summary: {stderr}"
     );
 }
+
+#[tokio::test]
+async fn execute_step_failure_reports_stdout_tail() {
+    let step = PlanStep {
+        id: 7,
+        title: "stdout failure".into(),
+        tool: Some("bash".into()),
+        prompt:
+            "```bash\nfor i in $(seq 1 25); do printf 'out-%02d\\n' \"$i\"; done\nprintf 'generic wrapper failure\\n' >&2\nexit 1\n```"
+                .into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+        workspace_access: None,
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
+
+    assert_eq!(result.exit_code, 1);
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("stdout (last 20 lines):"),
+        "failure summary must label stdout tail: {error}"
+    );
+    assert!(
+        error.contains("out-25"),
+        "failure summary must include final stdout line: {error}"
+    );
+    assert!(
+        !error.contains("out-01"),
+        "failure summary must keep only the stdout tail: {error}"
+    );
+}

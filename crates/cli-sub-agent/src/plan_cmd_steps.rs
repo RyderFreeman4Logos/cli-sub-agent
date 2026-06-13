@@ -585,8 +585,12 @@ pub(crate) async fn execute_step_with_workflow(
         .as_ref()
         .map(|outcome| outcome.stderr.as_str())
         .unwrap_or_default();
+    let failure_stdout = last_failure
+        .as_ref()
+        .map(|outcome| outcome.output.as_str())
+        .unwrap_or_default();
     let failure_stderr_tail = stderr_tail(failure_stderr);
-    let failure_error = format_step_failure_error(exit_code, failure_stderr);
+    let failure_error = format_step_failure_error(exit_code, failure_stderr, failure_stdout);
 
     // Handle on_fail
     match &step.on_fail {
