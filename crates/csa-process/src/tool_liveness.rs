@@ -290,7 +290,7 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
 fn is_reconciler_artifact(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|n| n.to_str()),
-        Some(".reconcile.lock") | Some(".reconcile")
+        Some(".reconcile.lock") | Some(".reconcile") | Some(".wait.lock")
     )
 }
 

@@ -233,6 +233,23 @@ fn is_alive_read_only_does_not_persist_liveness_snapshot() {
 }
 
 #[test]
+fn wait_lock_does_not_count_as_liveness_signal() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join(".wait.lock"), "pid = 1\n").expect("write wait lock");
+
+    let signals = ToolLiveness::probe(tmp.path());
+
+    assert!(
+        !signals.session_write,
+        "wait's own lock must not keep an otherwise dead session alive"
+    );
+    assert!(
+        !signals.has_any_signal(),
+        "wait lock alone must not be treated as tool liveness"
+    );
+}
+
+#[test]
 fn probe_detects_spool_byte_growth_after_rotation() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(

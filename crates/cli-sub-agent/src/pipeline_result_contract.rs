@@ -34,7 +34,7 @@ pub(crate) fn enforce_result_toml_path_contract(
             csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
         let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
         let reason = format!(
-            "contract violation: failed to prepare result artifacts before execution (stale-file cleanup or parent mkdir): '{}', '{}', '{}', '{}'",
+            "contract violation: failed to clear pre-existing result artifacts before execution (or create current-turn result parent): '{}', '{}', '{}', '{}'",
             expected_path.display(),
             expected_turn_path.display(),
             csa_session::contract_result_path(session_dir).display(),
