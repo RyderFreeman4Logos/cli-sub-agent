@@ -93,6 +93,9 @@ impl PlanFailureReport {
             if let Some(detail) = step.actionable_failure_detail() {
                 lines.push(format!("Failure detail: {detail}"));
             }
+            if let Some(hint) = step.recovery_hint() {
+                lines.push(format!("Recovery hint: {hint}"));
+            }
         }
         if let Some(recovery) = &self.recovery {
             lines.push(format!("Recovery status: {}", recovery.status.as_str()));
@@ -115,6 +118,9 @@ impl PlanFailureReport {
             details.push_str(&format!("\n### Step {}: {}\n\n", step.step_id, step.title));
             details.push_str(&format!("- Exit code: `{}`\n", step.exit_code));
             details.push_str(&format!("- Skipped: `{}`\n", step.skipped));
+            if let Some(hint) = step.recovery_hint() {
+                details.push_str(&format!("- Recovery hint: {hint}\n"));
+            }
             if let Some(command) = step.command.as_deref().filter(|value| !value.is_empty()) {
                 details.push_str("\nCommand:\n\n```bash\n");
                 details.push_str(command.trim_end());
@@ -147,14 +153,27 @@ impl PlanFailureReport {
 
 impl FailedPlanStep {
     fn actionable_failure_detail(&self) -> Option<String> {
-        self.stderr_excerpt
+        self.error
             .as_deref()
             .and_then(failure_detail::select_actionable_failure_line)
             .or_else(|| {
-                self.error
+                self.stderr_excerpt
                     .as_deref()
                     .and_then(failure_detail::select_actionable_failure_line)
             })
+    }
+
+    fn recovery_hint(&self) -> Option<&'static str> {
+        let command_mentions_mktd = self
+            .command
+            .as_deref()
+            .is_some_and(|command| command.contains("patterns/mktd/workflow.toml"));
+        if self.title.to_ascii_lowercase().contains("mktd") || command_mentions_mktd {
+            return Some(
+                "Inspect the mktd failure detail above, fix the reported mktd/TODO validation error, then rerun dev2merge. The parent structured output is the diagnostic source; hidden child transcripts should not be required.",
+            );
+        }
+        None
     }
 }
 

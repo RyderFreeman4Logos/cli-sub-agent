@@ -2,8 +2,8 @@ use weave::compiler::PlanStep;
 
 use super::{StepResult, StepTarget};
 
-const STEP_FAILURE_STDERR_TAIL_LINES: usize = 20;
-const STEP_FAILURE_STDERR_TAIL_MAX_CHARS: usize = 4000;
+const STEP_FAILURE_STREAM_TAIL_LINES: usize = 20;
+const STEP_FAILURE_STREAM_TAIL_MAX_CHARS: usize = 4000;
 
 pub(super) fn describe_step_command(
     target: &StepTarget,
@@ -40,11 +40,19 @@ pub(super) fn describe_step_command(
     }
 }
 
-pub(super) fn format_step_failure_error(exit_code: i32, stderr: &str) -> String {
+pub(super) fn format_step_failure_error(exit_code: i32, stderr: &str, stdout: &str) -> String {
     let mut error = format!("Exit code {exit_code}");
-    if let Some(stderr_tail) = stderr_tail(stderr) {
+    let stderr_tail = stream_tail(stderr);
+    if let Some(stderr_tail) = &stderr_tail {
         error.push_str(&format!(
-            "\nstderr (last {STEP_FAILURE_STDERR_TAIL_LINES} lines):\n{stderr_tail}"
+            "\nstderr (last {STEP_FAILURE_STREAM_TAIL_LINES} lines):\n{stderr_tail}"
+        ));
+    }
+    if let Some(stdout_tail) =
+        stream_tail(stdout).filter(|tail| Some(tail.as_str()) != stderr_tail.as_deref())
+    {
+        error.push_str(&format!(
+            "\nstdout (last {STEP_FAILURE_STREAM_TAIL_LINES} lines):\n{stdout_tail}"
         ));
     }
     error
@@ -56,23 +64,27 @@ pub(super) fn serialize_step_result_json(result: &StepResult) -> String {
 }
 
 pub(super) fn stderr_tail(stderr: &str) -> Option<String> {
-    let mut lines = stderr
+    stream_tail(stderr)
+}
+
+fn stream_tail(stream: &str) -> Option<String> {
+    let mut lines = stream
         .lines()
         .filter(|line| !line.trim().is_empty())
         .rev()
-        .take(STEP_FAILURE_STDERR_TAIL_LINES)
+        .take(STEP_FAILURE_STREAM_TAIL_LINES)
         .collect::<Vec<_>>();
     if lines.is_empty() {
         return None;
     }
     lines.reverse();
     let mut tail = lines.join("\n");
-    if tail.len() > STEP_FAILURE_STDERR_TAIL_MAX_CHARS {
+    if tail.len() > STEP_FAILURE_STREAM_TAIL_MAX_CHARS {
         let keep_from = tail
             .char_indices()
             .rev()
             .find_map(|(idx, _)| {
-                (tail.len() - idx <= STEP_FAILURE_STDERR_TAIL_MAX_CHARS).then_some(idx)
+                (tail.len() - idx <= STEP_FAILURE_STREAM_TAIL_MAX_CHARS).then_some(idx)
             })
             .unwrap_or(0);
         tail = format!("...{}", &tail[keep_from..]);
