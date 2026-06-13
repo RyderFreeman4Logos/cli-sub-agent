@@ -674,7 +674,7 @@ async fn run() -> Result<()> {
             exit_current_process(exit_code);
         }
         Commands::Health(args) => cli::handle_health(args)?,
-        Commands::Xurl { cmd } => xurl_cmd::handle_xurl(cmd)?,
+        Commands::Xurl { cmd } => xurl_cmd::handle_xurl(cmd, output_format)?,
         Commands::Recall(args) => recall_cmd::handle_recall(args.cmd)?,
         Commands::Hooks { cmd } => hooks_cmd::handle_hooks(cmd)?,
     }

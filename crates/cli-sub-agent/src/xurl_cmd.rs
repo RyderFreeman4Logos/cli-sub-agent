@@ -6,18 +6,56 @@
 //! reach `crate::recall_cmd::*` without forcing those tests to declare every
 //! transitively referenced module.
 use anyhow::Result;
+use csa_core::types::OutputFormat;
 
 use crate::cli::XurlCommands;
 use crate::recall_cmd;
 
-pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
+#[path = "xurl_hermes.rs"]
+mod hermes;
+
+struct ThreadDispatch {
+    keyword: Option<String>,
+    provider: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+    hermes_home: Option<std::path::PathBuf>,
+    hermes_profile: Option<String>,
+    limit: usize,
+    json: bool,
+}
+
+struct RecallDispatch {
+    keyword: Option<String>,
+    session: Option<String>,
+    page: Option<u32>,
+    list: bool,
+    all: bool,
+    limit: usize,
+    provider: Option<String>,
+    cwd: Option<std::path::PathBuf>,
+    hermes_home: Option<std::path::PathBuf>,
+    hermes_profile: Option<String>,
+}
+
+pub fn handle_xurl(cmd: XurlCommands, output_format: OutputFormat) -> Result<()> {
     match cmd {
         XurlCommands::Threads {
             keyword,
             provider,
+            cwd,
+            hermes_home,
+            hermes_profile,
             limit,
             json,
-        } => crate::cli::handle_threads(keyword, provider, limit, json),
+        } => handle_threads(ThreadDispatch {
+            keyword,
+            provider,
+            cwd,
+            hermes_home,
+            hermes_profile,
+            limit,
+            json: json || matches!(output_format, OutputFormat::Json),
+        }),
         XurlCommands::Recall {
             keyword,
             session,
@@ -25,18 +63,93 @@ pub fn handle_xurl(cmd: XurlCommands) -> Result<()> {
             list,
             all,
             limit,
-        } => handle_recall(keyword, session, page, list, all, limit),
+            provider,
+            cwd,
+            hermes_home,
+            hermes_profile,
+        } => handle_recall(RecallDispatch {
+            keyword,
+            session,
+            page,
+            list,
+            all,
+            limit,
+            provider,
+            cwd,
+            hermes_home,
+            hermes_profile,
+        }),
     }
 }
 
-fn handle_recall(
-    keyword: Option<String>,
-    session: Option<String>,
-    page: Option<u32>,
-    list: bool,
-    all: bool,
-    limit: usize,
-) -> Result<()> {
+fn handle_threads(args: ThreadDispatch) -> Result<()> {
+    let ThreadDispatch {
+        keyword,
+        provider,
+        cwd,
+        hermes_home,
+        hermes_profile,
+        limit,
+        json,
+    } = args;
+
+    if provider
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("hermes"))
+    {
+        return hermes::handle_threads(hermes::HermesThreadArgs {
+            keyword,
+            cwd,
+            hermes_home,
+            hermes_profile,
+            limit,
+            json,
+        });
+    }
+    if cwd.is_some() || hermes_home.is_some() || hermes_profile.is_some() {
+        anyhow::bail!("--cwd/--hermes-home/--hermes-profile require --provider hermes");
+    }
+    crate::cli::handle_threads(keyword, provider, limit, json)
+}
+
+fn handle_recall(args: RecallDispatch) -> Result<()> {
+    let RecallDispatch {
+        keyword,
+        session,
+        page,
+        list,
+        all,
+        limit,
+        provider,
+        cwd,
+        hermes_home,
+        hermes_profile,
+    } = args;
+
+    if provider
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("hermes"))
+    {
+        return hermes::handle_recall(hermes::HermesRecallArgs {
+            keyword,
+            session,
+            page,
+            list,
+            all,
+            limit,
+            cwd,
+            hermes_home,
+            hermes_profile,
+        });
+    }
+    if let Some(provider) = provider {
+        anyhow::bail!(
+            "csa xurl recall --provider currently supports only 'hermes'; got '{provider}'"
+        );
+    }
+    if cwd.is_some() || hermes_home.is_some() || hermes_profile.is_some() {
+        anyhow::bail!("--cwd/--hermes-home/--hermes-profile require --provider hermes");
+    }
     if list {
         return recall_cmd::handle_recall_list_cmd(limit, all);
     }

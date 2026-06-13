@@ -24,7 +24,7 @@ pub(super) fn is_compact_heading(line: &str) -> bool {
 ///
 /// Returns pages in chronological order. The caller maps user-facing page
 /// numbers (0 = newest) via [`resolve_page_index`].
-pub(super) fn split_markdown_pages(content: &str) -> Vec<String> {
+pub(crate) fn split_markdown_pages(content: &str) -> Vec<String> {
     let mut pages: Vec<String> = Vec::new();
     let mut current_start = 0usize;
 
@@ -62,7 +62,7 @@ fn line_byte_offsets(content: &str) -> impl Iterator<Item = (usize, &str)> {
 ///
 /// Page 0 = last (newest) page, page 1 = second-to-last, etc.
 /// Returns `None` if `page >= total`.
-pub(super) fn resolve_page_index(page: u32, total: usize) -> Option<usize> {
+pub(crate) fn resolve_page_index(page: u32, total: usize) -> Option<usize> {
     let n = page as usize;
     if n >= total {
         return None;
