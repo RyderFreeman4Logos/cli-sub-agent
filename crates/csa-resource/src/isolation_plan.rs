@@ -277,8 +277,8 @@ impl IsolationPlanBuilder {
             // where the directory doesn't exist yet, we add it anyway so bwrap
             // can create it (the parent must exist).
             let default_cargo_home = home.join(".cargo");
-            if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
-                let cargo_home = PathBuf::from(&cargo_home_env);
+            if let Ok(cargo_home_env) = std::env::var(csa_core::env::CARGO_HOME_ENV_KEY) {
+                let cargo_home = rust_state_path_or_default(&cargo_home_env, &default_cargo_home);
                 if cargo_home == default_cargo_home {
                     // CARGO_HOME points to the default — treat as if unset.
                     add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
@@ -295,8 +295,8 @@ impl IsolationPlanBuilder {
             // (downloading components, updating toolchains). Same pattern as
             // CARGO_HOME: when explicitly set elsewhere, don't expose ~/.rustup.
             let default_rustup = home.join(".rustup");
-            if let Ok(rustup_home) = std::env::var("RUSTUP_HOME") {
-                let rustup_path = PathBuf::from(&rustup_home);
+            if let Ok(rustup_home) = std::env::var(csa_core::env::RUSTUP_HOME_ENV_KEY) {
+                let rustup_path = rust_state_path_or_default(&rustup_home, &default_rustup);
                 if rustup_path == default_rustup {
                     add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
                 } else {
@@ -438,6 +438,15 @@ fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: 
     }
 }
 
+fn rust_state_path_or_default(value: &str, default: &Path) -> PathBuf {
+    let path = PathBuf::from(value);
+    if value.trim().is_empty() || csa_core::env::rust_state_path_needs_session_override(&path) {
+        default.to_path_buf()
+    } else {
+        path
+    }
+}
+
 /// Add `dir` to `paths` if it exists, otherwise pre-create it when a
 /// non-root ancestor exists (bwrap `--bind` requires the source path to exist).
 ///
@@ -495,6 +504,10 @@ mod tests;
 #[cfg(test)]
 #[path = "isolation_plan_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "isolation_plan_rust_env_tests.rs"]
+mod rust_env_tests;
 
 #[cfg(test)]
 #[path = "isolation_plan_claude_tests.rs"]

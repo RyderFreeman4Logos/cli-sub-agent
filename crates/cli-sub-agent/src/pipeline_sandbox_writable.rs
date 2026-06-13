@@ -1,8 +1,28 @@
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
+use csa_resource::isolation_plan::IsolationPlanBuilder;
 use tracing::{info, warn};
+
+pub(crate) fn add_execution_env_writable_paths(
+    builder: IsolationPlanBuilder,
+    env: Option<&HashMap<String, String>>,
+    project_root: &Path,
+) -> Result<IsolationPlanBuilder, String> {
+    let Some(env) = env else {
+        return Ok(builder);
+    };
+    let paths = crate::pipeline_env::rust_session_writable_paths(env);
+    if paths.is_empty() {
+        return Ok(builder);
+    }
+    let paths = resolve_and_prepare_rust_env_writable_sources(&paths, project_root)?;
+    Ok(paths
+        .into_iter()
+        .fold(builder, IsolationPlanBuilder::with_writable_path))
+}
 
 pub(crate) fn resolve_and_prepare_writable_sources(
     paths: &[PathBuf],
@@ -26,6 +46,14 @@ pub(crate) fn resolve_and_prepare_writable_sources(
         }
     }
     Ok(prepared)
+}
+
+pub(crate) fn resolve_and_prepare_rust_env_writable_sources(
+    paths: &[PathBuf],
+    project_root: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    reject_readonly_usr_local_rust_state_paths(paths)?;
+    resolve_and_prepare_writable_sources(paths, project_root, "Rust state env writable paths")
 }
 
 pub(crate) fn resolve_config_extra_writable_sources(
@@ -77,6 +105,23 @@ fn resolve_paths_with_extra(
         .map_err(|e| format!("Per-tool writable_paths validation failed for '{tool_name}': {e}"))?;
     resolved.extend(resolve_config_extra_writable_sources(config, project_root)?);
     Ok(resolved)
+}
+
+fn reject_readonly_usr_local_rust_state_paths(paths: &[PathBuf]) -> Result<(), String> {
+    let rejected = paths
+        .iter()
+        .filter(|path| csa_core::env::rust_state_path_needs_session_override(path))
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if rejected.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Rust state env writable paths validation failed: rejected paths [{}]. \
+         Normalize read-only /usr/local Rust state env before granting sandbox write access",
+        rejected.join(", ")
+    ))
 }
 
 fn prepare_missing_source(

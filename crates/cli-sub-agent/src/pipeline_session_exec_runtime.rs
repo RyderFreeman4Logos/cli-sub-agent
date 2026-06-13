@@ -318,6 +318,7 @@ async fn prepare_session_runtime_inner(
         readonly_project_root: input.readonly_project_root,
         extra_writable: input.extra_writable,
         extra_readable: input.extra_readable,
+        execution_env: Some(&merged_env),
     };
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options_with_overrides(
         sandbox_input,

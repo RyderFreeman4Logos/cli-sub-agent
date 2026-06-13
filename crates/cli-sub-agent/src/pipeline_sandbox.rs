@@ -4,6 +4,7 @@
 //! Handles enforcement mode checking, capability detection, config resolution,
 //! and first-turn telemetry recording.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
@@ -23,6 +24,7 @@ mod memory_balloon;
 mod memory_override;
 #[path = "pipeline_sandbox_writable.rs"]
 mod writable_sources;
+use writable_sources::add_execution_env_writable_paths;
 
 pub(crate) use memory_balloon::maybe_inflate_balloon;
 #[cfg(test)]
@@ -51,6 +53,7 @@ pub(crate) struct SandboxResolveInput<'a> {
     pub(crate) readonly_project_root: bool,
     pub(crate) extra_writable: &'a [PathBuf],
     pub(crate) extra_readable: &'a [PathBuf],
+    pub(crate) execution_env: Option<&'a HashMap<String, String>>,
 }
 
 fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> PathBuf {
@@ -128,6 +131,7 @@ pub(crate) fn resolve_sandbox_options(
             readonly_project_root,
             extra_writable,
             extra_readable,
+            execution_env: None,
         },
         RunResourceOverrides::default(),
     )
@@ -150,6 +154,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         readonly_project_root,
         extra_writable,
         extra_readable,
+        execution_env,
     } = input;
     let has_run_memory_override = resource_overrides.memory_max_mb.is_some();
 
@@ -225,8 +230,12 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
             .with_tool_defaults(tool_name, project_root, &session_dir)
             .with_readonly_project_root(readonly_project_root);
 
-        // CSA runtime writable paths (best-effort for profile defaults).
+        // CSA runtime writable paths.
         if !no_fs_sandbox {
+            builder = match add_execution_env_writable_paths(builder, execution_env, project_root) {
+                Ok(builder) => builder,
+                Err(message) => return SandboxResolution::RequiredButUnavailable(message),
+            };
             if let Ok(project_state_root) = csa_session::manager::get_session_root(project_root) {
                 builder = builder.with_writable_path(project_state_root);
             }
@@ -410,11 +419,13 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
 
-    // CSA runtime writable paths: project state root (for fork-call session
-    // creation) and global slots (for lock files).  These are always added
-    // regardless of per-tool REPLACE semantics because CSA needs them to
-    // function even when the tool's project-root access is restricted.
+    // CSA runtime paths must survive per-tool REPLACE semantics so fork-call
+    // session creation and slot locks still work.
     if !no_fs_sandbox {
+        builder = match add_execution_env_writable_paths(builder, execution_env, project_root) {
+            Ok(builder) => builder,
+            Err(message) => return SandboxResolution::RequiredButUnavailable(message),
+        };
         if let Ok(project_state_root) = csa_session::manager::get_session_root(project_root) {
             builder = builder.with_writable_path(project_state_root);
         }

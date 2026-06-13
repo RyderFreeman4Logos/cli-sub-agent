@@ -65,6 +65,132 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
 }
 
 #[test]
+fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let mise_data = temp.path().join("mise-data");
+    let mise_rust = mise_data.join("installs/rust/stable");
+    std::fs::create_dir_all(home.join(".cargo")).expect("create cargo home");
+    std::fs::create_dir_all(home.join(".config/mise")).expect("create mise config");
+    std::fs::create_dir_all(mise_rust.join("toolchains")).expect("create rust toolchains");
+    std::fs::write(mise_rust.join("settings.toml"), "version = \"12\"\n")
+        .expect("write rustup settings");
+    let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
+    let _cargo_home = ScopedEnvVarRestore::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local");
+    let _rustup_home = ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
+    let _cargo_install_root =
+        ScopedEnvVarRestore::set(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/usr/local");
+    let _mise_config =
+        ScopedEnvVarRestore::set(csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "/usr/local");
+    let _mise_data = ScopedEnvVarRestore::set(
+        csa_core::env::MISE_DATA_DIR_ENV_KEY,
+        mise_data.to_str().expect("mise data utf8"),
+    );
+    let cfg = test_config_with_node_heap_limit(None);
+
+    let merged = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "codex",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
+
+    assert_eq!(
+        merged
+            .get(csa_core::env::CARGO_HOME_ENV_KEY)
+            .map(String::as_str),
+        Some(home.join(".cargo").to_str().expect("cargo home utf8"))
+    );
+    assert_eq!(
+        merged
+            .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+            .map(String::as_str),
+        Some(home.join(".cargo").to_str().expect("cargo home utf8"))
+    );
+    assert_eq!(
+        merged
+            .get(csa_core::env::RUSTUP_HOME_ENV_KEY)
+            .map(String::as_str),
+        Some(mise_rust.to_str().expect("mise rust utf8"))
+    );
+    assert_eq!(
+        merged
+            .get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(home.join(".config/mise").to_str().expect("mise config utf8"))
+    );
+}
+
+#[test]
+fn build_merged_env_preserves_explicit_writable_rust_state() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let cargo_home = temp.path().join("explicit-cargo");
+    let rustup_home = temp.path().join("explicit-rustup");
+    let cargo_install_root = temp.path().join("explicit-install");
+    let mise_config = temp.path().join("explicit-mise-config");
+    for dir in [&home, &cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+        std::fs::create_dir_all(dir).expect("create explicit env dir");
+    }
+    let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
+    let _ambient_cargo =
+        ScopedEnvVarRestore::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local");
+    let _ambient_rustup =
+        ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
+    let cfg = test_config_with_node_heap_limit(None);
+    let extra_env = HashMap::from([
+        (
+            csa_core::env::CARGO_HOME_ENV_KEY.to_string(),
+            cargo_home.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::RUSTUP_HOME_ENV_KEY.to_string(),
+            rustup_home.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY.to_string(),
+            cargo_install_root.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::MISE_CONFIG_DIR_ENV_KEY.to_string(),
+            mise_config.to_string_lossy().into_owned(),
+        ),
+    ]);
+
+    let merged = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: Some(&extra_env),
+        config: Some(&cfg),
+        global_config: None,
+        tool_name: "codex",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
+
+    assert_eq!(
+        merged.get(csa_core::env::CARGO_HOME_ENV_KEY),
+        extra_env.get(csa_core::env::CARGO_HOME_ENV_KEY)
+    );
+    assert_eq!(
+        merged.get(csa_core::env::RUSTUP_HOME_ENV_KEY),
+        extra_env.get(csa_core::env::RUSTUP_HOME_ENV_KEY)
+    );
+    assert_eq!(
+        merged.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY),
+        extra_env.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+    );
+    assert_eq!(
+        merged.get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY),
+        extra_env.get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY)
+    );
+}
+
+#[test]
 fn build_merged_env_disables_gemini_direct_launch_in_tests() {
     let cfg = test_config_with_node_heap_limit(None);
 
