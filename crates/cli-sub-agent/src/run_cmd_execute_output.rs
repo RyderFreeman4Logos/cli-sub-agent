@@ -105,7 +105,7 @@ pub(super) fn render_run_text_output(
     result: &ExecutionResult,
     large_diff_warning: Option<&csa_session::LargeDiffWarningReport>,
 ) -> String {
-    let mut output = result.output.clone();
+    let mut output = render_success_text_output(&result.output, result.exit_code);
     if let Some(warning) = large_diff_warning {
         if !output.is_empty() && !output.ends_with('\n') {
             output.push('\n');
@@ -116,9 +116,21 @@ pub(super) fn render_run_text_output(
     output
 }
 
+fn render_success_text_output(raw_output: &str, exit_code: i32) -> String {
+    if exit_code == 0
+        && crate::codex_transcript_filter::first_non_empty_line_is_thread_started(raw_output)
+    {
+        return crate::codex_transcript_filter::extract_codex_json_event_text(raw_output)
+            .unwrap_or_else(|| raw_output.to_string());
+    }
+
+    raw_output.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn ephemeral_signal_diagnostic_adds_no_session_metadata() {
@@ -193,6 +205,84 @@ mod tests {
         let rendered = render_run_text_output(&result, None);
 
         assert_eq!(rendered, "done\n");
+    }
+
+    #[test]
+    fn run_text_output_filters_codex_internal_stale_todo_events_on_success() {
+        let final_summary = "\
+<!-- CSA:SECTION:summary -->
+Implemented and committed.
+<!-- CSA:SECTION:summary:END -->";
+        let stale_todo = json!({
+            "todos": [
+                {"text": "implement fix", "completed": false},
+                {"text": "run validation", "completed": false}
+            ]
+        })
+        .to_string();
+        let raw_output = [
+            json!({"type": "thread.started", "thread_id": "thread_1"}).to_string(),
+            json!({
+                "type": "item.completed",
+                "item": {"id": "item_1", "type": "agent_message", "text": final_summary}
+            })
+            .to_string(),
+            json!({
+                "type": "item.completed",
+                "item": {"id": "item_2", "type": "tool_result", "text": stale_todo}
+            })
+            .to_string(),
+            json!({"type": "turn.completed", "usage": {"input_tokens": 100}}).to_string(),
+        ]
+        .join("\n");
+        let result = ExecutionResult {
+            output: raw_output,
+            summary: "Implemented and committed.".to_string(),
+            exit_code: 0,
+            terminal_reason: Some("turn.completed".to_string()),
+            model_completed: Some(true),
+            ..Default::default()
+        };
+
+        let rendered = render_run_text_output(&result, None);
+
+        assert_eq!(rendered, final_summary);
+        assert!(rendered.contains("Implemented and committed."));
+        assert!(!rendered.contains("\"completed\":false"));
+        assert!(!rendered.contains("turn.completed"));
+        assert!(!rendered.trim_end().ends_with("\"completed\":false}]}}"));
+    }
+
+    #[test]
+    fn run_text_output_preserves_codex_raw_output_on_failure() {
+        let raw_output = [
+            json!({"type": "thread.started", "thread_id": "thread_1"}).to_string(),
+            json!({
+                "type": "item.completed",
+                "item": {
+                    "id": "item_1",
+                    "type": "tool_result",
+                    "text": "{\"todos\":[{\"text\":\"debug\",\"completed\":false}]}"
+                }
+            })
+            .to_string(),
+            json!({"type": "turn.failed", "error": {"message": "tool failed"}}).to_string(),
+        ]
+        .join("\n");
+        let result = ExecutionResult {
+            output: raw_output.clone(),
+            summary: "tool failed".to_string(),
+            exit_code: 1,
+            terminal_reason: Some("failed".to_string()),
+            model_completed: Some(false),
+            ..Default::default()
+        };
+
+        let rendered = render_run_text_output(&result, None);
+
+        assert_eq!(rendered, raw_output);
+        assert!(rendered.contains(r#"\"completed\":false"#));
+        assert!(rendered.contains("turn.failed"));
     }
 
     #[test]
