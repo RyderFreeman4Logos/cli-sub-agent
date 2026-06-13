@@ -211,6 +211,12 @@ async fn prepare_session_runtime_inner(
         input.session_dir,
         session.turn_count,
     );
+    crate::run_cmd_model_pin::sync_subtree_model_pin_sidecar(
+        input.project_root,
+        &session.meta_session_id,
+        input.session_dir,
+        input.subtree_pin,
+    )?;
     let execution_start_time = chrono::Utc::now();
     let sa_mode =
         std::env::var_os(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)

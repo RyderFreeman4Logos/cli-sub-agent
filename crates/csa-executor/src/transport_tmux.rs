@@ -493,6 +493,10 @@ impl TmuxTransport {
                     (session.genealogy.depth + 1).to_string(),
                 );
                 env.insert("CSA_PROJECT_ROOT".into(), session.project_path.clone());
+                env.insert(
+                    csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY.into(),
+                    "1".into(),
+                );
                 env.insert("CSA_TOOL".into(), "claude-code".into());
                 if let Ok(current_tool) = std::env::var("CSA_TOOL") {
                     env.insert("CSA_PARENT_TOOL".into(), current_tool);

@@ -31,6 +31,8 @@ const CSA_DEPTH_ENV: &str = "CSA_DEPTH";
 #[cfg(feature = "acp")]
 const CSA_PROJECT_ROOT_ENV: &str = "CSA_PROJECT_ROOT";
 #[cfg(feature = "acp")]
+const CSA_INTERNAL_INVOCATION_ENV: &str = csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY;
+#[cfg(feature = "acp")]
 const CSA_TOOL_ENV: &str = "CSA_TOOL";
 #[cfg(feature = "acp")]
 const CSA_IS_SUBPROCESS_ENV: &str = "CSA_IS_SUBPROCESS";
@@ -47,6 +49,7 @@ const CSA_OWNED_ENV_KEYS: &[&str] = &[
     CSA_SESSION_ID_ENV,
     CSA_DEPTH_ENV,
     CSA_PROJECT_ROOT_ENV,
+    CSA_INTERNAL_INVOCATION_ENV,
     CSA_TOOL_ENV,
     CSA_IS_SUBPROCESS_ENV,
     CSA_PARENT_TOOL_ENV,
@@ -212,6 +215,7 @@ impl AcpTransport {
             CSA_PROJECT_ROOT_ENV.to_string(),
             session.project_path.clone(),
         );
+        env.insert(CSA_INTERNAL_INVOCATION_ENV.to_string(), "1".to_string());
         env.insert(CSA_TOOL_ENV.to_string(), self.tool_name.clone());
         // Mark this process as a CSA subprocess so child tools can detect
         // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
@@ -528,6 +532,7 @@ mod tests {
                 CSA_PROJECT_ROOT_ENV.to_string(),
                 "/tmp/spoofed-root".to_string(),
             ),
+            (CSA_INTERNAL_INVOCATION_ENV.to_string(), "0".to_string()),
             (CSA_TOOL_ENV.to_string(), "spoofed-tool".to_string()),
             (CSA_IS_SUBPROCESS_ENV.to_string(), "0".to_string()),
             (
@@ -568,6 +573,10 @@ mod tests {
         assert_eq!(
             env.get(CSA_PROJECT_ROOT_ENV).map(String::as_str),
             Some("/tmp/test")
+        );
+        assert_eq!(
+            env.get(CSA_INTERNAL_INVOCATION_ENV).map(String::as_str),
+            Some("1")
         );
         assert_eq!(
             env.get(CSA_TOOL_ENV).map(String::as_str),

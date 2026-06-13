@@ -118,9 +118,10 @@ pub fn strip_reserved_pin_keys(env: &mut std::collections::HashMap<String, Strin
 /// **if and only if CSA itself decided to pin**. This type is the sole carrier
 /// of that decision: it can only be built from validated CSA state (see
 /// [`SubtreeModelPin::from_validated_spec`], fed by the inherited-pin reader
-/// which already requires the force-ignore marker + `ModelSpec::parse`, or by a
-/// locally resolved spec), and [`SubtreeModelPin::pin_env_entries`] is the ONLY
-/// function in the codebase that emits the pin keys for injection.
+/// which already requires the force-ignore marker, `ModelSpec::parse`, and a
+/// CSA-owned session sidecar check, or by a locally resolved spec), and
+/// [`SubtreeModelPin::pin_env_entries`] is the ONLY function in the codebase
+/// that emits the pin keys for injection.
 ///
 /// Because the pin travels in this typed channel — never inside the generic
 /// `extra_env` map that user/request/config input flows through (those are
@@ -139,8 +140,9 @@ impl SubtreeModelPin {
     ///
     /// `model_spec` MUST originate from validated CSA state: either a spec the
     /// current process resolved itself, or one returned by the inherited-pin
-    /// reader (which gates on the paired force-ignore marker and `ModelSpec`
-    /// well-formedness). A blank spec yields `None` (no pin).
+    /// reader (which gates on the paired force-ignore marker, `ModelSpec`
+    /// well-formedness, and a CSA-owned session sidecar). A blank spec yields
+    /// `None` (no pin).
     ///
     /// The pin always carries `CSA_FORCE_IGNORE_TIER_SETTING=1` because a CSA
     /// subtree pin is, by definition, a force-ignore-tier pin; `no_failover`

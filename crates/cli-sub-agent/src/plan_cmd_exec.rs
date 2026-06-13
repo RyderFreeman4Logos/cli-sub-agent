@@ -144,10 +144,12 @@ async fn spawn_bash(
     // This bash step is a CSA-child boundary because it may run nested `csa`
     // commands. Reserve the protected contract keys before re-applying CSA's
     // trusted startup snapshot, so workflow/user env cannot spoof session
-    // genealogy or subtree pins.
+    // genealogy or subtree pins. A bash step has no session state/sidecar of its
+    // own, so nested plan runs that reuse an inherited session contract must not
+    // advance CSA_DEPTH beyond the depth that contract can validate.
     csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
     cmd.env("CSA_PROJECT_ROOT", project_root)
-        .env("CSA_DEPTH", startup_env.next_depth_string())
+        .env("CSA_DEPTH", bash_step_depth_string(startup_env))
         .env("CSA_INTERNAL_INVOCATION", "1")
         // Every bash step of a weave pattern is pattern-internal: mark it so any
         // `csa run`/`review`/`debate` it invokes (and their nested CSA children)
@@ -160,6 +162,17 @@ async fn spawn_bash(
         .stderr(std::process::Stdio::piped())
         .output()
         .await
+}
+
+fn bash_step_depth_string(startup_env: &StartupSubtreeEnv) -> String {
+    // Root/foreground plan sessions may have no startup depth yet; keep the
+    // historical child marker there. Once a real parent depth exists, preserve
+    // it because the session sidecar/state contract is still the same session.
+    if startup_env.current_depth() > 0 {
+        return startup_env.current_depth().to_string();
+    }
+
+    startup_env.next_depth_string()
 }
 
 fn apply_startup_child_contract_env(

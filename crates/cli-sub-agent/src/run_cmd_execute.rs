@@ -30,7 +30,6 @@ use crate::run_helpers::{
 use crate::run_helpers_branch_guard::{
     BranchGuardRuntime, evaluate_and_emit_refusal, observe_branch_state,
 };
-use crate::session_guard::{PreExecErrorCtx, persist_pre_exec_error_result};
 use crate::startup_env::StartupSubtreeEnv;
 #[path = "run_cmd_execute_post_exec_gate.rs"]
 mod post_exec_gate;
@@ -54,9 +53,9 @@ use post_exec_gate::{
 };
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
-    RunModelSelectionFlags, enforce_run_tier_bypass_gate, resolve_primary_writer_spec_for_run,
-    resolve_run_effective_tier, resolve_run_fallback_tier_name, resolve_run_no_failover,
-    resolve_run_subtree_pin_selection, resolve_run_tier_context, resolve_run_tool_strategy,
+    RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,
+    resolve_run_fallback_tier_name, resolve_run_no_failover, resolve_run_subtree_pin_selection,
+    resolve_run_tier_context, resolve_run_tool_strategy,
 };
 use run_cli_flags::{
     resolve_return_target, warn_deprecated_session_flags,
@@ -65,7 +64,10 @@ use run_cli_flags::{
 use run_context::finalize_prompt_text;
 use run_output::emit_run_result_output;
 use skill_resume::maybe_auto_resume_interrupted_skill_session;
-use tier_guard::{DirectToolTierGuardCtx, enforce_direct_tool_tier_guard};
+use tier_guard::{
+    DirectToolTierGuardCtx, RunPreExecErrorCtx, RunTierBypassPersistCtx,
+    enforce_direct_tool_tier_guard, enforce_run_tier_bypass_gate_or_persist,
+};
 
 use super::attempt::{RunLoopCompletion, RunLoopRequest, execute_run_loop};
 use super::resume::{
@@ -275,6 +277,28 @@ pub(crate) async fn handle_run(
     let thinking = skill_res.thinking;
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
+    let fallback_description = truncate_prompt(&prompt_text, 80);
+    let pre_exec_description = description
+        .as_deref()
+        .or(skill_session_tag.as_deref())
+        .or(Some(fallback_description.as_str()));
+    let pre_exec_parent = if is_fork {
+        session_arg.as_deref().or(parent.as_deref())
+    } else {
+        parent.as_deref()
+    };
+    let explicit_tool_name = match skill_res.tool.as_ref() {
+        Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
+        _ => None,
+    };
+    let pre_exec_error = RunPreExecErrorCtx {
+        project_root: &project_root,
+        is_fork,
+        session_arg: session_arg.as_deref(),
+        description: pre_exec_description,
+        parent: pre_exec_parent,
+        tool_name: explicit_tool_name,
+    };
     let model_selection_flags = RunModelSelectionFlags {
         tool: user_explicit_tool,
         auto_route: auto_route.is_some(),
@@ -287,14 +311,16 @@ pub(crate) async fn handle_run(
         tier: tier.is_some(),
         hint_difficulty: hint_difficulty.is_some() || frontmatter_difficulty.is_some(),
     };
-    enforce_run_tier_bypass_gate(
-        config.as_ref(),
-        &global_config,
-        model_selection_flags,
+    enforce_run_tier_bypass_gate_or_persist(RunTierBypassPersistCtx {
+        config: config.as_ref(),
+        global_config: &global_config,
+        selection_flags: model_selection_flags,
         force,
         force_ignore_tier_setting,
-        model_pin_resolution.inherited_trusted_pin,
-    )?;
+        inherited_trusted_pin: model_pin_resolution.inherited_trusted_pin,
+        pre_exec: pre_exec_error,
+        tier_name: tier.as_deref(),
+    })?;
     if model_selection_flags.model_spec
         && tier_bypass_allowed(
             config.as_ref(),
@@ -312,21 +338,6 @@ pub(crate) async fn handle_run(
     if let Some(c) = config.as_ref() {
         merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
-    let explicit_tool_name = match skill_res.tool.as_ref() {
-        Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
-        _ => None,
-    };
-    let fallback_description = truncate_prompt(&prompt_text, 80);
-    let pre_exec_description = description
-        .as_deref()
-        .or(skill_session_tag.as_deref())
-        .or(Some(fallback_description.as_str()));
-    let pre_exec_parent = if is_fork {
-        session_arg.as_deref().or(parent.as_deref())
-    } else {
-        parent.as_deref()
-    };
-
     let effective_tier = resolve_run_effective_tier(
         config.as_ref(),
         tier.as_deref(),
@@ -343,22 +354,7 @@ pub(crate) async fn handle_run(
         config.as_ref(),
     ) {
         Ok(pair) => pair,
-        Err(err) => {
-            return Err(persist_pre_exec_error_result(PreExecErrorCtx {
-                project_root: &project_root,
-                session_id: if is_fork {
-                    None
-                } else {
-                    session_arg.as_deref()
-                },
-                description: pre_exec_description,
-                parent: pre_exec_parent,
-                tool_name: explicit_tool_name,
-                task_type: Some("run"),
-                tier_name: None,
-                error: err,
-            }));
-        }
+        Err(err) => return Err(pre_exec_error.persist(None, err)),
     };
     skill_res.tool = compounded_tool;
 
@@ -369,12 +365,7 @@ pub(crate) async fn handle_run(
         model_spec: model_spec.as_deref(),
         force_ignore_tier_setting,
         force,
-        project_root: &project_root,
-        is_fork,
-        session_arg: session_arg.as_deref(),
-        pre_exec_description,
-        pre_exec_parent,
-        explicit_tool_name,
+        pre_exec: pre_exec_error,
     })?;
 
     warn_if_tier_without_tool(tier.as_deref(), user_explicit_tool);
@@ -419,20 +410,7 @@ pub(crate) async fn handle_run(
     )
     .map_err(|err| {
         if is_routing_conflict(&err) {
-            persist_pre_exec_error_result(PreExecErrorCtx {
-                project_root: &project_root,
-                session_id: if is_fork {
-                    None
-                } else {
-                    session_arg.as_deref()
-                },
-                description: pre_exec_description,
-                parent: pre_exec_parent,
-                tool_name: explicit_tool_name,
-                task_type: Some("run"),
-                tier_name: effective_tier.as_deref(),
-                error: err,
-            })
+            pre_exec_error.persist(effective_tier.as_deref(), err)
         } else {
             err
         }

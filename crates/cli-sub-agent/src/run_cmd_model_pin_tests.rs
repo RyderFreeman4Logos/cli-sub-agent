@@ -5,8 +5,52 @@ use csa_config::{
     GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig,
 };
 use csa_core::types::{ToolName, ToolSelectionStrategy};
+use std::path::Path;
 
 const PINNED_SPEC: &str = "codex/openai/gpt-5.5/xhigh";
+const TEST_SESSION_ID: &str = "01KPINNEDSESSION0000000000";
+const TEST_SESSION_DIR: &str = "/repo/.csa/sessions/01KPINNEDSESSION0000000000";
+const TEST_PROJECT_ROOT: &str = "/repo";
+
+#[path = "run_cmd_model_pin_sidecar_tests.rs"]
+mod sidecar_tests;
+
+fn trusted_startup_env_for_pinned_session(
+    project_root: &Path,
+    spec: &str,
+    no_failover: bool,
+) -> StartupSubtreeEnv {
+    let session =
+        csa_session::create_session(project_root, Some("pinned subtree"), None, Some("codex"))
+            .expect("create pinned session");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    let typed_pin = resolve_subtree_model_pin(Some(spec), true, no_failover).expect("typed pin");
+    sync_subtree_model_pin_sidecar(
+        project_root,
+        &session.meta_session_id,
+        &session_dir,
+        Some(&typed_pin),
+    )
+    .expect("write trusted pin sidecar");
+
+    StartupSubtreeEnv::from_values(std::collections::HashMap::from([
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY,
+            session.genealogy.depth.saturating_add(1).to_string(),
+        ),
+        (CSA_INTERNAL_INVOCATION_ENV_KEY, "1".to_string()),
+        (CSA_SESSION_ID_ENV_KEY, session.meta_session_id),
+        (CSA_SESSION_DIR_ENV_KEY, session_dir.display().to_string()),
+        (CSA_PROJECT_ROOT_ENV_KEY, project_root.display().to_string()),
+        (CSA_MODEL_SPEC_ENV_KEY, spec.to_string()),
+        (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
+        (
+            CSA_NO_FAILOVER_ENV_KEY,
+            if no_failover { "1" } else { "0" }.to_string(),
+        ),
+    ]))
+}
 
 #[test]
 fn pinned_child_inherits_model_spec_and_drops_tier_routing() {
@@ -128,6 +172,52 @@ fn explicit_child_model_spec_overrides_inherited_pin() {
 }
 
 #[test]
+fn explicit_child_same_model_spec_reuses_inherited_pin() {
+    let resolution = apply_inherited_model_pin(
+        RunModelPinInput {
+            model_spec: Some(PINNED_SPEC.to_string()),
+            tier: None,
+            auto_route: None,
+            force_ignore_tier_setting: true,
+            no_failover: false,
+        },
+        Some(InheritedModelPin {
+            model_spec: PINNED_SPEC.to_string(),
+            force_ignore_tier_setting: true,
+            no_failover: true,
+        }),
+    );
+
+    assert_eq!(resolution.model_spec.as_deref(), Some(PINNED_SPEC));
+    assert!(resolution.force_ignore_tier_setting);
+    assert!(resolution.no_failover);
+    assert!(resolution.inherited_pin.is_some());
+}
+
+#[test]
+fn explicit_child_same_model_spec_with_tier_is_not_inherited() {
+    let resolution = apply_inherited_model_pin(
+        RunModelPinInput {
+            model_spec: Some(PINNED_SPEC.to_string()),
+            tier: Some("tier-4-critical".to_string()),
+            auto_route: None,
+            force_ignore_tier_setting: true,
+            no_failover: false,
+        },
+        Some(InheritedModelPin {
+            model_spec: PINNED_SPEC.to_string(),
+            force_ignore_tier_setting: true,
+            no_failover: true,
+        }),
+    );
+
+    assert_eq!(resolution.model_spec.as_deref(), Some(PINNED_SPEC));
+    assert_eq!(resolution.tier.as_deref(), Some("tier-4-critical"));
+    assert!(!resolution.no_failover);
+    assert!(resolution.inherited_pin.is_none());
+}
+
+#[test]
 fn subtree_env_requires_force_ignore_pin() {
     // Without force_ignore_tier_setting, no typed pin is produced.
     assert!(resolve_subtree_model_pin(Some(PINNED_SPEC), false, true).is_none());
@@ -154,8 +244,12 @@ fn subtree_env_requires_force_ignore_pin() {
 }
 
 #[test]
-fn inherited_pin_from_lookup_requires_child_depth() {
+fn raw_inherited_pin_parser_requires_child_depth() {
     let lookup = |key: &str| match key {
+        CSA_INTERNAL_INVOCATION_ENV_KEY => Some("1".to_string()),
+        CSA_SESSION_ID_ENV_KEY => Some(TEST_SESSION_ID.to_string()),
+        CSA_SESSION_DIR_ENV_KEY => Some(TEST_SESSION_DIR.to_string()),
+        CSA_PROJECT_ROOT_ENV_KEY => Some(TEST_PROJECT_ROOT.to_string()),
         CSA_MODEL_SPEC_ENV_KEY => Some(PINNED_SPEC.to_string()),
         CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY => Some("true".to_string()),
         CSA_NO_FAILOVER_ENV_KEY => Some("yes".to_string()),
@@ -169,12 +263,31 @@ fn inherited_pin_from_lookup_requires_child_depth() {
     assert!(pin.no_failover);
 }
 
+#[test]
+fn raw_inherited_pin_parser_requires_csa_child_contract() {
+    let lookup = |key: &str| match key {
+        CSA_MODEL_SPEC_ENV_KEY => Some(PINNED_SPEC.to_string()),
+        CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY => Some("1".to_string()),
+        CSA_NO_FAILOVER_ENV_KEY => Some("1".to_string()),
+        _ => None,
+    };
+
+    assert!(
+        inherited_model_pin_from_lookup(1, lookup).is_none(),
+        "depth plus pin env is not enough; unrelated sessions must not spoof a CSA child pin"
+    );
+}
+
 /// #1741: an ambient CSA_MODEL_SPEC set in a NON-pinned root (no paired
 /// CSA_FORCE_IGNORE_TIER_SETTING marker) must NOT be honored as a subtree pin —
 /// the child preserves tier auto-routing.
 #[test]
 fn ambient_model_spec_without_force_ignore_is_not_inherited() {
     let lookup = |key: &str| match key {
+        CSA_INTERNAL_INVOCATION_ENV_KEY => Some("1".to_string()),
+        CSA_SESSION_ID_ENV_KEY => Some(TEST_SESSION_ID.to_string()),
+        CSA_SESSION_DIR_ENV_KEY => Some(TEST_SESSION_DIR.to_string()),
+        CSA_PROJECT_ROOT_ENV_KEY => Some(TEST_PROJECT_ROOT.to_string()),
         CSA_MODEL_SPEC_ENV_KEY => Some(PINNED_SPEC.to_string()),
         // No CSA_FORCE_IGNORE_TIER_SETTING — simulates a value leaked into the
         // shell rather than a CSA-injected pin.
@@ -192,6 +305,10 @@ fn ambient_model_spec_without_force_ignore_is_not_inherited() {
 #[test]
 fn malformed_inherited_model_spec_is_ignored() {
     let lookup = |key: &str| match key {
+        CSA_INTERNAL_INVOCATION_ENV_KEY => Some("1".to_string()),
+        CSA_SESSION_ID_ENV_KEY => Some(TEST_SESSION_ID.to_string()),
+        CSA_SESSION_DIR_ENV_KEY => Some(TEST_SESSION_DIR.to_string()),
+        CSA_PROJECT_ROOT_ENV_KEY => Some(TEST_PROJECT_ROOT.to_string()),
         CSA_MODEL_SPEC_ENV_KEY => Some("not-a-valid-spec".to_string()),
         CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY => Some("1".to_string()),
         _ => None,
@@ -203,31 +320,12 @@ fn malformed_inherited_model_spec_is_ignored() {
     );
 }
 
-/// #1741: a CSA-injected pin (paired force-ignore marker + well-formed spec at
-/// child depth) still propagates — the legitimate subtree-pin path stays green.
-#[test]
-fn csa_injected_pin_still_propagates() {
-    // Build the exact child env CSA's trusted typed channel writes for a pinned
-    // subtree, then prove the reader honors it (the legitimate path stays green).
-    let typed_pin = resolve_subtree_model_pin(Some(PINNED_SPEC), true, true).expect("typed pin");
-    let env: std::collections::HashMap<String, String> = typed_pin
-        .pin_env_entries()
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-
-    let lookup = |key: &str| env.get(key).cloned();
-    let pin = inherited_model_pin_from_lookup(1, lookup).expect("CSA-injected pin is honored");
-    assert_eq!(pin.model_spec, PINNED_SPEC);
-    assert!(pin.force_ignore_tier_setting);
-    assert!(pin.no_failover);
-}
-
 #[test]
 fn subtree_prompt_guard_mentions_required_flags() {
     let guard =
         subtree_model_pin_prompt_guard(Some(PINNED_SPEC), true, true).expect("prompt guard");
 
+    assert!(guard.contains("SHOULD omit --model-spec"));
     assert!(guard.contains("--model-spec codex/openai/gpt-5.5/xhigh"));
     assert!(guard.contains("--force-ignore-tier-setting"));
     assert!(guard.contains("--no-failover"));
@@ -238,38 +336,25 @@ fn subtree_prompt_guard_mentions_required_flags() {
 //
 // These exercise `apply_inherited_pin_for_review_debate`, the adapter both
 // `handle_review` and `handle_debate` call before building executor
-// candidates. Env mutation is serialized via TEST_ENV_LOCK and restored by
-// ScopedEnvVarRestore guards (process-wide env).
-
-fn set_subtree_pin_env(
-    spec: &str,
-    force_ignore: bool,
-    no_failover: bool,
-) -> Vec<crate::test_env_lock::ScopedEnvVarRestore> {
-    use crate::test_env_lock::ScopedEnvVarRestore;
-    vec![
-        ScopedEnvVarRestore::set(CSA_MODEL_SPEC_ENV_KEY, spec),
-        ScopedEnvVarRestore::set(
-            CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-            if force_ignore { "1" } else { "0" },
-        ),
-        ScopedEnvVarRestore::set(CSA_NO_FAILOVER_ENV_KEY, if no_failover { "1" } else { "0" }),
-    ]
-}
+// candidates. Trusted inheritance uses a real session plus CSA-owned sidecar;
+// raw env-only fixtures are intentionally not accepted as trusted.
 
 #[test]
 fn review_debate_inherits_env_pin_and_drops_tier() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
         .blocking_lock_owned();
-    let _guards = set_subtree_pin_env(PINNED_SPEC, true, true);
+    let xdg = tempfile::tempdir().expect("xdg tempdir");
+    let _xdg_guard = crate::test_env_lock::ScopedEnvVarRestore::set("XDG_STATE_HOME", xdg.path());
+    let project = tempfile::tempdir().expect("project tempdir");
+    let startup_env = trusted_startup_env_for_pinned_session(project.path(), PINNED_SPEC, true);
 
     let resolved = apply_inherited_pin_for_review_debate(
         None,
         Some("tier-4-critical".to_string()),
         false,
         false,
-        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
+        inherited_model_pin_from_startup(&startup_env),
     );
 
     assert_eq!(resolved.model_spec.as_deref(), Some(PINNED_SPEC));
@@ -284,14 +369,17 @@ fn review_debate_inherited_pin_selects_pinned_model_not_tier_first_tool() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
         .blocking_lock_owned();
-    let _guards = set_subtree_pin_env(PINNED_SPEC, true, true);
+    let xdg = tempfile::tempdir().expect("xdg tempdir");
+    let _xdg_guard = crate::test_env_lock::ScopedEnvVarRestore::set("XDG_STATE_HOME", xdg.path());
+    let project = tempfile::tempdir().expect("project tempdir");
+    let startup_env = trusted_startup_env_for_pinned_session(project.path(), PINNED_SPEC, true);
 
     let resolved = apply_inherited_pin_for_review_debate(
         None,
         Some("tier-4-critical".to_string()),
         false,
         false,
-        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
+        inherited_model_pin_from_startup(&startup_env),
     );
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -333,7 +421,10 @@ fn review_debate_explicit_model_spec_overrides_env_pin() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
         .blocking_lock_owned();
-    let _guards = set_subtree_pin_env(PINNED_SPEC, true, true);
+    let xdg = tempfile::tempdir().expect("xdg tempdir");
+    let _xdg_guard = crate::test_env_lock::ScopedEnvVarRestore::set("XDG_STATE_HOME", xdg.path());
+    let project = tempfile::tempdir().expect("project tempdir");
+    let startup_env = trusted_startup_env_for_pinned_session(project.path(), PINNED_SPEC, true);
     let explicit = "gemini-cli/google/gemini-3.1-pro-preview/xhigh";
 
     let resolved = apply_inherited_pin_for_review_debate(
@@ -341,7 +432,7 @@ fn review_debate_explicit_model_spec_overrides_env_pin() {
         None,
         false,
         false,
-        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
+        inherited_model_pin_from_startup(&startup_env),
     );
 
     assert_eq!(resolved.model_spec.as_deref(), Some(explicit));
@@ -352,18 +443,12 @@ fn review_debate_explicit_model_spec_overrides_env_pin() {
 
 #[test]
 fn review_debate_unpinned_preserves_tier() {
-    let _lock = crate::test_env_lock::TEST_ENV_LOCK
-        .clone()
-        .blocking_lock_owned();
-    use crate::test_env_lock::ScopedEnvVarRestore;
-    let _g = ScopedEnvVarRestore::unset(CSA_MODEL_SPEC_ENV_KEY);
-
     let resolved = apply_inherited_pin_for_review_debate(
         None,
         Some("tier-4-critical".to_string()),
         false,
         false,
-        inherited_model_pin_from_lookup(1, |key| std::env::var(key).ok()),
+        None,
     );
 
     assert!(resolved.model_spec.is_none());
@@ -375,17 +460,12 @@ fn review_debate_unpinned_preserves_tier() {
 
 #[test]
 fn review_debate_depth_zero_ignores_env_pin() {
-    let _lock = crate::test_env_lock::TEST_ENV_LOCK
-        .clone()
-        .blocking_lock_owned();
-    let _guards = set_subtree_pin_env(PINNED_SPEC, true, true);
-
     let resolved = apply_inherited_pin_for_review_debate(
         None,
         Some("tier-4-critical".to_string()),
         false,
         false,
-        inherited_model_pin_from_lookup(0, |key| std::env::var(key).ok()),
+        None,
     );
 
     assert!(resolved.model_spec.is_none());
@@ -445,17 +525,17 @@ fn review_debate_spawn_unpinned_does_not_inject_pin() {
 #[test]
 fn propagate_inherited_subtree_pin_passes_pin_through_at_child_depth() {
     // batch / plan / claude-sub-agent path: the process inherited a pin
-    // (CSA_DEPTH>0 + pin env) and must cascade it to its child unchanged.
+    // (CSA_DEPTH>0 + child contract + trusted sidecar) and must cascade it to
+    // its child unchanged.
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
         .blocking_lock_owned();
-    let mut guards = set_subtree_pin_env(PINNED_SPEC, true, true);
-    guards.push(crate::test_env_lock::ScopedEnvVarRestore::set(
-        "CSA_DEPTH",
-        "2",
-    ));
+    let xdg = tempfile::tempdir().expect("xdg tempdir");
+    let _xdg_guard = crate::test_env_lock::ScopedEnvVarRestore::set("XDG_STATE_HOME", xdg.path());
+    let project = tempfile::tempdir().expect("project tempdir");
+    let startup_env = trusted_startup_env_for_pinned_session(project.path(), PINNED_SPEC, true);
 
-    let inherited = inherited_model_pin_from_lookup(2, |key| std::env::var(key).ok());
+    let inherited = inherited_model_pin_from_startup(&startup_env);
     let pin = inherited_subtree_model_pin(inherited.as_ref())
         .expect("inherited pin must cascade to the child env");
     let entries = pin_entries_map(&pin);
@@ -473,16 +553,6 @@ fn propagate_inherited_subtree_pin_passes_pin_through_at_child_depth() {
 
 #[test]
 fn propagate_inherited_subtree_pin_noop_at_root_depth() {
-    let _lock = crate::test_env_lock::TEST_ENV_LOCK
-        .clone()
-        .blocking_lock_owned();
-    let mut guards = set_subtree_pin_env(PINNED_SPEC, true, true);
-    // Root process (depth 0) never inherits a pin, so nothing cascades.
-    guards.push(crate::test_env_lock::ScopedEnvVarRestore::set(
-        "CSA_DEPTH",
-        "0",
-    ));
-
     assert!(
         inherited_subtree_model_pin(None).is_none(),
         "root-depth must not cascade a pin"
@@ -491,14 +561,6 @@ fn propagate_inherited_subtree_pin_noop_at_root_depth() {
 
 #[test]
 fn propagate_inherited_subtree_pin_noop_when_unpinned() {
-    let _lock = crate::test_env_lock::TEST_ENV_LOCK
-        .clone()
-        .blocking_lock_owned();
-    use crate::test_env_lock::ScopedEnvVarRestore;
-    // Child depth but no pin env → nothing to cascade.
-    let _g1 = ScopedEnvVarRestore::unset(CSA_MODEL_SPEC_ENV_KEY);
-    let _g2 = ScopedEnvVarRestore::set("CSA_DEPTH", "3");
-
     assert!(
         inherited_subtree_model_pin(None).is_none(),
         "unpinned child must not cascade a pin"

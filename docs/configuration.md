@@ -87,6 +87,14 @@ inherited subtree pin. This escape hatch covers `--model-spec`,
 `--force-ignore-tier-setting`/`--force-tier`, and broad direct-routing force
 flags.
 
+Pinned CSA subtrees do not need to repeat bypass flags for nested
+`csa run --skill ...`, `csa review`, or `csa debate` calls. When CSA itself
+spawned the parent with an exact model pin, it passes that pin to children via
+the reserved `CSA_MODEL_SPEC` child contract. Nested workers should omit
+`--model-spec` and `--force-ignore-tier-setting`; repeating the same inherited
+spec is accepted for compatibility, but changing the spec or using an unrelated
+session is still rejected by the configured tier policy.
+
 This field is global-only. A project `.csa/config.toml` cannot grant
 `[tier_policy].allow_force_bypass`; CSA rejects that as a privilege-escalation
 guard because a repository must not be able to authorize its own tier bypass.

@@ -441,11 +441,11 @@ const CLI_TRANSPORT_CSA_OWNED_ENV_VARS: &[&str] = &[
     "CSA_DAEMON_SESSION_DIR",
     csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
 ];
-
 fn inject_cli_session_env(cmd: &mut Command, session: &MetaSessionState) {
     cmd.env("CSA_SESSION_ID", &session.meta_session_id);
     cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
     cmd.env("CSA_PROJECT_ROOT", &session.project_path);
+    cmd.env(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1");
     cmd.env("CSA_TOOL", "claude-code");
     if let Ok(current_tool) = std::env::var("CSA_TOOL") {
         cmd.env("CSA_PARENT_TOOL", current_tool);

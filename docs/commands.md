@@ -27,7 +27,7 @@ csa run --sa-mode false [OPTIONS] [PROMPT]
 | `--model <MODEL>` | Override tool default model |
 | `--thinking <LEVEL>` | Thinking budget: `low`, `medium`, `high`, `xhigh` |
 | `--force` | Emergency direct-routing override. With configured tiers, rejected unless the global tier-policy escape hatch is enabled |
-| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass for direct tool/model routing. Invalid with `--tier`; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass for direct tool/model routing. Invalid with `--tier`; rejected under configured tiers unless the global tier-policy escape hatch is enabled or CSA is continuing the same inherited subtree pin |
 | `--no-failover` | Disable automatic 429 failover |
 | `--wait` | Block-wait for a free slot instead of failing |
 | `--idle-timeout <SECS>` | Kill when no output for N seconds |
@@ -46,6 +46,13 @@ the tier. Exact model and force-bypass flags are reserved
 for emergency use and require `[tier_policy].allow_force_bypass = true` in the
 global config, not project `.csa/config.toml`, unless CSA is continuing an
 already-trusted inherited subtree pin.
+
+Inside a model-pinned CSA subtree, nested workers should invoke
+`csa run --skill ...`, `csa review`, or `csa debate` without repeating
+`--model-spec` or `--force-ignore-tier-setting`. CSA passes the already
+authorized exact pin through `CSA_MODEL_SPEC`; repeating the same inherited
+spec remains accepted for older prompts, but changing the spec is treated as a
+new bypass attempt.
 
 **Examples:**
 
@@ -79,7 +86,7 @@ csa review --sa-mode false [OPTIONS]
 | `--tier <NAME>` | Canonical selector when `[tiers]` is configured |
 | `--hint-difficulty <LABEL>` | Resolve a difficulty label through `[tier_mapping]` when no explicit `--tier` or permitted direct model bypass is set |
 | `--model <MODEL>` | Override model |
-| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled or CSA is continuing the same inherited subtree pin |
 | `--fix` | Review-and-fix mode (apply fixes directly) |
 | `--security-mode <MODE>` | `auto`, `on`, or `off` |
 | `--reviewers <N>` | Number of parallel reviewers (default: 1) |
@@ -117,7 +124,7 @@ csa debate --sa-mode false [OPTIONS] [QUESTION]
 | `--session <ID>` | Resume existing debate session |
 | `--model <MODEL>` | Override model |
 | `--thinking <LEVEL>` | Thinking budget |
-| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled |
+| `--force-ignore-tier-setting` / `--force-tier` | Emergency tier bypass; rejected under configured tiers unless the global tier-policy escape hatch is enabled or CSA is continuing the same inherited subtree pin |
 | `--rounds <N>` | Number of debate rounds (default: 3) |
 | `--timeout <SECS>` | Absolute wall-clock timeout |
 | `--idle-timeout <SECS>` | Kill on output silence |

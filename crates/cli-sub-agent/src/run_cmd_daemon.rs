@@ -125,23 +125,13 @@ impl DaemonSpawnOptions {
     }
 }
 
-/// Guard returned by [`check_daemon_flags`] when running as daemon child.
-///
-/// Holds the stderr rotation guard (if installed) so that stderr.log rotation
-/// remains active for the entire daemon child lifetime.  Must be kept alive
-/// until the process exits.
-///
-/// Call [`finalize`](Self::finalize) explicitly before any `process::exit()`
-/// since `exit()` skips Drop destructors.
+/// Daemon child resources; call [`finalize`](Self::finalize) before `process::exit()`.
 pub(crate) struct DaemonChildGuard {
-    /// Kept alive to maintain stderr rotation; dropped on process exit.
     _stderr_rotation: Option<csa_process::daemon_stderr::StderrRotationGuard>,
 }
 
 impl DaemonChildGuard {
-    /// Explicitly shut down the stderr rotation guard before process exit.
-    ///
-    /// This is a no-op if no stderr rotation was installed.
+    /// Shut down stderr rotation before process exit.
     pub(crate) fn finalize(&mut self) {
         if let Some(guard) = &mut self._stderr_rotation {
             guard.finalize();
@@ -149,11 +139,7 @@ impl DaemonChildGuard {
     }
 }
 
-/// Check daemon flags and either spawn+exit or propagate session ID.
-///
-/// Returns `Ok(guard)` when the caller should proceed with the child path.
-/// The returned guard must be kept alive for the duration of the process.
-/// **Never returns** when daemon spawn succeeds (calls `process::exit(0)`).
+/// Check daemon flags; spawns+exits on parent path, returns a child guard otherwise.
 pub(crate) fn check_daemon_flags(
     subcommand: &str,
     no_daemon: bool,
@@ -177,9 +163,7 @@ pub(crate) fn check_daemon_flags(
             std::env::set_var(csa_core::env::CSA_SESSION_ID_ENV_KEY, sid);
         }
         crate::session_cmds_daemon::seed_daemon_session_env(sid, cd);
-        // Keep ordinary run/review/debate daemon children in sync with the plan-daemon
-        // invariant established by `inject_plan_daemon_session_into_startup_env`: after
-        // daemon bootstrap, StartupSubtreeEnv::session_id() names the executing session.
+        // Keep daemon children aligned with plan-daemon's executing-session invariant.
         *startup_env = daemon_child_startup_env(startup_env, sid, cd)?;
 
         // Install stderr rotation so daemon stderr.log is bounded.
@@ -188,8 +172,7 @@ pub(crate) fn check_daemon_flags(
         // Install panic hook so daemon-completion.toml is written even on panic.
         install_daemon_panic_hook();
 
-        // Spawn a background task that writes daemon-completion.toml on SIGTERM/SIGINT.
-        // This runs inside the tokio runtime (we are inside `#[tokio::main]`).
+        // Write daemon-completion.toml on SIGTERM/SIGINT.
         spawn_daemon_signal_handler();
     }
     Ok(DaemonChildGuard {
@@ -202,17 +185,25 @@ fn daemon_child_startup_env(
     session_id: &str,
     cd: Option<&str>,
 ) -> Result<StartupSubtreeEnv> {
+    // Wrapper sidecar is written later; carry only the already sidecar-validated pin.
+    let trusted_inherited_pin =
+        crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let project_root = crate::pipeline::determine_project_root(cd)?;
     let session_dir = csa_session::get_session_dir(&project_root, session_id)?;
-    Ok(startup_env
+    let mut daemon_startup_env = startup_env
         .clone()
-        .with_current_session(session_id, session_dir.display().to_string()))
+        .with_current_session(session_id, session_dir.display().to_string());
+    if let Some(pin) = trusted_inherited_pin {
+        daemon_startup_env = daemon_startup_env.with_trusted_inherited_model_pin(
+            pin.model_spec,
+            pin.force_ignore_tier_setting,
+            pin.no_failover,
+        );
+    }
+    Ok(daemon_startup_env)
 }
 
-/// Install a custom panic hook that writes `daemon-completion.toml` before
-/// chaining to the default hook (preserving backtrace output).
-///
-/// Exit code 101 is Rust's conventional panic exit code.
+/// Install a panic hook that writes `daemon-completion.toml` before chaining.
 fn install_daemon_panic_hook() {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -221,9 +212,7 @@ fn install_daemon_panic_hook() {
     }));
 }
 
-/// Spawn a tokio task that listens for SIGTERM and SIGINT, writes
-/// `daemon-completion.toml` with the conventional signal exit code
-/// (128 + signal number), then exits.
+/// Persist daemon completion on SIGTERM/SIGINT, then exit with 128+signal.
 fn spawn_daemon_signal_handler() {
     tokio::spawn(async {
         #[cfg(unix)]
@@ -265,10 +254,7 @@ fn spawn_daemon_signal_handler() {
     });
 }
 
-/// Best-effort stderr rotation install for daemon child processes.
-///
-/// Reads `stderr_spool_max_mb` and `spool_keep_rotated` from project config.
-/// Falls back to defaults on any error.
+/// Best-effort daemon stderr rotation using config spool limits when readable.
 fn install_daemon_stderr_rotation(
     session_id: &str,
     cd: Option<&str>,
@@ -313,13 +299,7 @@ fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool, st
     )
 }
 
-/// Fork a daemon child and exit the parent process.
-///
-/// The daemon child will re-exec with `--daemon-child --session-id <ID>`
-/// and the same flags the parent received. stdout.log / stderr.log are
-/// captured in the session directory.
-///
-/// This function **never returns on success** — it calls `process::exit(0)`.
+/// Fork a daemon child, capture logs in its session, and exit parent on success.
 pub(crate) fn spawn_and_exit(
     subcommand: &str,
     cd: Option<&str>,
@@ -337,10 +317,7 @@ pub(crate) fn spawn_and_exit(
     persist_daemon_placeholder_session(&project_root, &session_dir, &sid, subcommand)?;
     let prompt_input_file = write_daemon_prompt_input_if_needed(&session_dir, prompt_input)?;
 
-    // Collect args to forward: everything after the subcommand verb.
-    // spawn_daemon() injects '<subcommand> --daemon-child --session-id <ID>' itself.
-    // We find the subcommand by position (not substring) to handle global flags
-    // that may appear before the subcommand (e.g. `csa --format json review ...`).
+    // Forward args after the subcommand verb; spawn_daemon injects child/session flags.
     let all_args: Vec<String> = std::env::args().collect();
     let forwarded_args = build_forwarded_args(
         &all_args,

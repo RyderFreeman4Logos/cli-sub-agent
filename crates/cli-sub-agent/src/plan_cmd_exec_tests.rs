@@ -3,17 +3,91 @@
 //! Split out of plan_cmd_exec.rs to stay under the monolith token budget.
 
 use super::*;
-use crate::test_env_lock::TEST_ENV_LOCK;
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 
 fn startup_env_with_pin(depth: u32) -> crate::startup_env::StartupSubtreeEnv {
     crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
         (csa_core::env::CSA_DEPTH_ENV_KEY, depth.to_string()),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            "01KPINNEDSESSION0000000000".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            "/repo/.csa/sessions/01KPINNEDSESSION0000000000".to_string(),
+        ),
+        (csa_core::env::CSA_PROJECT_ROOT_ENV_KEY, "/repo".to_string()),
         (csa_core::env::CSA_MODEL_SPEC_ENV_KEY, PIN_SPEC.to_string()),
         (
             csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
             "1".to_string(),
         ),
         (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
+    ]))
+}
+
+fn trusted_startup_env_for_pinned_plan_session(
+    project_root: &std::path::Path,
+    model_spec: &str,
+    no_failover: bool,
+) -> crate::startup_env::StartupSubtreeEnv {
+    let session = csa_session::create_session(
+        project_root,
+        Some("plan pinned startup"),
+        None,
+        Some("codex"),
+    )
+    .expect("create pinned plan session");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    let pin =
+        crate::run_cmd_model_pin::resolve_subtree_model_pin(Some(model_spec), true, no_failover)
+            .expect("typed pin");
+    crate::run_cmd_model_pin::sync_subtree_model_pin_sidecar(
+        project_root,
+        &session.meta_session_id,
+        &session_dir,
+        Some(&pin),
+    )
+    .expect("write trusted pin sidecar");
+
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (
+            csa_core::env::CSA_DEPTH_ENV_KEY,
+            session.genealogy.depth.saturating_add(1).to_string(),
+        ),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            session.meta_session_id,
+        ),
+        (
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            session_dir.display().to_string(),
+        ),
+        (
+            csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
+            project_root.display().to_string(),
+        ),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+            model_spec.to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
+            if no_failover { "1" } else { "0" }.to_string(),
+        ),
     ]))
 }
 
@@ -201,6 +275,21 @@ fn recorded_env(
         .collect()
 }
 
+fn startup_env_from_recorded_env(
+    env: &std::collections::HashMap<String, Option<String>>,
+) -> crate::startup_env::StartupSubtreeEnv {
+    let mut values = HashMap::new();
+    for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
+        if let Some(Some(value)) = env.get(*key) {
+            values.insert(*key, value.clone());
+        }
+    }
+    if let Some(Some(value)) = env.get(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY) {
+        values.insert(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY, value.clone());
+    }
+    crate::startup_env::StartupSubtreeEnv::from_values(values)
+}
+
 /// #1741 round-6: a bash step is marked nested (CSA_DEPTH set) and inherits
 /// the parent env. When the parent is ROOT (depth 0) but ambient
 /// SUBTREE_PIN_ENV_KEYS are present (a user-controlled spoof attempt), the
@@ -212,6 +301,10 @@ fn spawn_bash_env_strips_ambient_subtree_pin_when_not_legitimately_inherited() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let original: Vec<(&str, Option<String>)> = [
         "CSA_DEPTH",
+        csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+        csa_core::env::CSA_SESSION_ID_ENV_KEY,
+        csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+        csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
         csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
         csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
         csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
@@ -224,6 +317,16 @@ fn spawn_bash_env_strips_ambient_subtree_pin_when_not_legitimately_inherited() {
     unsafe {
         // Root depth: any ambient pin is NOT a CSA-injected inherited pin.
         std::env::set_var("CSA_DEPTH", "0");
+        std::env::set_var(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1");
+        std::env::set_var(
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            "01KPINNEDSESSION0000000000",
+        );
+        std::env::set_var(
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            "/repo/.csa/sessions/01KPINNEDSESSION0000000000",
+        );
+        std::env::set_var(csa_core::env::CSA_PROJECT_ROOT_ENV_KEY, "/repo");
         std::env::set_var(csa_core::env::CSA_MODEL_SPEC_ENV_KEY, PIN_SPEC);
         std::env::set_var(csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1");
         std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
@@ -257,39 +360,35 @@ fn spawn_bash_env_strips_ambient_subtree_pin_when_not_legitimately_inherited() {
     }
 }
 
-/// #1741 round-6: a legitimately-propagated subtree pin (this process is a
-/// genuine pinned child: CSA_DEPTH > 0 + well-formed pin in env, as written
-/// by the parent's trusted typed channel) MUST still cascade to the nested
-/// bash step. The strip-then-reapply path re-writes the pin keys from the
-/// typed channel, so legitimate propagation is preserved.
+/// #1741 round-6/#2097: a legitimately-propagated subtree pin (this process is
+/// a genuine pinned child: CSA_DEPTH > 0 + child contract backed by persisted
+/// session state + matching subtree-model-pin.toml sidecar) MUST still cascade
+/// to the nested bash step. The strip-then-reapply path re-writes the pin keys
+/// from the typed channel, so legitimate propagation is preserved.
 #[test]
 fn spawn_bash_env_reapplies_legitimately_inherited_subtree_pin() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let original: Vec<(&str, Option<String>)> = [
-        "CSA_DEPTH",
-        csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-        csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-        csa_core::env::CSA_NO_FAILOVER_ENV_KEY,
-    ]
-    .iter()
-    .map(|k| (*k, std::env::var(k).ok()))
-    .collect();
-
-    // SAFETY: test-scoped env mutation, serialized by TEST_ENV_LOCK.
-    unsafe {
-        // Child depth + well-formed pin + paired force-ignore marker =
-        // a genuine CSA-injected inherited pin.
-        std::env::set_var("CSA_DEPTH", "2");
-        std::env::set_var(csa_core::env::CSA_MODEL_SPEC_ENV_KEY, PIN_SPEC);
-        std::env::set_var(csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1");
-        std::env::set_var(csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1");
-    }
-
-    let startup_env = startup_env_with_pin(2);
+    let xdg = tempfile::tempdir().expect("xdg tempdir");
+    let _xdg_guard = ScopedEnvVarRestore::set("XDG_STATE_HOME", xdg.path());
+    let project = tempfile::tempdir().expect("project tempdir");
+    let startup_env = trusted_startup_env_for_pinned_plan_session(project.path(), PIN_SPEC, true);
     let mut cmd = tokio::process::Command::new("bash");
+    cmd.env(csa_core::env::CSA_PROJECT_ROOT_ENV_KEY, project.path())
+        .env(
+            csa_core::env::CSA_DEPTH_ENV_KEY,
+            bash_step_depth_string(&startup_env),
+        )
+        .env(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1")
+        .env(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY, "1");
     apply_startup_child_contract_env(&mut cmd, &startup_env);
     let env = recorded_env(&cmd);
 
+    assert_eq!(
+        env.get(csa_core::env::CSA_DEPTH_ENV_KEY),
+        Some(&Some(startup_env.current_depth().to_string())),
+        "plan bash reuses the same trusted session sidecar/state contract, so \
+         it must not advance CSA_DEPTH beyond that session's startup depth"
+    );
     assert_eq!(
         env.get(csa_core::env::CSA_MODEL_SPEC_ENV_KEY),
         Some(&Some(PIN_SPEC.to_string())),
@@ -306,15 +405,12 @@ fn spawn_bash_env_reapplies_legitimately_inherited_subtree_pin() {
         "no-failover must cascade when the inherited pin carries it"
     );
 
-    // SAFETY: restore original env values.
-    unsafe {
-        for (key, value) in original {
-            match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
+    let nested_startup_env = startup_env_from_recorded_env(&env);
+    let inherited = crate::run_cmd_model_pin::inherited_model_pin_from_startup(&nested_startup_env)
+        .expect("plan bash env must still validate against the trusted sidecar");
+    assert_eq!(inherited.model_spec, PIN_SPEC);
+    assert!(inherited.force_ignore_tier_setting);
+    assert!(inherited.no_failover);
 }
 
 /// #1750 round-4: foreground nested plan bash steps are CSA-child boundaries.
