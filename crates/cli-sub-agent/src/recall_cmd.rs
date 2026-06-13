@@ -3,7 +3,7 @@
 #[path = "recall_cmd_keyword.rs"]
 mod keyword;
 #[path = "recall_cmd_pages.rs"]
-mod pages;
+pub(crate) mod pages;
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, IsTerminal, Write};
@@ -17,7 +17,7 @@ use tracing::debug;
 use crate::cli::RecallCommands;
 
 const HISTORY_FILE_NAME: &str = "main-agent-history.jsonl";
-const OUTPUT_GUARD_BYTES: usize = 50 * 1024;
+pub(crate) const OUTPUT_GUARD_BYTES: usize = 50 * 1024;
 const RECENT_DEDUP_WINDOW: usize = 10;
 const SEARCH_CONTEXT_LINES: usize = 2;
 
@@ -590,13 +590,17 @@ fn recent_duplicate_exists(history_path: &Path, sid: &str) -> Result<bool> {
 }
 
 fn output_guard_message(session_id: &str, content: &str) -> Option<String> {
+    output_guard_message_for_command(&format!("csa recall read {session_id}"), content)
+}
+
+pub(crate) fn output_guard_message_for_command(command: &str, content: &str) -> Option<String> {
     if content.len() < OUTPUT_GUARD_BYTES {
         return None;
     }
 
     let size_kb = content.len().div_ceil(1024);
     Some(format!(
-        "OUTPUT_TOO_LARGE: {size_kb}KB. Use: csa recall read {session_id} | tail -100"
+        "OUTPUT_TOO_LARGE: {size_kb}KB. Use: {command} | tail -100"
     ))
 }
 

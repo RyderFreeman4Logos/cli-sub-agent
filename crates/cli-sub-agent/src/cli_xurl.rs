@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 //! CLI subcommand for xurl thread queries.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Subcommand;
 
@@ -13,9 +15,21 @@ pub enum XurlCommands {
         #[arg(long)]
         keyword: Option<String>,
 
-        /// Filter by provider (amp, codex, claude, gemini, pi, opencode)
+        /// Filter by provider (amp, codex, claude, gemini, pi, opencode, hermes)
         #[arg(long)]
         provider: Option<String>,
+
+        /// Working directory used by the Hermes provider (defaults to process cwd).
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        /// Hermes home directory used by the Hermes provider (defaults to HERMES_HOME or ~/.hermes).
+        #[arg(long, value_name = "PATH")]
+        hermes_home: Option<PathBuf>,
+
+        /// Hermes profile used by the Hermes provider.
+        #[arg(long)]
+        hermes_profile: Option<String>,
 
         /// Maximum results per provider
         #[arg(long, default_value = "20")]
@@ -67,6 +81,22 @@ pub enum XurlCommands {
         /// With `--list` / `--keyword`: cap how many results to return.
         #[arg(long, default_value = "10")]
         limit: usize,
+
+        /// Provider-specific recall backend. Currently supports `hermes`.
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Working directory used by the Hermes provider (defaults to process cwd).
+        #[arg(long, value_name = "PATH")]
+        cwd: Option<PathBuf>,
+
+        /// Hermes home directory used by the Hermes provider (defaults to HERMES_HOME or ~/.hermes).
+        #[arg(long, value_name = "PATH")]
+        hermes_home: Option<PathBuf>,
+
+        /// Hermes profile used by the Hermes provider.
+        #[arg(long)]
+        hermes_profile: Option<String>,
     },
 }
 
@@ -88,7 +118,7 @@ fn parse_provider(s: &str) -> Result<xurl_core::ProviderKind> {
         "pi" => Ok(xurl_core::ProviderKind::Pi),
         "opencode" => Ok(xurl_core::ProviderKind::Opencode),
         _ => anyhow::bail!(
-            "Unknown provider: '{s}'. Valid: amp, codex, claude, gemini, pi, opencode"
+            "Unknown provider: '{s}'. Valid: amp, codex, claude, gemini, pi, opencode, hermes"
         ),
     }
 }
