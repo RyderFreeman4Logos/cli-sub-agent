@@ -1,7 +1,7 @@
 use super::*;
 use csa_session::{
-    SessionPhase, SessionResult, ToolState, create_session, get_session_root, save_result,
-    save_session,
+    SessionPhase, SessionResult, ToolState, create_session, get_session_dir, get_session_root,
+    save_result, save_session,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -75,6 +75,9 @@ impl Drop for CurrentDirGuard {
         std::env::set_current_dir(&self.original).expect("restore current dir");
     }
 }
+
+#[path = "mcp_server_model_pin_tests.rs"]
+mod model_pin_tests;
 
 fn seed_retired_runtime_session(project_root: &Path) -> (String, PathBuf) {
     std::fs::create_dir_all(project_root).expect("create project root");
@@ -458,64 +461,6 @@ async fn mcp_gc_reap_runtime_protects_hosting_session_runtime() {
     );
 }
 
-#[test]
-fn mcp_model_pin_resolution_inherits_server_startup_pin() {
-    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
-        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
-        (
-            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-            "codex/openai/gpt-5.5/xhigh".to_string(),
-        ),
-        (
-            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-            "1".to_string(),
-        ),
-        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
-    ]));
-
-    let resolution = resolve_mcp_model_pin(None, Some("quality"), false, &startup_env);
-
-    assert_eq!(
-        resolution.model_spec.as_deref(),
-        Some("codex/openai/gpt-5.5/xhigh")
-    );
-    assert_eq!(resolution.tier, None);
-    assert!(resolution.force_ignore_tier_setting);
-    assert!(resolution.no_failover);
-    assert!(resolution.inherited_trusted_pin);
-}
-
-#[test]
-fn mcp_model_pin_resolution_keeps_explicit_model_spec_over_inherited_pin() {
-    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
-        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
-        (
-            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-            "codex/openai/gpt-5.5/xhigh".to_string(),
-        ),
-        (
-            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-            "1".to_string(),
-        ),
-    ]));
-
-    let resolution = resolve_mcp_model_pin(
-        Some("gemini-cli/google/gemini-2.5-pro/high"),
-        Some("quality"),
-        false,
-        &startup_env,
-    );
-
-    assert_eq!(
-        resolution.model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-2.5-pro/high")
-    );
-    assert_eq!(resolution.tier.as_deref(), Some("quality"));
-    assert!(!resolution.force_ignore_tier_setting);
-    assert!(!resolution.no_failover);
-    assert!(!resolution.inherited_trusted_pin);
-}
-
 #[tokio::test]
 async fn mcp_run_rejects_model_spec_when_project_tiers_exist_and_policy_is_default() {
     let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
@@ -549,59 +494,6 @@ models = ["codex/openai/gpt-5/high"]
     assert!(message.contains("Tier bypass is disabled"));
     assert!(message.contains("--model-spec"));
     assert!(message.contains("[tier_policy].allow_force_bypass"));
-}
-
-#[tokio::test]
-async fn mcp_run_allows_inherited_model_spec_when_project_tiers_exist_and_policy_is_default() {
-    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
-    let project = tempdir().expect("project tempdir");
-    let config_dir = project.path().join(".csa");
-    std::fs::create_dir_all(&config_dir).expect("create project config dir");
-    std::fs::write(
-        config_dir.join("config.toml"),
-        r#"
-[tiers.quality]
-description = "quality"
-models = ["codex/openai/gpt-5.5/xhigh"]
-"#,
-    )
-    .expect("write project config");
-
-    let xdg = tempdir().expect("xdg tempdir");
-    let empty_path = tempdir().expect("empty PATH tempdir");
-    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
-    let _path_guard = EnvVarGuard::set("PATH", empty_path.path());
-    let _cwd_guard = CurrentDirGuard::set(project.path());
-    let startup_env = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
-        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
-        (
-            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
-            "codex/openai/gpt-5.5/xhigh".to_string(),
-        ),
-        (
-            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
-            "1".to_string(),
-        ),
-        (csa_core::env::CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
-    ]));
-
-    let response = handle_run_tool(
-        serde_json::json!({
-            "prompt": "hello",
-            "tier": "quality"
-        }),
-        &startup_env,
-    )
-    .await
-    .expect("inherited trusted pin should bypass the tier gate before tool availability");
-
-    let text = response
-        .get("content")
-        .and_then(|content| content.get(0))
-        .and_then(|entry| entry.get("text"))
-        .and_then(|text| text.as_str())
-        .expect("response text");
-    assert!(text.contains("Tool 'codex' is not installed"));
 }
 
 #[tokio::test]

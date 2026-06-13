@@ -40,3 +40,21 @@ pub(super) fn explicit_review_tool(args: &ReviewArgs) -> Option<csa_core::types:
             .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
     })
 }
+
+pub(super) fn persist_tier_bypass_pre_exec_error(
+    args: &ReviewArgs,
+    project_root: &std::path::Path,
+    effective_tier: Option<&str>,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    crate::session_guard::persist_pre_exec_error_result(crate::session_guard::PreExecErrorCtx {
+        project_root,
+        session_id: review_pre_exec_session_id(args),
+        description: Some("review"),
+        parent: None,
+        tool_name: explicit_review_tool(args).map(|tool| tool.as_str()),
+        task_type: Some("review"),
+        tier_name: effective_tier,
+        error: err,
+    })
+}

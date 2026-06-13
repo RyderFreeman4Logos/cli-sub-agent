@@ -1,7 +1,7 @@
+use super::routing::enforce_run_tier_bypass_gate;
 use super::{
-    RunModelSelectionFlags, enforce_run_tier_bypass_gate, finalize_prompt_text,
-    resolve_primary_writer_spec_for_run, resolve_run_no_failover,
-    resolve_run_subtree_pin_selection, resolve_run_tier_context,
+    RunModelSelectionFlags, finalize_prompt_text, resolve_primary_writer_spec_for_run,
+    resolve_run_no_failover, resolve_run_subtree_pin_selection, resolve_run_tier_context,
 };
 use crate::run_cmd_model_pin::{InheritedModelPin, RunModelPinInput, apply_inherited_model_pin};
 use crate::run_cmd_tool_selection::{resolve_skill_and_prompt, resolve_tool_by_strategy};
@@ -283,8 +283,7 @@ fn finalize_prompt_text_uses_subprocess_preamble_when_only_session_id_is_set() {
     let mut sandbox = ScopedSessionSandbox::new_blocking(&tmp);
     sandbox.track_env("CSA_DEPTH");
     sandbox.track_env("CSA_SESSION_ID");
-    // Treat CSA_SESSION_ID alone as subprocess so detached child contexts still avoid the
-    // unavailable /commit slash-command path.
+    // CSA_SESSION_ID alone means detached subprocess; avoid unavailable /commit slash path.
     // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
     unsafe {
         std::env::remove_var("CSA_DEPTH");

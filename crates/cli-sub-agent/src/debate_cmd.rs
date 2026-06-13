@@ -102,6 +102,21 @@ pub(crate) async fn handle_debate(
             thinking: args.thinking.is_some(),
         },
         inherited_trusted_pin,
+    })
+    .map_err(|err| {
+        crate::session_guard::persist_pre_exec_error_result(crate::session_guard::PreExecErrorCtx {
+            project_root: &project_root,
+            session_id: args.session.as_deref(),
+            description: Some("debate"),
+            parent: None,
+            tool_name: match args.tool.as_ref() {
+                Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
+                Some(ToolArg::Auto | ToolArg::AnyAvailable | ToolArg::Alias(_)) | None => None,
+            },
+            task_type: Some("debate"),
+            tier_name: args.tier.as_deref(),
+            error: err,
+        })
     })?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
 

@@ -141,7 +141,7 @@ async fn run_preflight_fixture(project_root: &Path, no_preflight: bool) -> anyho
 }
 
 #[tokio::test]
-async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
+async fn handle_run_persists_model_spec_tier_bypass_pre_exec_result() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let config = run_config_with_tier(
@@ -226,9 +226,27 @@ async fn handle_run_rejects_model_spec_tier_bypass_before_session_creation() {
     );
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "tier bypass gate should persist a structured pre-exec failure session"
+    );
+    let session_id = &sessions[0].meta_session_id;
+    let result = csa_session::load_result(project_dir.path(), session_id)
+        .expect("pre-exec failure should write result.toml")
+        .expect("result.toml should exist");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.tool, "unknown");
     assert!(
-        sessions.is_empty(),
-        "tier bypass gate should reject before session creation"
+        result.summary.contains("Tier bypass is disabled"),
+        "summary should name tier bypass policy: {}",
+        result.summary
+    );
+    assert!(
+        result.summary.contains("Refused flags: --model-spec"),
+        "summary should name refused flags: {}",
+        result.summary
     );
 }
 

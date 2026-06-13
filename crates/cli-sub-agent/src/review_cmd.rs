@@ -72,6 +72,8 @@ mod reviewers;
 mod session_fix;
 #[path = "review_cmd_subtree_pin.rs"]
 mod subtree_pin;
+#[path = "review_cmd_tier_gate.rs"]
+mod tier_gate;
 #[cfg(test)]
 pub(crate) use bug_class_pipeline::try_extract_recurring_bug_class_skills;
 #[cfg(test)]
@@ -139,18 +141,14 @@ pub(crate) async fn handle_review(
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
     let (effective_tier, args_tool) = resolve_review_effective_tier(&args, config.as_ref())?;
     let selection = session_fix::resolve_selection_tool(&args, &project_root, args_tool)?;
-    crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
-        project_config: config.as_ref(),
-        global_config: &global_config,
-        flags: crate::run_helpers::TierBypassGateFlags {
-            model_spec: args.model_spec.is_some(),
-            force: false,
-            force_ignore_tier_setting: args.force_ignore_tier_setting,
-            model: args.model.is_some(),
-            thinking: args.thinking.is_some(),
-        },
+    tier_gate::enforce_review_tier_bypass_gate(
+        &args,
+        config.as_ref(),
+        &global_config,
         inherited_trusted_pin,
-    })?;
+        effective_tier.as_deref(),
+        &project_root,
+    )?;
     validate_review_direct_tool_tier_restriction(
         selection.direct_tool_requested,
         config.as_ref(),

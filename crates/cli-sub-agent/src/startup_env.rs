@@ -41,6 +41,17 @@ pub(crate) struct StartupSubtreeEnv {
     raw_model_spec: Option<String>,
     raw_force_ignore_tier_setting: Option<String>,
     raw_no_failover: Option<String>,
+    // In-memory only: set after the current startup sidecar/session contract
+    // has already validated an inherited pin, before daemon wrappers rewrite
+    // StartupSubtreeEnv to the preassigned wrapper session.
+    trusted_inherited_model_pin: Option<TrustedInheritedModelPin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrustedInheritedModelPin {
+    model_spec: String,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
 }
 
 #[cfg(test)]
@@ -67,6 +78,7 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     raw_model_spec: None,
     raw_force_ignore_tier_setting: None,
     raw_no_failover: None,
+    trusted_inherited_model_pin: None,
 };
 
 impl StartupSubtreeEnv {
@@ -135,6 +147,7 @@ impl StartupSubtreeEnv {
             raw_model_spec,
             raw_force_ignore_tier_setting,
             raw_no_failover,
+            trusted_inherited_model_pin: None,
         }
     }
 
@@ -161,6 +174,7 @@ impl StartupSubtreeEnv {
         self.raw_session_id = self.session_id.clone();
         self.session_dir = non_empty_str(session_dir.as_ref());
         self.raw_session_dir = self.session_dir.clone();
+        self.trusted_inherited_model_pin = None;
         if let Some(previous_session_id) = previous_session_id
             && self.session_id.as_deref() != Some(previous_session_id.as_str())
         {
@@ -170,6 +184,30 @@ impl StartupSubtreeEnv {
             self.raw_parent_session_dir = previous_session_dir;
         }
         self
+    }
+
+    pub(crate) fn with_trusted_inherited_model_pin(
+        mut self,
+        model_spec: String,
+        force_ignore_tier_setting: bool,
+        no_failover: bool,
+    ) -> Self {
+        self.trusted_inherited_model_pin = Some(TrustedInheritedModelPin {
+            model_spec,
+            force_ignore_tier_setting,
+            no_failover,
+        });
+        self
+    }
+
+    pub(crate) fn trusted_inherited_model_pin(&self) -> Option<(&str, bool, bool)> {
+        self.trusted_inherited_model_pin.as_ref().map(|pin| {
+            (
+                pin.model_spec.as_str(),
+                pin.force_ignore_tier_setting,
+                pin.no_failover,
+            )
+        })
     }
 
     pub(crate) fn apply_to_child_env(&self, env: &mut HashMap<String, String>) {
@@ -250,7 +288,6 @@ impl StartupSubtreeEnv {
         self.parent_session.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn parent_session_dir(&self) -> Option<&str> {
         self.parent_session_dir.as_deref()
     }
@@ -307,321 +344,5 @@ pub(crate) fn is_truthy_env_value(raw: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_env_lock::ScopedEnvVarRestore;
-    use serial_test::serial;
-
-    #[test]
-    fn startup_subtree_env_parses_values_without_process_env() {
-        let values = HashMap::from([
-            (
-                CSA_SESSION_ID_ENV_KEY,
-                "01KTESTSESSION0000000000".to_string(),
-            ),
-            (CSA_DEPTH_ENV_KEY, "3".to_string()),
-            (CSA_PROJECT_ROOT_ENV_KEY, "/repo".to_string()),
-            (CSA_SESSION_DIR_ENV_KEY, "/repo/.csa/session".to_string()),
-            (
-                CSA_PARENT_SESSION_ENV_KEY,
-                "01KPARENTSESSION00000000".to_string(),
-            ),
-            (
-                CSA_PARENT_SESSION_DIR_ENV_KEY,
-                "/repo/.csa/parent".to_string(),
-            ),
-            (CSA_INTERNAL_INVOCATION_ENV_KEY, "yes".to_string()),
-            (
-                CSA_MODEL_SPEC_ENV_KEY,
-                "codex/openai/gpt-5.5/xhigh".to_string(),
-            ),
-            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
-            (CSA_NO_FAILOVER_ENV_KEY, "true".to_string()),
-        ]);
-
-        let startup = StartupSubtreeEnv::from_values(values);
-
-        assert_eq!(startup.session_id(), Some("01KTESTSESSION0000000000"));
-        assert_eq!(startup.current_depth(), 3);
-        assert_eq!(startup.next_depth_string(), "4");
-        assert_eq!(startup.project_root(), Some("/repo"));
-        assert_eq!(startup.session_dir(), Some("/repo/.csa/session"));
-        assert_eq!(startup.parent_session(), Some("01KPARENTSESSION00000000"));
-        assert_eq!(startup.parent_session_dir(), Some("/repo/.csa/parent"));
-        assert!(startup.internal_invocation());
-        assert_eq!(startup.model_spec(), Some("codex/openai/gpt-5.5/xhigh"));
-        assert!(startup.force_ignore_tier_setting());
-        assert!(startup.no_failover());
-    }
-
-    #[test]
-    fn startup_subtree_env_reemits_only_captured_keys() {
-        let values = HashMap::from([
-            (CSA_DEPTH_ENV_KEY, "0".to_string()),
-            (CSA_PROJECT_ROOT_ENV_KEY, "/repo".to_string()),
-            (CSA_INTERNAL_INVOCATION_ENV_KEY, "1".to_string()),
-            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "false".to_string()),
-            (CSA_NO_FAILOVER_ENV_KEY, "0".to_string()),
-        ]);
-
-        let startup = StartupSubtreeEnv::from_values(values);
-        let child_env = startup.to_child_env_vars();
-
-        assert_eq!(
-            child_env,
-            vec![
-                (CSA_DEPTH_ENV_KEY.to_string(), "0".to_string()),
-                (CSA_PROJECT_ROOT_ENV_KEY.to_string(), "/repo".to_string()),
-                (CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(), "1".to_string()),
-            ]
-        );
-        assert!(!startup.force_ignore_tier_setting());
-        assert!(!startup.no_failover());
-    }
-
-    #[test]
-    fn pattern_internal_marker_is_captured_and_reemitted_to_children() {
-        // A CSA process that inherited CSA_PATTERN_INTERNAL re-emits it to its
-        // own children, so by induction the marker reaches depth>=2 nested CSA
-        // sessions (#1847).
-        let startup = StartupSubtreeEnv::from_values(HashMap::from([
-            (CSA_DEPTH_ENV_KEY, "1".to_string()),
-            (CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string()),
-        ]));
-
-        assert!(startup.pattern_internal());
-        assert!(
-            startup
-                .to_child_env_vars()
-                .contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
-            "captured pattern-internal marker must propagate to the child env"
-        );
-    }
-
-    #[test]
-    fn pattern_internal_marker_absent_is_not_emitted() {
-        // Interactive callers (no marker) must NOT propagate it (#1847 (iii)).
-        let startup =
-            StartupSubtreeEnv::from_values(HashMap::from([(CSA_DEPTH_ENV_KEY, "0".to_string())]));
-
-        assert!(!startup.pattern_internal());
-        assert!(
-            !startup
-                .to_child_env_vars()
-                .iter()
-                .any(|(key, _)| key == CSA_PATTERN_INTERNAL_ENV_KEY)
-        );
-    }
-
-    #[test]
-    fn pattern_internal_marker_survives_two_nested_csa_hops() {
-        // Canonical #1847 depth-2 chain: `csa plan run` sets the marker in the
-        // bash step env -> `csa run --skill mktd` (depth 1) -> `csa debate`
-        // (depth 2). Compose the capture->re-emit cycle twice and assert the
-        // marker still reaches the depth-2 grandchild, justifying mktd dropping
-        // its redundant per-step `--no-error-marker-scan`. The depth-1 base case
-        // (plan-run bash step exposing the marker) is covered by
-        // `spawn_bash_step_exposes_pattern_internal_marker` in plan_cmd_exec.
-
-        // A child only learns the marker if its parent actually emitted it, so
-        // each hop's inheritance genuinely depends on the prior re-emission.
-        fn captured_from_parent(
-            parent_child_env: &[(String, String)],
-            depth: &str,
-        ) -> HashMap<&'static str, String> {
-            let mut values = HashMap::from([(CSA_DEPTH_ENV_KEY, depth.to_string())]);
-            if parent_child_env
-                .iter()
-                .any(|(key, value)| key == CSA_PATTERN_INTERNAL_ENV_KEY && value == "1")
-            {
-                values.insert(CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string());
-            }
-            values
-        }
-
-        // Depth 1: `csa run --skill mktd` inherits the marker from the plan-run
-        // bash step env, then re-emits it to the mktd worker it spawns.
-        let depth1 = StartupSubtreeEnv::from_values(HashMap::from([
-            (CSA_DEPTH_ENV_KEY, "1".to_string()),
-            (CSA_PATTERN_INTERNAL_ENV_KEY, "1".to_string()),
-        ]));
-        let depth1_child_env = depth1.to_child_env_vars();
-        assert!(
-            depth1_child_env.contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
-            "depth-1 csa process must re-emit the marker to its child"
-        );
-
-        // Depth 2: `csa debate`, spawned from inside mktd, captures that
-        // re-emitted env and must still see the marker (and keep propagating).
-        let depth2 = StartupSubtreeEnv::from_values(captured_from_parent(&depth1_child_env, "2"));
-        assert_eq!(depth2.current_depth(), 2);
-        assert!(
-            depth2.pattern_internal(),
-            "depth-2 csa debate must inherit the pattern-internal marker"
-        );
-        assert!(
-            depth2
-                .to_child_env_vars()
-                .contains(&(CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string())),
-            "marker must keep propagating beyond depth 2"
-        );
-    }
-
-    #[test]
-    fn startup_subtree_env_child_contract_env_reemits_identity_parent_and_trusted_pin() {
-        let values = HashMap::from([
-            (CSA_SESSION_ID_ENV_KEY, "01KSESSION".to_string()),
-            (CSA_SESSION_DIR_ENV_KEY, "/repo/session".to_string()),
-            (CSA_PARENT_SESSION_ENV_KEY, "01KPARENT".to_string()),
-            (CSA_PARENT_SESSION_DIR_ENV_KEY, "/repo/parent".to_string()),
-            (CSA_DEPTH_ENV_KEY, "2".to_string()),
-            (
-                CSA_MODEL_SPEC_ENV_KEY,
-                "codex/openai/gpt-5.5/xhigh".to_string(),
-            ),
-            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
-            (CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
-        ]);
-
-        let startup = StartupSubtreeEnv::from_values(values);
-        let child_contract_env = startup.to_csa_child_contract_env_vars();
-
-        assert_eq!(
-            child_contract_env,
-            vec![
-                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
-                (
-                    CSA_SESSION_DIR_ENV_KEY.to_string(),
-                    "/repo/session".to_string()
-                ),
-                (
-                    CSA_PARENT_SESSION_ENV_KEY.to_string(),
-                    "01KPARENT".to_string()
-                ),
-                (
-                    CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
-                    "/repo/parent".to_string()
-                ),
-                (
-                    CSA_MODEL_SPEC_ENV_KEY.to_string(),
-                    "codex/openai/gpt-5.5/xhigh".to_string(),
-                ),
-                (
-                    CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY.to_string(),
-                    "1".to_string(),
-                ),
-                (CSA_NO_FAILOVER_ENV_KEY.to_string(), "1".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn startup_subtree_env_child_contract_env_does_not_emit_root_pin() {
-        let values = HashMap::from([
-            (CSA_DEPTH_ENV_KEY, "0".to_string()),
-            (
-                CSA_MODEL_SPEC_ENV_KEY,
-                "codex/openai/gpt-5.5/xhigh".to_string(),
-            ),
-            (CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1".to_string()),
-            (CSA_NO_FAILOVER_ENV_KEY, "1".to_string()),
-        ]);
-
-        let startup = StartupSubtreeEnv::from_values(values);
-        let child_contract_env = startup.to_csa_child_contract_env_vars();
-
-        assert!(child_contract_env.is_empty());
-    }
-
-    #[test]
-    fn startup_subtree_env_with_current_session_updates_child_env() {
-        let values = HashMap::from([
-            (CSA_SESSION_ID_ENV_KEY, "01KPARENT".to_string()),
-            (CSA_SESSION_DIR_ENV_KEY, "/repo/parent".to_string()),
-            (
-                CSA_MODEL_SPEC_ENV_KEY,
-                "codex/openai/gpt-5.5/xhigh".to_string(),
-            ),
-        ]);
-
-        let startup =
-            StartupSubtreeEnv::from_values(values).with_current_session("01KCHILD", "/repo/child");
-        let child_env = startup.to_child_env_vars();
-
-        assert_eq!(startup.session_id(), Some("01KCHILD"));
-        assert_eq!(startup.session_dir(), Some("/repo/child"));
-        assert_eq!(startup.parent_session(), Some("01KPARENT"));
-        assert_eq!(startup.parent_session_dir(), Some("/repo/parent"));
-        assert_eq!(
-            child_env,
-            vec![
-                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KCHILD".to_string()),
-                (
-                    CSA_SESSION_DIR_ENV_KEY.to_string(),
-                    "/repo/child".to_string()
-                ),
-                (
-                    CSA_PARENT_SESSION_ENV_KEY.to_string(),
-                    "01KPARENT".to_string()
-                ),
-                (
-                    CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
-                    "/repo/parent".to_string()
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn startup_subtree_env_with_current_session_does_not_self_parent() {
-        let values = HashMap::from([
-            (CSA_SESSION_ID_ENV_KEY, "01KSESSION".to_string()),
-            (CSA_SESSION_DIR_ENV_KEY, "/repo/session".to_string()),
-        ]);
-
-        let startup = StartupSubtreeEnv::from_values(values)
-            .with_current_session("01KSESSION", "/repo/session");
-
-        assert_eq!(startup.session_id(), Some("01KSESSION"));
-        assert_eq!(startup.session_dir(), Some("/repo/session"));
-        assert_eq!(startup.parent_session(), None);
-        assert_eq!(
-            startup.to_child_env_vars(),
-            vec![
-                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
-                (
-                    CSA_SESSION_DIR_ENV_KEY.to_string(),
-                    "/repo/session".to_string()
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn startup_capture_preserves_subtree_keys_in_process_env() {
-        let _depth = ScopedEnvVarRestore::set(CSA_DEPTH_ENV_KEY, "2");
-        let _session = ScopedEnvVarRestore::set(CSA_SESSION_ID_ENV_KEY, "01KTESTSESSION");
-        let _model = ScopedEnvVarRestore::set(CSA_MODEL_SPEC_ENV_KEY, "codex/openai/gpt-5/xhigh");
-        let _force = ScopedEnvVarRestore::set(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, "1");
-
-        let startup = StartupSubtreeEnv::capture_from_process_env();
-
-        assert_eq!(startup.current_depth(), 2);
-        assert_eq!(startup.session_id(), Some("01KTESTSESSION"));
-        assert_eq!(startup.model_spec(), Some("codex/openai/gpt-5/xhigh"));
-        assert_eq!(std::env::var(CSA_DEPTH_ENV_KEY).as_deref(), Ok("2"));
-        assert_eq!(
-            std::env::var(CSA_SESSION_ID_ENV_KEY).as_deref(),
-            Ok("01KTESTSESSION")
-        );
-        assert_eq!(
-            std::env::var(CSA_MODEL_SPEC_ENV_KEY).as_deref(),
-            Ok("codex/openai/gpt-5/xhigh")
-        );
-        assert_eq!(
-            std::env::var(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY).as_deref(),
-            Ok("1")
-        );
-    }
-}
+#[path = "startup_env_tests.rs"]
+mod tests;
