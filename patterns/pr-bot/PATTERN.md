@@ -2132,8 +2132,7 @@ gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BR
 
 Tool: bash
 OnFail: abort
-
-Merge and update the local default branch.
+Merge the clean PR.
 
 ```bash
 set -e
@@ -2148,6 +2147,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
+bash "${CSA_WORKFLOW_DIR:-patterns/pr-bot}/scripts/pre-merge-version-check.sh" "${REMOTE_NAME}" "${DEFAULT_BRANCH}"
 CSA_SKIP_REVIEW_CHECK=1 \
 CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12 pre-merge push" \
   git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
@@ -2164,7 +2164,7 @@ fi
 # shellcheck disable=SC2086
 gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
-# --- Inline post-merge checkout (defense-in-depth for #1401) ---
+# Inline post-merge checkout.
 _SYNC_BRANCH="${DEFAULT_BRANCH:-}"
 if [ -z "${_SYNC_BRANCH}" ]; then
   _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
@@ -2173,7 +2173,7 @@ if [ -n "${_SYNC_BRANCH}" ]; then
   git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
 fi
 
-# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+# Write pr-bot completion marker.
 MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
@@ -2193,8 +2193,7 @@ echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" requ
 
 Tool: bash
 OnFail: abort
-
-First-pass clean review or Step 10.5 post-rebase success: merge the existing PR directly.
+Merge the existing PR directly.
 
 ```bash
 set -e
@@ -2209,6 +2208,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
+bash "${CSA_WORKFLOW_DIR:-patterns/pr-bot}/scripts/pre-merge-version-check.sh" "${REMOTE_NAME}" "${DEFAULT_BRANCH}"
 CSA_SKIP_REVIEW_CHECK=1 \
 CSA_SKIP_REVIEW_CHECK_REASON="pr-bot Step 12b pre-merge push" \
   git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
@@ -2221,7 +2221,7 @@ fi
 # shellcheck disable=SC2086
 gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
-# --- Inline post-merge checkout (defense-in-depth for #1401) ---
+# Inline post-merge checkout.
 _SYNC_BRANCH="${DEFAULT_BRANCH:-}"
 if [ -z "${_SYNC_BRANCH}" ]; then
   _SYNC_BRANCH="$(git symbolic-ref refs/remotes/${REMOTE_NAME:-origin}/HEAD 2>/dev/null | sed "s@^refs/remotes/${REMOTE_NAME:-origin}/@@")"
@@ -2230,7 +2230,7 @@ if [ -n "${_SYNC_BRANCH}" ]; then
   git checkout "${_SYNC_BRANCH}" 2>/dev/null && git pull --ff-only "${REMOTE_NAME:-origin}" "${_SYNC_BRANCH}" 2>/dev/null || true
 fi
 
-# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+# Write pr-bot completion marker.
 MARKER_REPO_SLUG="$(printf '%s' "${REPO_SLUG}" | tr '/' '_')"
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${MARKER_REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
