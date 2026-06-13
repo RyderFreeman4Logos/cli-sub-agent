@@ -92,9 +92,9 @@ pub(super) async fn bootstrap_session(
         // Auto-generate description from prompt when not provided
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = match parent_session_source {
-            ParentSessionSource::ExplicitOrEnv => {
-                parent.or_else(|| startup_env.session_id().map(ToOwned::to_owned))
-            }
+            ParentSessionSource::ExplicitOrEnv => parent.or_else(|| {
+                inherited_parent_session_id_for_new_session(startup_env).map(ToOwned::to_owned)
+            }),
             ParentSessionSource::ExplicitOnly => parent,
         };
         let mut new_session = match session_creation_mode {
@@ -175,4 +175,84 @@ pub(super) async fn bootstrap_session(
         session,
         resolved_provider_session_id,
     })
+}
+
+fn inherited_parent_session_id_for_new_session(startup_env: &StartupSubtreeEnv) -> Option<&str> {
+    let inherited_session = startup_env.session_id()?;
+    if std::env::var("CSA_DAEMON_SESSION_ID").ok().as_deref() == Some(inherited_session) {
+        return startup_env.parent_session();
+    }
+    Some(inherited_session)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inherited_parent_session_id_for_new_session;
+    use crate::startup_env::StartupSubtreeEnv;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
+    use csa_core::env::{
+        CSA_PARENT_SESSION_ENV_KEY, CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn inherited_parent_session_uses_session_id_for_foreground_nested_run() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let _daemon = ScopedEnvVarRestore::unset("CSA_DAEMON_SESSION_ID");
+        let startup_env = StartupSubtreeEnv::from_values(HashMap::from([(
+            CSA_SESSION_ID_ENV_KEY,
+            "01PARENT".to_string(),
+        )]));
+
+        assert_eq!(
+            inherited_parent_session_id_for_new_session(&startup_env),
+            Some("01PARENT")
+        );
+    }
+
+    #[test]
+    fn inherited_parent_session_uses_parent_for_daemon_child_run() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let _daemon = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_ID", "01CHILD");
+        let startup_env = StartupSubtreeEnv::from_values(HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY, "01PARENT".to_string()),
+            (CSA_SESSION_DIR_ENV_KEY, "/repo/parent".to_string()),
+        ]))
+        .with_current_session("01CHILD", "/repo/child");
+
+        assert_eq!(
+            inherited_parent_session_id_for_new_session(&startup_env),
+            Some("01PARENT")
+        );
+    }
+
+    #[test]
+    fn inherited_parent_session_returns_none_for_top_level_daemon_child() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let _daemon = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_ID", "01CHILD");
+        let startup_env = StartupSubtreeEnv::from_values(HashMap::from([(
+            CSA_SESSION_ID_ENV_KEY,
+            "01CHILD".to_string(),
+        )]));
+
+        assert_eq!(
+            inherited_parent_session_id_for_new_session(&startup_env),
+            None
+        );
+    }
+
+    #[test]
+    fn inherited_parent_session_preserves_explicit_parent_snapshot_for_daemon_child() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let _daemon = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_ID", "01CHILD");
+        let startup_env = StartupSubtreeEnv::from_values(HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY, "01CHILD".to_string()),
+            (CSA_PARENT_SESSION_ENV_KEY, "01PARENT".to_string()),
+        ]));
+
+        assert_eq!(
+            inherited_parent_session_id_for_new_session(&startup_env),
+            Some("01PARENT")
+        );
+    }
 }

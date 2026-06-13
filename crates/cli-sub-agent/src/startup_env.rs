@@ -155,10 +155,20 @@ impl StartupSubtreeEnv {
         session_id: impl AsRef<str>,
         session_dir: impl AsRef<str>,
     ) -> Self {
+        let previous_session_id = self.session_id.clone();
+        let previous_session_dir = self.session_dir.clone();
         self.session_id = non_empty_str(session_id.as_ref());
         self.raw_session_id = self.session_id.clone();
         self.session_dir = non_empty_str(session_dir.as_ref());
         self.raw_session_dir = self.session_dir.clone();
+        if let Some(previous_session_id) = previous_session_id
+            && self.session_id.as_deref() != Some(previous_session_id.as_str())
+        {
+            self.parent_session = Some(previous_session_id.clone());
+            self.raw_parent_session = Some(previous_session_id);
+            self.parent_session_dir = previous_session_dir.clone();
+            self.raw_parent_session_dir = previous_session_dir;
+        }
         self
     }
 
@@ -236,7 +246,6 @@ impl StartupSubtreeEnv {
         self.session_dir.as_deref()
     }
 
-    #[cfg(test)]
     pub(crate) fn parent_session(&self) -> Option<&str> {
         self.parent_session.as_deref()
     }
@@ -541,6 +550,8 @@ mod tests {
 
         assert_eq!(startup.session_id(), Some("01KCHILD"));
         assert_eq!(startup.session_dir(), Some("/repo/child"));
+        assert_eq!(startup.parent_session(), Some("01KPARENT"));
+        assert_eq!(startup.parent_session_dir(), Some("/repo/parent"));
         assert_eq!(
             child_env,
             vec![
@@ -548,6 +559,39 @@ mod tests {
                 (
                     CSA_SESSION_DIR_ENV_KEY.to_string(),
                     "/repo/child".to_string()
+                ),
+                (
+                    CSA_PARENT_SESSION_ENV_KEY.to_string(),
+                    "01KPARENT".to_string()
+                ),
+                (
+                    CSA_PARENT_SESSION_DIR_ENV_KEY.to_string(),
+                    "/repo/parent".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn startup_subtree_env_with_current_session_does_not_self_parent() {
+        let values = HashMap::from([
+            (CSA_SESSION_ID_ENV_KEY, "01KSESSION".to_string()),
+            (CSA_SESSION_DIR_ENV_KEY, "/repo/session".to_string()),
+        ]);
+
+        let startup = StartupSubtreeEnv::from_values(values)
+            .with_current_session("01KSESSION", "/repo/session");
+
+        assert_eq!(startup.session_id(), Some("01KSESSION"));
+        assert_eq!(startup.session_dir(), Some("/repo/session"));
+        assert_eq!(startup.parent_session(), None);
+        assert_eq!(
+            startup.to_child_env_vars(),
+            vec![
+                (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
+                (
+                    CSA_SESSION_DIR_ENV_KEY.to_string(),
+                    "/repo/session".to_string()
                 ),
             ]
         );

@@ -247,6 +247,70 @@ async fn debate_write_mode_fails_fast_when_worktree_write_lock_is_held() {
 }
 
 #[tokio::test]
+async fn run_commit_child_reenters_under_ancestor_worktree_write_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+    let project_root = temp.path();
+
+    let holder =
+        csa_session::create_session(project_root, Some("holder"), None, Some("codex")).unwrap();
+    let _worktree_lock =
+        csa_lock::acquire_worktree_write_lock(project_root, &holder.meta_session_id, &[], |_| {
+            false
+        })
+        .expect("ancestor worktree write lock should succeed");
+    let child = csa_session::create_session(
+        project_root,
+        Some("skill:commit"),
+        Some(&holder.meta_session_id),
+        Some("codex"),
+    )
+    .unwrap();
+    let child_dir = csa_session::get_session_dir(project_root, &child.meta_session_id).unwrap();
+    let _child_session_lock =
+        csa_lock::acquire_lock(&child_dir, "codex", "active commit child").unwrap();
+
+    let execution = run_pipeline_for_worktree_lock_test(
+        project_root,
+        Some("run"),
+        Some(child.meta_session_id),
+        false,
+    )
+    .await;
+
+    assert_blocked_on_session_lock_not_worktree(execution);
+}
+
+#[tokio::test]
+async fn run_child_of_different_parent_fails_fast_when_worktree_write_lock_is_held() {
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+    let project_root = temp.path();
+
+    let (holder_session_id, _worktree_lock) = acquire_active_holder_worktree_lock(project_root);
+    let other_parent =
+        csa_session::create_session(project_root, Some("other parent"), None, Some("codex"))
+            .unwrap();
+    let child = csa_session::create_session(
+        project_root,
+        Some("skill:commit"),
+        Some(&other_parent.meta_session_id),
+        Some("codex"),
+    )
+    .unwrap();
+
+    let execution = run_pipeline_for_worktree_lock_test(
+        project_root,
+        Some("run"),
+        Some(child.meta_session_id),
+        false,
+    )
+    .await;
+
+    assert_worktree_write_lock_blocked(execution, project_root, &holder_session_id);
+}
+
+#[tokio::test]
 async fn readonly_review_is_not_blocked_by_worktree_write_lock() {
     let temp = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&temp).await;

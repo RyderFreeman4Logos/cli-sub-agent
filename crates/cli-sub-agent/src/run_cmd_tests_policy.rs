@@ -171,6 +171,7 @@ fn format_post_run_commit_guard_message_includes_next_step_and_paths() {
     let message = format_post_run_commit_guard_message(&guard, false, false, Some("codex"));
     assert!(message.contains("WARNING"));
     assert!(message.contains("csa run --tool codex --skill commit"));
+    assert!(message.contains("lineage-scoped child sessions"));
     assert!(message.contains("Cargo.lock"));
     assert!(message.contains("uncommitted workspace mutations"));
 }

@@ -322,6 +322,10 @@ pub(crate) fn format_post_run_commit_guard_message(
     lines.push(format!(
         "Next step: run `{recovery_command}` and continue with PR/review workflow."
     ));
+    lines.push(
+        "Nested commit runs inside an active CSA session are supported as lineage-scoped child sessions; unrelated writers remain serialized by the worktree lock."
+            .to_string(),
+    );
     if !guard.changed_paths.is_empty() {
         lines.push(format!("Changed paths: {}", guard.changed_paths.join(", ")));
     }
