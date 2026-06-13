@@ -190,6 +190,14 @@ pub(crate) fn handle_session_wait_with_emitters(
                     "session wait",
                 )?;
             } else {
+                loaded_result = load_completed_daemon_result_with_fallback(
+                    effective_root,
+                    result_session_id,
+                    &result_session_dir,
+                    is_cross_project,
+                )?;
+            }
+            if loaded_result.is_none() {
                 loaded_result = finalize_daemon_completion_if_present(&result_session_dir)?
                     .and_then(|result| {
                         suppress_pending_tier_failover_result(

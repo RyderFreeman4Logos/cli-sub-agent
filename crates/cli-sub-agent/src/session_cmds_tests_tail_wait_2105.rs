@@ -5,6 +5,14 @@ use crate::session_cmds_daemon::{
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use tempfile::tempdir;
 
+#[cfg(unix)]
+fn backdate_dead_wait_fixture(session_dir: &std::path::Path) {
+    super::backdate_tree(
+        session_dir,
+        csa_process::DEFAULT_LIVENESS_DEAD_SECS.saturating_add(1),
+    );
+}
+
 #[test]
 fn handle_session_wait_uses_persisted_current_turn_artifact_after_multi_turn_state_save() {
     let td = tempdir().expect("tempdir");
@@ -394,6 +402,8 @@ fn handle_session_wait_rejects_stale_legacy_output_result_without_current_marker
             .exists(),
         "test setup requires missing root result.toml"
     );
+    #[cfg(unix)]
+    backdate_dead_wait_fixture(&session_dir);
 
     let mut emitted_completion = false;
     let exit_code = handle_session_wait_with_hooks(
@@ -475,6 +485,8 @@ fn handle_session_wait_rejects_stale_inherited_contract_env_prior_turn_sidecar()
             .exists(),
         "test setup requires missing root result.toml"
     );
+    #[cfg(unix)]
+    backdate_dead_wait_fixture(&session_dir);
     assert_eq!(
         crate::session_cmds_daemon::expected_in_flight_turn_result_artifact_path_for_test(
             &session_dir
