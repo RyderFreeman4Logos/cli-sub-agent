@@ -1,4 +1,5 @@
-//! Best-effort diagnostics for signal exits that often mean host OOM pressure.
+//! Best-effort diagnostics for signal exits that often mean host OOM pressure
+//! or a bounded in-turn child command timing out.
 
 use std::path::{Path, PathBuf};
 
@@ -6,6 +7,13 @@ use anyhow::{Context, Result};
 use csa_session::{
     MetaSessionState, SessionResult, SignalResultMetadata, save_result,
     save_result_with_signal_metadata,
+};
+
+mod child_timeout;
+
+use child_timeout::{
+    ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance, redact_command_text,
+    truncate_one_line,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +66,8 @@ pub(crate) struct KillSignalObservations {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KillHint {
     CsaTimeout,
+    ChildTimeout,
+    HookCommitTimeout,
     Earlyoom,
     MemoryPressure,
     PossibleMemoryPressure,
@@ -68,6 +78,8 @@ impl KillHint {
     pub(crate) fn as_result_hint(self) -> &'static str {
         match self {
             Self::CsaTimeout => "csa_timeout",
+            Self::ChildTimeout => "child_timeout",
+            Self::HookCommitTimeout => "hook_commit_timeout",
             Self::Earlyoom => "earlyoom",
             Self::MemoryPressure => "memory_pressure",
             Self::PossibleMemoryPressure => "possible_memory_pressure",
@@ -81,6 +93,7 @@ pub(crate) struct KillDiagnostic {
     pub(crate) hint: KillHint,
     pub(crate) observations: KillSignalObservations,
     pub(crate) terminal_reason: Option<String>,
+    pub(crate) child_timeout: Option<ChildTimeoutProvenance>,
 }
 
 impl KillDiagnostic {
@@ -94,6 +107,28 @@ impl KillDiagnostic {
         });
         if self.hint == KillHint::CsaTimeout {
             details.push("CSA supervisor timeout metadata matched signal exit".to_string());
+            return details;
+        }
+        if let Some(child) = &self.child_timeout {
+            details.push("transcript matched bounded child command".to_string());
+            if let Some(seconds) = child.timeout_seconds {
+                details.push(format!("child_timeout_seconds={seconds}"));
+            }
+            if let Some(status) = child
+                .command_status
+                .as_deref()
+                .map(str::trim)
+                .filter(|status| !status.is_empty())
+            {
+                details.push(format!("child_command_status={status}"));
+            }
+            if child.transcript_exit_143 {
+                details.push("transcript reported child exit 143".to_string());
+            }
+            details.push(format!(
+                "child_command={}",
+                redacted_command_one_line(&child.command, 180)
+            ));
             return details;
         }
         if let Some(meminfo) = &self.observations.meminfo {
@@ -132,6 +167,8 @@ impl KillDiagnostic {
             KillHint::MemoryPressure => "memory pressure",
             KillHint::PossibleMemoryPressure => "possible memory pressure",
             KillHint::CsaTimeout => "csa_timeout",
+            KillHint::ChildTimeout => "child_timeout",
+            KillHint::HookCommitTimeout => "hook_commit_timeout",
             KillHint::UnknownSignal => "unknown_signal",
         };
 
@@ -141,6 +178,12 @@ impl KillDiagnostic {
                 "Re-dispatch when host memory frees."
             }
             KillHint::CsaTimeout => "The recorded timeout is the concrete kill reason.",
+            KillHint::ChildTimeout => {
+                "The transcript shows the last tool command was wrapped in a bounded timeout; inspect that child timeout before treating this as an external session kill."
+            }
+            KillHint::HookCommitTimeout => {
+                "The transcript shows a bounded hook-enabled git commit was active; inspect hook duration/toolchain setup or increase the child command timeout before redispatching."
+            }
             KillHint::UnknownSignal => {
                 "No timeout or cgroup OOM evidence was found, and memory checks did not identify a concrete kill source; reason remains unknown."
             }
@@ -148,6 +191,13 @@ impl KillDiagnostic {
         Some(format!(
             "CSA diagnostic: signal kill hint: {hint} ({details}). {suffix}"
         ))
+    }
+
+    pub(crate) fn last_item(&self) -> Option<String> {
+        self.child_timeout
+            .as_ref()
+            .map(|child| redacted_command_one_line(&child.command, 300))
+            .filter(|command| !command.is_empty())
     }
 
     pub(crate) fn ephemeral_line(&self) -> String {
@@ -164,8 +214,10 @@ pub(crate) fn diagnose_signal_kill(
     terminal_reason: Option<&str>,
     tool_name: &str,
     session_id: &str,
+    session_dir: Option<&Path>,
 ) -> Option<KillDiagnostic> {
-    diagnose_signal_kill_with(exit_code, terminal_reason, || {
+    let child_timeout = session_dir.and_then(|dir| detect_child_timeout_provenance(dir, exit_code));
+    diagnose_signal_kill_with_child_timeout(exit_code, terminal_reason, child_timeout, || {
         collect_signal_observations(tool_name, session_id)
     })
 }
@@ -186,6 +238,15 @@ pub(crate) fn diagnose_signal_kill_with(
     terminal_reason: Option<&str>,
     collect: impl FnOnce() -> KillSignalObservations,
 ) -> Option<KillDiagnostic> {
+    diagnose_signal_kill_with_child_timeout(exit_code, terminal_reason, None, collect)
+}
+
+fn diagnose_signal_kill_with_child_timeout(
+    exit_code: i32,
+    terminal_reason: Option<&str>,
+    child_timeout: Option<ChildTimeoutProvenance>,
+    collect: impl FnOnce() -> KillSignalObservations,
+) -> Option<KillDiagnostic> {
     if !matches!(exit_code, 137 | 143) {
         return None;
     }
@@ -194,11 +255,14 @@ pub(crate) fn diagnose_signal_kill_with(
             hint: KillHint::CsaTimeout,
             observations: KillSignalObservations::default(),
             terminal_reason: normalize_terminal_reason(terminal_reason),
+            child_timeout: None,
         });
     }
     Some(classify_signal_kill(
+        exit_code,
         collect(),
         normalize_terminal_reason(terminal_reason),
+        child_timeout,
     ))
 }
 
@@ -213,6 +277,10 @@ pub(crate) fn last_known_work_item<'a>(
         .filter(|summary| !summary.is_empty())
 }
 
+fn redacted_command_one_line(command: &str, max_chars: usize) -> String {
+    truncate_one_line(&redact_command_text(command), max_chars)
+}
+
 pub(crate) fn save_result_with_signal_diagnostic(
     project_root: &Path,
     session: &MetaSessionState,
@@ -221,11 +289,13 @@ pub(crate) fn save_result_with_signal_diagnostic(
     terminal_reason: Option<&str>,
     stderr_output: Option<&mut String>,
 ) -> Result<Option<String>> {
+    let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).ok();
     let diagnostic = diagnose_signal_kill(
         result.exit_code,
         terminal_reason,
         tool_name,
         &session.meta_session_id,
+        session_dir.as_deref(),
     );
     let diagnostic_line = diagnostic.as_ref().and_then(KillDiagnostic::stderr_line);
     if let Some(line) = &diagnostic_line {
@@ -234,13 +304,18 @@ pub(crate) fn save_result_with_signal_diagnostic(
     }
 
     if let Some(diagnostic) = diagnostic {
+        let diagnostic_last_item = diagnostic.last_item();
+        let last_item = diagnostic_last_item
+            .as_deref()
+            .or_else(|| last_known_work_item(session, tool_name))
+            .map(redact_command_text);
         save_result_with_signal_metadata(
             project_root,
             &session.meta_session_id,
             result,
             SignalResultMetadata {
                 kill_hint: diagnostic.hint.as_result_hint(),
-                last_item: last_known_work_item(session, tool_name),
+                last_item: last_item.as_deref(),
             },
         )?;
     } else {
@@ -264,7 +339,7 @@ pub(crate) fn render_result_toml_with_signal_diagnostic(
         rendered_result.last_item = last_item
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+            .map(redact_command_text);
     }
     toml::to_string_pretty(&rendered_result).context("Failed to render session result")
 }
@@ -273,6 +348,7 @@ pub(crate) fn signal_toml(
     result: &SessionResult,
     session: &MetaSessionState,
     session_id: &str,
+    session_dir: &Path,
     exit_code: i32,
 ) -> Result<String> {
     let diagnostic = diagnose_signal_kill(
@@ -280,12 +356,13 @@ pub(crate) fn signal_toml(
         session.termination_reason.as_deref(),
         &result.tool,
         session_id,
+        Some(session_dir),
     );
-    render_result_toml_with_signal_diagnostic(
-        result,
-        diagnostic.as_ref(),
-        last_known_work_item(session, &result.tool),
-    )
+    let diagnostic_last_item = diagnostic.as_ref().and_then(KillDiagnostic::last_item);
+    let last_item = diagnostic_last_item
+        .as_deref()
+        .or_else(|| last_known_work_item(session, &result.tool));
+    render_result_toml_with_signal_diagnostic(result, diagnostic.as_ref(), last_item)
 }
 
 fn append_stderr_line(stderr_output: Option<&mut String>, line: &str) {
@@ -314,8 +391,10 @@ fn normalize_terminal_reason(reason: Option<&str>) -> Option<String> {
 }
 
 fn classify_signal_kill(
+    exit_code: i32,
     observations: KillSignalObservations,
     terminal_reason: Option<String>,
+    child_timeout: Option<ChildTimeoutProvenance>,
 ) -> KillDiagnostic {
     let very_low_memory = observations
         .meminfo
@@ -335,6 +414,15 @@ fn classify_signal_kill(
         KillHint::MemoryPressure
     } else if possible_low_memory {
         KillHint::PossibleMemoryPressure
+    } else if exit_code == 143
+        && let Some(child_timeout) = child_timeout
+    {
+        return KillDiagnostic {
+            hint: child_timeout_hint(child_timeout.kind),
+            observations,
+            terminal_reason,
+            child_timeout: Some(child_timeout),
+        };
     } else {
         KillHint::UnknownSignal
     };
@@ -343,6 +431,14 @@ fn classify_signal_kill(
         hint,
         observations,
         terminal_reason,
+        child_timeout: None,
+    }
+}
+
+fn child_timeout_hint(kind: ChildTimeoutKind) -> KillHint {
+    match kind {
+        ChildTimeoutKind::BoundedCommand => KillHint::ChildTimeout,
+        ChildTimeoutKind::HookEnabledGitCommit => KillHint::HookCommitTimeout,
     }
 }
 
@@ -491,246 +587,5 @@ fn kb_to_mb(kb: u64) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn parses_meminfo_available_and_total() {
-        let meminfo = parse_meminfo(
-            "\
-MemTotal:       16384000 kB
-MemFree:         1000000 kB
-MemAvailable:    900000 kB
-",
-        )
-        .expect("meminfo should parse");
-
-        assert_eq!(meminfo.total_kb, 16_384_000);
-        assert_eq!(meminfo.available_kb, 900_000);
-        assert!(meminfo.available_below_ten_percent());
-        assert!(!meminfo.available_below_five_percent());
-    }
-
-    #[test]
-    fn classifies_signal_exit_under_possible_memory_pressure() {
-        let diagnostic = diagnose_signal_kill_with(143, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 999,
-            }),
-            earlyoom_running: false,
-            cgroup_memory_events: None,
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::PossibleMemoryPressure);
-        assert!(
-            diagnostic
-                .stderr_line()
-                .expect("memory pressure should render")
-                .contains("MemAvailable: 0 MB / MemTotal: 9 MB")
-        );
-    }
-
-    #[test]
-    fn classifies_signal_exit_under_strong_memory_pressure() {
-        let diagnostic = diagnose_signal_kill_with(143, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 499,
-            }),
-            earlyoom_running: false,
-            cgroup_memory_events: None,
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::MemoryPressure);
-        assert!(
-            diagnostic
-                .stderr_line()
-                .expect("memory pressure should render")
-                .contains("memory pressure")
-        );
-    }
-
-    #[test]
-    fn classifies_unknown_when_earlyoom_runs_without_memory_pressure() {
-        let diagnostic = diagnose_signal_kill_with(137, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 5_000,
-            }),
-            earlyoom_running: true,
-            cgroup_memory_events: None,
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
-        assert!(
-            diagnostic
-                .stderr_line()
-                .expect("unknown signal should render checked evidence")
-                .contains("earlyoom running")
-        );
-    }
-
-    #[test]
-    fn classifies_earlyoom_when_daemon_runs_with_strong_memory_pressure() {
-        let diagnostic = diagnose_signal_kill_with(137, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 499,
-            }),
-            earlyoom_running: true,
-            cgroup_memory_events: None,
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::Earlyoom);
-        assert!(
-            diagnostic
-                .stderr_line()
-                .expect("earlyoom should render")
-                .contains("earlyoom running")
-        );
-    }
-
-    #[test]
-    fn classifies_earlyoom_when_daemon_runs_with_cgroup_oom_kill() {
-        let diagnostic = diagnose_signal_kill_with(137, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 5_000,
-            }),
-            earlyoom_running: true,
-            cgroup_memory_events: Some(CgroupMemoryEvents {
-                oom: 0,
-                oom_kill: 1,
-            }),
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::Earlyoom);
-    }
-
-    #[test]
-    fn does_not_classify_earlyoom_from_oom_without_oom_kill() {
-        let diagnostic = diagnose_signal_kill_with(137, None, || KillSignalObservations {
-            meminfo: Some(MemInfo {
-                total_kb: 10_000,
-                available_kb: 5_000,
-            }),
-            earlyoom_running: true,
-            cgroup_memory_events: Some(CgroupMemoryEvents {
-                oom: 1,
-                oom_kill: 0,
-            }),
-        })
-        .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
-        assert!(
-            diagnostic
-                .stderr_line()
-                .expect("unknown signal should render checked evidence")
-                .contains("cgroup memory.events oom=1 oom_kill=0")
-        );
-    }
-
-    #[test]
-    fn csa_timeout_terminal_reasons_take_precedence_over_earlyoom() {
-        for terminal_reason in ["timeout", "idle_timeout", "initial_response_timeout"] {
-            let called = Cell::new(false);
-            let diagnostic = diagnose_signal_kill_with(137, Some(terminal_reason), || {
-                called.set(true);
-                KillSignalObservations {
-                    meminfo: Some(MemInfo {
-                        total_kb: 10_000,
-                        available_kb: 999,
-                    }),
-                    earlyoom_running: true,
-                    cgroup_memory_events: Some(CgroupMemoryEvents {
-                        oom: 1,
-                        oom_kill: 1,
-                    }),
-                }
-            })
-            .expect("signal exit should produce diagnostic");
-
-            assert_eq!(diagnostic.hint, KillHint::CsaTimeout);
-            assert!(!called.get(), "{terminal_reason} should skip memory checks");
-            let line = diagnostic
-                .stderr_line()
-                .expect("timeout signal should render timeout reason");
-            assert!(line.contains(terminal_reason));
-            assert!(line.contains("concrete kill reason"));
-        }
-    }
-
-    #[test]
-    fn classifies_unknown_signal_without_memory_evidence() {
-        let diagnostic = diagnose_signal_kill_with(143, None, KillSignalObservations::default)
-            .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
-        let line = diagnostic
-            .stderr_line()
-            .expect("unknown signal should render checked evidence");
-        assert!(line.contains("unknown_signal"));
-        assert!(line.contains("termination_reason: missing"));
-        assert!(line.contains("MemAvailable: unavailable"));
-        assert!(line.contains("earlyoom not running"));
-        assert!(line.contains("reason remains unknown"));
-    }
-
-    #[test]
-    fn unknown_signal_reports_negative_memory_evidence() {
-        let diagnostic =
-            diagnose_signal_kill_with(143, Some("sigterm"), || KillSignalObservations {
-                meminfo: Some(MemInfo {
-                    total_kb: 16_384_000,
-                    available_kb: 12_288_000,
-                }),
-                earlyoom_running: false,
-                cgroup_memory_events: Some(CgroupMemoryEvents {
-                    oom: 0,
-                    oom_kill: 0,
-                }),
-            })
-            .expect("signal exit should produce diagnostic");
-
-        assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
-        let line = diagnostic
-            .stderr_line()
-            .expect("unknown signal should render checked evidence");
-        assert!(line.contains("termination_reason=sigterm"));
-        assert!(line.contains("MemAvailable: 12000 MB / MemTotal: 16000 MB"));
-        assert!(line.contains("earlyoom not running"));
-        assert!(line.contains("cgroup memory.events oom=0 oom_kill=0"));
-        assert!(line.contains("reason remains unknown"));
-    }
-
-    #[test]
-    fn non_signal_exits_do_not_collect_observations() {
-        for exit_code in [0, 1, 2] {
-            let called = Cell::new(false);
-            let diagnostic = diagnose_signal_kill_with(exit_code, None, || {
-                called.set(true);
-                KillSignalObservations::default()
-            });
-            assert!(diagnostic.is_none());
-            assert!(!called.get(), "exit {exit_code} should not trigger checks");
-        }
-    }
-
-    #[test]
-    fn parses_cgroup_memory_events() {
-        let events = parse_memory_events("low 2\nhigh 3\nmax 4\noom 1\noom_kill 1\n");
-
-        assert_eq!(events.oom, 1);
-        assert_eq!(events.oom_kill, 1);
-        assert!(events.has_oom_event());
-        assert!(events.has_oom_kill_event());
-    }
-}
+#[path = "session_kill_diagnostics_tests.rs"]
+mod tests;

@@ -563,7 +563,7 @@ where
         completed_at,
     );
     #[rustfmt::skip]
-    let result_contents = crate::session_kill_diagnostics::signal_toml(&result, &session, session_id, packet.exit_code).context("serialize result")?;
+    let result_contents = crate::session_kill_diagnostics::signal_toml(&result, &session, session_id, session_dir, packet.exit_code).context("serialize result")?;
     match persist_new_result_file(result_path, &result_contents, before_write)? {
         SyntheticResultPersistOutcome::AlreadyExists => {
             let retired = retire_if_dead_with_result_impl(
