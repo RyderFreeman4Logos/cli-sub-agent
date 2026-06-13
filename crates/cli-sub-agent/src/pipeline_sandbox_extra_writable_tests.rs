@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 
@@ -10,6 +10,151 @@ fn parse_project_config(toml_str: &str) -> csa_config::ProjectConfig {
 
 fn current_project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
+}
+
+fn sandbox_config() -> csa_config::ProjectConfig {
+    parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    )
+}
+
+fn resolve_sandbox_options_with_execution_env(
+    cfg: &csa_config::ProjectConfig,
+    project_root: &std::path::Path,
+    execution_env: &HashMap<String, String>,
+) -> SandboxResolution {
+    resolve_sandbox_options_with_overrides(
+        SandboxResolveInput {
+            config: Some(cfg),
+            tool_name: "codex",
+            session_id: "test-session",
+            project_root,
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: Some(execution_env),
+        },
+        RunResourceOverrides::default(),
+    )
+}
+
+#[test]
+fn test_rust_env_writable_rejects_sensitive_and_usr_local_paths() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let cfg = sandbox_config();
+
+    for (key, value) in [
+        (csa_core::env::CARGO_HOME_ENV_KEY, "/etc"),
+        (csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local"),
+        (csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/boot"),
+        (csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "/run/csa-mise"),
+    ] {
+        let execution_env = HashMap::from([(key.to_string(), value.to_string())]);
+        let result =
+            resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
+
+        assert!(
+            matches!(
+                result,
+                SandboxResolution::RequiredButUnavailable(ref message)
+                    if message.contains("Rust state env writable paths validation failed")
+                        && message.contains(value)
+            ),
+            "{key}={value} should be rejected before being granted writable sandbox access"
+        );
+    }
+}
+
+#[test]
+fn test_rust_env_writable_creates_missing_safe_directory_before_sandbox_launch() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let cargo_home = project_root.path().join(".cache/csa-cargo");
+    let cfg = sandbox_config();
+    let execution_env = HashMap::from([(
+        csa_core::env::CARGO_HOME_ENV_KEY.to_string(),
+        cargo_home.to_string_lossy().into_owned(),
+    )]);
+
+    let result =
+        resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected fresh Rust env writable path to be prepared before sandbox launch");
+    };
+    assert!(
+        cargo_home.is_dir(),
+        "missing Rust env writable directory should be created"
+    );
+
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&cargo_home.canonicalize().unwrap()),
+        "created Rust env path should be granted writable access, got: {:?}",
+        sandbox.isolation_plan.writable_paths
+    );
+}
+
+#[test]
+fn test_rust_env_writable_preserves_explicit_safe_values() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let rust_state = project_root.path().join("rust-state");
+    let cargo_home = rust_state.join("cargo-home");
+    let rustup_home = rust_state.join("rustup-home");
+    let cargo_install_root = rust_state.join("cargo-install-root");
+    let mise_config = rust_state.join("mise-config");
+    for path in [&cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+        std::fs::create_dir_all(path).expect("create explicit Rust env dir");
+    }
+    let cfg = sandbox_config();
+    let execution_env = HashMap::from([
+        (
+            csa_core::env::CARGO_HOME_ENV_KEY.to_string(),
+            cargo_home.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::RUSTUP_HOME_ENV_KEY.to_string(),
+            rustup_home.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY.to_string(),
+            cargo_install_root.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::MISE_CONFIG_DIR_ENV_KEY.to_string(),
+            mise_config.to_string_lossy().into_owned(),
+        ),
+    ]);
+
+    let result =
+        resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected explicit safe Rust env writable paths to be preserved");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    for path in [&cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+        assert!(
+            sandbox
+                .isolation_plan
+                .writable_paths
+                .contains(&path.canonicalize().unwrap()),
+            "explicit Rust env path {} should be granted writable access, got: {:?}",
+            path.display(),
+            sandbox.isolation_plan.writable_paths
+        );
+    }
 }
 
 /// CLI --extra-writable paths are appended to writable_paths (APPEND semantics).

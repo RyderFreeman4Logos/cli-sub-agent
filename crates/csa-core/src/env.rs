@@ -1,6 +1,21 @@
 /// Reserved executor env var that disables automatic runtime failover/retry paths.
 pub const NO_FAILOVER_ENV_KEY: &str = "_CSA_NO_FAILOVER";
 
+/// Cargo state/cache root.
+pub const CARGO_HOME_ENV_KEY: &str = "CARGO_HOME";
+
+/// Rustup state/toolchain root.
+pub const RUSTUP_HOME_ENV_KEY: &str = "RUSTUP_HOME";
+
+/// Cargo install root used by `cargo install`.
+pub const CARGO_INSTALL_ROOT_ENV_KEY: &str = "CARGO_INSTALL_ROOT";
+
+/// mise configuration directory.
+pub const MISE_CONFIG_DIR_ENV_KEY: &str = "MISE_CONFIG_DIR";
+
+/// mise data directory, which commonly contains installed toolchains.
+pub const MISE_DATA_DIR_ENV_KEY: &str = "MISE_DATA_DIR";
+
 /// Exact model spec inherited by nested CSA invocations in a pinned SA subtree.
 pub const CSA_MODEL_SPEC_ENV_KEY: &str = "CSA_MODEL_SPEC";
 
@@ -50,6 +65,55 @@ pub fn strip_git_push_authorization_keys(env: &mut std::collections::HashMap<Str
     for key in GIT_PUSH_AUTHORIZATION_ENV_KEYS {
         env.remove(*key);
     }
+}
+
+/// Return true when a Rust toolchain state path should be overridden before
+/// spawning a CSA session.
+///
+/// `/usr/local` is a tool-install prefix on the shared hosts CSA commonly runs
+/// on, not a writable Cargo/Rustup state root. Descendants under `/usr/local`
+/// are allowed only when the current namespace can write there; this preserves
+/// intentionally mounted mise Rust homes such as
+/// `/usr/local/share/mise/installs/rust/stable`.
+pub fn rust_state_path_needs_session_override(path: &std::path::Path) -> bool {
+    let usr_local = std::path::Path::new("/usr/local");
+    if path == usr_local {
+        return true;
+    }
+    path.starts_with(usr_local) && !rust_state_path_is_writable(path)
+}
+
+fn rust_state_path_is_writable(path: &std::path::Path) -> bool {
+    let dir = if path.is_dir() {
+        path
+    } else if let Some(parent) = path.parent() {
+        parent
+    } else {
+        return false;
+    };
+    if !dir.is_dir() {
+        return false;
+    }
+
+    for attempt in 0..8 {
+        let probe = dir.join(format!(
+            ".csa-rust-env-probe-{}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                return true;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 /// Marker that a CSA command runs INSIDE a weave pattern pipeline (`csa plan
@@ -266,6 +330,20 @@ mod tests {
             );
         }
         assert_eq!(env.get("KEEP_ME").map(String::as_str), Some("value"));
+    }
+
+    #[test]
+    fn rust_state_path_exact_usr_local_needs_session_override() {
+        assert!(rust_state_path_needs_session_override(
+            std::path::Path::new("/usr/local")
+        ));
+    }
+
+    #[test]
+    fn rust_state_path_outside_usr_local_does_not_need_session_override() {
+        assert!(!rust_state_path_needs_session_override(
+            std::path::Path::new("/tmp/csa-rust-home")
+        ));
     }
 
     #[test]

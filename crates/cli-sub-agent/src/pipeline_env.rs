@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
 use tracing::info;
@@ -47,6 +47,7 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
     {
         merged_env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
     }
+    apply_rust_session_env_contract(&mut merged_env);
     if suppress {
         merged_env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
     }
@@ -126,6 +127,97 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
     }
 
     merged_env
+}
+
+pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for key in [
+        csa_core::env::CARGO_HOME_ENV_KEY,
+        csa_core::env::RUSTUP_HOME_ENV_KEY,
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+    ] {
+        let Some(value) = env.get(key).filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let path = PathBuf::from(value.as_str());
+        if path.is_absolute() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn apply_rust_session_env_contract(env: &mut HashMap<String, String>) {
+    let Some(home) = env_path(env, "HOME") else {
+        return;
+    };
+    let cargo_home = home.join(".cargo");
+    normalize_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
+
+    let effective_cargo_home =
+        env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
+    normalize_rust_env_path(
+        env,
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        &effective_cargo_home,
+    );
+
+    let rustup_home = preferred_rustup_home(env, &home);
+    normalize_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
+
+    let mise_config_dir = home.join(".config/mise");
+    normalize_rust_env_path(
+        env,
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+        &mise_config_dir,
+    );
+}
+
+fn normalize_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
+    let Some(current) = env_path(env, key) else {
+        return;
+    };
+    if csa_core::env::rust_state_path_needs_session_override(&current) {
+        env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
+    }
+}
+
+fn preferred_rustup_home(env: &HashMap<String, String>, home: &Path) -> PathBuf {
+    for candidate in mise_rust_home_candidates(env) {
+        if candidate.join("settings.toml").is_file()
+            && candidate.join("toolchains").is_dir()
+            && !csa_core::env::rust_state_path_needs_session_override(&candidate)
+        {
+            return candidate;
+        }
+    }
+    home.join(".rustup")
+}
+
+fn mise_rust_home_candidates(env: &HashMap<String, String>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for data_dir in env_path(env, csa_core::env::MISE_DATA_DIR_ENV_KEY)
+        .into_iter()
+        .chain(Some(PathBuf::from("/usr/local/share/mise")))
+    {
+        let stable = data_dir.join("installs/rust/stable");
+        if !candidates.contains(&stable) {
+            candidates.push(stable);
+        }
+    }
+    candidates
+}
+
+fn env_path(env: &HashMap<String, String>, key: &str) -> Option<PathBuf> {
+    env.get(key)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| PathBuf::from(value.as_str()))
+        .or_else(|| {
+            std::env::var_os(key)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
 }
 
 pub(crate) fn apply_review_target_dir(project_root: &Path, tool_name: &str) {
