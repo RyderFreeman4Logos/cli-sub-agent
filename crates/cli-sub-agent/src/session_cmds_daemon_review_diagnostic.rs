@@ -1,12 +1,70 @@
+use std::io::ErrorKind;
 use std::path::Path;
 
 use csa_core::types::ReviewDecision;
-use csa_session::MetaSessionState;
+use csa_session::{MetaSessionState, SessionArtifact};
 use tracing::warn;
 
 use super::completion::DaemonCompletionPacket;
 
 const REVIEW_DAEMON_NO_RESULT_REASON: &str = "daemon_completion_before_result";
+const REVIEW_VERDICT_ARTIFACT_PATH: &str = "output/review-verdict.json";
+
+pub(crate) fn has_review_no_result_diagnostic(session: &MetaSessionState) -> bool {
+    is_review_daemon_session(session)
+}
+
+pub(crate) fn append_review_no_result_diagnostic_artifacts(
+    artifacts: &mut Vec<SessionArtifact>,
+    session: &MetaSessionState,
+) {
+    if !has_review_no_result_diagnostic(session) {
+        return;
+    }
+    if artifacts
+        .iter()
+        .any(|artifact| artifact.path == REVIEW_VERDICT_ARTIFACT_PATH)
+    {
+        return;
+    }
+    artifacts.push(SessionArtifact::new(REVIEW_VERDICT_ARTIFACT_PATH));
+}
+
+impl DaemonCompletionPacket {
+    pub(crate) fn persist_review_diag(
+        &self,
+        result_path: &Path,
+        expected_contents: &[u8],
+        session_dir: &Path,
+        session: &MetaSessionState,
+    ) {
+        if !has_review_no_result_diagnostic(session) {
+            return;
+        }
+
+        match std::fs::read(result_path) {
+            Ok(current_contents) if current_contents == expected_contents => {
+                persist_review_no_result_diagnostic(session_dir, session, self)
+            }
+            Ok(_) => warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "late_real_result_preserved",
+                "Skipped review daemon no-result diagnostic sidecars because result.toml changed after synthetic daemon completion publication"
+            ),
+            Err(err) if err.kind() == ErrorKind::NotFound => warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "result_missing",
+                "Skipped review daemon no-result diagnostic sidecars because synthetic daemon completion result.toml disappeared before sidecar publication"
+            ),
+            Err(err) => warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "read_failed",
+                error = %err,
+                "Skipped review daemon no-result diagnostic sidecars because synthetic daemon completion result.toml could not be verified"
+            ),
+        }
+    }
+}
 
 pub(crate) fn persist_review_no_result_diagnostic(
     session_dir: &Path,

@@ -197,7 +197,6 @@ pub(crate) fn daemon_completion_result(
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> SessionResult {
-    super::review_diagnostic::persist_review_no_result_diagnostic(session_dir, session, packet);
     let tool_name = session
         .tools
         .iter()
@@ -233,6 +232,12 @@ pub(crate) fn daemon_completion_result(
             .unwrap_or_default()
     );
 
+    let mut artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(
+        project_root,
+        &session.meta_session_id,
+    );
+    super::review_diagnostic::append_review_no_result_diagnostic_artifacts(&mut artifacts, session);
+
     SessionResult {
         post_exec_gate: None,
         status: effective.status,
@@ -248,10 +253,7 @@ pub(crate) fn daemon_completion_result(
         started_at: std::cmp::min(session.last_accessed, completed_at),
         completed_at,
         events_count: 0,
-        artifacts: crate::pipeline_post_exec::collect_fallback_result_artifacts(
-            project_root,
-            &session.meta_session_id,
-        ),
+        artifacts,
         raw_process_exit_code: effective.raw_process_exit_code,
         ..Default::default()
     }
