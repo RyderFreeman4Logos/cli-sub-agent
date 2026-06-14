@@ -51,6 +51,7 @@ run_case() {
   local expected_title="${11:-Fix 1171}"
   local pr_title_mode="${12:-set}"
   local git_head_subject="${13-Fix 1171}"
+  local pr_body_mode="${14:-set}"
   local case_dir="${TMP_ROOT}/${case_name}"
   local bin_dir="${case_dir}/bin"
   local stdout_file="${case_dir}/stdout.txt"
@@ -81,7 +82,11 @@ run_case() {
     export WORKFLOW_BRANCH="${workflow_branch}"
     export REPO_SLUG="test-owner/test-repo"
     export DEFAULT_BRANCH="main"
-    export PR_BODY="Body"
+    if [ "${pr_body_mode}" = "unset" ]; then
+      unset PR_BODY
+    else
+      export PR_BODY="Body"
+    fi
     if [ "${pr_title_mode}" = "unset" ]; then
       unset PR_TITLE
     else
@@ -122,6 +127,7 @@ run_case "lookup-hits-merged-noop" "true" "merged" "0" "909" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "unset-title-derives-head" "true" "create-success" "0" "101" "1" "PR_TITLE unset; using derived title: fix(pr-bot): derive title" "fix/1171" "fix/1171" "test-owner:fix/1171" "fix(pr-bot): derive title" "unset" "fix(pr-bot): derive title"
 run_case "unset-title-falls-back-to-branch" "true" "create-success" "0" "101" "1" "PR_TITLE unset; using derived title: Topic custom title" "topic/custom_title" "topic/custom_title" "test-owner:topic/custom_title" "Topic custom title" "unset" ""
+run_case "unset-body-creates-with-empty-body" "true" "create-success" "0" "101" "1" "" "fix/1171" "fix/1171" "test-owner:fix/1171" "Fix 1171" "set" "Fix 1171" "unset"
 run_case "create-already-exists-reresolve" "true" "missed-already-exists" "0" "303" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "stale-list-create-race-recovery" "true" "stale-already-exists" "0" "808" "1" "PR already exists for test-owner:fix/1171; re-resolving"
 run_case "ambiguous-fail-closed" "true" "ambiguous" "1" "" "0" "Multiple PRs found for test-owner:fix/1171"
