@@ -9,9 +9,10 @@ use agent_client_protocol::{
     Agent, ClientSideConnection, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PromptRequest, ProtocolVersion, SessionId, StopReason,
 };
+#[cfg(test)]
+use csa_process::SpoolRotator;
 use csa_process::{
     DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, ProcessTreeActivity, ProcessTreeStatus,
-    SpoolRotator,
 };
 use tokio::{process::Child, task::LocalSet};
 
@@ -26,7 +27,7 @@ use connection_status::{format_stderr, process_exited_error};
 mod connection_stream;
 #[cfg(test)]
 pub(crate) use connection_stream::LINE_BUF_CAP;
-use connection_stream::{collect_agent_output, stream_new_agent_messages};
+use connection_stream::{collect_agent_output, open_output_spool_file, stream_new_agent_messages};
 
 // Re-export spawn-related types from the dedicated module.
 #[path = "connection_sandbox_handle.rs"]
@@ -42,8 +43,11 @@ pub(crate) mod connection_fork;
 pub use connection_fork::{CliForkResult, fork_session_via_cli};
 
 use crate::{
-    client::{SessionEvent, SharedActivity, SharedEvents, StreamingMetadata},
+    client::{
+        SessionEvent, SharedActivity, SharedEvents, SharedToolOutputCompactor, StreamingMetadata,
+    },
     error::{AcpError, AcpResult},
+    tool_output_compaction::ToolOutputCompactionConfig,
 };
 
 const DEFAULT_HEARTBEAT_SECS: u64 = 15;
@@ -60,12 +64,13 @@ pub struct PromptResult {
     pub metadata: StreamingMetadata,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PromptIoOptions<'a> {
     pub stream_stdout_to_stderr: bool,
     pub output_spool: Option<&'a Path>,
     pub spool_max_bytes: u64,
     pub keep_rotated_spool: bool,
+    pub tool_output_compaction: Option<ToolOutputCompactionConfig>,
 }
 
 impl Default for PromptIoOptions<'_> {
@@ -75,6 +80,7 @@ impl Default for PromptIoOptions<'_> {
             output_spool: None,
             spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
+            tool_output_compaction: None,
         }
     }
 }
@@ -86,6 +92,7 @@ pub struct AcpConnection {
     events: SharedEvents,
     last_activity: SharedActivity,
     last_meaningful_activity: SharedActivity,
+    tool_output_compactor: SharedToolOutputCompactor,
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
     init_timeout: Duration,
@@ -109,6 +116,7 @@ impl AcpConnection {
         events: SharedEvents,
         last_activity: SharedActivity,
         last_meaningful_activity: SharedActivity,
+        tool_output_compactor: SharedToolOutputCompactor,
         stderr_buf: Rc<RefCell<String>>,
         default_working_dir: PathBuf,
         options: AcpConnectionOptions,
@@ -120,6 +128,7 @@ impl AcpConnection {
             events,
             last_activity,
             last_meaningful_activity,
+            tool_output_compactor,
             stderr_buf,
             default_working_dir,
             init_timeout: options.init_timeout,
@@ -322,6 +331,10 @@ impl AcpConnection {
         self.ensure_process_running().await?;
 
         self.events.borrow_mut().clear();
+        *self.tool_output_compactor.borrow_mut() = io
+            .tool_output_compaction
+            .clone()
+            .map(ToolOutputCompactionConfig::into_state);
         let now = Instant::now();
         *self.last_activity.borrow_mut() = now;
         *self.last_meaningful_activity.borrow_mut() = now;
@@ -422,6 +435,7 @@ impl AcpConnection {
             &mut stdout_line_buf,
             &mut thought_line_buf,
         );
+        self.tool_output_compactor.borrow_mut().take();
         if let Some(writer) = output_spool.take() {
             match writer.finalize() {
                 Ok(plan) => {
@@ -555,26 +569,6 @@ fn process_tree_made_cpu_progress(process_activity: Option<&mut ProcessTreeActiv
     })
 }
 
-/// 64 KiB buffer for spool writes to reduce syscall overhead vs per-chunk flush.
-fn open_output_spool_file(
-    path: Option<&Path>,
-    spool_max_bytes: u64,
-    keep_rotated_spool: bool,
-) -> Option<SpoolRotator> {
-    let path = path?;
-    match SpoolRotator::open(path, spool_max_bytes, keep_rotated_spool) {
-        Ok(rotator) => Some(rotator),
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "failed to open ACP output spool file"
-            );
-            None
-        }
-    }
-}
-
 fn resolve_heartbeat_interval() -> Option<Duration> {
     let raw = std::env::var(HEARTBEAT_INTERVAL_ENV).ok();
     let secs = match raw {
@@ -646,3 +640,7 @@ fn stop_reason_to_string(reason: StopReason) -> String {
 #[cfg(test)]
 #[path = "connection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "connection_tool_output_compaction_tests.rs"]
+mod tool_output_compaction_tests;

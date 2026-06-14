@@ -501,10 +501,12 @@ impl AcpConnection {
         let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now()));
         let last_meaningful_activity = Rc::new(RefCell::new(Instant::now()));
-        let client = AcpClient::new(
+        let tool_output_compactor = Rc::new(RefCell::new(None));
+        let client = AcpClient::new_with_tool_output_compactor(
             events.clone(),
             last_activity.clone(),
             last_meaningful_activity.clone(),
+            tool_output_compactor.clone(),
         );
         let stderr_buf = Rc::new(RefCell::new(String::new()));
 
@@ -562,6 +564,7 @@ impl AcpConnection {
             events,
             last_activity,
             last_meaningful_activity,
+            tool_output_compactor,
             stderr_buf,
             working_dir.to_path_buf(),
             options,

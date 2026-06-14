@@ -13,6 +13,7 @@ use super::{
     AcpClient, MAX_EXTRACTED_COMMANDS, MAX_RETAINED_EVENTS, SessionEvent, SessionEventStore,
     StreamingMetadata, command_looks_like_no_verify_commit,
 };
+use crate::tool_output_compaction::ToolOutputCompactionConfig;
 
 #[test]
 fn test_update_to_event_agent_message_chunk() {
@@ -68,6 +69,60 @@ fn test_update_to_event_tool_call_completed() {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn test_update_to_event_compacts_large_raw_tool_output() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let sidecar_dir = temp.path().join("tool_outputs");
+    let raw_output = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        "stdout: build started",
+        "stdout: progress before\n".repeat(400),
+        "MIDDLE: sidecar-only diagnostic noise",
+        "stdout: progress after\n".repeat(400),
+        "stderr: FAILED at src/lib.rs:42"
+    );
+    let fields = ToolCallUpdateFields::new()
+        .title("cargo test --all")
+        .status(ToolCallStatus::Failed)
+        .raw_output(serde_json::Value::String(raw_output.clone()));
+    let update = ToolCallUpdate::new("call-raw", fields);
+    let mut compactor = ToolOutputCompactionConfig::new(sidecar_dir.clone(), 128).into_state();
+
+    let event = AcpClient::update_to_event_with_compactor(
+        SessionUpdate::ToolCallUpdate(update),
+        Some(&mut compactor),
+    )
+    .expect("raw tool output should produce an event");
+
+    match event {
+        SessionEvent::ToolCallOutput {
+            id,
+            title,
+            status,
+            output,
+        } => {
+            assert_eq!(id, "call-raw");
+            assert_eq!(title.as_deref(), Some("cargo test --all"));
+            assert_eq!(status, "Failed");
+            assert!(output.contains("[tool:output:compacted]"));
+            assert!(output.contains("tool_call_id: call-raw"));
+            assert!(output.contains("status: Failed"));
+            assert!(output.contains("stdout: build started"));
+            assert!(output.contains("stderr: FAILED at src/lib.rs:42"));
+            assert!(!output.contains("MIDDLE: sidecar-only diagnostic noise"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let raw = std::fs::read_to_string(sidecar_dir.join("1000000.raw")).expect("read sidecar");
+    assert_eq!(raw, raw_output);
+    let manifest =
+        std::fs::read_to_string(sidecar_dir.join("manifest.toml")).expect("read sidecar manifest");
+    assert!(manifest.contains("compacted = true"));
+    assert!(manifest.contains("tool_call_id = \"call-raw\""));
+    assert!(manifest.contains("status = \"Failed\""));
 }
 
 #[test]

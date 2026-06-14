@@ -1,8 +1,12 @@
+use std::path::Path;
+
+use csa_core::redact::redact_text_content;
 use csa_process::SpoolRotator;
 
 use crate::client::{
     SessionEvent, SharedEvents, StreamingMetadata, event_counts_as_initial_response,
 };
+use crate::tool_output_compaction::ToolOutputCompactionState;
 
 /// Maximum bytes buffered before a newline-free chunk is force-flushed.
 pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
@@ -36,6 +40,42 @@ pub(crate) fn stream_new_agent_messages(
     stdout_line_buf: &mut String,
     thought_line_buf: &mut String,
 ) -> bool {
+    stream_new_agent_messages_with_tool_output_compaction(
+        events,
+        processed_event_count,
+        stream_stdout_to_stderr,
+        output_spool,
+        metadata,
+        StreamLineBuffers::new(stdout_line_buf, thought_line_buf),
+        None,
+    )
+}
+
+pub(crate) struct StreamLineBuffers<'buf> {
+    stdout: &'buf mut String,
+    thought: &'buf mut String,
+}
+
+impl<'buf> StreamLineBuffers<'buf> {
+    pub(crate) fn new(stdout: &'buf mut String, thought: &'buf mut String) -> Self {
+        Self { stdout, thought }
+    }
+}
+
+pub(crate) fn stream_new_agent_messages_with_tool_output_compaction(
+    events: &SharedEvents,
+    processed_event_count: &mut usize,
+    stream_stdout_to_stderr: bool,
+    output_spool: &mut Option<SpoolRotator>,
+    metadata: &mut StreamingMetadata,
+    line_buffers: StreamLineBuffers<'_>,
+    mut tool_output_compaction: Option<&mut ToolOutputCompactionState>,
+) -> bool {
+    let StreamLineBuffers {
+        stdout: stdout_line_buf,
+        thought: thought_line_buf,
+    } = line_buffers;
+
     // Track progress against total seen events because the retained deque can evict old entries.
     let events_ref = events.borrow();
     metadata.sync_from_store(&events_ref);
@@ -109,6 +149,32 @@ pub(crate) fn stream_new_agent_messages(
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
+            SessionEvent::ToolCallOutput {
+                id,
+                title,
+                status,
+                output,
+            } => {
+                metadata.has_tool_calls = true;
+                let rendered = if output.starts_with("[tool:output") {
+                    ensure_trailing_newline(redact_text_content(output))
+                } else if let Some(compaction) = tool_output_compaction.as_mut() {
+                    ensure_trailing_newline(compaction.render_tool_output(
+                        id,
+                        title.as_deref(),
+                        status,
+                        output,
+                    ))
+                } else {
+                    ensure_trailing_newline(format!("[tool:output] {id} {status}\n{output}"))
+                };
+                if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
+                    eprint!("{rendered}");
+                }
+                spool_chunk(output_spool, rendered.as_bytes(), metadata);
+            }
             SessionEvent::Other(payload) => {
                 let msg = format!("[other] {payload}\n");
                 if stream_stdout_to_stderr {
@@ -128,6 +194,33 @@ pub(crate) fn stream_new_agent_messages(
 
     *processed_event_count = events_ref.total_events_count();
     saw_initial_response_event
+}
+
+/// 64 KiB buffer for spool writes to reduce syscall overhead vs per-chunk flush.
+pub(crate) fn open_output_spool_file(
+    path: Option<&Path>,
+    spool_max_bytes: u64,
+    keep_rotated_spool: bool,
+) -> Option<SpoolRotator> {
+    let path = path?;
+    match SpoolRotator::open(path, spool_max_bytes, keep_rotated_spool) {
+        Ok(rotator) => Some(rotator),
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to open ACP output spool file"
+            );
+            None
+        }
+    }
+}
+
+fn ensure_trailing_newline(mut value: String) -> String {
+    if !value.ends_with('\n') {
+        value.push('\n');
+    }
+    value
 }
 
 fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut StreamingMetadata) {

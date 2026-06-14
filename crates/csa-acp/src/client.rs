@@ -1,9 +1,11 @@
 use std::time::Instant;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
+use crate::tool_output_compaction::ToolOutputCompactionState;
 use agent_client_protocol::{
     Client, ContentBlock, ContentChunk, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
+    ToolCallContent, ToolCallUpdateFields,
 };
 
 /// Maximum bytes retained in the tail text buffer; shared with `csa-process::output_helpers`.
@@ -130,6 +132,12 @@ pub enum SessionEvent {
         id: String,
         status: String,
     },
+    ToolCallOutput {
+        id: String,
+        title: Option<String>,
+        status: String,
+        output: String,
+    },
     PlanUpdate(String),
     Other(String),
 }
@@ -142,6 +150,7 @@ pub(crate) fn event_counts_as_initial_response(event: &SessionEvent) -> bool {
             | SessionEvent::PlanUpdate(_)
             | SessionEvent::ToolCallStarted { .. }
             | SessionEvent::ToolCallCompleted { .. }
+            | SessionEvent::ToolCallOutput { .. }
     )
 }
 
@@ -244,6 +253,9 @@ impl SessionEventStore {
             SessionEvent::AgentMessage(_) => {
                 self.turn_count = self.turn_count.saturating_add(1);
             }
+            SessionEvent::ToolCallOutput { .. } => {
+                self.has_tool_calls = true;
+            }
             SessionEvent::AgentThought(_)
             | SessionEvent::ToolCallCompleted { .. }
             | SessionEvent::Other(_) => {}
@@ -272,24 +284,42 @@ use no_verify_detect::command_looks_like_no_verify_commit;
 
 pub(crate) type SharedEvents = Rc<RefCell<SessionEventStore>>;
 pub(crate) type SharedActivity = Rc<RefCell<Instant>>;
+pub(crate) type SharedToolOutputCompactor = Rc<RefCell<Option<ToolOutputCompactionState>>>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AcpClient {
     events: SharedEvents,
     last_activity: SharedActivity,
     last_meaningful_activity: SharedActivity,
+    tool_output_compactor: SharedToolOutputCompactor,
 }
 
 impl AcpClient {
+    #[cfg(test)]
     pub(crate) fn new(
         events: SharedEvents,
         last_activity: SharedActivity,
         last_meaningful_activity: SharedActivity,
     ) -> Self {
+        Self::new_with_tool_output_compactor(
+            events,
+            last_activity,
+            last_meaningful_activity,
+            Rc::new(RefCell::new(None)),
+        )
+    }
+
+    pub(crate) fn new_with_tool_output_compactor(
+        events: SharedEvents,
+        last_activity: SharedActivity,
+        last_meaningful_activity: SharedActivity,
+        tool_output_compactor: SharedToolOutputCompactor,
+    ) -> Self {
         Self {
             events,
             last_activity,
             last_meaningful_activity,
+            tool_output_compactor,
         }
     }
 
@@ -307,7 +337,15 @@ impl AcpClient {
     /// updates).  These are logged at trace level but excluded from
     /// collected output to prevent multi-KB JSON blobs from polluting
     /// stdout and summary extraction.
+    #[cfg(test)]
     fn update_to_event(update: SessionUpdate) -> Option<SessionEvent> {
+        Self::update_to_event_with_compactor(update, None)
+    }
+
+    fn update_to_event_with_compactor(
+        update: SessionUpdate,
+        compactor: Option<&mut ToolOutputCompactionState>,
+    ) -> Option<SessionEvent> {
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 Some(SessionEvent::AgentMessage(Self::chunk_to_text(&chunk)))
@@ -322,6 +360,32 @@ impl AcpClient {
             }),
             SessionUpdate::ToolCallUpdate(tool_call_update) => {
                 let id = tool_call_update.tool_call_id.0.to_string();
+                let output = tool_update_output_text(&tool_call_update.fields);
+                let title = tool_call_update.fields.title.clone();
+                let status = tool_call_update
+                    .fields
+                    .status
+                    .as_ref()
+                    .map(|status| format!("{status:?}"))
+                    .unwrap_or_else(|| "Updated".to_string());
+                if let Some(output) = output {
+                    let output = if let Some(compactor) = compactor {
+                        compactor.render_tool_output(
+                            &id,
+                            title.as_deref(),
+                            status.as_str(),
+                            output.as_str(),
+                        )
+                    } else {
+                        output
+                    };
+                    return Some(SessionEvent::ToolCallOutput {
+                        id,
+                        title,
+                        status,
+                        output,
+                    });
+                }
                 if let Some(status) = tool_call_update.fields.status {
                     Some(SessionEvent::ToolCallCompleted {
                         id,
@@ -357,6 +421,46 @@ impl AcpClient {
             )),
         }
     }
+
+    fn update_to_event_for_session(&self, update: SessionUpdate) -> Option<SessionEvent> {
+        let mut compactor_ref = self.tool_output_compactor.borrow_mut();
+        Self::update_to_event_with_compactor(update, compactor_ref.as_mut())
+    }
+}
+
+fn tool_update_output_text(fields: &ToolCallUpdateFields) -> Option<String> {
+    let mut chunks = Vec::new();
+    if let Some(contents) = &fields.content {
+        for content in contents {
+            match content {
+                ToolCallContent::Content(content) => match &content.content {
+                    ContentBlock::Text(text) => chunks.push(text.text.clone()),
+                    other => chunks.push(
+                        serde_json::to_string(other)
+                            .unwrap_or_else(|_| "<non-text-tool-output>".to_string()),
+                    ),
+                },
+                other => chunks.push(
+                    serde_json::to_string(other)
+                        .unwrap_or_else(|_| "<non-text-tool-output>".to_string()),
+                ),
+            }
+        }
+    }
+    if let Some(raw_output) = &fields.raw_output {
+        let rendered = raw_output
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string_pretty(raw_output).unwrap_or_default());
+        if !rendered.is_empty() {
+            chunks.push(rendered);
+        }
+    }
+    if chunks.is_empty() {
+        None
+    } else {
+        Some(chunks.join("\n"))
+    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -386,7 +490,7 @@ impl Client for AcpClient {
         // Idle-timeout remains broad: any ACP session notification counts
         // as transport liveness, even when suppressed from collected output.
         *self.last_activity.borrow_mut() = now;
-        if let Some(event) = Self::update_to_event(args.update) {
+        if let Some(event) = self.update_to_event_for_session(args.update) {
             if event_counts_as_initial_response(&event) {
                 *self.last_meaningful_activity.borrow_mut() = now;
             }

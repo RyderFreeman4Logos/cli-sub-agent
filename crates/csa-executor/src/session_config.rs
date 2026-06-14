@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,12 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOutputCompactionConfig {
+    pub sidecar_dir: PathBuf,
+    pub threshold_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -25,4 +31,6 @@ pub struct SessionConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub mcp_proxy_socket: Option<String>,
+    #[serde(skip)]
+    pub tool_output_compaction: Option<ToolOutputCompactionConfig>,
 }

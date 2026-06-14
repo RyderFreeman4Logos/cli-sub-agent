@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 clap.workspace = true
@@ -15,7 +16,7 @@ agent-teams.workspace = true
 sha2.workspace = true
 toml.workspace = true
 tokio.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true

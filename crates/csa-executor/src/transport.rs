@@ -357,6 +357,16 @@ impl AcpTransport {
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
         let output_spool_max_bytes = options.output_spool_max_bytes;
         let output_spool_keep_rotated = options.output_spool_keep_rotated;
+        let tool_output_compaction = self
+            .session_config
+            .as_ref()
+            .and_then(|config| config.tool_output_compaction.as_ref())
+            .map(|config| {
+                csa_acp::ToolOutputCompactionConfig::new(
+                    config.sidecar_dir.clone(),
+                    config.threshold_bytes,
+                )
+            });
         let spawn_request = AcpPromptRunRequest {
             tool_name: self.tool_name.clone(),
             acp_command,
@@ -379,6 +389,7 @@ impl AcpTransport {
             output_spool,
             output_spool_max_bytes,
             output_spool_keep_rotated,
+            tool_output_compaction,
             acp_payload_debug_path,
             gemini_classification_env,
             gemini_env_allowlist_applied,
@@ -472,6 +483,17 @@ fn convert_acp_event(event: csa_acp::SessionEvent) -> csa_core::transport_events
         csa_acp::SessionEvent::ToolCallCompleted { id, status } => {
             csa_core::transport_events::SessionEvent::ToolCallCompleted { id, status }
         }
+        csa_acp::SessionEvent::ToolCallOutput {
+            id,
+            title,
+            status,
+            output,
+        } => csa_core::transport_events::SessionEvent::ToolCallOutput {
+            id,
+            title,
+            status,
+            output,
+        },
         csa_acp::SessionEvent::PlanUpdate(text) => {
             csa_core::transport_events::SessionEvent::PlanUpdate(text)
         }

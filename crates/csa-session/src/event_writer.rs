@@ -223,9 +223,9 @@ fn event_type(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::AgentMessage(_) => "message",
         SessionEvent::AgentThought(_) => "thought",
-        SessionEvent::ToolCallStarted { .. } | SessionEvent::ToolCallCompleted { .. } => {
-            "tool_call"
-        }
+        SessionEvent::ToolCallStarted { .. }
+        | SessionEvent::ToolCallCompleted { .. }
+        | SessionEvent::ToolCallOutput { .. } => "tool_call",
         SessionEvent::PlanUpdate(_) => "plan",
         SessionEvent::Other(_) => "other",
     }

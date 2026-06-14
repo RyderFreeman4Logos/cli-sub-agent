@@ -21,6 +21,7 @@ struct AcpPromptRunRequest {
     output_spool: Option<std::path::PathBuf>,
     output_spool_max_bytes: u64,
     output_spool_keep_rotated: bool,
+    tool_output_compaction: Option<csa_acp::ToolOutputCompactionConfig>,
     acp_payload_debug_path: Option<std::path::PathBuf>,
     gemini_classification_env: Option<HashMap<String, String>>,
     gemini_env_allowlist_applied: String,
@@ -72,6 +73,7 @@ impl AcpTransport {
                         request.output_spool.as_deref(),
                         request.output_spool_max_bytes,
                         request.output_spool_keep_rotated,
+                        request.tool_output_compaction.clone(),
                     ));
                     match sr {
                         transport_acp_sandbox::AcpSandboxedResult {
@@ -120,6 +122,9 @@ impl AcpTransport {
                                         output_spool: request.output_spool.as_deref(),
                                         spool_max_bytes: request.output_spool_max_bytes,
                                         keep_rotated_spool: request.output_spool_keep_rotated,
+                                        tool_output_compaction: request
+                                            .tool_output_compaction
+                                            .clone(),
                                     },
                                 },
                             ))
@@ -163,6 +168,7 @@ impl AcpTransport {
                                 output_spool: request.output_spool.as_deref(),
                                 spool_max_bytes: request.output_spool_max_bytes,
                                 keep_rotated_spool: request.output_spool_keep_rotated,
+                                tool_output_compaction: request.tool_output_compaction.clone(),
                             },
                         },
                     ))

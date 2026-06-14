@@ -221,20 +221,31 @@ async fn prepare_session_runtime_inner(
     let sa_mode =
         std::env::var_os(crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV)
             .is_some_and(|value| value == "true" || value == "1");
-    let session_config = input.global_config.map(|gc| {
-        let mcp_servers = resolve_mcp_servers(input.project_root, gc);
-        if !mcp_servers.is_empty() {
-            info!(
-                count = mcp_servers.len(),
-                servers = %mcp_servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "),
-                "Injecting MCP servers into tool session"
-            );
-        }
-        csa_executor::SessionConfig {
-            mcp_servers,
-            mcp_proxy_socket: gc.mcp_proxy_socket.clone(),
-            ..Default::default()
-        }
+    let mcp_servers = input
+        .global_config
+        .map(|gc| resolve_mcp_servers(input.project_root, gc))
+        .unwrap_or_default();
+    if !mcp_servers.is_empty() {
+        info!(
+            count = mcp_servers.len(),
+            servers = %mcp_servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "),
+            "Injecting MCP servers into tool session"
+        );
+    }
+    let tool_output_threshold_bytes = input
+        .config
+        .map(|cfg| cfg.session.tool_output_threshold_bytes)
+        .unwrap_or(csa_config::DEFAULT_TOOL_OUTPUT_THRESHOLD_BYTES);
+    let session_config = Some(csa_executor::SessionConfig {
+        mcp_servers,
+        mcp_proxy_socket: input
+            .global_config
+            .and_then(|gc| gc.mcp_proxy_socket.clone()),
+        tool_output_compaction: Some(csa_executor::ToolOutputCompactionConfig {
+            sidecar_dir: input.session_dir.join("tool_outputs"),
+            threshold_bytes: tool_output_threshold_bytes,
+        }),
+        ..Default::default()
     });
     let mut merged_env =
         crate::pipeline_env::build_merged_env(crate::pipeline_env::MergedEnvRequest {
