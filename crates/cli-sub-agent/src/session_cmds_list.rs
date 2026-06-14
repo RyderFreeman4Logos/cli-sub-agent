@@ -5,9 +5,13 @@ use std::path::Path;
 use csa_config::GlobalConfig;
 #[cfg(test)]
 use csa_session::decode_session_created_at;
-use csa_session::{MetaSessionState, SessionPhase, SessionResult, list_sessions, load_result};
+use csa_session::{
+    MetaSessionState, SessionPhase, SessionResult, get_session_dir, list_sessions, load_result,
+};
 
 use super::{ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result};
+
+const NO_LIVE_PID_STATUS: &str = "NoLivePID";
 
 /// Threshold (seconds) after which an `Active`-phase session whose `last_accessed`
 /// has not advanced is considered stale (#1118 part D). The threshold is `2 *
@@ -151,6 +155,31 @@ pub(super) fn status_from_phase_and_result(
     }
 }
 
+fn active_status_with_liveness(project_root: &Path, sid: &str, status: &'static str) -> String {
+    if status == "Active" && active_session_has_no_live_pid(project_root, sid) {
+        NO_LIVE_PID_STATUS.to_string()
+    } else {
+        status.to_string()
+    }
+}
+
+fn active_session_has_no_live_pid(project_root: &Path, sid: &str) -> bool {
+    let session_dir = match get_session_dir(project_root, sid) {
+        Ok(session_dir) => session_dir,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %sid,
+                error = %err,
+                "Failed to resolve session directory for liveness-derived list status"
+            );
+            return false;
+        }
+    };
+
+    !csa_process::ToolLiveness::has_live_process(&session_dir)
+        && !csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir)
+}
+
 pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
     // Use the session's own project_path so cross-project sessions resolve correctly.
     let project_root = Path::new(&session.project_path);
@@ -164,7 +193,11 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
                 return status_from_phase_and_result(&SessionPhase::Retired, Some(&result))
                     .to_string();
             }
-            status_from_phase_and_result(&session.phase, Some(&result)).to_string()
+            active_status_with_liveness(
+                project_root,
+                sid,
+                status_from_phase_and_result(&session.phase, Some(&result)),
+            )
         }
         Ok(None) => {
             let reconciled =
@@ -187,7 +220,7 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
             if is_session_stale(session, stale_threshold_seconds(), Utc::now()) {
                 return "Stale".to_string();
             }
-            phase_label(&session.phase).to_string()
+            active_status_with_liveness(project_root, sid, phase_label(&session.phase))
         }
         Err(err) => {
             tracing::warn!(session_id = %sid, error = %err, "Failed to load result.toml");
