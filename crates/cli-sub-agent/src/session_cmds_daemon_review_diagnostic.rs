@@ -82,16 +82,75 @@ pub(crate) fn persist_review_no_result_diagnostic(
 }
 
 fn is_review_daemon_session(session: &MetaSessionState) -> bool {
+    if matches!(
+        session.task_context.task_type.as_deref().map(str::trim),
+        Some("review" | "reviewer_sub_session")
+    ) {
+        return true;
+    }
+
     session
         .description
         .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|description| {
-            description == "review"
-                || description.starts_with("review:")
-                || description == "initializing daemon review"
+        .is_some_and(is_legacy_review_description)
+}
+
+fn is_legacy_review_description(description: &str) -> bool {
+    let description = description.trim();
+    description.eq_ignore_ascii_case("review")
+        || description.eq_ignore_ascii_case("initializing daemon review")
+        || has_ascii_prefix_ignore_case(description, "review:")
+        || strip_multi_reviewer_scope(description).is_some()
+        || has_ascii_prefix_ignore_case(description, "code-review:")
+}
+
+fn canonical_review_scope(session: &MetaSessionState) -> String {
+    session
+        .description
+        .as_deref()
+        .and_then(extract_review_scope)
+        .or_else(|| {
+            session
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
         })
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn extract_review_scope(description: &str) -> Option<&str> {
+    let description = description.trim();
+    strip_ascii_prefix_ignore_case(description, "review:")
+        .or_else(|| strip_multi_reviewer_scope(description))
+        .or_else(|| strip_ascii_prefix_ignore_case(description, "code-review:"))
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+}
+
+fn strip_multi_reviewer_scope(description: &str) -> Option<&str> {
+    let rest = strip_ascii_prefix_ignore_case(description, "review[")?;
+    let close_bracket = rest.find(']')?;
+    let reviewer_index = &rest[..close_bracket];
+    if reviewer_index.is_empty() || !reviewer_index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let after_bracket = rest.get(close_bracket + 1..)?.trim_start();
+    after_bracket.strip_prefix(':').map(str::trim)
+}
+
+fn has_ascii_prefix_ignore_case(value: &str, prefix: &str) -> bool {
+    strip_ascii_prefix_ignore_case(value, prefix).is_some()
+}
+
+fn strip_ascii_prefix_ignore_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let candidate = value.get(..prefix.len())?;
+    if candidate.eq_ignore_ascii_case(prefix) {
+        value.get(prefix.len()..)
+    } else {
+        None
+    }
 }
 
 fn review_no_result_summary(packet: &DaemonCompletionPacket, tool: &str) -> String {
@@ -152,11 +211,7 @@ fn persist_review_no_result_meta(
         primary_failure: (tool == "unknown").then(|| "tool_launch_metadata_absent".to_string()),
         failure_reason: Some(diagnostic.to_string()),
         tool: tool.to_string(),
-        scope: session
-            .description
-            .as_deref()
-            .unwrap_or("unknown")
-            .to_string(),
+        scope: canonical_review_scope(session),
         exit_code: crate::verdict_exit_code::exit_code_from_review_decision(
             ReviewDecision::Unavailable,
         ),
