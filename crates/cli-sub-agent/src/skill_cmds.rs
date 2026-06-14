@@ -8,6 +8,7 @@ use tracing::info;
 use crate::skill_repo::{
     SkillRepoManager, git_commit_all, git_commit_paths, skill_repo_root, validate_skill_name,
 };
+use crate::skill_resolver;
 
 /// Handle skill install command
 pub(crate) fn handle_skill_install(source: String, target: Option<String>) -> Result<()> {
@@ -45,39 +46,18 @@ pub(crate) fn handle_skill_install(source: String, target: Option<String>) -> Re
     Ok(())
 }
 
-/// Handle skill list command — shows both active (.claude/skills/) and managed (state dir) skills.
+/// Handle skill list command — shows runnable active sources and managed state-dir skills.
 pub(crate) fn handle_skill_list() -> Result<()> {
     let mut any = false;
 
-    // --- Active skills (project + global .claude/skills/) ---
-    let active_dirs = collect_active_skill_dirs();
-    let mut active_skills: Vec<(String, PathBuf)> = Vec::new();
-    for dir in &active_dirs {
-        if !dir.exists() {
-            continue;
-        }
-        for entry in fs::read_dir(dir)?.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) if !n.starts_with('.') => n.to_string(),
-                _ => continue,
-            };
-            if path.join("SKILL.md").exists() {
-                active_skills.push((name, path));
-            }
-        }
-    }
-    active_skills.sort_by(|a, b| a.0.cmp(&b.0));
-    active_skills.dedup_by(|a, b| a.0 == b.0);
+    // --- Active skills (same runnable search paths as `csa run --skill`) ---
+    let active_skills = collect_active_skill_sources()?;
 
     if !active_skills.is_empty() {
-        eprintln!("Active skills (.claude/skills/):\n");
-        for (name, path) in &active_skills {
-            let title = read_skill_title(path).unwrap_or_else(|| name.clone());
-            println!("  {name} [active] - {title}");
+        eprintln!("Active skills (runnable search paths):\n");
+        for source in &active_skills {
+            let title = read_skill_title(&source.dir).unwrap_or_else(|| source.name.clone());
+            println!("  {} [active] - {title}", source.name);
         }
         any = true;
     }
@@ -334,22 +314,9 @@ pub(crate) fn handle_skill_backup() -> Result<()> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Collect all directories to search for active skills.
-fn collect_active_skill_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    // Project-local
-    if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd.join(".claude").join("skills"));
-        dirs.push(cwd.join(".csa").join("skills"));
-    }
-
-    // Global ~/.claude/skills/
-    if let Some(base) = directories::BaseDirs::new() {
-        dirs.push(base.home_dir().join(".claude").join("skills"));
-    }
-
-    dirs
+fn collect_active_skill_sources() -> Result<Vec<skill_resolver::ActiveSkillSource>> {
+    let cwd = std::env::current_dir().context("Could not determine current directory")?;
+    skill_resolver::list_active_skill_sources(&cwd)
 }
 
 /// Return the current hostname (best-effort, falls back to "host").
@@ -746,18 +713,6 @@ mod tests {
 
         let installed = copy_skills(src.path(), dest.path()).unwrap();
         assert!(installed.is_empty());
-    }
-
-    // --- collect_active_skill_dirs tests ---
-
-    #[test]
-    fn collect_active_skill_dirs_returns_expected_paths() {
-        let dirs = collect_active_skill_dirs();
-        assert!(
-            dirs.iter()
-                .any(|d| d.ends_with(".claude/skills") || d.ends_with(".csa/skills")),
-            "should contain .claude/skills or .csa/skills: {dirs:?}"
-        );
     }
 
     // --- gethostname tests ---

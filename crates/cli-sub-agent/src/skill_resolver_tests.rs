@@ -81,6 +81,35 @@ fn assert_paths_exclude(paths: &[std::path::PathBuf], expected: &Path, msg: &str
     );
 }
 
+fn assert_listed_source_resolves_from_same_dir(project_root: &Path, home: &Path, name: &str) {
+    assert_listed_source_resolves_from_same_dir_with_config(project_root, home, None, name);
+}
+
+fn assert_listed_source_resolves_from_same_dir_with_config(
+    project_root: &Path,
+    home: &Path,
+    config_dir: Option<&Path>,
+    name: &str,
+) {
+    let listed =
+        list_active_skill_sources_with_home_and_config(project_root, Some(home), config_dir)
+            .unwrap();
+    let source = listed
+        .iter()
+        .find(|source| source.name == name)
+        .unwrap_or_else(|| panic!("{name} should be listed as active"));
+    let candidates =
+        search_paths_with_explicit_dirs(name, project_root, None, Some(home), config_dir, None);
+    let resolved = resolve_skill_from_candidates(name, &candidates).unwrap();
+
+    assert!(
+        path_equivalent(&source.dir, &resolved.dir),
+        "listed source and run resolver source should match: listed={}, resolved={}",
+        source.dir.display(),
+        resolved.dir.display()
+    );
+}
+
 #[test]
 fn resolve_skill_from_csa_skills() {
     let tmp = TempDir::new().unwrap();
@@ -131,7 +160,7 @@ tool = "claude-code"
     // Write lockfile referencing this package.
     write_lockfile(tmp.path(), "audit", commit);
 
-    let paths = search_paths_with_store("audit", tmp.path(), Some(store.path()));
+    let paths = search_paths_with_store("audit", tmp.path(), Some(store.path()), None);
     let found = paths.iter().find(|p| p.join("SKILL.md").is_file());
     assert!(found.is_some(), "skill not found in global store paths");
 
@@ -158,7 +187,7 @@ fn search_paths_include_superproject_roots_for_submodule_project_root() {
     )
     .unwrap();
 
-    let paths = search_paths_with_store("dev2merge", &submodule_root, None);
+    let paths = search_paths_with_store("dev2merge", &submodule_root, None, None);
     assert_paths_include(
         &paths,
         &tmp.path().join(".csa").join("skills").join("dev2merge"),
@@ -192,7 +221,7 @@ fn search_paths_include_immediate_parent_for_nested_submodule_project_root() {
     )
     .unwrap();
 
-    let paths = search_paths_with_store("dev2merge", &inner_root, None);
+    let paths = search_paths_with_store("dev2merge", &inner_root, None, None);
     assert_paths_include(
         &paths,
         &tmp.path()
@@ -252,7 +281,7 @@ fn search_paths_include_superproject_roots_for_worktree_submodule_project_root()
     )
     .unwrap();
 
-    let paths = search_paths_with_store("dev2merge", &submodule_root, None);
+    let paths = search_paths_with_store("dev2merge", &submodule_root, None, None);
     assert_paths_include(
         &paths,
         &worktree_root.join(".csa").join("skills").join("dev2merge"),
@@ -289,7 +318,7 @@ fn search_paths_do_not_include_main_root_for_plain_worktree_project_root() {
     )
     .unwrap();
 
-    let paths = search_paths_with_store("dev2merge", &worktree_root, None);
+    let paths = search_paths_with_store("dev2merge", &worktree_root, None, None);
     assert_paths_include(
         &paths,
         &worktree_root.join(".csa").join("skills").join("dev2merge"),
@@ -314,7 +343,7 @@ fn resolve_skill_csa_takes_priority_over_global_store() {
     make_skill_dir(&pkg_dir, ".", "# Global Store Review", None);
     write_lockfile(tmp.path(), "review", commit);
 
-    let paths = search_paths_with_store("review", tmp.path(), Some(store.path()));
+    let paths = search_paths_with_store("review", tmp.path(), Some(store.path()), None);
     let first_match = paths.iter().find(|p| p.join("SKILL.md").is_file());
     assert!(first_match.is_some());
     let content = fs::read_to_string(first_match.unwrap().join("SKILL.md")).unwrap();
@@ -349,6 +378,191 @@ fn resolve_skill_from_csa_namespace() {
     let resolved = resolve_skill("code-health-agent", tmp.path()).unwrap();
     assert!(resolved.skill_md.contains("Code Health Agent"));
     assert!(resolved.dir.ends_with("skills/csa/code-health-agent"));
+}
+
+#[test]
+fn resolve_skill_from_project_claude_csa_namespace() {
+    let tmp = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".claude/skills/csa/review-agent",
+        "# Review Agent\nFrom Claude CSA namespace.",
+        None,
+    );
+
+    let resolved = resolve_skill("review-agent", tmp.path()).unwrap();
+    assert!(resolved.skill_md.contains("Claude CSA namespace"));
+    assert!(resolved.dir.ends_with(".claude/skills/csa/review-agent"));
+}
+
+#[test]
+fn resolve_skill_from_project_codex_skills() {
+    let tmp = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".codex/skills/mktsk-codex",
+        "# mktsk-codex\nFrom project Codex skills.",
+        None,
+    );
+
+    let resolved = resolve_skill("mktsk-codex", tmp.path()).unwrap();
+    assert!(resolved.skill_md.contains("project Codex skills"));
+    assert!(resolved.dir.ends_with(".codex/skills/mktsk-codex"));
+}
+
+#[test]
+fn resolve_skill_from_project_agents_skills() {
+    let tmp = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".agents/skills/code-health-agent",
+        "# code-health-agent\nFrom project agent skills.",
+        None,
+    );
+
+    let resolved = resolve_skill("code-health-agent", tmp.path()).unwrap();
+    assert!(resolved.skill_md.contains("project agent skills"));
+    assert!(resolved.dir.ends_with(".agents/skills/code-health-agent"));
+}
+
+#[test]
+fn listed_project_csa_namespace_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        "skills/csa/code-health-agent",
+        "# code-health-agent\nListed and runnable from bundled CSA namespace.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "code-health-agent");
+}
+
+#[test]
+fn listed_project_claude_csa_namespace_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".claude/skills/csa/review-agent",
+        "# review-agent\nListed and runnable from Claude CSA namespace.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "review-agent");
+}
+
+#[test]
+fn listed_project_codex_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".codex/skills/mktsk-codex",
+        "# mktsk-codex\nListed and runnable.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "mktsk-codex");
+}
+
+#[test]
+fn listed_project_agents_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".agents/skills/shared-agent",
+        "# shared-agent\nListed and runnable.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "shared-agent");
+}
+
+#[test]
+fn listed_config_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let config = TempDir::new().unwrap();
+    make_skill_dir(
+        config.path(),
+        "skills/config-agent",
+        "# config-agent\nListed and runnable from user config.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir_with_config(
+        tmp.path(),
+        home.path(),
+        Some(config.path()),
+        "config-agent",
+    );
+}
+
+#[test]
+fn listed_global_codex_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        home.path(),
+        ".codex/skills/mktsk-codex",
+        "# mktsk-codex\nFrom global Codex skills.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "mktsk-codex");
+}
+
+#[test]
+fn listed_global_agents_skill_resolves_from_same_source() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        home.path(),
+        ".agents/skills/shared-agent",
+        "# shared-agent\nFrom global agent skills.",
+        None,
+    );
+
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "shared-agent");
+}
+
+#[test]
+fn listed_duplicate_skill_keeps_resolver_precedence() {
+    let tmp = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    make_skill_dir(
+        tmp.path(),
+        ".csa/skills/shared",
+        "# shared\nFrom CSA skills.",
+        None,
+    );
+    make_skill_dir(
+        tmp.path(),
+        ".codex/skills/shared",
+        "# shared\nFrom Codex skills.",
+        None,
+    );
+
+    let listed =
+        list_active_skill_sources_with_home_and_config(tmp.path(), Some(home.path()), None)
+            .unwrap();
+    let source = listed
+        .iter()
+        .find(|source| source.name == "shared")
+        .expect("shared should be listed as active");
+    assert!(source.dir.ends_with(".csa/skills/shared"));
+    assert_eq!(
+        listed
+            .iter()
+            .filter(|source| source.name == "shared")
+            .count(),
+        1,
+        "active list should deduplicate duplicate skill names: {listed:?}"
+    );
+    assert_listed_source_resolves_from_same_dir(tmp.path(), home.path(), "shared");
 }
 
 #[test]
