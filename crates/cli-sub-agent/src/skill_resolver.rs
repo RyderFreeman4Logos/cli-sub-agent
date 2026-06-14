@@ -7,11 +7,14 @@
 //! Search order:
 //! 1. `./.csa/skills/<name>/`                             (project-local, CSA-specific)
 //! 2. `./.claude/skills/<name>/`                          (project-local, Claude Code compat)
-//! 3. `<superproject>/.csa/skills/<name>/`                (submodule only)
-//! 4. `<superproject>/.claude/skills/<name>/`             (submodule only)
-//! 5. `~/.config/cli-sub-agent/skills/<name>/`            (global user config)
-//! 6. `~/.local/state/cli-sub-agent/skills/<name>/`       (CSA-managed inactive skills)
-//! 7. `<global_store>/<name>/<commit>/`                   (weave global store via lockfiles)
+//! 3. `./.codex/skills/<name>/`                           (project-local, Codex compat)
+//! 4. `./.agents/skills/<name>/`                          (project-local, shared agent compat)
+//! 5. `./skills/csa/<name>/` and `./.claude/skills/csa/<name>/`
+//! 6. Matching active skill directories and bundled namespaces in an optional superproject root
+//! 7. `~/.claude/skills/<name>/`, `~/.codex/skills/<name>/`, `~/.agents/skills/<name>/`
+//! 8. `~/.config/cli-sub-agent/skills/<name>/`            (global user config)
+//! 9. `~/.local/state/cli-sub-agent/skills/<name>/`       (CSA-managed inactive skills)
+//! 10. `<global_store>/<name>/<commit>/`                  (weave global store via lockfiles)
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -21,6 +24,8 @@ use weave::package::{self, SourceKind};
 use weave::parser::{AgentConfig, SkillConfig, parse_skill_config};
 
 use crate::skill_repo::sanitize_skill_md;
+
+const CSA_SKILL_DIR: &str = ".csa/skills";
 
 /// A skill resolved from disk, ready for injection into a CSA run.
 #[derive(Debug, Clone)]
@@ -40,6 +45,15 @@ impl ResolvedSkill {
     }
 }
 
+/// A runnable skill discovered for `csa skill list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveSkillSource {
+    /// Skill name used by `csa run --skill <name>`.
+    pub name: String,
+    /// Directory where the skill lives.
+    pub dir: PathBuf,
+}
+
 /// Resolve a skill by name, searching standard paths in priority order.
 ///
 /// `project_root` is the working directory / project root for the CSA run.
@@ -50,8 +64,11 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
     }
 
     let candidates = search_paths(name, project_root);
+    resolve_skill_from_candidates(name, &candidates)
+}
 
-    for dir in &candidates {
+fn resolve_skill_from_candidates(name: &str, candidates: &[PathBuf]) -> Result<ResolvedSkill> {
+    for dir in candidates {
         let skill_md_path = dir.join("SKILL.md");
         if skill_md_path.is_file() {
             let raw_skill_md = std::fs::read_to_string(&skill_md_path)
@@ -80,12 +97,23 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
     )
 }
 
+/// List active runnable skills using the same runnable non-store parent
+/// directories searched by the run resolver.
+pub(crate) fn list_active_skill_sources(project_root: &Path) -> Result<Vec<ActiveSkillSource>> {
+    list_active_skill_sources_with_home_and_config(
+        project_root,
+        user_home_dir().as_deref(),
+        paths::config_dir().as_deref(),
+    )
+}
+
 /// Build the ordered list of directories to search for a skill.
 fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
     search_paths_with_store(
         name,
         project_root,
         package::global_store_root().ok().as_deref(),
+        user_home_dir().as_deref(),
     )
 }
 
@@ -94,31 +122,38 @@ fn search_paths_with_store(
     name: &str,
     project_root: &Path,
     store_root: Option<&Path>,
+    home_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut search_roots = Vec::with_capacity(8);
+    search_paths_with_explicit_dirs(
+        name,
+        project_root,
+        store_root,
+        home_dir,
+        paths::config_dir().as_deref(),
+        paths::state_dir_write().as_deref(),
+    )
+}
+
+fn search_paths_with_explicit_dirs(
+    name: &str,
+    project_root: &Path,
+    store_root: Option<&Path>,
+    home_dir: Option<&Path>,
+    config_dir: Option<&Path>,
+    state_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     let repo_roots = discover_repo_roots(project_root);
-
-    // 1. Project-local and ancestor repo roots:
-    //    direct skill names first, then the CSA namespace used by bundled
-    //    compatibility skills.
-    for root in &repo_roots {
-        search_roots.push(root.join(".csa").join("skills").join(name));
-        search_roots.push(root.join(".claude").join("skills").join(name));
-        search_roots.push(root.join("skills").join("csa").join(name));
-        search_roots.push(root.join(".claude").join("skills").join("csa").join(name));
+    let mut parent_dirs =
+        runnable_non_store_skill_parent_dirs_with_config(&repo_roots, home_dir, config_dir);
+    if let Some(state_dir) = state_dir {
+        parent_dirs.push(state_dir.join("skills"));
     }
+    let mut search_roots = parent_dirs
+        .into_iter()
+        .map(|parent| parent.join(name))
+        .collect::<Vec<_>>();
 
-    // 5. Global user config: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
-    if let Some(config_dir) = paths::config_dir() {
-        search_roots.push(config_dir.join("skills").join(name));
-    }
-
-    // 6. CSA-managed inactive skills: ~/.local/state/cli-sub-agent/skills/<name>/
-    if let Some(state_dir) = paths::state_dir_write() {
-        search_roots.push(state_dir.join("skills").join(name));
-    }
-
-    // 7. Weave global store: match locked packages by name.
+    // Weave global store: match locked packages by name.
     if let Some(store) = store_root {
         for root in &repo_roots {
             if let Some(lockfile_path) = package::find_lockfile(root)
@@ -142,6 +177,81 @@ fn search_paths_with_store(
     }
 
     search_roots
+}
+
+fn runnable_non_store_skill_parent_dirs_with_config(
+    repo_roots: &[PathBuf],
+    home_dir: Option<&Path>,
+    config_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::with_capacity(repo_roots.len() * 6 + 5);
+
+    for root in repo_roots {
+        dirs.extend(repo_active_skill_parent_dirs(root));
+        dirs.push(root.join("skills").join("csa"));
+        dirs.push(root.join(".claude").join("skills").join("csa"));
+    }
+    if let Some(home) = home_dir {
+        dirs.extend(home_active_skill_parent_dirs(home));
+    }
+    if let Some(config_dir) = config_dir {
+        dirs.push(config_dir.join("skills"));
+    }
+
+    dirs
+}
+
+fn repo_active_skill_parent_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::with_capacity(weave::check::DEFAULT_LINK_DIRS.len() + 1);
+    dirs.push(root.join(CSA_SKILL_DIR));
+    dirs.extend(
+        weave::check::DEFAULT_LINK_DIRS
+            .iter()
+            .map(|rel| root.join(rel)),
+    );
+    dirs
+}
+
+fn home_active_skill_parent_dirs(home: &Path) -> Vec<PathBuf> {
+    weave::check::DEFAULT_LINK_DIRS
+        .iter()
+        .map(|rel| home.join(rel))
+        .collect()
+}
+
+fn list_active_skill_sources_with_home_and_config(
+    project_root: &Path,
+    home_dir: Option<&Path>,
+    config_dir: Option<&Path>,
+) -> Result<Vec<ActiveSkillSource>> {
+    let mut active_skills = Vec::new();
+    let repo_roots = discover_repo_roots(project_root);
+    for dir in runnable_non_store_skill_parent_dirs_with_config(&repo_roots, home_dir, config_dir) {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) if !n.starts_with('.') => n.to_string(),
+                _ => continue,
+            };
+            if path.join("SKILL.md").exists() {
+                active_skills.push(ActiveSkillSource { name, dir: path });
+            }
+        }
+    }
+
+    active_skills.sort_by(|a, b| a.name.cmp(&b.name));
+    active_skills.dedup_by(|a, b| a.name == b.name);
+    Ok(active_skills)
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
 }
 
 fn discover_repo_roots(project_root: &Path) -> Vec<PathBuf> {

@@ -21,6 +21,7 @@ const HINT_SLOT_EXHAUSTED: &str = "hint: free slots with 'csa gc' or wait with '
 const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa session list'";
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
+const HINT_SKILL_NOT_FOUND: &str = "hint: list runnable skills with 'csa skill list' or install one with 'csa skill install <repo>'";
 const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; current builds pin TMPDIR to a writable sandbox temp dir (private /tmp in bwrap, session tmp elsewhere) and seed under CSA session state, but older builds may still need re-run with TMPDIR=/tmp";
 const LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "core.hooksPath is set locally";
 const HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "hint: lefthook blocked git commit because core.hooksPath is set locally. Staged work may be uncommitted. Run `git config --unset-all --local core.hooksPath`, then rerun the commit or continue the session.";
@@ -59,6 +60,10 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
 
     let has_not_installed_or_not_found =
         chain_text.contains("not installed") || chain_text.contains("not found");
+
+    if chain_text.contains("skill '") && chain_text.contains("not found") {
+        return Some(HINT_SKILL_NOT_FOUND.to_string());
+    }
 
     if has_not_installed_or_not_found {
         if chain_text.contains("gemini") {
@@ -251,6 +256,19 @@ mod tests {
         assert!(
             hint.contains("@openai/codex"),
             "should mention the default codex CLI: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_skill_not_found_with_codex_name_does_not_suggest_codex_install() {
+        let err = anyhow::anyhow!(
+            "Skill 'mktsk-codex' not found. Searched:\n  - /project/.codex/skills/mktsk-codex"
+        );
+        let hint = suggest_fix(&err).unwrap();
+        assert!(hint.contains("csa skill list"), "got: {hint}");
+        assert!(
+            !hint.contains("@openai/codex"),
+            "missing skill must not suggest installing Codex CLI: {hint}"
         );
     }
 
