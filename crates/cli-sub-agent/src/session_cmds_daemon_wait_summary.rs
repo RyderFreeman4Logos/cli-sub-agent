@@ -360,6 +360,11 @@ fn read_review_verdict_label(
     session_dir: &Path,
     result: &csa_session::SessionResult,
 ) -> Option<String> {
+    let summary_requires_failed_gate =
+        crate::session_observability::human_review_summary_requires_failed_gate(
+            session_dir,
+            &result.summary,
+        );
     if let Some(artifact) = read_review_verdict_artifact(session_dir) {
         let meta = read_review_meta_for_label(session_dir);
         if let Some(label) = meta
@@ -368,6 +373,9 @@ fn read_review_verdict_label(
             .or_else(|| format_fix_loop_noop_label(artifact.failure_reason.as_deref()))
         {
             return Some(label);
+        }
+        if summary_requires_failed_gate {
+            return Some("FAIL".to_string());
         }
         if artifact.decision == ReviewDecision::Pass {
             if !wait_result_allows_pass_verdict(result) {
@@ -400,10 +408,17 @@ fn read_review_verdict_label(
         if let Some(label) = format_fix_loop_noop_label(meta.failure_reason.as_deref()) {
             return Some(label);
         }
+        if summary_requires_failed_gate {
+            return Some("FAIL".to_string());
+        }
         if meta.fix_attempted && !meta.fix_clean_converged() {
             return Some("UNAVAILABLE".to_string());
         }
         return Some(normalize_review_verdict_label(&meta.decision, result));
+    }
+
+    if summary_requires_failed_gate {
+        return Some("FAIL".to_string());
     }
 
     None

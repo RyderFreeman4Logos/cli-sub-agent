@@ -117,21 +117,28 @@ pub(crate) fn enrich_result_from_session_dir(
 }
 
 fn sync_review_verdict_exit_code(session_dir: &Path, result: &mut SessionResult) -> Result<bool> {
-    let Some(exit_code) = read_review_verdict_exit_code(session_dir)? else {
-        return Ok(sync_review_summary_exit_code(session_dir, result));
+    let exit_code = if human_review_summary_requires_failed_gate(session_dir, &result.summary) {
+        Some(1)
+    } else {
+        read_review_verdict_exit_code(session_dir)?
+    };
+    let Some(exit_code) = exit_code else {
+        return Ok(false);
     };
     Ok(sync_result_exit_code(result, exit_code))
 }
 
-fn sync_review_summary_exit_code(session_dir: &Path, result: &mut SessionResult) -> bool {
-    let summary_has_fail_verdict = review_summary_has_fail_verdict(&result.summary);
-    let review_summary_has_blocking_outcome = session_dir.join("review_meta.json").is_file()
-        && review_summary_has_blocking_outcome(&result.summary);
-    if !(summary_has_fail_verdict || review_summary_has_blocking_outcome) {
-        return false;
-    }
-
-    sync_result_exit_code(result, 1)
+pub(crate) fn human_review_summary_requires_failed_gate(
+    session_dir: &Path,
+    raw_summary: &str,
+) -> bool {
+    crate::session_summary_text::human_session_summary(session_dir, raw_summary).is_some_and(
+        |summary| {
+            review_summary_has_fail_verdict(&summary)
+                || session_dir.join("review_meta.json").is_file()
+                    && review_summary_has_blocking_outcome(&summary)
+        },
+    )
 }
 
 fn review_summary_has_fail_verdict(summary: &str) -> bool {

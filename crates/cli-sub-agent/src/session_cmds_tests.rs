@@ -863,5 +863,7 @@ mod tail_tests_wait_lock;
 mod tail_tests_wait_regression;
 #[path = "session_cmds_tests_tail_wait_2105.rs"]
 mod w;
+#[path = "session_cmds_tests_tail_wait_2183.rs"]
+mod w2183;
 #[path = "session_cmds_tests_tail_wait_resume_wrapper.rs"]
 mod wait_resume;
