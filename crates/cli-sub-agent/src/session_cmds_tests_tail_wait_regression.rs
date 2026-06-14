@@ -5,6 +5,9 @@ use crate::session_cmds_daemon::{
 use crate::test_env_lock::TEST_ENV_LOCK;
 use tempfile::tempdir;
 
+#[path = "session_cmds_tests_tail_wait_2150.rs"]
+mod issue_2150;
+
 struct EnvVarGuard {
     key: &'static str,
     original: Option<String>,

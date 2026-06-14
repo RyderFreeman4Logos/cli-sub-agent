@@ -197,6 +197,7 @@ pub(crate) fn daemon_completion_result(
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> SessionResult {
+    super::review_diagnostic::persist_review_no_result_diagnostic(session_dir, session, packet);
     let tool_name = session
         .tools
         .iter()
