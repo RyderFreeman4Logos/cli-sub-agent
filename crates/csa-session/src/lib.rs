@@ -75,7 +75,8 @@ pub use output_section::{
 };
 pub use post_exec_gate_report::{
     GATE_FAILURE_LOG_REL_PATH, GATE_OUTPUT_TAIL_MAX_BYTES, GATE_OUTPUT_TAIL_MAX_LINES,
-    PostExecGateReport, bound_output_tail, parse_failing_step, parse_nextest_failing_tests,
+    GATE_SUMMARY_LEAD, PostExecGateReport, bound_output_tail, parse_failing_step,
+    parse_nextest_failing_tests, post_exec_gate_failure_label, post_exec_gate_failure_summary,
 };
 pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};

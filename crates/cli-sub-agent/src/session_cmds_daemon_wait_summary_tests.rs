@@ -121,6 +121,58 @@ fn compact_summary_includes_signal_kill_hint() {
 }
 
 #[test]
+fn compact_summary_prefers_post_exec_gate_failure_over_success_markdown() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("summary.md"),
+        "Fixed and committed the remaining medium finding. Did not push; working tree clean.",
+    )
+    .expect("success-looking summary should be written");
+    std::fs::write(
+        temp.path().join(csa_session::GATE_FAILURE_LOG_REL_PATH),
+        "FAIL [   0.005s] cli_sub_agent::gate::fails\nerror: Recipe `test` failed on line 42 with exit code 100\n",
+    )
+    .expect("gate failure log should be written");
+
+    let now = Utc::now();
+    let report = csa_session::PostExecGateReport::from_redacted_gate_output(
+        "post-exec gate",
+        1,
+        "FAIL [   0.005s] cli_sub_agent::gate::fails\nerror: Recipe `test` failed on line 42 with exit code 100\n",
+    );
+    let result = csa_session::SessionResult {
+        post_exec_gate: Some(report),
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "POST-EXEC GATE FAILED (exit=1, step=just test)".to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: vec![csa_session::SessionArtifact::new(
+            csa_session::GATE_FAILURE_LOG_REL_PATH,
+        )],
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITGATE", &result);
+
+    assert!(summary.contains("Post-exec gate: failed"));
+    assert!(summary.contains("step=just test"));
+    assert!(summary.contains(csa_session::GATE_FAILURE_LOG_REL_PATH));
+    assert!(summary.contains("Summary: POST-EXEC GATE FAILED"));
+    assert!(
+        !summary.contains("working tree clean"),
+        "wait summary must not show child success markdown as authoritative: {summary}"
+    );
+}
+
+#[test]
 fn compact_summary_includes_unknown_signal_evidence() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let now = Utc::now();

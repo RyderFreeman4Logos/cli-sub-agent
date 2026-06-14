@@ -6,6 +6,9 @@ use anyhow::Result;
 use csa_session::{ReviewVerdictArtifact, SessionArtifact, SessionResult};
 use tracing::debug;
 
+#[path = "session_observability_gate.rs"]
+mod gate;
+
 const SUMMARY_MAX_CHARS: usize = 200;
 const REVIEW_SUMMARY_FAIL_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];
 
@@ -60,6 +63,9 @@ pub(crate) fn refresh_and_repair_result_from_dir(
     if sync_review_verdict_exit_code(session_dir, &mut result)? {
         changed = true;
     }
+    if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, &mut result)? {
+        changed = true;
+    }
 
     if changed && let Ok(serialized) = toml::to_string_pretty(&result) {
         let tmp = result_path.with_extension("toml.tmp");
@@ -94,6 +100,11 @@ pub(crate) fn enrich_result_from_session_dir(
     }
 
     if sync_review_verdict_exit_code(session_dir, result)? {
+        changed = true;
+    }
+
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, result)? {
         changed = true;
     }
 

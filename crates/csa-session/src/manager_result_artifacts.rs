@@ -60,12 +60,14 @@ pub fn is_manager_result_artifact_path(artifact_path: &str) -> bool {
 
 /// Convert an observed session artifact path into an ownership-safe artifact.
 ///
-/// Manager result artifacts discovered by directory scans are diagnostics only:
-/// callers must prove current-turn ownership before such paths can drive
-/// manager sidecar overlay or write-target selection.
+/// Manager result artifacts and gate-failure logs discovered by directory
+/// scans are diagnostics only: callers must prove current-turn ownership
+/// before such paths can drive result repair or manager sidecar selection.
 pub fn observed_session_artifact(artifact_path: impl Into<String>) -> SessionArtifact {
     let artifact_path = artifact_path.into();
-    if is_manager_result_artifact_path(&artifact_path) {
+    if is_manager_result_artifact_path(&artifact_path)
+        || artifact_path == crate::post_exec_gate_report::GATE_FAILURE_LOG_REL_PATH
+    {
         SessionArtifact::display_only(artifact_path)
     } else {
         SessionArtifact::new(artifact_path)

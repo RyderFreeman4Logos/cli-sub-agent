@@ -1,4 +1,5 @@
 use super::*;
+use crate::post_exec_gate_report::GATE_FAILURE_LOG_REL_PATH;
 use tempfile::tempdir;
 
 fn runtime_result(summary: &str, artifact_path: &str) -> crate::result::SessionResult {
@@ -445,5 +446,12 @@ fn test_observed_session_artifact_marks_manager_results_display_only() {
     assert!(
         !observed_log.display_only,
         "ordinary observed artifacts remain owned artifacts"
+    );
+
+    let observed_gate_log = observed_session_artifact(GATE_FAILURE_LOG_REL_PATH);
+    assert_eq!(observed_gate_log.path, GATE_FAILURE_LOG_REL_PATH);
+    assert!(
+        observed_gate_log.display_only,
+        "observed gate-failure logs must not prove current result ownership"
     );
 }
