@@ -247,6 +247,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
     let diff_fingerprint = compute_diff_fingerprint(ctx.project_root, ctx.scope);
     persist_multi_review_sidecars(
         ctx.project_root,
+        parent_startup_env.session_dir().map(Path::new),
         ctx.scope,
         &outcomes,
         &head_sha,
@@ -294,9 +295,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         all_reviewers_unavailable,
         head_sha: &head_sha,
         scope: ctx.scope,
-        // Authoritative run-level mode, mirroring the child-sidecar stamp above so
-        // the parent consensus verdict is mode-tagged independently of whether the
-        // per-reviewer findings artifacts carried a mode (#1817).
+        // Parent consensus uses run-level mode even when reviewer artifacts lack it (#1817).
         run_review_mode: Some(ctx.args.effective_review_mode().as_str()),
         review_iterations,
         diff_fingerprint: diff_fingerprint.clone(),
@@ -514,9 +513,7 @@ pub(super) async fn collect_reviewer_outcomes(
     Ok(outcomes)
 }
 
-/// Per-run review metadata stamped onto every reviewer's [`ReviewSessionMeta`]
-/// when persisting multi-reviewer sidecars. `review_mode` records whether the
-/// run was a standard or red-team review so the merge gate can audit it (#1817).
+/// Per-run metadata stamped onto each reviewer sidecar.
 pub(super) struct ReviewRunMeta<'a> {
     pub(super) review_iterations: u32,
     pub(super) diff_fingerprint: Option<String>,
@@ -525,6 +522,7 @@ pub(super) struct ReviewRunMeta<'a> {
 
 pub(super) fn persist_multi_review_sidecars(
     project_root: &Path,
+    parent_session_dir: Option<&Path>,
     scope: &str,
     outcomes: &[ReviewerOutcome],
     head_sha: &str,
@@ -599,6 +597,7 @@ pub(super) fn persist_multi_review_sidecars(
         }
         super::multi_repo_write_audit::persist_multi_reviewer_repo_write_audit_artifact(
             project_root,
+            parent_session_dir,
             outcome,
             &worktree_mutation_findings,
             effective_meta.review_mode.as_deref(),

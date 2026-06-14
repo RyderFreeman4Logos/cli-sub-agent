@@ -5,7 +5,7 @@ use csa_config::ProjectProfile;
 use csa_core::consensus::ConsensusStrategy;
 use csa_core::env::{CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY};
 use csa_core::types::ReviewDecision;
-use csa_session::{FindingsFile, ReviewArtifact, ReviewVerdictArtifact, Severity};
+use csa_session::{FindingsFile, ReviewArtifact, ReviewVerdictArtifact, Severity, SeveritySummary};
 use proptest::prelude::*;
 use std::{collections::HashMap, path::Path};
 
@@ -155,8 +155,27 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
     let final_verdict = final_verdict_for_multi_review(false, blocked, &consensus);
     assert_eq!(final_verdict, HAS_ISSUES);
 
+    let parent_dir = project.path().join("parent-session");
+    std::fs::create_dir_all(parent_dir.join("reviewer-1")).expect("create parent reviewer dir");
+    let parent_session_id = "01PARENTSESSION000000000000";
+    let preexisting_parent_artifact = ReviewArtifact {
+        findings: Vec::new(),
+        severity_summary: SeveritySummary::default(),
+        review_mode: Some("standard".to_string()),
+        schema_version: "1.0".to_string(),
+        session_id: dirty_session_id.clone(),
+        timestamp: chrono::Utc::now(),
+    };
+    std::fs::write(
+        parent_dir.join("reviewer-1").join("review-findings.json"),
+        serde_json::to_vec_pretty(&preexisting_parent_artifact)
+            .expect("preexisting parent artifact should serialize"),
+    )
+    .expect("preexisting parent reviewer artifact should be written");
+
     persist_multi_review_sidecars(
         project.path(),
+        Some(&parent_dir),
         "range:main...HEAD",
         &outcomes,
         "HEADSHA",
@@ -208,9 +227,17 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
         "CSA-REVIEW-WORKTREE-MUTATION"
     );
 
-    let parent_dir = project.path().join("parent-session");
-    std::fs::create_dir_all(&parent_dir).expect("create parent session dir");
-    let parent_session_id = "01PARENTSESSION000000000000";
+    let parent_reviewer_artifact: ReviewArtifact = serde_json::from_str(
+        &std::fs::read_to_string(parent_dir.join("reviewer-1").join("review-findings.json"))
+            .expect("parent reviewer artifact should exist"),
+    )
+    .expect("parent reviewer artifact should parse");
+    assert_eq!(parent_reviewer_artifact.severity_summary.high, 1);
+    assert_eq!(
+        parent_reviewer_artifact.findings[0].fid,
+        "CSA-REVIEW-WORKTREE-MUTATION"
+    );
+
     super::super::parent_artifacts::write_multi_reviewer_consensus_artifacts(
         super::super::parent_artifacts::MultiReviewerConsensusArtifacts {
             project_root: project.path(),
@@ -229,6 +256,29 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
         &startup_env_for_parent_session(&parent_dir, parent_session_id),
     )
     .expect("parent consensus artifacts should be written");
+
+    let parent_findings: FindingsFile = toml::from_str(
+        &std::fs::read_to_string(parent_dir.join("output").join("findings.toml"))
+            .expect("parent findings.toml should exist"),
+    )
+    .expect("parent findings.toml should parse");
+    assert_eq!(
+        parent_findings.findings[0].id,
+        "CSA-REVIEW-WORKTREE-MUTATION"
+    );
+
+    let parent_consolidated: ReviewArtifact = serde_json::from_str(
+        &std::fs::read_to_string(
+            parent_dir.join(crate::bug_class::CONSOLIDATED_REVIEW_ARTIFACT_FILE),
+        )
+        .expect("parent consolidated review artifact should exist"),
+    )
+    .expect("parent consolidated review artifact should parse");
+    assert_eq!(parent_consolidated.severity_summary.high, 1);
+    assert_eq!(
+        parent_consolidated.findings[0].fid,
+        "CSA-REVIEW-WORKTREE-MUTATION"
+    );
 
     let parent_verdict: ReviewVerdictArtifact = serde_json::from_str(
         &std::fs::read_to_string(parent_dir.join("output").join("review-verdict.json"))
