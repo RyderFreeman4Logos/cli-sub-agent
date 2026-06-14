@@ -259,7 +259,6 @@ if [ -z "${PR_TITLE}" ]; then
   PR_TITLE="$(derive_default_pr_title)"
   echo "INFO: PR_TITLE unset; using derived title: ${PR_TITLE}" >&2
 fi
-
 # --- Early-push detection: warn if branch was already pushed before review ---
 if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
   echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
@@ -407,7 +406,7 @@ elif [ "${FIND_RC}" = "1" ]; then
   exit 1
 else
   set +e
-  CREATE_OUTPUT="$(gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
+  CREATE_OUTPUT="$(gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY:-}" 2>&1)"
   CREATE_RC=$?
   set -e
   if [ "${CREATE_RC}" != "0" ]; then
@@ -2123,7 +2122,7 @@ git checkout -b "${CLEAN_BRANCH}"
 CSA_SKIP_REVIEW_CHECK=1 \
 CSA_SKIP_REVIEW_CHECK_REASON="pr-bot push clean branch for PR" \
   git push -u "${REMOTE_NAME}" "${CLEAN_BRANCH}"
-gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
+gh pr create --repo "${REPO_SLUG}" --base "${DEFAULT_BRANCH}" --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY:-}"
 ```
 
 ## Step 12: Final Merge
