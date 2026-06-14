@@ -822,17 +822,6 @@ fn session_logs_cli_events_defaults_to_false() {
     }
 }
 
-#[test]
-fn print_content_with_tail_no_panic_on_empty() {
-    print_content_with_tail("", None);
-    print_content_with_tail("", Some(5));
-}
-
-#[test]
-fn print_content_with_tail_no_panic_on_large_tail() {
-    print_content_with_tail("line1\nline2\n", Some(100));
-}
-
 include!("session_cmds_tests_fork_tail.rs");
 
 #[path = "session_cmds_tests_daemon_pid_tail.rs"]
@@ -841,6 +830,10 @@ mod daemon_pid_tail_tests;
 mod kv_warm_tests;
 #[path = "session_cmds_tests_list_format.rs"]
 mod list_format_tests;
+#[path = "session_cmds_tests_list_no_live_pid.rs"]
+mod list_no_live_pid_tests;
+#[path = "session_cmds_tests_print_tail.rs"]
+mod print_tail_tests;
 #[path = "session_cmds_tests_result_cli.rs"]
 mod result_cli_tests;
 #[path = "session_cmds_tests_tail.rs"]
