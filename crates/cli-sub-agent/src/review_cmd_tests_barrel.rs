@@ -1,4 +1,5 @@
 pub(in crate::review_cmd::tests) use super::*;
+use csa_core::types::ToolName;
 pub(crate) use review_core::{
     ScopedEnvVarRestore, project_config_with_enabled_tools, setup_git_repo,
 };
@@ -24,6 +25,17 @@ fn review_fix_forces_writable_project_root() {
     assert!(!resolve_review_readonly_project_root(true, None));
     assert!(!resolve_review_readonly_project_root(true, Some(true)));
     assert!(!resolve_review_readonly_project_root(true, Some(false)));
+}
+
+#[test]
+fn explicit_tool_failover_context_requires_explicit_tool_active_tier_and_failover() {
+    let context = |direct_tool_requested: bool, tier_active: bool, no_failover: bool| {
+        (direct_tool_requested && tier_active && !no_failover).then_some(ToolName::Codex)
+    };
+    assert_eq!(context(true, true, false), Some(ToolName::Codex));
+    assert_eq!(context(false, true, false), None);
+    assert_eq!(context(true, false, false), None);
+    assert_eq!(context(true, true, true), None);
 }
 
 fn project_config_with_review_readonly(readonly_sandbox: Option<bool>) -> ProjectConfig {

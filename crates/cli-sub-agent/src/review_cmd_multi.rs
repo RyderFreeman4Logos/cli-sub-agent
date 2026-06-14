@@ -196,6 +196,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 reviewer_force_override,
                 reviewer_force_ignore_tier,
                 reviewer_no_failover,
+                None,
                 reviewer_build_jobs,
                 reviewer_fast_but_more_cost,
                 false,

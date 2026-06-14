@@ -125,6 +125,7 @@ pub(crate) async fn handle_fix_finding(
         args.force_override_user_config,
         true,
         true,
+        None,
         args.build_jobs,
         args.fast_but_more_cost,
         false,
