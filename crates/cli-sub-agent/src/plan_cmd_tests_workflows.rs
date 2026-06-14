@@ -297,6 +297,13 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save""#,
             r#"TODO_ARTIFACT="${SAVE_DIR}/TODO.md""#,
             r#"SPEC_ARTIFACT="${SAVE_DIR}/spec.toml""#,
+            r#"FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}")"#,
+            r#"LOWER_SPEC_LINE="${FIRST_SPEC_LINE,,}""#,
+            r#"SPEC_MARKER_KIND="""#,
+            r#"SPEC_MARKER_KIND="CSA section marker""#,
+            r#"spec artifact-shape error: expected TOML spec.toml"#,
+            r#"first marker kind: %s"#,
+            r#"Spec artifact path: %s"#,
             r#"csa todo persist -t "${TODO_TS}""#,
             r#"--todo-file "${TODO_ARTIFACT}""#,
             r#"--spec-file "${SPEC_ARTIFACT}""#,
@@ -312,6 +319,8 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"> "${SPEC_PATH}""#,
             r#"> "${EPIC_PATH}""#,
             "csa todo save -t",
+            r#"Artifact preview:"#,
+            r#"sed -n '1,8p' "${SPEC_ARTIFACT}""#,
         ] {
             assert!(
                 !content.contains(forbidden),
@@ -328,9 +337,18 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
         let validate_idx = content
             .find(r#"grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}""#)
             .unwrap_or_else(|| panic!("{name} must validate the TODO artifact before persist"));
+        let shape_idx = content
+            .find(
+                r#"FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}")"#,
+            )
+            .unwrap_or_else(|| panic!("{name} must shape-check spec artifact before persist"));
         assert!(
             validate_idx < persist_idx,
             "{name} must validate artifacts BEFORE csa todo persist (commit), not after"
+        );
+        assert!(
+            shape_idx < persist_idx,
+            "{name} must reject markdown/HTML-shaped spec artifacts BEFORE csa todo persist"
         );
 
         for forbidden_postcommit in [

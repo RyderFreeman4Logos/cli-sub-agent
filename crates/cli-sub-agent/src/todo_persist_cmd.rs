@@ -1,5 +1,7 @@
 use anyhow::Result;
-use csa_todo::{EpicPlan, GeneratedPlanPersistRequest, SpecDocument, TodoManager};
+use csa_todo::{
+    EpicPlan, GeneratedPlanPersistRequest, SpecDocument, TodoManager, parse_spec_document,
+};
 
 use crate::cli::TodoCommands;
 
@@ -34,8 +36,7 @@ pub(crate) fn handle_persist(
         .map_err(|e| anyhow::anyhow!("failed to read TODO file '{}': {}", todo_file, e))?;
     let spec_content = std::fs::read_to_string(&spec_file)
         .map_err(|e| anyhow::anyhow!("failed to read spec file '{}': {}", spec_file, e))?;
-    let spec: SpecDocument = toml::from_str(&spec_content)
-        .map_err(|e| anyhow::anyhow!("failed to parse spec file '{}': {}", spec_file, e))?;
+    let spec: SpecDocument = parse_spec_document(&spec_content, &spec_file)?;
     let epic_plan: Option<EpicPlan> = epic_plan_file
         .as_deref()
         .map(|path| {
