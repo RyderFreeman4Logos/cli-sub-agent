@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 fn default_schema_version() -> u32 {
@@ -51,9 +52,65 @@ impl Default for SpecDocument {
     }
 }
 
+/// Parse a `spec.toml` document after rejecting known non-TOML artifact shapes.
+///
+/// Generated plans pass through session-output files before they are persisted.
+/// If a producing step writes a CSA return packet or markdown fence into
+/// `spec.toml`, plain TOML parsing reports a low-level syntax error that hides
+/// the real contract breach. This parser keeps normal TOML errors intact while
+/// failing early for those artifact-shape mismatches.
+pub fn parse_spec_document(content: &str, source: &str) -> Result<SpecDocument> {
+    reject_non_toml_artifact_shape(content, source)?;
+    toml::from_str(content)
+        .map_err(|e| anyhow::anyhow!("failed to parse spec file '{}': {}", source, e))
+}
+
+fn reject_non_toml_artifact_shape(content: &str, source: &str) -> Result<()> {
+    let Some((line_number, line)) = content
+        .lines()
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+    else {
+        return Ok(());
+    };
+
+    let trimmed = line
+        .trim_start()
+        .trim_start_matches('\u{feff}')
+        .trim_start();
+    let lower_trimmed = trimmed.to_ascii_lowercase();
+    let marker_kind = if trimmed.starts_with("<!-- CSA:SECTION:") {
+        Some("a CSA section marker")
+    } else if trimmed.starts_with("<!--") {
+        Some("an HTML marker")
+    } else if lower_trimmed.starts_with("<!doctype html") || lower_trimmed.starts_with("<html") {
+        Some("an HTML document marker")
+    } else if trimmed.starts_with("```") {
+        Some("a Markdown code fence")
+    } else {
+        None
+    };
+
+    if let Some(marker_kind) = marker_kind {
+        let redacted_marker = csa_session::redact_text_content(line.trim());
+        anyhow::bail!(
+            "spec artifact-shape error in '{}': expected TOML spec.toml, but line {} starts \
+             with {}: `{}`. This usually means a CSA return packet, markdown output, or \
+             upstream MCP/tool error was written to spec.toml; inspect the producing step \
+             before running `csa todo persist`.",
+            source,
+            line_number + 1,
+            marker_kind,
+            redacted_marker
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
+    use super::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, parse_spec_document};
 
     fn sample_criterion() -> SpecCriterion {
         SpecCriterion {
@@ -112,5 +169,64 @@ description = "Missing status should default to pending."
             toml::from_str(&toml).expect("document should deserialize from TOML");
 
         assert_eq!(decoded, document);
+    }
+
+    #[test]
+    fn parse_spec_document_rejects_csa_section_marker_artifact_shape() {
+        let err = parse_spec_document(
+            "<!-- CSA:SECTION:summary -->\nnot a toml spec\n<!-- CSA:SECTION:summary:END -->\n",
+            "output/mktd-save/spec.toml",
+        )
+        .expect_err("CSA section marker must be rejected before TOML parsing");
+        let message = err.to_string();
+
+        assert!(message.contains("spec artifact-shape error"));
+        assert!(message.contains("CSA section marker"));
+        assert!(message.contains("output/mktd-save/spec.toml"));
+        assert!(!message.contains("not a toml spec"));
+        assert!(message.contains("inspect the producing step"));
+    }
+
+    #[test]
+    fn parse_spec_document_rejects_markdown_fence_artifact_shape() {
+        let err = parse_spec_document(
+            "```toml\nschema_version = 1\n```\n",
+            "output/mktd-save/spec.toml",
+        )
+        .expect_err("markdown-fenced spec artifact must be rejected before TOML parsing");
+        let message = err.to_string();
+
+        assert!(message.contains("spec artifact-shape error"));
+        assert!(message.contains("Markdown code fence"));
+    }
+
+    #[test]
+    fn parse_spec_document_rejects_html_document_artifact_shape() {
+        let err = parse_spec_document(
+            "<!doctype html>\n<html><body>mempal MCP schema mismatch</body></html>\n",
+            "output/mktd-save/spec.toml",
+        )
+        .expect_err("HTML spec artifact must be rejected before TOML parsing");
+        let message = err.to_string();
+
+        assert!(message.contains("spec artifact-shape error"));
+        assert!(message.contains("HTML document marker"));
+        assert!(!message.contains("mempal MCP schema mismatch"));
+    }
+
+    #[test]
+    fn parse_spec_document_redacts_secret_like_marker_line() {
+        let err = parse_spec_document(
+            "<!-- CSA:SECTION:summary --> api_key=fixture12345\nAuthorization: Bearer fixturebearertoken\n",
+            "output/mktd-save/spec.toml",
+        )
+        .expect_err("CSA section marker must be rejected before TOML parsing");
+        let message = err.to_string();
+
+        assert!(message.contains("spec artifact-shape error"));
+        assert!(message.contains("[REDACTED]"));
+        assert!(!message.contains("fixture12345"));
+        assert!(!message.contains("fixturebearertoken"));
+        assert!(!message.contains("Authorization: Bearer"));
     }
 }

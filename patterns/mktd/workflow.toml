@@ -741,19 +741,22 @@ SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artifact failed" >&2; exit 1; }
 [[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
 [[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
-# Hard-gate: validate the RENDERED artifacts BEFORE `csa todo persist` commits
-# them. An invalid plan must NEVER reach the persist/commit step (#1820/#1822
-# hard-gate contract; round-5 ordering fix). `csa todo persist` ALSO re-checks
-# the core invariants fail-closed inside its locked commit (defense-in-depth)
-# — including the spec-criteria check that replaces the former post-commit
-# `csa todo show --spec` render gate — so NO content validation runs after the
-# commit.
+FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}") || { echo "read spec artifact failed" >&2; exit 1; }
+LOWER_SPEC_LINE="${FIRST_SPEC_LINE,,}"
+SPEC_MARKER_KIND=""
+case "${LOWER_SPEC_LINE}" in
+  '<!-- csa:section:'*) SPEC_MARKER_KIND="CSA section marker" ;;
+  '<!--'*) SPEC_MARKER_KIND="HTML marker" ;;
+  '<!doctype html'*|'<html'*) SPEC_MARKER_KIND="HTML document marker" ;;
+  '```'*) SPEC_MARKER_KIND="Markdown code fence" ;;
+esac
+if [[ -n "${SPEC_MARKER_KIND}" ]]; then
+  printf 'spec artifact-shape error: expected TOML spec.toml; first marker kind: %s\nSpec artifact path: %s\n' "${SPEC_MARKER_KIND}" "${SPEC_ARTIFACT}" >&2
+  exit 1
+fi
+# Pre-persist gates must run before commit; `csa todo persist` repeats core checks under lock.
 grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}" || { echo "TODO artifact has no non-empty checkbox tasks" >&2; exit 1; }
-# Per-task gate: EVERY open checkbox task must carry its OWN mechanically
-# verifiable `DONE WHEN:` clause (AGENTS.md Meta 005). A single global match is
-# insufficient — a bare keyword mention in a subject, or one task's clause, must
-# not cover another open task's gap. `csa todo persist` re-applies the same
-# per-task check fail-closed under the write lock (defense-in-depth).
+# Every open task needs its own `DONE WHEN:`; persist repeats this under lock.
 awk '
 function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
 function scan(text,   pos, rest) {

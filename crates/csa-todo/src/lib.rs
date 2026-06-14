@@ -33,7 +33,7 @@ const LOCK_FILE: &str = ".lock";
 pub use epic_plan::{EpicMeta, EpicPlan, ScaleSignals, Story, StoryStatus};
 pub use generated_plan::{GeneratedPlanPersistRequest, GeneratedPlanPersistResult};
 pub use reference::{ReferenceFile, ReferenceIndex, ReferenceSource};
-pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
+pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, parse_spec_document};
 
 mod attestation;
 pub mod epic_plan;
@@ -352,7 +352,7 @@ impl TodoManager {
 
         let content = std::fs::read_to_string(&spec_path)
             .with_context(|| format!("Failed to read spec: {}", spec_path.display()))?;
-        let spec: SpecDocument = toml::from_str(&content)
+        let spec = parse_spec_document(&content, &spec_path.display().to_string())
             .with_context(|| format!("Failed to parse spec: {}", spec_path.display()))?;
         Ok(Some(spec))
     }

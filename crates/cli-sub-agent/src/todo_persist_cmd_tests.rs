@@ -146,6 +146,64 @@ fn git_head(dir: &std::path::Path) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+#[test]
+fn handle_persist_rejects_spec_section_marker_without_committing() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let manager = TodoManager::new(project_dir.path())?;
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let plan = manager.create("Reject marker spec", Some("fix/reject-marker-spec"))?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, "create plan")?
+        .ok_or_else(|| anyhow::anyhow!("initial plan should commit"))?;
+    let head_before = git_head(manager.todos_dir())?;
+
+    let artifact_dir = project_dir.path().join("session-output");
+    std::fs::create_dir_all(&artifact_dir)?;
+    let todo_file = artifact_dir.join("TODO.md");
+    let spec_file = artifact_dir.join("spec.toml");
+    std::fs::write(
+        &todo_file,
+        "# Marker spec plan\n\n## Tasks\n\n- [ ] Reject non-TOML spec artifacts.\n  DONE WHEN: csa todo persist reports an artifact-shape diagnostic before commit.\n",
+    )?;
+    std::fs::write(
+        &spec_file,
+        "<!-- CSA:SECTION:summary -->\nMCP schema mismatch details are not TOML.\napi_key=fixture12345\nAuthorization: Bearer fixturebearertoken\n<!-- CSA:SECTION:summary:END -->\n",
+    )?;
+
+    let err = handle_persist(
+        plan.timestamp.clone(),
+        todo_file.display().to_string(),
+        spec_file.display().to_string(),
+        None,
+        Some("finalize marker spec".to_string()),
+        Some(project_dir.path().display().to_string()),
+    )
+    .expect_err("persist must reject CSA section marker spec artifacts");
+    let message = err.to_string();
+    assert!(message.contains("spec artifact-shape error"));
+    assert!(message.contains("CSA section marker"));
+    assert!(message.contains("inspect the producing step"));
+    assert!(!message.contains("MCP schema mismatch details"));
+    assert!(!message.contains("fixture12345"));
+    assert!(!message.contains("fixturebearertoken"));
+    assert!(!message.contains("Authorization: Bearer"));
+
+    assert_eq!(
+        head_before,
+        git_head(manager.todos_dir())?,
+        "no new todos-git commit may exist for a rejected spec artifact"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(manager.todos_dir())
+        .output()?;
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "todos git status must stay clean when spec artifact shape is rejected"
+    );
+    Ok(())
+}
+
 /// Round-5 regression: a generated TODO that lacks a `DONE WHEN` clause must be
 /// rejected fail-closed by `csa todo persist` BEFORE it commits, so no invalid
 /// plan can enter the todos git history (the hard-gate contract). Proven by
