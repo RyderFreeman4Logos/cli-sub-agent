@@ -26,6 +26,18 @@ pub const GATE_OUTPUT_TAIL_MAX_LINES: usize = 100;
 /// The full output always lives in [`GATE_FAILURE_LOG_REL_PATH`].
 pub const GATE_OUTPUT_TAIL_MAX_BYTES: usize = 8 * 1024;
 
+/// Leading marker for gate-failure summaries. Callers and tests key off this
+/// marker to distinguish the authoritative gate verdict from the employee's
+/// pre-gate self-report.
+pub const GATE_SUMMARY_LEAD: &str = "POST-EXEC GATE FAILED";
+
+/// How many failing test names to inline into one-line summaries before
+/// collapsing the rest into a `(+N more)` suffix.
+const SUMMARY_MAX_INLINE_TESTS: usize = 5;
+
+/// Maximum size of the single-line tail excerpt embedded in summary text.
+const SUMMARY_OUTPUT_EXCERPT_MAX_CHARS: usize = 240;
+
 /// Structured detail of a failed post-exec verification gate.
 ///
 /// Serialized as the `[post_exec_gate]` table of `result.toml`. Present ONLY
@@ -77,6 +89,86 @@ impl PostExecGateReport {
             log_path: GATE_FAILURE_LOG_REL_PATH.to_string(),
         }
     }
+}
+
+/// Build the caller-facing one-line failure summary for a post-exec gate
+/// report. It always leads with [`GATE_SUMMARY_LEAD`] and includes bounded
+/// context only; the full output remains in [`PostExecGateReport::log_path`].
+pub fn post_exec_gate_failure_summary(report: &PostExecGateReport) -> String {
+    let mut summary = format!(
+        "{GATE_SUMMARY_LEAD} (phase=post-exec, command={}, exit={}",
+        report.gate_command, report.exit_code
+    );
+    if let Some(step) = &report.failing_step {
+        summary.push_str(&format!(", step={step}"));
+    }
+    summary.push_str(") - employee self-report SUPERSEDED by gate verdict; full output: ");
+    summary.push_str(&report.log_path);
+    append_failing_tests(&mut summary, report);
+    append_tail_excerpt(&mut summary, report);
+    summary
+}
+
+/// Build a compact label for terminal summaries, e.g. the `csa session wait`
+/// compact output.
+pub fn post_exec_gate_failure_label(report: &PostExecGateReport) -> String {
+    let mut label = format!(
+        "failed (phase=post-exec, command={}, exit={}",
+        report.gate_command, report.exit_code
+    );
+    if let Some(step) = &report.failing_step {
+        label.push_str(&format!(", step={step}"));
+    }
+    label.push_str(&format!(", log={})", report.log_path));
+    append_failing_tests(&mut label, report);
+    label
+}
+
+fn append_failing_tests(message: &mut String, report: &PostExecGateReport) {
+    if report.failing_tests.is_empty() {
+        return;
+    }
+    let shown: Vec<&str> = report
+        .failing_tests
+        .iter()
+        .take(SUMMARY_MAX_INLINE_TESTS)
+        .map(String::as_str)
+        .collect();
+    message.push_str("; failing tests: ");
+    message.push_str(&shown.join(", "));
+    let extra = report
+        .failing_tests
+        .len()
+        .saturating_sub(SUMMARY_MAX_INLINE_TESTS);
+    if extra > 0 {
+        message.push_str(&format!(" (+{extra} more)"));
+    }
+}
+
+fn append_tail_excerpt(message: &mut String, report: &PostExecGateReport) {
+    let Some(excerpt) = compact_tail_excerpt(&report.output_tail) else {
+        return;
+    };
+    message.push_str("; tail: ");
+    message.push_str(&excerpt);
+}
+
+fn compact_tail_excerpt(output_tail: &str) -> Option<String> {
+    let line = output_tail
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(clip_chars(&normalized, SUMMARY_OUTPUT_EXCERPT_MAX_CHARS))
+}
+
+fn clip_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let truncated: String = value.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", truncated.trim_end())
 }
 
 /// Parse failed test names from `cargo nextest` output.
@@ -299,5 +391,40 @@ error: Recipe `clippy` failed on line 7 with exit code 101";
         assert_eq!(loaded, report);
         assert_eq!(loaded.failing_tests, vec!["pkg::a".to_string()]);
         assert_eq!(loaded.failing_step.as_deref(), Some("just test"));
+    }
+
+    #[test]
+    fn failure_summary_leads_with_gate_and_includes_bounded_tail() {
+        let report = PostExecGateReport::from_redacted_gate_output(
+            "post-exec gate",
+            1,
+            "FAIL [   0.005s] pkg::a\nerror: Recipe `test` failed on line 1 with exit code 100\n",
+        );
+
+        let summary = post_exec_gate_failure_summary(&report);
+
+        assert!(summary.starts_with(GATE_SUMMARY_LEAD));
+        assert!(summary.contains("phase=post-exec"));
+        assert!(summary.contains("command=post-exec gate"));
+        assert!(summary.contains("step=just test"));
+        assert!(summary.contains("pkg::a"));
+        assert!(summary.contains(GATE_FAILURE_LOG_REL_PATH));
+        assert!(summary.contains("tail: error: Recipe `test` failed"));
+    }
+
+    #[test]
+    fn failure_label_is_compact() {
+        let report = PostExecGateReport::from_redacted_gate_output(
+            "just pre-commit",
+            100,
+            "FAIL [   0.005s] pkg::a\nerror: Recipe `test` failed on line 1 with exit code 100\n",
+        );
+
+        let label = post_exec_gate_failure_label(&report);
+
+        assert!(label.starts_with("failed (phase=post-exec"));
+        assert!(label.contains("command=just pre-commit"));
+        assert!(label.contains("step=just test"));
+        assert!(label.contains(GATE_FAILURE_LOG_REL_PATH));
     }
 }

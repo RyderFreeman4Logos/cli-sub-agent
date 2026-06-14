@@ -34,14 +34,6 @@ use csa_session::{
 /// already-prepended banner (idempotency) so re-entry never double-stamps.
 const GATE_BANNER_HEADER: &str = "> ⚠️ **POST-EXEC GATE FAILED";
 
-/// Leading marker for the reconciled `result.toml` summary. Kept as a constant
-/// so tests assert the non-contradiction contract rather than prose wording.
-pub(crate) const GATE_SUMMARY_LEAD: &str = "POST-EXEC GATE FAILED";
-
-/// How many failing test names to inline into the one-line `result.toml`
-/// summary before collapsing the rest into a `(+N more)` suffix.
-const SUMMARY_MAX_INLINE_TESTS: usize = 5;
-
 /// How many failing test names to list in the (multi-line) section banner.
 const BANNER_MAX_LISTED_TESTS: usize = 10;
 
@@ -173,31 +165,7 @@ fn overwrite_result_with_report(
 /// (exit code + failing step) and points at the full log, so an orchestrator
 /// reading only `result.summary` cannot mistake the run for a success.
 fn build_failure_summary(report: &PostExecGateReport) -> String {
-    let mut summary = format!("{GATE_SUMMARY_LEAD} (exit={}", report.exit_code);
-    if let Some(step) = &report.failing_step {
-        summary.push_str(&format!(", step={step}"));
-    }
-    summary.push_str(") — employee self-report SUPERSEDED by gate verdict; full output: ");
-    summary.push_str(&report.log_path);
-
-    if !report.failing_tests.is_empty() {
-        let shown: Vec<&str> = report
-            .failing_tests
-            .iter()
-            .take(SUMMARY_MAX_INLINE_TESTS)
-            .map(String::as_str)
-            .collect();
-        summary.push_str("; failing tests: ");
-        summary.push_str(&shown.join(", "));
-        let extra = report
-            .failing_tests
-            .len()
-            .saturating_sub(SUMMARY_MAX_INLINE_TESTS);
-        if extra > 0 {
-            summary.push_str(&format!(" (+{extra} more)"));
-        }
-    }
-    summary
+    csa_session::post_exec_gate_failure_summary(report)
 }
 
 /// Build the multi-line markdown banner prepended to `summary.md`/`details.md`.
@@ -316,7 +284,7 @@ mod tests {
     fn summary_leads_with_gate_verdict_not_success() {
         let summary = build_failure_summary(&report_with(100, Some("just test"), &["pkg::a"]));
         // Leads with the gate verdict marker.
-        assert!(summary.starts_with(GATE_SUMMARY_LEAD));
+        assert!(summary.starts_with(csa_session::GATE_SUMMARY_LEAD));
         assert!(summary.contains("exit=100"));
         assert!(summary.contains("step=just test"));
         assert!(summary.contains("SUPERSEDED"));
@@ -327,7 +295,7 @@ mod tests {
     #[test]
     fn summary_handles_missing_step_and_tests() {
         let summary = build_failure_summary(&report_with(1, None, &[]));
-        assert!(summary.starts_with(GATE_SUMMARY_LEAD));
+        assert!(summary.starts_with(csa_session::GATE_SUMMARY_LEAD));
         assert!(summary.contains("exit=1"));
         assert!(!summary.contains("step="));
         assert!(!summary.contains("failing tests"));

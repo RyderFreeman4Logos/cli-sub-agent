@@ -32,10 +32,13 @@ pub(super) fn display_result_text(
     println!("Tool:    {}", envelope.tool);
     println!("Started: {}", envelope.started_at);
     println!("Ended:   {}", envelope.completed_at);
-    if let Some(summary) =
-        crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
-    {
-        let summary = crate::session_summary_text::enrich_review_summary(session_dir, &summary);
+    if let Some(report) = envelope.post_exec_gate.as_ref() {
+        println!(
+            "Post-exec gate: {}",
+            csa_session::post_exec_gate_failure_label(report)
+        );
+    }
+    if let Some(summary) = result_display_summary(session_dir, envelope) {
         println!("Summary: {summary}");
     }
     if !envelope.artifacts.is_empty() {
@@ -151,6 +154,10 @@ pub(super) fn build_result_json_payload(
     token_usage: Option<&TokenUsage>,
 ) -> Result<serde_json::Value> {
     let mut payload = serde_json::to_value(&result.envelope)?;
+    if let Some(report) = result.envelope.post_exec_gate.as_ref() {
+        payload["summary"] =
+            serde_json::Value::String(csa_session::post_exec_gate_failure_summary(report));
+    }
     if let Some(sidecar) = result
         .manager_sidecar
         .as_ref()
@@ -185,6 +192,17 @@ pub(super) fn build_result_json_payload(
         payload["total_token_usage"] = value;
     }
     Ok(payload)
+}
+
+fn result_display_summary(
+    session_dir: &Path,
+    envelope: &csa_session::SessionResult,
+) -> Option<String> {
+    if let Some(report) = envelope.post_exec_gate.as_ref() {
+        return Some(csa_session::post_exec_gate_failure_summary(report));
+    }
+    crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
+        .map(|summary| crate::session_summary_text::enrich_review_summary(session_dir, &summary))
 }
 
 fn normalized_token_usage_for_output(usage: &TokenUsage) -> TokenUsage {

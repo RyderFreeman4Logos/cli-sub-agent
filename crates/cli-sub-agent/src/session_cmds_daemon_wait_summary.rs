@@ -141,10 +141,14 @@ pub(crate) fn render_wait_result_summary(
         lines.push(format!("Warning: {warning}"));
     }
 
-    if let Some(summary) =
-        crate::session_summary_text::human_session_summary(session_dir, &result.summary)
-            .and_then(|text| compact_wait_summary_text(&text))
-    {
+    if let Some(report) = result.post_exec_gate.as_ref() {
+        lines.push(format!(
+            "Post-exec gate: {}",
+            csa_session::post_exec_gate_failure_label(report)
+        ));
+    }
+
+    if let Some(summary) = wait_display_summary(session_dir, result) {
         lines.push(format!("Summary: {summary}"));
     }
 
@@ -217,12 +221,20 @@ fn render_wait_result_json(
         "review_verdict": read_review_verdict_label(session_dir, result),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
+        "post_exec_gate": result.post_exec_gate.as_ref(),
         "large_diff_warning": result.large_diff_warning.as_ref(),
         "warnings": result.warnings,
-        "summary": crate::session_summary_text::human_session_summary(session_dir, &result.summary)
-            .and_then(|text| compact_wait_summary_text(&text)),
+        "summary": wait_display_summary(session_dir, result),
     });
     serde_json::to_string_pretty(&value).map_err(Into::into)
+}
+
+fn wait_display_summary(session_dir: &Path, result: &csa_session::SessionResult) -> Option<String> {
+    if let Some(report) = result.post_exec_gate.as_ref() {
+        return compact_wait_summary_text(&csa_session::post_exec_gate_failure_summary(report));
+    }
+    crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+        .and_then(|text| compact_wait_summary_text(&text))
 }
 
 fn wait_result_tool_label(result: &csa_session::SessionResult) -> String {
