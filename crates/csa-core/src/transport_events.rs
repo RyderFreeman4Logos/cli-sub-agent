@@ -71,6 +71,12 @@ pub enum SessionEvent {
         id: String,
         status: String,
     },
+    ToolCallOutput {
+        id: String,
+        title: Option<String>,
+        status: String,
+        output: String,
+    },
     PlanUpdate(String),
     Other(String),
 }

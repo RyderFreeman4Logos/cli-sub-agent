@@ -7,6 +7,7 @@ use crate::{
     client::SessionEvent,
     connection::{AcpConnection, PromptIoOptions},
     error::AcpResult,
+    tool_output_compaction::ToolOutputCompactionConfig,
 };
 
 pub use crate::connection::PromptResult;
@@ -39,12 +40,13 @@ pub struct AcpOutput {
     pub peak_memory_mb: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AcpOutputIoOptions<'a> {
     pub stream_stdout_to_stderr: bool,
     pub output_spool: Option<&'a Path>,
     pub spool_max_bytes: u64,
     pub keep_rotated_spool: bool,
+    pub tool_output_compaction: Option<ToolOutputCompactionConfig>,
 }
 
 impl Default for AcpOutputIoOptions<'_> {
@@ -54,11 +56,12 @@ impl Default for AcpOutputIoOptions<'_> {
             output_spool: None,
             spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
+            tool_output_compaction: None,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AcpRunOptions<'a> {
     pub idle_timeout: Duration,
     /// Shorter timeout for the period before the first response is received.
@@ -286,6 +289,7 @@ pub async fn run_prompt_with_io(
                 output_spool: options.io.output_spool,
                 spool_max_bytes: options.io.spool_max_bytes,
                 keep_rotated_spool: options.io.keep_rotated_spool,
+                tool_output_compaction: options.io.tool_output_compaction,
             },
         )
         .await?;

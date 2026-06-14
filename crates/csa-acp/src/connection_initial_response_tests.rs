@@ -1,4 +1,8 @@
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use agent_client_protocol::{
     AgentSideConnection, AvailableCommand, AvailableCommandsUpdate, Client as _,
@@ -205,6 +209,7 @@ async fn build_test_connection(
         events,
         last_activity,
         last_meaningful_activity,
+        Rc::new(RefCell::new(None)),
         stderr_buf,
         std::env::current_dir().expect("cwd"),
         AcpConnectionOptions {

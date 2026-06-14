@@ -4,6 +4,7 @@ pub mod error;
 pub mod mcp_proxy_client;
 pub mod prefix_extract;
 pub mod session_config;
+pub mod tool_output_compaction;
 pub mod transport;
 
 pub use client::{SessionEvent, StreamingMetadata};
@@ -16,4 +17,5 @@ pub use prefix_extract::{
     DEFAULT_PREFIX_BUDGET_TOKENS, ExtractedPrefix, PrefixConfig, PrefixExtractor,
 };
 pub use session_config::{McpServerConfig, SessionConfig};
+pub use tool_output_compaction::{ToolOutputCompactionConfig, ToolOutputCompactionState};
 pub use transport::{AcpOutput, AcpOutputIoOptions, AcpRunOptions, AcpSession};

@@ -43,6 +43,7 @@ pub(super) async fn run_acp_sandboxed(
     output_spool: Option<&Path>,
     output_spool_max_bytes: u64,
     output_spool_keep_rotated: bool,
+    tool_output_compaction: Option<csa_acp::ToolOutputCompactionConfig>,
 ) -> AcpSandboxedResult {
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
@@ -102,6 +103,7 @@ pub(super) async fn run_acp_sandboxed(
         output_spool,
         output_spool_max_bytes,
         output_spool_keep_rotated,
+        tool_output_compaction,
         working_dir,
     )
     .await;
@@ -221,6 +223,7 @@ async fn run_acp_sandboxed_inner(
     output_spool: Option<&Path>,
     output_spool_max_bytes: u64,
     output_spool_keep_rotated: bool,
+    tool_output_compaction: Option<csa_acp::ToolOutputCompactionConfig>,
     working_dir: &Path,
 ) -> csa_acp::AcpResult<(csa_acp::connection::PromptResult, String)> {
     connection.initialize().await?;
@@ -260,6 +263,7 @@ async fn run_acp_sandboxed_inner(
                 output_spool,
                 spool_max_bytes: output_spool_max_bytes,
                 keep_rotated_spool: output_spool_keep_rotated,
+                tool_output_compaction,
             },
         )
         .await;

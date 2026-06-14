@@ -220,4 +220,37 @@ mod tests {
         assert_eq!(reader.load(0).unwrap(), b"payload");
         assert_eq!(reader.read_manifest().unwrap().entries.len(), 1);
     }
+
+    #[test]
+    fn test_read_manifest_ignores_acp_compaction_metadata_for_expansion() {
+        let tmp = TempDir::new().unwrap();
+        let tool_outputs = tmp.path().join("tool_outputs");
+        fs::create_dir_all(&tool_outputs).unwrap();
+        fs::write(tool_outputs.join("1000000.raw"), b"full raw acp output").unwrap();
+        fs::write(
+            tool_outputs.join("manifest.toml"),
+            r#"
+[[entries]]
+index = 1000000
+original_bytes = 19
+path = "tool_outputs/1000000.raw"
+compacted = true
+original_lines = 1
+tool_call_id = "call-raw"
+tool_title = "cargo test --all"
+status = "Failed"
+threshold_bytes = 128
+"#,
+        )
+        .unwrap();
+
+        let reader = ToolOutputStore::open_readonly(tmp.path());
+        let manifest = reader.read_manifest().unwrap();
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].index, 1_000_000);
+        assert_eq!(manifest.entries[0].original_bytes, 19);
+        assert_eq!(manifest.entries[0].path, "tool_outputs/1000000.raw");
+        assert_eq!(reader.load(1_000_000).unwrap(), b"full raw acp output");
+    }
 }

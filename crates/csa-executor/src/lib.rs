@@ -35,7 +35,9 @@ pub use install_hints::{
 };
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
-pub use session_config::{McpServerConfig as AcpMcpServerConfig, SessionConfig};
+pub use session_config::{
+    McpServerConfig as AcpMcpServerConfig, SessionConfig, ToolOutputCompactionConfig,
+};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};
 #[cfg(feature = "acp")]
 pub use transport::AcpTransport;

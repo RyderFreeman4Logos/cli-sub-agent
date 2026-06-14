@@ -187,16 +187,16 @@ pub struct SessionConfig {
     /// Keep rotated spool files for debugging (default true).
     #[serde(default)]
     pub spool_keep_rotated: Option<bool>,
-    /// Enable tool output compression for large outputs (default false, opt-in).
+    /// Enable legacy post-run compression for large final tool outputs.
     ///
-    /// When enabled, tool outputs exceeding `tool_output_threshold_bytes` are
-    /// replaced in-context with a file path reference. The full output is
-    /// persisted to `{session_dir}/tool_outputs/` for on-demand retrieval.
+    /// ACP streaming tool-output compaction is enabled by default for child
+    /// context reinjection and uses `tool_output_threshold_bytes`.
     #[serde(default)]
     pub tool_output_compression: bool,
-    /// Byte threshold above which tool outputs are compressed (default 8192).
+    /// Byte threshold above which tool outputs are sidecarred (default 8192).
     ///
-    /// Only effective when `tool_output_compression` is enabled.
+    /// Applies to default ACP streaming compaction and to legacy post-run
+    /// compression when `tool_output_compression` is enabled.
     #[serde(default = "default_tool_output_threshold_bytes")]
     pub tool_output_threshold_bytes: u64,
     /// Byte threshold above which manager-facing report text spills to an artifact.
@@ -237,8 +237,11 @@ fn default_max_seed_sessions() -> u32 {
     2
 }
 
+/// Default byte threshold before model-visible ACP tool output is sidecarred.
+pub const DEFAULT_TOOL_OUTPUT_THRESHOLD_BYTES: u64 = 8192;
+
 fn default_tool_output_threshold_bytes() -> u64 {
-    8192
+    DEFAULT_TOOL_OUTPUT_THRESHOLD_BYTES
 }
 
 /// Default spillover threshold for manager-facing report text fields.

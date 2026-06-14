@@ -68,8 +68,7 @@ fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
         extra_load: vec!["skills/bar".to_string()],
         tier: Some("tier-2".to_string()),
         models: vec!["codex/openai/o3/medium".to_string()],
-        mcp_servers: Vec::new(),
-        mcp_proxy_socket: None,
+        ..SessionConfig::default()
     };
 
     let transport = TransportFactory::create(&executor, Some(session_config.clone()))
