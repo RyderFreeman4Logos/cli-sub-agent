@@ -19,8 +19,6 @@ use csa_config::GlobalConfig;
 #[cfg(test)]
 use csa_config::ProjectConfig;
 use csa_core::types::ReviewDecision;
-#[cfg(test)]
-use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
@@ -324,6 +322,8 @@ pub(crate) async fn handle_review(
         &global_config,
     );
     let reviewers = reviewer_selection.reviewers;
+    let explicit_tool_with_failover =
+        (selection.direct_tool_requested && tier_active && !execution_no_failover).then_some(tool);
 
     if reviewers == 1 {
         let review_future = execute_review_with_tier_filter(
@@ -348,6 +348,7 @@ pub(crate) async fn handle_review(
             args.force_override_user_config,
             args.force_ignore_tier_setting,
             execution_no_failover,
+            explicit_tool_with_failover,
             args.build_jobs,
             args.fast_but_more_cost,
             true,

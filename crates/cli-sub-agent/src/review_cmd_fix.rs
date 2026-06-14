@@ -152,6 +152,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.force_override_user_config,
             ctx.force_ignore_tier_setting,
             ctx.no_failover,
+            None,
             ctx.build_jobs,
             ctx.fast_but_more_cost,
             false,

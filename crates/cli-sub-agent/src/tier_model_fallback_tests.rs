@@ -1,7 +1,7 @@
 use super::{
     TierAttemptFailure, classify_next_model_failure_with_elapsed, earliest_backend_reset_window,
-    format_all_models_failed_reason_with_reset, opaque_total_exhaustion_message,
-    ordered_tier_candidates, parse_backend_reset_duration,
+    format_all_models_failed_reason_with_reset, format_all_models_failed_reason_with_ux_context,
+    opaque_total_exhaustion_message, ordered_tier_candidates, parse_backend_reset_duration,
 };
 use csa_config::{GlobalConfig, ProjectConfig, ToolConfig, global::GlobalToolConfig};
 use csa_core::types::ToolName;
@@ -245,6 +245,39 @@ fn opaque_total_exhaustion_uses_provider_reset_window() {
         Some(
             "review unavailable: all tier-4-critical backends rate-limited; earliest reset ~1h 0m"
         )
+    );
+}
+
+#[test]
+fn opaque_total_exhaustion_explains_explicit_tool_tier_failover() {
+    let failures = vec![
+        TierAttemptFailure {
+            model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+            reason: "auth_unavailable".to_string(),
+            quota_exhausted: Some(false),
+        },
+        TierAttemptFailure {
+            model_spec: "codex/openai/gpt-5.5/xhigh".to_string(),
+            reason: "HTTP 429".to_string(),
+            quota_exhausted: Some(false),
+        },
+    ];
+    let failure_reason = format_all_models_failed_reason_with_ux_context(
+        Some("tier-4-critical"),
+        &failures,
+        Some(Duration::from_secs(3600)),
+        Some(ToolName::Codex),
+    )
+    .expect("failure reason");
+
+    let message =
+        opaque_total_exhaustion_message(Some("auth_unavailable; HTTP 429"), Some(&failure_reason))
+            .expect("opaque message");
+
+    assert!(message.contains("explicit --tool codex kept tier failover enabled"));
+    assert!(message.contains("--tool is not a pin"));
+    assert!(
+        message.contains("csa review --tool codex --tier tier-4-critical --no-failover --single")
     );
 }
 

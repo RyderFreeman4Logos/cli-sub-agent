@@ -252,6 +252,20 @@ pub(crate) fn format_all_models_failed_reason_with_reset(
     Some(reason)
 }
 
+pub(crate) fn format_all_models_failed_reason_with_ux_context(
+    tier_name: Option<&str>,
+    failures: &[TierAttemptFailure],
+    reset_after: Option<Duration>,
+    explicit_tool_with_failover: Option<ToolName>,
+) -> Option<String> {
+    let mut reason = format_all_models_failed_reason_with_reset(tier_name, failures, reset_after)?;
+    if let Some(tool) = explicit_tool_with_failover {
+        reason.push_str("; explicit_tool_failover=");
+        reason.push_str(tool.as_str());
+    }
+    Some(reason)
+}
+
 pub(crate) fn earliest_backend_reset_window(reset_windows: &[Duration]) -> Option<Duration> {
     reset_windows.iter().copied().min()
 }
@@ -283,6 +297,7 @@ pub(crate) fn opaque_total_exhaustion_message(
     Some(format_opaque_total_exhaustion_message(
         tier_label,
         failure_reason.and_then(parse_backend_reset_duration),
+        failure_reason.and_then(parse_explicit_tool_failover),
     ))
 }
 
@@ -357,13 +372,39 @@ fn is_quota_rate_auth_reason(reason: &str) -> bool {
 fn format_opaque_total_exhaustion_message(
     tier_label: &str,
     reset_after: Option<Duration>,
+    explicit_tool_with_failover: Option<&str>,
 ) -> String {
     let mut message = format!("review unavailable: all {tier_label} backends rate-limited");
     if let Some(reset_after) = reset_after {
         message.push_str("; earliest reset ~");
         message.push_str(&format_reset_duration(reset_after));
     }
+    if let Some(tool) = explicit_tool_with_failover {
+        message.push_str("; explicit --tool ");
+        message.push_str(tool);
+        message.push_str(" kept tier failover enabled (--tool is not a pin); to pin ");
+        message.push_str(tool_display_name(tool));
+        message.push_str(" use: csa review --tool ");
+        message.push_str(tool);
+        message.push_str(" --tier ");
+        message.push_str(tier_label);
+        message.push_str(" --no-failover --single");
+    }
     message
+}
+
+fn parse_explicit_tool_failover(text: &str) -> Option<&str> {
+    let (_, rest) = text.split_once("explicit_tool_failover=")?;
+    let value = rest.split(';').next().unwrap_or(rest).trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn tool_display_name(tool: &str) -> &str {
+    if tool == ToolName::Codex.as_str() {
+        "Codex"
+    } else {
+        tool
+    }
 }
 
 fn format_reset_duration(duration: Duration) -> String {

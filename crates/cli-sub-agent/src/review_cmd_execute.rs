@@ -2,6 +2,8 @@
 
 #[path = "review_cmd_execute_artifact_guard.rs"]
 mod artifact_guard;
+#[path = "review_cmd_execute_once.rs"]
+mod execute_once;
 #[path = "review_cmd_execute_failures.rs"]
 mod failures;
 
@@ -18,9 +20,9 @@ use csa_core::{
         API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY,
         AUTH_MODE_OAUTH,
     },
-    types::{OutputFormat, ReviewDecision, ToolName},
+    types::{ReviewDecision, ToolName},
 };
-use csa_executor::{Executor, PeakMemoryContext};
+use csa_executor::PeakMemoryContext;
 use csa_session::{
     SessionResult, get_session_dir, load_result, load_session, save_result, save_session,
 };
@@ -32,7 +34,7 @@ use crate::review_routing::{
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, earliest_backend_reset_window,
-    fallback_reason_for_result, format_all_models_failed_reason_with_reset,
+    fallback_reason_for_result, format_all_models_failed_reason_with_ux_context,
     ordered_tier_candidates, parse_backend_reset_duration, persist_fallback_chain,
     persist_fallback_result_fields,
 };
@@ -43,17 +45,16 @@ use super::output::{
     is_review_output_empty,
 };
 use artifact_guard::detect_repo_root_review_artifact_violations;
+use execute_once::execute_review_once_with_artifact_guard;
 #[cfg(test)]
 use failures::read_review_failure_excerpt;
 use failures::{
     build_gemini_api_key_retry_env, classify_review_failover_error,
     classify_review_failover_reason, classify_review_failure_result,
-    enforce_review_artifact_contract, extract_meta_session_id_from_error,
-    maybe_synthesize_missing_review_result, repair_completed_review_restriction_result,
-    retire_tier_failover_session,
+    extract_meta_session_id_from_error, maybe_synthesize_missing_review_result,
+    repair_completed_review_restriction_result, retire_tier_failover_session,
 };
 
-const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
 const CSA_READONLY_SESSION_ENV: &str = "CSA_READONLY_SESSION";
 
 fn with_readonly_session_env(
@@ -183,6 +184,7 @@ pub(crate) async fn execute_review(
         force_ignore_tier_setting,
         no_failover,
         None,
+        None,
         false,
         false,
         no_fs_sandbox,
@@ -219,6 +221,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     force_override_user_config: bool,
     force_ignore_tier_setting: bool,
     no_failover: bool,
+    explicit_tool_with_failover: Option<ToolName>,
     build_jobs: Option<u32>,
     fast_but_more_cost: bool,
     warn_no_codex_fast_mode: bool,
@@ -450,10 +453,11 @@ pub(crate) async fn execute_review_with_tier_filter(
                             fallback_chain,
                         );
                     }
-                    let failure_reason = format_all_models_failed_reason_with_reset(
+                    let failure_reason = format_all_models_failed_reason_with_ux_context(
                         tier_name.as_deref(),
                         &failures,
                         earliest_backend_reset_window(&reset_windows),
+                        explicit_tool_with_failover,
                     );
                     return Ok(ReviewExecutionOutcome {
                         execution: crate::pipeline::SessionExecutionResult {
@@ -657,10 +661,11 @@ pub(crate) async fn execute_review_with_tier_filter(
                     forced_decision: Some(ReviewDecision::Unavailable),
                     routed_to: None,
                     primary_failure: chain_failure_reasons(&failures),
-                    failure_reason: format_all_models_failed_reason_with_reset(
+                    failure_reason: format_all_models_failed_reason_with_ux_context(
                         tier_name.as_deref(),
                         &failures,
                         earliest_backend_reset_window(&reset_windows),
+                        explicit_tool_with_failover,
                     ),
                 });
             }
@@ -746,141 +751,6 @@ pub(crate) async fn execute_review_with_tier_filter(
 
     unreachable!("tier candidate list is never empty")
 }
-#[allow(clippy::too_many_arguments)]
-async fn execute_review_once(
-    executor: &Executor,
-    tool: &ToolName,
-    effective_prompt: &str,
-    session: Option<String>,
-    description: String,
-    project_root: &Path,
-    project_config: Option<&ProjectConfig>,
-    extra_env: Option<&HashMap<String, String>>,
-    subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
-    tier_name: Option<&str>,
-    global_config: &GlobalConfig,
-    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-    no_fs_sandbox: bool,
-    readonly_project_root: bool,
-    extra_writable: &[PathBuf],
-    extra_readable: &[PathBuf],
-    error_marker_scan_override: Option<bool>,
-    startup_env: &StartupSubtreeEnv,
-) -> Result<crate::pipeline::SessionExecutionResult> {
-    crate::pipeline::execute_with_session_and_meta_with_parent_source(
-        executor,
-        tool,
-        effective_prompt,
-        OutputFormat::Json,
-        session,
-        false,
-        Some(description),
-        None,
-        project_root,
-        project_config,
-        extra_env,
-        subtree_pin,
-        false,
-        Some(REVIEWER_SUB_SESSION_TASK_TYPE),
-        tier_name,
-        None,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        None,
-        None,
-        Some(global_config),
-        pre_session_hook,
-        crate::pipeline::ParentSessionSource::ExplicitOnly,
-        crate::pipeline::SessionCreationMode::DaemonManaged,
-        Default::default(),
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-        extra_readable,
-        error_marker_scan_override,
-        false,
-        startup_env,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_review_once_with_artifact_guard(
-    executor: &Executor,
-    tool: &ToolName,
-    effective_prompt: &str,
-    session: Option<String>,
-    description: String,
-    project_root: &Path,
-    project_config: Option<&ProjectConfig>,
-    extra_env: Option<&HashMap<String, String>>,
-    subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
-    tier_name: Option<&str>,
-    global_config: &GlobalConfig,
-    pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-    no_fs_sandbox: bool,
-    readonly_project_root: bool,
-    extra_writable: &[PathBuf],
-    extra_readable: &[PathBuf],
-    error_marker_scan_override: Option<bool>,
-    startup_env: &StartupSubtreeEnv,
-) -> Result<crate::pipeline::SessionExecutionResult> {
-    let invocation_started_at = Utc::now();
-    match execute_review_once(
-        executor,
-        tool,
-        effective_prompt,
-        session,
-        description,
-        project_root,
-        project_config,
-        extra_env,
-        subtree_pin,
-        tier_name,
-        global_config,
-        pre_session_hook,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-        extra_readable,
-        error_marker_scan_override,
-        startup_env,
-    )
-    .await
-    {
-        Ok(mut execution) => {
-            enforce_review_artifact_contract(
-                project_root,
-                tool,
-                invocation_started_at,
-                Some(&mut execution),
-                None,
-            )?;
-            Ok(execution)
-        }
-        Err(err) => {
-            enforce_review_artifact_contract(
-                project_root,
-                tool,
-                invocation_started_at,
-                None,
-                Some(&err),
-            )?;
-            Err(err)
-        }
-    }
-}
-
 /// Compute a SHA-256 content hash of the diff being reviewed.
 ///
 /// The fingerprint enables diff-level deduplication: if two review
