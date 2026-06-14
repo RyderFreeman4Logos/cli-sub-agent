@@ -128,6 +128,8 @@ mod triage_cmd;
 mod untracked_size;
 mod verdict_exit_code;
 mod verify_cmd;
+#[cfg(test)]
+mod version_check_recipe_tests;
 mod xurl_cmd;
 #[cfg(test)]
 include!("review_cmd_exact_tests.rs");

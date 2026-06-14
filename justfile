@@ -107,7 +107,12 @@ check-version-bumped:
         exit 0
     fi
     # Extract workspace version from Cargo.toml on current branch vs main.
-    current=$(cargo metadata --no-deps --format-version 1 \
+    cargo_install_root="${CARGO_INSTALL_ROOT:-}"
+    if [ -z "$cargo_install_root" ] || [ "$cargo_install_root" = "/usr/local" ]; then
+        cargo_install_root="{{_repo_root}}/target/cargo-install-root"
+    fi
+    mkdir -p "$cargo_install_root"
+    current=$(CARGO_INSTALL_ROOT="$cargo_install_root" cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     main_version=$(git show main:Cargo.toml 2>/dev/null \
         | grep -A1 '^\[workspace\.package\]' \
