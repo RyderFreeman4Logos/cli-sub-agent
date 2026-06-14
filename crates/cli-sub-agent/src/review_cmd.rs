@@ -54,6 +54,8 @@ mod gate;
 mod mempal;
 #[path = "review_cmd_multi.rs"]
 mod multi;
+#[path = "review_cmd_multi_repo_write_audit.rs"]
+mod multi_repo_write_audit;
 #[path = "review_cmd_parent_artifacts.rs"]
 mod parent_artifacts;
 #[path = "review_cmd_post_review.rs"]

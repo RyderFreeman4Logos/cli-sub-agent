@@ -10,7 +10,7 @@ use crate::failover_trace::FailoverSkipKind;
 use crate::pipeline::resolve_effective_initial_response_timeout_for_tool;
 use crate::review_consensus::{
     CLEAN, UNAVAILABLE, agreement_level, build_multi_reviewer_instruction,
-    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, resolve_consensus,
+    consensus_strategy_label, parse_consensus_strategy, resolve_consensus,
 };
 use crate::review_routing::{
     ReviewRoutingMetadata, persist_review_routing_artifact_with_fallback_chain,
@@ -231,8 +231,13 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         });
     }
 
-    let outcomes =
+    let mut outcomes =
         collect_reviewer_outcomes(&mut join_set, &reviewer_tool_plan, ctx.args.timeout).await?;
+    let repo_write_audit_blocked =
+        super::multi_repo_write_audit::apply_repo_write_audit_findings_to_multi_outcomes(
+            ctx.project_root,
+            &mut outcomes,
+        );
 
     let review_iterations = outcomes
         .first()
@@ -275,11 +280,11 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         && outcomes
             .iter()
             .all(|outcome| outcome.verdict == UNAVAILABLE);
-    let final_verdict = if all_reviewers_unavailable {
-        crate::review_consensus::UNAVAILABLE
-    } else {
-        consensus_verdict(&consensus_result)
-    };
+    let final_verdict = super::multi_repo_write_audit::final_verdict_for_multi_review(
+        all_reviewers_unavailable,
+        repo_write_audit_blocked,
+        &consensus_result,
+    );
     let agreement = agreement_level(&consensus_result);
     let consensus_artifacts = super::parent_artifacts::MultiReviewerConsensusArtifacts {
         project_root: ctx.project_root,
@@ -564,9 +569,19 @@ pub(super) fn persist_multi_review_sidecars(
             diff_report.large_diff_warning,
         );
         super::findings_toml::persist_review_findings_toml(project_root, &effective_meta);
-        if let Some(mut artifact) =
-            persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new())
-        {
+        let worktree_mutation_findings =
+            super::dirty_tree::append_repo_write_audit_finding(project_root, &outcome.session_id);
+        let effective_meta = if worktree_mutation_findings.is_empty() {
+            effective_meta
+        } else {
+            super::flow::review_meta_with_blocking_worktree_mutation(effective_meta)
+        };
+        if let Some(mut artifact) = persist_review_verdict_artifact(
+            project_root,
+            &effective_meta,
+            &worktree_mutation_findings,
+            Vec::new(),
+        ) {
             super::diff_size::persist_review_verdict_diff_report(
                 project_root,
                 &effective_meta.session_id,
@@ -582,6 +597,12 @@ pub(super) fn persist_multi_review_sidecars(
                 diff_report.large_diff_warning,
             );
         }
+        super::multi_repo_write_audit::persist_multi_reviewer_repo_write_audit_artifact(
+            project_root,
+            outcome,
+            &worktree_mutation_findings,
+            effective_meta.review_mode.as_deref(),
+        );
     }
 }
 

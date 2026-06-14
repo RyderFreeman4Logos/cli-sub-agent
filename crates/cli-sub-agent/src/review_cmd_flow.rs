@@ -123,7 +123,9 @@ pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
     Some(verdict_exit_code)
 }
 
-fn review_meta_with_blocking_worktree_mutation(mut meta: ReviewSessionMeta) -> ReviewSessionMeta {
+pub(super) fn review_meta_with_blocking_worktree_mutation(
+    mut meta: ReviewSessionMeta,
+) -> ReviewSessionMeta {
     let decision = meta
         .decision
         .parse::<ReviewDecision>()

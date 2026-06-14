@@ -126,13 +126,7 @@ pub(super) fn append_repo_write_audit_finding(
     project_root: &Path,
     session_id: &str,
 ) -> Vec<Finding> {
-    let Some(result) = csa_session::load_result(project_root, session_id)
-        .ok()
-        .flatten()
-    else {
-        return Vec::new();
-    };
-    let paths = repo_write_audit_paths_from_result(&result);
+    let paths = repo_write_audit_paths(project_root, session_id);
     if paths.is_empty() {
         return Vec::new();
     }
@@ -169,6 +163,26 @@ pub(super) fn append_repo_write_audit_finding(
         format_path_list(&paths)
     );
     vec![legacy_finding]
+}
+
+/// Return the blocking finding(s) implied by a read-only review repo-write audit
+/// without mutating any review sidecars.
+pub(super) fn repo_write_audit_findings(project_root: &Path, session_id: &str) -> Vec<Finding> {
+    let paths = repo_write_audit_paths(project_root, session_id);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    vec![legacy_worktree_mutation_finding(&paths)]
+}
+
+fn repo_write_audit_paths(project_root: &Path, session_id: &str) -> Vec<String> {
+    let Some(result) = csa_session::load_result(project_root, session_id)
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    repo_write_audit_paths_from_result(&result)
 }
 
 fn repo_write_audit_paths_from_result(result: &csa_session::SessionResult) -> Vec<String> {
