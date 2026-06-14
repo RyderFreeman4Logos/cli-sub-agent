@@ -14,16 +14,44 @@ if [ ! -f Cargo.toml ]; then
   exit 0
 fi
 
+require_version_check() {
+  [ "${CSA_REQUIRE_VERSION_CHECK:-0}" = "1" ]
+}
+
+has_justfile() {
+  [ -f justfile ] || [ -f Justfile ] || [ -f .justfile ]
+}
+
 if ! command -v just >/dev/null 2>&1; then
-  echo "ERROR: Cargo.toml exists but 'just' is unavailable; cannot run the pre-merge version gate." >&2
-  echo "Install just or run the repository version check before retrying pr-bot." >&2
-  exit 1
+  if require_version_check; then
+    echo "ERROR: CSA_REQUIRE_VERSION_CHECK=1 but 'just' is unavailable; cannot run the pre-merge version gate." >&2
+    echo "Install just or unset CSA_REQUIRE_VERSION_CHECK for repositories without a mandatory version gate." >&2
+    exit 1
+  fi
+  echo "pr-bot version gate skipped: 'just' is unavailable"
+  exit 0
 fi
 
-if ! just --summary 2>/dev/null | tr ' ' '\n' | grep -qx 'check-version-bumped'; then
-  echo "ERROR: Cargo.toml exists but just target 'check-version-bumped' is unavailable." >&2
-  echo "Add a local version bump gate, or set CSA_SKIP_VERSION_CHECK=1 only for release automation." >&2
-  exit 1
+JUST_SUMMARY=""
+if ! JUST_SUMMARY="$(just --summary 2>&1)"; then
+  if require_version_check || has_justfile; then
+    echo "ERROR: Could not inspect just targets before the pre-merge version gate." >&2
+    printf '%s\n' "${JUST_SUMMARY}" >&2
+    echo "Fix the justfile or unset CSA_REQUIRE_VERSION_CHECK for repositories without a mandatory version gate." >&2
+    exit 1
+  fi
+  echo "pr-bot version gate skipped: just targets are unavailable"
+  exit 0
+fi
+
+if ! printf '%s\n' "${JUST_SUMMARY}" | tr ' ' '\n' | grep -qx 'check-version-bumped'; then
+  if require_version_check; then
+    echo "ERROR: CSA_REQUIRE_VERSION_CHECK=1 but just target 'check-version-bumped' is unavailable." >&2
+    echo "Add a local just target named 'check-version-bumped' or unset CSA_REQUIRE_VERSION_CHECK." >&2
+    exit 1
+  fi
+  echo "pr-bot version gate skipped: just target 'check-version-bumped' is unavailable"
+  exit 0
 fi
 
 if [ -z "${REMOTE_NAME}" ] || [ -z "${DEFAULT_BRANCH}" ]; then
