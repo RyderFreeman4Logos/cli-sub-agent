@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 mod attach;
 #[path = "session_cmds_daemon_completion.rs"]
 mod completion;
+#[path = "session_cmds_daemon_review_diagnostic.rs"]
+mod review_diagnostic;
 
 #[cfg(test)]
 use attach::{

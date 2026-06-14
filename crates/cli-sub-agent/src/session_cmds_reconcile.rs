@@ -580,7 +580,7 @@ where
                 reconciliation_reason = "late_result_write",
                 result_path = %result_path.display(),
                 result_mtime = %format_optional_file_mtime(result_path).unwrap_or_else(|| "unknown".to_string()),
-                "Late result.toml write won during daemon-completion reconciliation"
+                "Late result.toml write won"
             );
             return Ok(if retired {
                 DeadActiveSessionReconciliation::LateResultRetired
@@ -608,13 +608,19 @@ where
             "Failed to transition daemon-completed session to Retired phase during reconciliation for {session_id}"
         ));
     }
+    packet.persist_review_diag(
+        result_path,
+        result_contents.as_bytes(),
+        session_dir,
+        &session,
+    );
     if let Err(err) = persist_session(session_dir, &session) {
         warn!(
             session_id = %session_id,
             trigger = %trigger,
             reconciliation_reason = "daemon_completion",
             error = %err,
-            "Failed to persist retired daemon-completed session state during reconciliation; preserving daemon completion result so callers can recover the terminal outcome"
+            "Failed to persist retired daemon-completed session state during reconciliation"
         );
         return Ok(DeadActiveSessionReconciliation::DaemonCompletionFinalized);
     }
@@ -626,7 +632,7 @@ where
         result_path = %result_path.display(),
         exit_code = packet.exit_code,
         status = %packet.status,
-        "Recovered daemon-completed session from completion packet"
+        "Recovered daemon-completed session"
     );
     Ok(DeadActiveSessionReconciliation::DaemonCompletionFinalized)
 }
