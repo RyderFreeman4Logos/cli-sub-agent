@@ -310,9 +310,13 @@ pub(crate) async fn process_execution_result(
         && elapsed_secs < no_op::ELAPSED_THRESHOLD_SECS
     {
         let original_summary = session_result.summary.clone();
-        let no_op_summary = format!(
-            "no-op exit detected: turn_count={}, elapsed={}s, no tool calls. Original: {}",
-            session.turn_count, elapsed_secs, original_summary,
+        let no_op_summary = no_op::build_no_op_failure_summary(
+            session.turn_count,
+            elapsed_secs,
+            ctx.executor.tool_name(),
+            session.description.as_deref(),
+            ctx.prompt,
+            &original_summary,
         );
         warn!(
             session = %session.meta_session_id,
@@ -565,6 +569,10 @@ mod tests;
 #[cfg(test)]
 #[path = "pipeline_tests_no_op_gate.rs"]
 mod no_op_gate_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_no_op_gate_2181.rs"]
+mod no_op_gate_2181_tests;
 
 #[cfg(test)]
 #[path = "pipeline_tests_no_progress.rs"]
