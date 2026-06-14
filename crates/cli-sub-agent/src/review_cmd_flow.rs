@@ -2,6 +2,8 @@ use csa_core::types::ReviewDecision;
 use csa_session::ReviewDiffSize;
 use csa_session::state::ReviewSessionMeta;
 
+use crate::review_consensus::HAS_ISSUES;
+
 #[cfg(test)]
 use super::execute;
 use super::findings_toml::persist_review_findings_toml;
@@ -64,19 +66,29 @@ pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
         large_diff_warning,
     );
     persist_review_findings_toml(project_root, &effective_meta);
-    let verdict_artifact =
-        persist_review_verdict_artifact(project_root, &effective_meta, &[], Vec::new()).map(
-            |mut artifact| {
-                super::diff_size::persist_review_verdict_diff_report(
-                    project_root,
-                    &effective_meta.session_id,
-                    &mut artifact,
-                    diff_size,
-                    large_diff_warning,
-                );
-                artifact
-            },
+    let worktree_mutation_findings =
+        super::dirty_tree::append_repo_write_audit_finding(project_root, persistable_session_id);
+    let effective_meta = if worktree_mutation_findings.is_empty() {
+        effective_meta
+    } else {
+        review_meta_with_blocking_worktree_mutation(effective_meta)
+    };
+    let verdict_artifact = persist_review_verdict_artifact(
+        project_root,
+        &effective_meta,
+        &worktree_mutation_findings,
+        Vec::new(),
+    )
+    .map(|mut artifact| {
+        super::diff_size::persist_review_verdict_diff_report(
+            project_root,
+            &effective_meta.session_id,
+            &mut artifact,
+            diff_size,
+            large_diff_warning,
         );
+        artifact
+    });
     let final_meta = verdict_artifact
         .as_ref()
         .map(|artifact| review_meta_for_verdict_artifact(&effective_meta, artifact))
@@ -109,6 +121,20 @@ pub(super) fn persist_review_sidecars_if_session_exists_with_diff_size(
         );
     }
     Some(verdict_exit_code)
+}
+
+fn review_meta_with_blocking_worktree_mutation(mut meta: ReviewSessionMeta) -> ReviewSessionMeta {
+    let decision = meta
+        .decision
+        .parse::<ReviewDecision>()
+        .unwrap_or(ReviewDecision::Uncertain);
+    if matches!(decision, ReviewDecision::Pass | ReviewDecision::Skip) {
+        meta.decision = ReviewDecision::Fail.as_str().to_string();
+        meta.verdict = HAS_ISSUES.to_string();
+        meta.exit_code =
+            crate::verdict_exit_code::exit_code_from_review_decision(ReviewDecision::Fail);
+    }
+    meta
 }
 
 #[cfg(test)]

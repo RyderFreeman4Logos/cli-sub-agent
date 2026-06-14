@@ -172,6 +172,10 @@ pub(crate) fn should_audit_repo_tracked_writes(
         return false;
     }
 
+    if matches!(task_type, Some("review" | "reviewer_sub_session")) {
+        return readonly_project_root;
+    }
+
     if !matches!(task_type, Some("run" | "plan" | "plan-step")) {
         return false;
     }

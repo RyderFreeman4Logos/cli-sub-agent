@@ -62,12 +62,28 @@ fn should_audit_repo_tracked_writes_for_plan_step_task_type() {
 }
 
 #[test]
-fn should_not_audit_repo_tracked_writes_for_review_or_debate() {
-    assert!(!should_audit_repo_tracked_writes(
+fn should_audit_repo_tracked_writes_for_readonly_review_sessions() {
+    assert!(should_audit_repo_tracked_writes(
         false,
         Some("review"),
         true,
         "Analyze the diff and summarize findings"
+    ));
+    assert!(should_audit_repo_tracked_writes(
+        false,
+        Some("reviewer_sub_session"),
+        true,
+        "Analyze the diff and summarize findings"
+    ));
+}
+
+#[test]
+fn should_not_audit_repo_tracked_writes_for_writable_review_or_debate() {
+    assert!(!should_audit_repo_tracked_writes(
+        false,
+        Some("review"),
+        false,
+        "Fix the diff and summarize findings"
     ));
     assert!(!should_audit_repo_tracked_writes(
         false,
