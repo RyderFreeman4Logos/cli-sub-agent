@@ -85,7 +85,7 @@ struct ReviewerFindingsContractArtifact {
     summary: Option<String>,
 }
 
-fn parse_reviewer_artifact(path: &Path, content: &str) -> Result<ReviewArtifact> {
+pub(super) fn parse_reviewer_artifact(path: &Path, content: &str) -> Result<ReviewArtifact> {
     if let Ok(artifact) = serde_json::from_str::<ReviewArtifact>(content) {
         return Ok(artifact);
     }

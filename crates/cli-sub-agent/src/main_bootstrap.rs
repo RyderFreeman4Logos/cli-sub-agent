@@ -28,15 +28,17 @@ pub(crate) fn resolve_effective_min_timeout() -> u64 {
 }
 
 pub(crate) fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
-    // Only execution commands need upgraded weave patterns.
-    // All management/read-only commands stay available even when weave is unhealthy.
+    // Only write-capable execution commands need upgraded weave patterns.
+    // Management/read-only commands stay available even when weave is unhealthy.
     match command {
         Commands::Run { .. }
         | Commands::Hunt(_)
         | Commands::Arch(_)
         | Commands::Triage(_)
         | Commands::Mktsk(_) => true,
-        Commands::Review(args) => !args.check_verdict,
+        // Review is a gate: stale weave.lock should warn, not rewrite the repo
+        // before verdict artifacts are produced.
+        Commands::Review(_) => false,
         Commands::Debate(_) | Commands::Batch { .. } | Commands::Plan { .. } => true,
         Commands::ClaudeSubAgent(_) | Commands::McpServer => true,
         _ => false,

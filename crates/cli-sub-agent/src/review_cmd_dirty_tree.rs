@@ -1,8 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
-use csa_session::{FindingsFile, get_session_dir};
-use tracing::debug;
+use csa_session::{
+    Finding, FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity, get_session_dir,
+    write_findings_toml,
+};
+use tracing::{debug, warn};
+
+const REVIEW_WORKTREE_MUTATION_FINDING_ID: &str = "CSA-REVIEW-WORKTREE-MUTATION";
+const REVIEW_WORKTREE_MUTATION_RULE_ID: &str = "csa.review.readonly-worktree-mutation";
 
 /// Returns the set of file paths (relative to project root) that have uncommitted
 /// changes in the working tree, according to `git diff --name-only HEAD`.
@@ -109,6 +115,189 @@ fn emit_dirty_tree_hint(dirty_finding_files: &[String]) {
         );
     }
 }
+
+/// Convert a read-only review repo-write audit into a blocking structured finding.
+///
+/// `pipeline_post_exec_audit` records the exact tracked paths that changed during
+/// a read-only session. Review consumers gate on `findings.toml` and
+/// `review-verdict.json`, so a dirty tracked worktree must be surfaced there
+/// rather than remaining a warning-only manager sidecar.
+pub(super) fn append_repo_write_audit_finding(
+    project_root: &Path,
+    session_id: &str,
+) -> Vec<Finding> {
+    let paths = repo_write_audit_paths(project_root, session_id);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+
+    let review_finding = review_worktree_mutation_finding(&paths);
+    let legacy_finding = legacy_worktree_mutation_finding(&paths);
+    if let Ok(session_dir) = get_session_dir(project_root, session_id) {
+        let findings_path = session_dir.join("output").join("findings.toml");
+        let mut findings_file = std::fs::read_to_string(&findings_path)
+            .ok()
+            .and_then(|content| toml::from_str::<FindingsFile>(&content).ok())
+            .unwrap_or_default();
+        findings_file
+            .findings
+            .retain(|finding| finding.id != REVIEW_WORKTREE_MUTATION_FINDING_ID);
+        findings_file.findings.push(review_finding);
+
+        if let Err(error) = write_findings_toml(&session_dir, &findings_file) {
+            warn!(
+                session_id,
+                error = %error,
+                "Failed to persist review worktree-mutation finding"
+            );
+        } else {
+            let synthetic_marker = session_dir
+                .join("output")
+                .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
+            let _ = std::fs::remove_file(synthetic_marker);
+        }
+    }
+
+    eprintln!(
+        "[csa-review] Read-only review mutated repo-tracked file(s): {}",
+        format_path_list(&paths)
+    );
+    vec![legacy_finding]
+}
+
+/// Return the blocking finding(s) implied by a read-only review repo-write audit
+/// without mutating any review sidecars.
+pub(super) fn repo_write_audit_findings(project_root: &Path, session_id: &str) -> Vec<Finding> {
+    let paths = repo_write_audit_paths(project_root, session_id);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    vec![legacy_worktree_mutation_finding(&paths)]
+}
+
+fn repo_write_audit_paths(project_root: &Path, session_id: &str) -> Vec<String> {
+    let Some(result) = csa_session::load_result(project_root, session_id)
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    repo_write_audit_paths_from_result(&result)
+}
+
+fn repo_write_audit_paths_from_result(result: &csa_session::SessionResult) -> Vec<String> {
+    let Some(audit) = result
+        .manager_fields
+        .artifacts
+        .as_ref()
+        .and_then(|value| value.get("repo_write_audit"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Vec::new();
+    };
+
+    let mut paths = BTreeSet::new();
+    collect_path_array(audit.get("added"), &mut paths);
+    collect_path_array(audit.get("modified"), &mut paths);
+    collect_path_array(audit.get("deleted"), &mut paths);
+    collect_renamed_paths(audit.get("renamed"), &mut paths);
+    paths.into_iter().collect()
+}
+
+fn collect_path_array(value: Option<&toml::Value>, paths: &mut BTreeSet<String>) {
+    let Some(array) = value.and_then(toml::Value::as_array) else {
+        return;
+    };
+    for item in array {
+        if let Some(path) = item.as_str().map(str::trim).filter(|path| !path.is_empty()) {
+            paths.insert(path.to_string());
+        }
+    }
+}
+
+fn collect_renamed_paths(value: Option<&toml::Value>, paths: &mut BTreeSet<String>) {
+    let Some(array) = value.and_then(toml::Value::as_array) else {
+        return;
+    };
+    for item in array {
+        let Some(table) = item.as_table() else {
+            continue;
+        };
+        collect_path_value(table.get("from"), paths);
+        collect_path_value(table.get("to"), paths);
+    }
+}
+
+fn collect_path_value(value: Option<&toml::Value>, paths: &mut BTreeSet<String>) {
+    if let Some(path) = value
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        paths.insert(path.to_string());
+    }
+}
+
+fn review_worktree_mutation_finding(paths: &[String]) -> ReviewFinding {
+    ReviewFinding {
+        id: REVIEW_WORKTREE_MUTATION_FINDING_ID.to_string(),
+        severity: Severity::High,
+        file_ranges: paths
+            .iter()
+            .map(|path| ReviewFindingFileRange {
+                path: path.clone(),
+                start: 1,
+                end: None,
+            })
+            .collect(),
+        is_regression_of_commit: None,
+        suggested_test_scenario: Some(
+            "Run csa review again after restoring or intentionally committing the tracked worktree changes."
+                .to_string(),
+        ),
+        description: format!(
+            "Read-only review mutated repo-tracked file(s): {}. Treat the review as blocking until the worktree is inspected or restored.",
+            format_path_list(paths)
+        ),
+    }
+}
+
+fn legacy_worktree_mutation_finding(paths: &[String]) -> Finding {
+    Finding {
+        severity: Severity::High,
+        fid: REVIEW_WORKTREE_MUTATION_FINDING_ID.to_string(),
+        file: paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string()),
+        line: Some(1),
+        rule_id: REVIEW_WORKTREE_MUTATION_RULE_ID.to_string(),
+        summary: format!(
+            "Read-only review mutated repo-tracked file(s): {}",
+            format_path_list(paths)
+        ),
+        engine: "csa-review".to_string(),
+    }
+}
+
+fn format_path_list(paths: &[String]) -> String {
+    const MAX_SHOWN: usize = 8;
+    let shown = paths
+        .iter()
+        .take(MAX_SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() > MAX_SHOWN {
+        format!("{shown}, and {} more", paths.len() - MAX_SHOWN)
+    } else {
+        shown
+    }
+}
+
+#[cfg(test)]
+#[path = "review_cmd_dirty_tree_tests.rs"]
+mod sidecar_tests;
 
 #[cfg(test)]
 mod tests {

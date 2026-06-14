@@ -79,9 +79,9 @@ fn plan_run_still_attempt_auto_weave_upgrade() {
 }
 
 #[test]
-fn review_still_attempts_auto_weave_upgrade() {
+fn review_skips_auto_weave_upgrade() {
     let cli = Cli::parse_from(["csa", "review", "--sa-mode", "false", "--diff"]);
-    assert!(should_attempt_auto_weave_upgrade(&cli.command));
+    assert!(!should_attempt_auto_weave_upgrade(&cli.command));
 }
 
 #[test]
