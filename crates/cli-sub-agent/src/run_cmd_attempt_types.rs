@@ -92,6 +92,7 @@ pub(crate) struct RunLoopOutcome {
     pub(crate) current_tool: ToolName,
     pub(crate) executed_session_id: Option<String>,
     pub(crate) changed_paths: Option<Vec<String>>,
+    pub(crate) commit_created: Option<bool>,
     pub(crate) fork_resolution: Option<ForkResolution>,
     /// Ordered list of tools skipped due to rate-limit/quota failover before this result.
     pub(crate) fallback_chain: csa_scheduler::FallbackChain,

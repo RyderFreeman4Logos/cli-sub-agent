@@ -48,6 +48,13 @@ pub(super) fn display_result_text(
     if let Some(diagnostics) = envelope.kill_diagnostics.as_ref() {
         println!("Kill diagnostics: {}", format_kill_diagnostics(diagnostics));
     }
+    if let Some(recovery) = envelope.require_commit_recovery.as_ref() {
+        for line in
+            crate::require_commit_recovery_display::format_require_commit_recovery_lines(recovery)
+        {
+            println!("{line}");
+        }
+    }
     if !envelope.artifacts.is_empty() {
         println!("Artifacts:");
         for a in &envelope.artifacts {

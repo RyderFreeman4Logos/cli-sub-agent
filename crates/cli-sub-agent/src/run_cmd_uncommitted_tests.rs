@@ -68,7 +68,7 @@ fn apply_uncommitted_changes_warn_only_preserves_success() {
         truncated: 0,
     };
 
-    apply_uncommitted_changes_to_result(&mut result, changes, None, false);
+    apply_uncommitted_changes_to_result(&mut result, changes, None, false, None);
 
     assert_eq!(result.status, "success");
     assert_eq!(result.exit_code, 0);
@@ -89,12 +89,154 @@ fn apply_uncommitted_changes_require_commit_flips_to_failure() {
         truncated: 0,
     };
 
-    apply_uncommitted_changes_to_result(&mut result, changes, None, true);
+    apply_uncommitted_changes_to_result(&mut result, changes, None, true, None);
 
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);
     assert_eq!(result.summary, REQUIRE_COMMIT_REASON);
     assert!(result.uncommitted_changes.is_some());
+}
+
+#[test]
+fn require_commit_recovery_diagnostic_preserves_signal_exit_and_sanitized_paths() {
+    let mut result = session_result("signal", 143);
+    result.kill_hint = Some("memory_pressure".to_string());
+    let changes = csa_session::UncommittedChanges {
+        file_count: 4,
+        insertions: 8,
+        deletions: 1,
+        approx_diff_tokens: 64,
+        files: vec![
+            "src/lib.rs".to_string(),
+            "secret\nname.txt".to_string(),
+            "../outside.txt".to_string(),
+        ],
+        truncated: 1,
+    };
+    let recovery = build_require_commit_recovery_diagnostic(&result, &changes);
+
+    apply_uncommitted_changes_to_result(&mut result, changes, None, true, Some(recovery.clone()));
+
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    let persisted = result
+        .require_commit_recovery
+        .expect("recovery diagnostic should be attached");
+    assert!(persisted.require_commit);
+    assert!(!persisted.commit_created);
+    assert!(persisted.dirty_worktree);
+    assert_eq!(persisted.termination_status, "signal");
+    assert_eq!(persisted.exit_code, 143);
+    assert_eq!(persisted.termination_signal, Some(15));
+    assert_eq!(persisted.kill_hint.as_deref(), Some("memory_pressure"));
+    assert_eq!(
+        persisted.changed_paths,
+        vec![
+            "src/lib.rs".to_string(),
+            "secret�name.txt".to_string(),
+            REDACTED_PATH.to_string(),
+        ]
+    );
+    assert_eq!(persisted.changed_paths_truncated, 1);
+    assert_eq!(
+        persisted.suggested_recovery_action,
+        REQUIRE_COMMIT_RECOVERY_ACTION
+    );
+}
+
+#[test]
+fn require_commit_recovery_diagnostic_covers_generic_nonzero_exit() {
+    let result = session_result("failure", 2);
+    let changes = csa_session::UncommittedChanges {
+        file_count: 1,
+        insertions: 1,
+        deletions: 0,
+        approx_diff_tokens: 4,
+        files: vec!["src/main.rs".to_string()],
+        truncated: 0,
+    };
+
+    let recovery = build_require_commit_recovery_diagnostic(&result, &changes);
+
+    assert_eq!(recovery.termination_status, "failure");
+    assert_eq!(recovery.exit_code, 2);
+    assert_eq!(recovery.termination_signal, None);
+    assert_eq!(recovery.changed_paths, vec!["src/main.rs".to_string()]);
+}
+
+#[test]
+fn require_commit_with_commit_created_does_not_record_recovery_or_fail_result() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
+        .expect("session should be created");
+    let mut session_result = session_result("success", 0);
+    csa_session::save_result(root, &session.meta_session_id, &session_result)
+        .expect("result should be saved");
+    std::fs::write(root.join("src.rs"), "dirty\n").expect("dirty file");
+    let mut execution = csa_process::ExecutionResult {
+        exit_code: 0,
+        summary: "done".to_string(),
+        ..Default::default()
+    };
+
+    record_writer_uncommitted_changes_with_config(
+        root,
+        Some(&session.meta_session_id),
+        &mut execution,
+        WriterUncommittedRecord {
+            sa_mode: false,
+            require_commit: true,
+            changed_paths: Some(&["src.rs".to_string()]),
+            commit_created: Some(true),
+            large_diff_config: &RunLargeDiffWarningConfig::default(),
+        },
+    );
+
+    session_result = csa_session::load_result(root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(execution.exit_code, 0);
+    assert_eq!(session_result.status, "success");
+    assert!(session_result.require_commit_recovery.is_none());
+}
+
+#[test]
+fn require_commit_with_no_session_dirty_paths_does_not_fail_or_diagnose() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
+        .expect("session should be created");
+    let session_result = session_result("success", 0);
+    csa_session::save_result(root, &session.meta_session_id, &session_result)
+        .expect("result should be saved");
+    std::fs::write(root.join("preexisting.txt"), "dirty\n").expect("dirty file");
+    let mut execution = csa_process::ExecutionResult {
+        exit_code: 0,
+        summary: "done".to_string(),
+        ..Default::default()
+    };
+
+    record_writer_uncommitted_changes_with_config(
+        root,
+        Some(&session.meta_session_id),
+        &mut execution,
+        WriterUncommittedRecord {
+            sa_mode: false,
+            require_commit: true,
+            changed_paths: Some(&[]),
+            commit_created: Some(false),
+            large_diff_config: &RunLargeDiffWarningConfig::default(),
+        },
+    );
+
+    let loaded = csa_session::load_result(root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(execution.exit_code, 0);
+    assert_eq!(loaded.status, "success");
+    assert!(loaded.uncommitted_changes.is_none());
+    assert!(loaded.require_commit_recovery.is_none());
 }
 
 #[test]

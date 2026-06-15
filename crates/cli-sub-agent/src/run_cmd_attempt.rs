@@ -37,8 +37,6 @@ use prompt::resolve_attempt_subtree_model_pin_spec;
 use prompt::{AttemptPromptRequest, build_attempt_prompt};
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
-    // Compute max failover attempts: count total models across ALL tiers to
-    // allow cross-tier failover when the primary tier is exhausted (#493).
     let max_failover_attempts = if request.no_failover {
         1
     } else {
@@ -88,7 +86,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let mut accumulated_changed_paths: Vec<String> = Vec::new();
     let mut all_attempt_change_snapshots_available = true;
-    let (result, changed_paths) = loop {
+    let (result, changed_paths, commit_created) = loop {
         attempts += 1;
         let mut fresh_spawn_preflight_override = false;
 
@@ -393,7 +391,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             .await
         }?;
 
-        let (mut exec_result, exec_changed_paths) = match attempt_execution {
+        let (mut exec_result, exec_changed_paths, exec_commit_created) = match attempt_execution {
             AttemptExecution::TimedOut => {
                 let timeout_resume_session = executed_session_id
                     .clone()
@@ -424,8 +422,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             AttemptExecution::Finished {
                 result,
                 changed_paths: attempt_changed_paths,
+                commit_created: attempt_commit_created,
             } => match *result {
-                Ok(result) => (result, attempt_changed_paths),
+                Ok(result) => (result, attempt_changed_paths, attempt_commit_created),
                 Err(e) => match handle_attempt_error(
                     e,
                     AttemptErrorRequest {
@@ -532,7 +531,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .apply(action);
                 continue;
             }
-            PostAttemptAction::Break(changed_paths) => break (exec_result, changed_paths),
+            PostAttemptAction::Break(changed_paths) => {
+                break (exec_result, changed_paths, exec_commit_created);
+            }
         }
     };
     let changed_paths = merge_run_loop_changed_paths(
@@ -545,6 +546,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         current_tool,
         executed_session_id,
         changed_paths,
+        commit_created,
         fork_resolution,
         fallback_chain,
     })))

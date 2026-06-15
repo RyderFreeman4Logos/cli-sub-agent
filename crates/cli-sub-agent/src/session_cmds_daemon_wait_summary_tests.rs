@@ -7,6 +7,8 @@ use super::{
 
 #[path = "session_cmds_daemon_wait_summary_kill_tests.rs"]
 mod kill_diagnostics;
+#[path = "session_cmds_daemon_wait_summary_recovery_tests.rs"]
+mod recovery;
 
 #[test]
 fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
@@ -295,6 +297,7 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
         raw_process_exit_code: None,
         uncommitted_changes: None,
         large_diff_warning: None,
+        require_commit_recovery: None,
         manager_fields: Default::default(),
     };
 
@@ -427,6 +430,7 @@ fn compact_summary_includes_writer_uncommitted_warning() {
             truncated: 6,
         }),
         large_diff_warning: None,
+        require_commit_recovery: None,
         manager_fields: Default::default(),
     };
 

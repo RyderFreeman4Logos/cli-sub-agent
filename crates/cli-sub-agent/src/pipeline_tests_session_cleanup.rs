@@ -504,6 +504,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
             raw_process_exit_code: None,
             uncommitted_changes: None,
             large_diff_warning: None,
+            require_commit_recovery: None,
             manager_fields: csa_session::SessionManagerFields {
                 report: Some(
                     toml::toml! {

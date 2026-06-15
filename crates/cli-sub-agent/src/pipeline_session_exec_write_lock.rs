@@ -348,6 +348,7 @@ mod tests {
                 raw_process_exit_code: None,
                 uncommitted_changes: None,
                 large_diff_warning: None,
+                require_commit_recovery: None,
                 post_exec_gate: None,
                 manager_fields: Default::default(),
             },

@@ -598,6 +598,7 @@ pub(crate) async fn handle_run(
         session_id,
         &mut result,
         loop_outcome.changed_paths.as_deref(),
+        loop_outcome.commit_created,
         require_commit,
         config.as_ref(),
     );

@@ -473,6 +473,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                                 .unwrap_or_else(|| "unknown".to_string()),
                             provider_session_id: None,
                             changed_paths: None,
+                            commit_created: None,
                         },
                         persistable_session_id: extract_meta_session_id_from_error(&err),
                         executed_tool: *attempt_tool,

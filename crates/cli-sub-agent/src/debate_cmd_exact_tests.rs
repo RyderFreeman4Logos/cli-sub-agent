@@ -156,6 +156,7 @@ fn finalize_seeded_debate(
             meta_session_id: session_id.to_string(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         }),
         debate_cmd::DebateFinalizeContext {
             all_tier_models_failed: false,
@@ -658,6 +659,7 @@ Verdict: APPROVE
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         }),
         debate_cmd::DebateFinalizeContext {
             all_tier_models_failed: false,
@@ -749,6 +751,7 @@ Verdict: APPROVE
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         }),
         debate_cmd::DebateFinalizeContext {
             all_tier_models_failed: false,
@@ -841,6 +844,7 @@ Verdict: APPROVE
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         }),
         debate_cmd::DebateFinalizeContext {
             all_tier_models_failed: false,
@@ -948,6 +952,7 @@ Summary: Needs changes from terminal non-success verdict.
             meta_session_id: session.meta_session_id.clone(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         }),
         debate_cmd::DebateFinalizeContext {
             all_tier_models_failed: false,
