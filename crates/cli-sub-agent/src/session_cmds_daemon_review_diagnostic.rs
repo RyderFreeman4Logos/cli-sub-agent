@@ -383,10 +383,24 @@ fn review_meta_from_verdict(
         fix_attempted: previous_meta.is_some_and(|meta| meta.fix_attempted),
         fix_rounds: previous_meta.map_or(0, |meta| meta.fix_rounds),
         review_iterations: previous_meta.map_or(1, |meta| meta.review_iterations),
-        timestamp: Utc::now(),
+        timestamp: recovered_review_timestamp(verdict, previous_meta),
         diff_fingerprint,
         fix_convergence: previous_meta.and_then(|meta| meta.fix_convergence.clone()),
     }
+}
+
+fn recovered_review_timestamp(
+    verdict: &csa_session::ReviewVerdictArtifact,
+    previous_meta: Option<&csa_session::ReviewSessionMeta>,
+) -> DateTime<Utc> {
+    // Artifact-only recovery may run long after the review completed. Using recovery time here
+    // can make an older recovered PASS outrank a newer FAIL in `review --check-verdict`.
+    // Preserve a real existing metadata timestamp when correcting stale/mismatched metadata;
+    // synthetic no-result metadata is not a review timestamp, so fall back to the verdict time.
+    previous_meta
+        .filter(|meta| !is_review_no_result_meta(meta))
+        .map(|meta| meta.timestamp)
+        .unwrap_or(verdict.timestamp)
 }
 
 fn review_artifact_result_summary(meta: &csa_session::ReviewSessionMeta) -> String {

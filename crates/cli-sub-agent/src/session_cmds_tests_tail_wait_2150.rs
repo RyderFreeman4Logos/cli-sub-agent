@@ -252,6 +252,7 @@ fn daemon_completion_review_artifact_recovery_prefers_non_pass_verdict_over_stal
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).unwrap();
 
+    let stale_meta_timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp(1_000, 0).unwrap();
     csa_session::write_review_meta(
         &session_dir,
         &csa_session::ReviewSessionMeta {
@@ -270,7 +271,7 @@ fn daemon_completion_review_artifact_recovery_prefers_non_pass_verdict_over_stal
             fix_attempted: false,
             fix_rounds: 0,
             review_iterations: 1,
-            timestamp: chrono::Utc::now(),
+            timestamp: stale_meta_timestamp,
             diff_fingerprint: Some("sha256:stale-pass-meta".to_string()),
             fix_convergence: None,
         },
@@ -315,6 +316,7 @@ fn daemon_completion_review_artifact_recovery_prefers_non_pass_verdict_over_stal
     assert_eq!(recovered_meta.exit_code, 1);
     assert_eq!(recovered_meta.head_sha, "abcdef1234567890");
     assert_eq!(recovered_meta.scope, "range:main...HEAD");
+    assert_eq!(recovered_meta.timestamp, stale_meta_timestamp);
     assert_eq!(
         recovered_meta.diff_fingerprint.as_deref(),
         Some("sha256:stale-pass-meta")
