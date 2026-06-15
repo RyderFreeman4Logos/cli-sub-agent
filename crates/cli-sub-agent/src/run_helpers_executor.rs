@@ -16,6 +16,14 @@ pub(crate) fn build_executor(
 ) -> Result<Executor> {
     let mut executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
+        if parsed.tool != tool.as_str() {
+            anyhow::bail!(
+                "tool/model-spec mismatch: selected tool {} cannot execute model spec {spec} \
+                 because it selects tool {}; refusing to dispatch through the wrong provider",
+                tool.as_str(),
+                parsed.tool
+            );
+        }
         Executor::from_spec(&parsed)?
     } else {
         let tool_name = tool.as_str();

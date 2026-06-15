@@ -229,6 +229,28 @@ fn build_executor_model_and_thinking_coexist() {
 }
 
 #[test]
+fn build_executor_rejects_model_spec_tool_mismatch_before_dispatch() {
+    let err = build_executor(
+        &ToolName::Codex,
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        None,
+        None,
+        None,
+        false,
+    )
+    .expect_err("codex must not build a gemini executor from mismatched model spec");
+    let msg = err.to_string();
+
+    assert!(msg.contains("selected tool codex"), "{msg}");
+    assert!(msg.contains("model spec"), "{msg}");
+    assert!(msg.contains("gemini-cli"), "{msg}");
+    assert!(
+        msg.contains("refusing to dispatch through the wrong provider"),
+        "{msg}"
+    );
+}
+
+#[test]
 fn build_executor_model_with_thinking_suffix() {
     let result = build_executor(
         &ToolName::GeminiCli,
