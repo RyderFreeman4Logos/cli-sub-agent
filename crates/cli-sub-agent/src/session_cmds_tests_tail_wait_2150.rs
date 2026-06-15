@@ -227,6 +227,102 @@ fn daemon_completion_before_result_uses_existing_review_verdict_artifact() {
 
 #[cfg(unix)]
 #[test]
+fn daemon_completion_review_artifact_recovery_prefers_non_pass_verdict_over_stale_pass_meta() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let mut session = create_session(
+        project,
+        Some("review: range:main...HEAD"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    session.git_head_at_creation = Some("abcdef1234567890".to_string());
+    session.task_context = csa_session::TaskContext {
+        task_type: Some("review".to_string()),
+        tier_name: None,
+    };
+    save_session(&session).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: "abcdef1234567890".to_string(),
+            decision: csa_core::types::ReviewDecision::Pass.as_str().to_string(),
+            verdict: "CLEAN".to_string(),
+            review_mode: Some("standard".to_string()),
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "codex".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 0,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: Some("sha256:stale-pass-meta".to_string()),
+            fix_convergence: None,
+        },
+    )
+    .unwrap();
+    csa_session::write_review_verdict(
+        &session_dir,
+        &csa_session::ReviewVerdictArtifact::from_parts(
+            session_id.clone(),
+            csa_core::types::ReviewDecision::Fail,
+            "HAS_ISSUES",
+            &[],
+            Vec::new(),
+        ),
+    )
+    .unwrap();
+
+    seed_daemon_session_env(&session_id, Some(project.to_string_lossy().as_ref()));
+    persist_daemon_completion_from_env(0);
+
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion should synthesize a result from review artifacts");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.raw_process_exit_code, Some(0));
+    assert!(
+        result.summary.contains("HAS_ISSUES (fail)"),
+        "summary should reflect authoritative non-pass verdict: {}",
+        result.summary
+    );
+
+    let recovered_meta: csa_session::ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered_meta.decision,
+        csa_core::types::ReviewDecision::Fail.as_str()
+    );
+    assert_eq!(recovered_meta.verdict, "HAS_ISSUES");
+    assert_eq!(recovered_meta.exit_code, 1);
+    assert_eq!(recovered_meta.head_sha, "abcdef1234567890");
+    assert_eq!(recovered_meta.scope, "range:main...HEAD");
+    assert_eq!(
+        recovered_meta.diff_fingerprint.as_deref(),
+        Some("sha256:stale-pass-meta")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn daemon_completion_reconcile_late_real_review_result_does_not_keep_unavailable_diagnostics() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

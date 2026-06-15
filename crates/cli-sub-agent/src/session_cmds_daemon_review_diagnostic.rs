@@ -45,7 +45,7 @@ pub(crate) fn review_result_from_existing_artifacts(
 
     let verdict = recoverable_review_verdict(session_dir)?;
     let meta = recover_or_persist_review_meta_from_verdict(session_dir, session, &verdict)?;
-    let exit_code = meta.exit_code;
+    let exit_code = crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision);
     let mut artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(
         project_root,
         &session.meta_session_id,
@@ -284,9 +284,10 @@ fn recover_or_persist_review_meta_from_verdict(
     verdict: &csa_session::ReviewVerdictArtifact,
 ) -> Option<csa_session::ReviewSessionMeta> {
     let existing_meta = read_review_meta(session_dir);
-    match existing_meta.as_ref() {
-        Some(meta) if !is_review_no_result_meta(meta) => return Some(meta.clone()),
-        _ => {}
+    if existing_meta.as_ref().is_some_and(|meta| {
+        !is_review_no_result_meta(meta) && review_meta_matches_verdict(meta, verdict)
+    }) {
+        return existing_meta;
     }
 
     let meta = review_meta_from_verdict(session_dir, session, verdict, existing_meta.as_ref());
@@ -295,11 +296,20 @@ fn recover_or_persist_review_meta_from_verdict(
             session_id = %session.meta_session_id,
             path = %session_dir.join("review_meta.json").display(),
             error = %err,
-            "Failed to recover review metadata from existing review verdict artifact"
+            "Failed to persist recovered review metadata from existing review verdict artifact; using in-memory metadata"
         );
-        return None;
     }
     Some(meta)
+}
+
+fn review_meta_matches_verdict(
+    meta: &csa_session::ReviewSessionMeta,
+    verdict: &csa_session::ReviewVerdictArtifact,
+) -> bool {
+    meta.decision == verdict.decision.as_str()
+        && meta.verdict == verdict.verdict_legacy
+        && meta.exit_code
+            == crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision)
 }
 
 fn review_meta_from_verdict(
