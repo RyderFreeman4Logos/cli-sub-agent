@@ -6,8 +6,7 @@
 
 #[cfg(feature = "acp")]
 use std::collections::HashMap;
-#[cfg(feature = "acp")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "acp")]
 use csa_core::env::{CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_SESSION_DIR_ENV_KEY};
@@ -345,7 +344,12 @@ pub(super) fn start_memory_monitor(
     pid: u32,
     isolation_plan: &IsolationPlan,
     grace_period: std::time::Duration,
+    diagnostic_path: Option<PathBuf>,
 ) -> Option<csa_resource::memory_monitor::MemoryMonitorHandle> {
+    if let Some(path) = diagnostic_path.as_deref() {
+        csa_resource::memory_monitor::clear_soft_limit_diagnostic(path);
+    }
+
     let max_mb = isolation_plan.memory_max_mb.unwrap_or(0);
     if pid == 0 || max_mb == 0 {
         return None;
@@ -361,7 +365,22 @@ pub(super) fn start_memory_monitor(
         soft_limit_percent: soft_pct,
         interval: std::time::Duration::from_secs(interval_secs),
         grace_period,
+        diagnostic_path,
     })
+}
+
+pub(super) fn memory_soft_limit_diagnostic_path(
+    project_root: &Path,
+    session_id: &str,
+) -> Option<PathBuf> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    csa_session::manager::get_session_dir(project_root, session_id)
+        .ok()
+        .and_then(|dir| {
+            csa_resource::memory_monitor::soft_limit_diagnostic_path_for_session_dir(&dir)
+        })
 }
 
 #[cfg(all(test, feature = "acp"))]

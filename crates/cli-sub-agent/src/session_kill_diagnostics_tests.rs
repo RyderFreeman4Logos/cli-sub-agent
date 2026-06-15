@@ -2,7 +2,11 @@ use super::child_timeout::{
     ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance,
 };
 use super::*;
-use std::{cell::Cell, fs};
+use std::{
+    cell::Cell,
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[test]
 fn parses_meminfo_available_and_total() {
@@ -502,6 +506,113 @@ fn external_sigterm_without_timeout_child_evidence_stays_unknown() {
     .expect("signal exit should produce diagnostic");
 
     assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
+}
+
+fn memory_soft_limit_event() -> csa_resource::memory_monitor::MemorySoftLimitKillDiagnostic {
+    csa_resource::memory_monitor::MemorySoftLimitKillDiagnostic {
+        kill_hint: csa_resource::memory_monitor::MEMORY_SOFT_LIMIT_KILL_HINT.to_string(),
+        signal: libc::SIGTERM,
+        current_mb: 9216,
+        threshold_mb: 8601,
+        memory_max_mb: 12_288,
+        soft_limit_percent: 70,
+        scope_name: "csa-codex-01KTEST.scope".to_string(),
+    }
+}
+
+fn test_session_dir(temp: &tempfile::TempDir, session_id: &str) -> PathBuf {
+    let session_dir = temp.path().join("sessions").join(session_id);
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    session_dir
+}
+
+fn register_memory_soft_limit_evidence(session_dir: &Path) {
+    let registry_key =
+        csa_resource::memory_monitor::soft_limit_diagnostic_path_for_session_dir(session_dir)
+            .expect("CSA-owned memory diagnostic path");
+    assert!(
+        !registry_key.starts_with(session_dir),
+        "memory-soft-limit evidence must live outside child-writable session dir"
+    );
+    let event = memory_soft_limit_event();
+    csa_resource::memory_monitor::record_soft_limit_diagnostic_evidence(&registry_key, &event);
+}
+
+#[test]
+fn csa_memory_soft_limit_monitor_evidence_classifies_sigterm_concretely() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01KTESTMEMCLASSIFY";
+    let session_dir = test_session_dir(&temp, session_id);
+    register_memory_soft_limit_evidence(&session_dir);
+
+    let diagnostic =
+        diagnose_signal_kill(143, Some("signal"), "codex", session_id, Some(&session_dir))
+            .expect("signal exit should produce diagnostic");
+
+    assert_eq!(diagnostic.hint, KillHint::MemorySoftLimit);
+    assert_eq!(
+        diagnostic
+            .result_report()
+            .as_ref()
+            .map(|report| report.source.as_str()),
+        Some("memory_soft_limit")
+    );
+    let line = diagnostic
+        .stderr_line()
+        .expect("memory soft limit should render");
+    assert!(line.contains("memory soft limit"));
+    assert!(line.contains("current_mb=9216"));
+    assert!(line.contains("threshold_mb=8601"));
+    assert!(line.contains("memory_max_mb=12288"));
+    assert!(line.contains("soft_limit_percent=70"));
+    assert!(line.contains("scope_name=csa-codex-01KTEST.scope"));
+    assert!(!line.contains("unknown_signal"));
+}
+
+#[test]
+fn forged_child_writable_memory_soft_limit_artifact_stays_unknown() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = test_session_dir(&temp, "01KTESTFORGEDOUTPUT");
+    let forged_path = session_dir.join("output/memory-soft-limit-kill.toml");
+    std::fs::create_dir_all(forged_path.parent().expect("forged artifact parent"))
+        .expect("create child-writable output dir");
+    std::fs::write(
+        &forged_path,
+        toml::to_string_pretty(&memory_soft_limit_event()).expect("serialize event"),
+    )
+    .expect("write forged output artifact");
+
+    let past_start = chrono::Utc::now() - chrono::Duration::seconds(60);
+    let memory_soft_limit = read_memory_soft_limit_diagnostic(&session_dir, Some(&past_start));
+    assert!(
+        memory_soft_limit.is_none(),
+        "child-writable output artifact must not be authoritative CSA evidence"
+    );
+
+    let diagnostic = diagnose_signal_kill_with_events(
+        143,
+        Some("signal"),
+        memory_soft_limit,
+        None,
+        KillSignalObservations::default,
+    )
+    .expect("signal exit should produce diagnostic");
+
+    assert_eq!(diagnostic.hint, KillHint::UnknownSignal);
+    assert!(diagnostic.result_report().is_none());
+}
+
+#[test]
+fn stale_memory_soft_limit_registry_evidence_is_ignored_for_result_window() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = test_session_dir(&temp, "01KTESTMEMWINDOW");
+    register_memory_soft_limit_evidence(&session_dir);
+
+    let future_start = chrono::Utc::now() + chrono::Duration::seconds(60);
+    let past_start = chrono::Utc::now() - chrono::Duration::seconds(60);
+
+    assert!(read_memory_soft_limit_diagnostic(&session_dir, Some(&future_start)).is_none());
+    assert!(read_memory_soft_limit_diagnostic(&session_dir, Some(&past_start)).is_some());
 }
 
 #[test]

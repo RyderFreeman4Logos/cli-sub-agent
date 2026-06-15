@@ -340,6 +340,7 @@ mod tests {
                 artifacts: Vec::new(),
                 peak_memory_mb: None,
                 kill_hint: None,
+                kill_diagnostics: None,
                 last_item: None,
                 fallback_chain: None,
                 gate_timeout: false,

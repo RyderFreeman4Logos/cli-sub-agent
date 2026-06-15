@@ -224,6 +224,7 @@ fn render_wait_result_json(
         "review_verdict": read_review_verdict_label(session_dir, result),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
+        "kill_diagnostics": result.kill_diagnostics.as_ref(),
         "post_exec_gate": result.post_exec_gate.as_ref(),
         "large_diff_warning": result.large_diff_warning.as_ref(),
         "warnings": result.warnings,
@@ -264,7 +265,36 @@ fn format_kill_hint_label(
     {
         return Some(format!("Kill hint: {kill_hint} ({summary})"));
     }
+    if let Some(diagnostics) = result.kill_diagnostics.as_ref() {
+        return Some(format!(
+            "Kill hint: {kill_hint} ({})",
+            format_kill_diagnostics(diagnostics)
+        ));
+    }
     Some(format!("Kill hint: {kill_hint}"))
+}
+
+fn format_kill_diagnostics(diagnostics: &csa_session::KillDiagnosticReport) -> String {
+    let mut parts = vec![format!("source={}", diagnostics.source)];
+    if let Some(signal) = diagnostics.signal {
+        parts.push(format!("signal={signal}"));
+    }
+    if let Some(current_mb) = diagnostics.current_mb {
+        parts.push(format!("current_mb={current_mb}"));
+    }
+    if let Some(threshold_mb) = diagnostics.threshold_mb {
+        parts.push(format!("threshold_mb={threshold_mb}"));
+    }
+    if let Some(memory_max_mb) = diagnostics.memory_max_mb {
+        parts.push(format!("memory_max_mb={memory_max_mb}"));
+    }
+    if let Some(soft_limit_percent) = diagnostics.soft_limit_percent {
+        parts.push(format!("soft_limit_percent={soft_limit_percent}"));
+    }
+    if let Some(scope_name) = diagnostics.scope_name.as_deref() {
+        parts.push(format!("scope_name={scope_name}"));
+    }
+    parts.join(", ")
 }
 
 fn wait_elapsed_seconds(result: &csa_session::SessionResult) -> i64 {

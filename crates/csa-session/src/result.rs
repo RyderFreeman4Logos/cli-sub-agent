@@ -1,5 +1,7 @@
 //! Structured session execution result.
 
+use crate::kill_diagnostics::KillDiagnosticReport;
+use crate::large_diff_warning::LargeDiffWarningReport;
 use chrono::{DateTime, Utc};
 use csa_core::types::FallbackAttempt;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -198,14 +200,6 @@ impl UncommittedChanges {
     }
 }
 
-/// Caller-visible warning emitted when a writer session leaves a large changed surface.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LargeDiffWarningReport {
-    pub changed_files: usize,
-    pub changed_lines: u64,
-    pub approx_diff_tokens: usize,
-}
-
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -248,6 +242,9 @@ pub struct SessionResult {
     /// Best-effort signal-exit diagnostic hint, not a definitive kill cause.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill_hint: Option<String>,
+    /// Structured details for concrete kill sources known to CSA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_diagnostics: Option<KillDiagnosticReport>,
     /// Last known work item when the signal diagnostic was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_item: Option<String>,
@@ -305,6 +302,10 @@ impl SessionResult {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "result_kill_diagnostics_tests.rs"]
+mod kill_diagnostics_tests;
 
 #[cfg(test)]
 mod tests {
@@ -387,6 +388,10 @@ mod tests {
             "Missing kill hint should be omitted from serialization"
         );
         assert!(
+            !toml_str.contains("kill_diagnostics"),
+            "Missing kill diagnostics should be omitted from serialization"
+        );
+        assert!(
             !toml_str.contains("last_item"),
             "Missing last_item should be omitted from serialization"
         );
@@ -415,6 +420,7 @@ mod tests {
             artifacts: vec![],
             peak_memory_mb: None,
             kill_hint: None,
+            kill_diagnostics: None,
             last_item: None,
             fallback_chain: None,
             gate_timeout: false,

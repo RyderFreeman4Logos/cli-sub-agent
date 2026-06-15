@@ -335,6 +335,7 @@ mod tests {
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
             peak_memory_mb: None,
             kill_hint: None,
+            kill_diagnostics: None,
             last_item: None,
             fallback_chain: None,
             gate_timeout: false,

@@ -17,6 +17,7 @@ fn test_save_result_persists_manager_fields_sidecar() {
         artifacts: vec![],
         peak_memory_mb: None,
         kill_hint: None,
+        kill_diagnostics: None,
         last_item: None,
         fallback_chain: None,
         gate_timeout: false,

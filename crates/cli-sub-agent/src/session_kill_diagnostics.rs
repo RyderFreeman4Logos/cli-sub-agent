@@ -4,17 +4,21 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use csa_resource::memory_monitor::{MEMORY_SOFT_LIMIT_KILL_HINT, MemorySoftLimitKillDiagnostic};
 use csa_session::{
-    MetaSessionState, SessionResult, SignalResultMetadata, save_result,
+    KillDiagnosticReport, MetaSessionState, SessionResult, SignalResultMetadata, save_result,
     save_result_with_signal_metadata,
 };
 
-mod child_timeout;
+#[path = "session_kill_diagnostics_memory.rs"]
+mod memory;
 
+mod child_timeout;
 use child_timeout::{
     ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance, redact_command_text,
     truncate_one_line,
 };
+use memory::read_memory_soft_limit_diagnostic;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MemInfo {
@@ -68,6 +72,7 @@ pub(crate) enum KillHint {
     CsaTimeout,
     ChildTimeout,
     HookCommitTimeout,
+    MemorySoftLimit,
     Earlyoom,
     MemoryPressure,
     PossibleMemoryPressure,
@@ -80,6 +85,7 @@ impl KillHint {
             Self::CsaTimeout => "csa_timeout",
             Self::ChildTimeout => "child_timeout",
             Self::HookCommitTimeout => "hook_commit_timeout",
+            Self::MemorySoftLimit => MEMORY_SOFT_LIMIT_KILL_HINT,
             Self::Earlyoom => "earlyoom",
             Self::MemoryPressure => "memory_pressure",
             Self::PossibleMemoryPressure => "possible_memory_pressure",
@@ -94,6 +100,7 @@ pub(crate) struct KillDiagnostic {
     pub(crate) observations: KillSignalObservations,
     pub(crate) terminal_reason: Option<String>,
     pub(crate) child_timeout: Option<ChildTimeoutProvenance>,
+    pub(crate) memory_soft_limit: Option<MemorySoftLimitKillDiagnostic>,
 }
 
 impl KillDiagnostic {
@@ -107,6 +114,15 @@ impl KillDiagnostic {
         });
         if self.hint == KillHint::CsaTimeout {
             details.push("CSA supervisor timeout metadata matched signal exit".to_string());
+            return details;
+        }
+        if let Some(event) = &self.memory_soft_limit {
+            details.push("CSA memory monitor soft-limit event matched signal exit".to_string());
+            details.push(format!("current_mb={}", event.current_mb));
+            details.push(format!("threshold_mb={}", event.threshold_mb));
+            details.push(format!("memory_max_mb={}", event.memory_max_mb));
+            details.push(format!("soft_limit_percent={}", event.soft_limit_percent));
+            details.push(format!("scope_name={}", event.scope_name));
             return details;
         }
         if let Some(child) = &self.child_timeout {
@@ -169,6 +185,7 @@ impl KillDiagnostic {
             KillHint::CsaTimeout => "csa_timeout",
             KillHint::ChildTimeout => "child_timeout",
             KillHint::HookCommitTimeout => "hook_commit_timeout",
+            KillHint::MemorySoftLimit => "memory soft limit",
             KillHint::UnknownSignal => "unknown_signal",
         };
 
@@ -178,6 +195,9 @@ impl KillDiagnostic {
                 "Re-dispatch when host memory frees."
             }
             KillHint::CsaTimeout => "The recorded timeout is the concrete kill reason.",
+            KillHint::MemorySoftLimit => {
+                "CSA's memory monitor sent SIGTERM at the configured soft limit; increase resources.memory_max_mb or tools.<tool>.memory_max_mb, raise resources.soft_limit_percent only if safe, or reduce compile/test parallelism."
+            }
             KillHint::ChildTimeout => {
                 "The transcript shows the last tool command was wrapped in a bounded timeout; inspect that child timeout before treating this as an external session kill."
             }
@@ -207,8 +227,23 @@ impl KillDiagnostic {
             self.detail_parts().join(", ")
         )
     }
+
+    pub(crate) fn result_report(&self) -> Option<KillDiagnosticReport> {
+        self.memory_soft_limit
+            .as_ref()
+            .map(|event| KillDiagnosticReport {
+                source: event.kill_hint.clone(),
+                signal: Some(event.signal),
+                current_mb: Some(event.current_mb),
+                threshold_mb: Some(event.threshold_mb),
+                memory_max_mb: Some(event.memory_max_mb),
+                soft_limit_percent: Some(event.soft_limit_percent),
+                scope_name: Some(event.scope_name.clone()),
+            })
+    }
 }
 
+#[cfg(test)]
 pub(crate) fn diagnose_signal_kill(
     exit_code: i32,
     terminal_reason: Option<&str>,
@@ -216,10 +251,34 @@ pub(crate) fn diagnose_signal_kill(
     session_id: &str,
     session_dir: Option<&Path>,
 ) -> Option<KillDiagnostic> {
+    diagnose_signal_kill_with_artifact_window(
+        exit_code,
+        terminal_reason,
+        tool_name,
+        session_id,
+        session_dir,
+        None,
+    )
+}
+
+fn diagnose_signal_kill_with_artifact_window(
+    exit_code: i32,
+    terminal_reason: Option<&str>,
+    tool_name: &str,
+    session_id: &str,
+    session_dir: Option<&Path>,
+    artifact_not_before: Option<&chrono::DateTime<chrono::Utc>>,
+) -> Option<KillDiagnostic> {
     let child_timeout = session_dir.and_then(|dir| detect_child_timeout_provenance(dir, exit_code));
-    diagnose_signal_kill_with_child_timeout(exit_code, terminal_reason, child_timeout, || {
-        collect_signal_observations(tool_name, session_id)
-    })
+    let memory_soft_limit =
+        session_dir.and_then(|dir| read_memory_soft_limit_diagnostic(dir, artifact_not_before));
+    diagnose_signal_kill_with_events(
+        exit_code,
+        terminal_reason,
+        memory_soft_limit,
+        child_timeout,
+        || collect_signal_observations(tool_name, session_id),
+    )
 }
 
 pub(crate) fn diagnose_ephemeral_signal_kill(
@@ -247,6 +306,16 @@ fn diagnose_signal_kill_with_child_timeout(
     child_timeout: Option<ChildTimeoutProvenance>,
     collect: impl FnOnce() -> KillSignalObservations,
 ) -> Option<KillDiagnostic> {
+    diagnose_signal_kill_with_events(exit_code, terminal_reason, None, child_timeout, collect)
+}
+
+fn diagnose_signal_kill_with_events(
+    exit_code: i32,
+    terminal_reason: Option<&str>,
+    memory_soft_limit: Option<MemorySoftLimitKillDiagnostic>,
+    child_timeout: Option<ChildTimeoutProvenance>,
+    collect: impl FnOnce() -> KillSignalObservations,
+) -> Option<KillDiagnostic> {
     if !matches!(exit_code, 137 | 143) {
         return None;
     }
@@ -256,6 +325,16 @@ fn diagnose_signal_kill_with_child_timeout(
             observations: KillSignalObservations::default(),
             terminal_reason: normalize_terminal_reason(terminal_reason),
             child_timeout: None,
+            memory_soft_limit: None,
+        });
+    }
+    if let Some(memory_soft_limit) = memory_soft_limit {
+        return Some(KillDiagnostic {
+            hint: KillHint::MemorySoftLimit,
+            observations: KillSignalObservations::default(),
+            terminal_reason: normalize_terminal_reason(terminal_reason),
+            child_timeout: None,
+            memory_soft_limit: Some(memory_soft_limit),
         });
     }
     Some(classify_signal_kill(
@@ -290,12 +369,13 @@ pub(crate) fn save_result_with_signal_diagnostic(
     stderr_output: Option<&mut String>,
 ) -> Result<Option<String>> {
     let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).ok();
-    let diagnostic = diagnose_signal_kill(
+    let diagnostic = diagnose_signal_kill_with_artifact_window(
         result.exit_code,
         terminal_reason,
         tool_name,
         &session.meta_session_id,
         session_dir.as_deref(),
+        Some(&result.started_at),
     );
     let diagnostic_line = diagnostic.as_ref().and_then(KillDiagnostic::stderr_line);
     if let Some(line) = &diagnostic_line {
@@ -309,6 +389,7 @@ pub(crate) fn save_result_with_signal_diagnostic(
             .as_deref()
             .or_else(|| last_known_work_item(session, tool_name))
             .map(redact_command_text);
+        result.kill_diagnostics = diagnostic.result_report();
         save_result_with_signal_metadata(
             project_root,
             &session.meta_session_id,
@@ -333,6 +414,7 @@ pub(crate) fn render_result_toml_with_signal_diagnostic(
     let mut rendered_result = result.clone();
     if let Some(diagnostic) = diagnostic {
         rendered_result.kill_hint = Some(diagnostic.hint.as_result_hint().to_string());
+        rendered_result.kill_diagnostics = diagnostic.result_report();
         if let Some(line) = diagnostic.stderr_line() {
             rendered_result.summary = line;
         }
@@ -351,12 +433,13 @@ pub(crate) fn signal_toml(
     session_dir: &Path,
     exit_code: i32,
 ) -> Result<String> {
-    let diagnostic = diagnose_signal_kill(
+    let diagnostic = diagnose_signal_kill_with_artifact_window(
         exit_code,
         session.termination_reason.as_deref(),
         &result.tool,
         session_id,
         Some(session_dir),
+        Some(&result.started_at),
     );
     let diagnostic_last_item = diagnostic.as_ref().and_then(KillDiagnostic::last_item);
     let last_item = diagnostic_last_item
@@ -422,6 +505,7 @@ fn classify_signal_kill(
             observations,
             terminal_reason,
             child_timeout: Some(child_timeout),
+            memory_soft_limit: None,
         };
     } else {
         KillHint::UnknownSignal
@@ -432,6 +516,7 @@ fn classify_signal_kill(
         observations,
         terminal_reason,
         child_timeout: None,
+        memory_soft_limit: None,
     }
 }
 
