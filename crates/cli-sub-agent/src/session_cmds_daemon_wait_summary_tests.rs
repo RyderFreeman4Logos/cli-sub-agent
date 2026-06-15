@@ -1,7 +1,8 @@
 use chrono::Utc;
 
 use super::{
-    WAIT_OUTPUT_MAX_BYTES, read_wait_output_log, render_wait_output_log, render_wait_result_summary,
+    WAIT_OUTPUT_MAX_BYTES, read_wait_output_log, render_wait_output_log, render_wait_result_json,
+    render_wait_result_summary,
 };
 
 #[test]
@@ -85,8 +86,67 @@ fn compact_summary_includes_usage_and_review_verdict() {
     assert!(summary.len() <= 2048);
     assert!(summary.contains("Session: 01TESTWAITSUMMARY"));
     assert!(summary.contains("Elapsed: 1m 5s"));
-    assert!(summary.contains("Tokens: input=100, output=25, total=125, cache_read=40"));
+    assert!(summary.contains(
+        "Tokens: input=100, output=25, total=125, cache_read=40, uncached=60, cache=40%"
+    ));
     assert!(summary.contains("Review verdict: PASS"));
+}
+
+#[test]
+fn compact_json_includes_token_cache_derived_fields() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: r#"{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":25}}"#.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        ..Default::default()
+    };
+
+    let rendered = render_wait_result_json(temp.path(), "01TESTWAITJSON", &result)
+        .expect("wait result JSON should render");
+    let value: serde_json::Value =
+        serde_json::from_str(&rendered).expect("wait result JSON should parse");
+
+    assert_eq!(value["tokens"]["cache_read_input_tokens"], 40);
+    assert_eq!(value["tokens"]["uncached_input_tokens"], 60);
+    assert_eq!(value["tokens"]["cache_read_ratio"], serde_json::json!(0.4));
+}
+
+#[test]
+fn compact_summary_includes_nested_input_cache_details() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: r#"{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40},"output_tokens":25,"output_tokens_details":{"reasoning_tokens":5}}}"#.to_string(),
+        tool: "codex".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITNESTED", &result);
+
+    assert!(summary.contains(
+        "Tokens: input=100, output=25, reasoning_output=5, total=125, cache_read=40, uncached=60, cache=40%"
+    ));
 }
 
 #[test]

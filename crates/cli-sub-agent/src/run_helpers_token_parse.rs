@@ -7,7 +7,8 @@ use csa_session::TokenUsage;
 /// Looks for common patterns in stdout/stderr:
 /// - "tokens: N" or "Tokens: N" or "total_tokens: N"
 /// - "input_tokens: N" / "output_tokens: N"
-/// - "cache_read_input_tokens: N" (Anthropic prompt caching)
+/// - "cache_read_input_tokens: N" or "cached_input_tokens: N"
+/// - "reasoning_output_tokens: N" when provider output includes it
 /// - "cost: $N.NN" or "estimated_cost: $N.NN"
 pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
     let mut usage = TokenUsage::default();
@@ -17,41 +18,35 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
     for line in output.lines() {
         let line_lower = line.to_lowercase();
 
-        // Parse cache_read_input_tokens BEFORE input_tokens to prevent the
-        // less-specific "input_tokens" probe from matching this longer key.
-        if let Some(pos) = line_lower.find("cache_read_input_tokens")
-            && let Some(val) = extract_number(&line[pos..])
+        found_any |= parse_usage_json_line(line, &mut usage);
+
+        if let Some(val) = extract_key_number(line, &line_lower, "cache_read_input_tokens")
+            .or_else(|| extract_key_number(line, &line_lower, "cached_input_tokens"))
         {
             usage.cache_read_input_tokens = Some(val);
             found_any = true;
         }
 
-        // Parse input_tokens (only when not actually pointing at cache_read_input_tokens)
-        if let Some(pos) = line_lower.find("input_tokens") {
-            let prev_run_start = line_lower[..pos]
-                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .map_or(0, |i| i + 1);
-            let is_cache_read = line_lower[prev_run_start..pos].ends_with("cache_read_");
-            if !is_cache_read && let Some(val) = extract_number(&line[pos..]) {
-                usage.input_tokens = Some(val);
-                found_any = true;
-            }
+        if let Some(val) = extract_key_number(line, &line_lower, "reasoning_output_tokens")
+            .or_else(|| extract_key_number(line, &line_lower, "reasoning_tokens"))
+        {
+            usage.reasoning_output_tokens = Some(val);
+            found_any = true;
         }
 
-        // Parse output_tokens
-        if let Some(pos) = line_lower.find("output_tokens")
-            && let Some(val) = extract_number(&line[pos..])
-        {
+        if let Some(val) = extract_key_number(line, &line_lower, "input_tokens") {
+            usage.input_tokens = Some(val);
+            found_any = true;
+        }
+
+        if let Some(val) = extract_key_number(line, &line_lower, "output_tokens") {
             usage.output_tokens = Some(val);
             found_any = true;
         }
 
-        // Parse total_tokens
-        if let Some(pos) = line_lower.find("total_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
-            }
+        if let Some(val) = extract_key_number(line, &line_lower, "total_tokens") {
+            usage.total_tokens = Some(val);
+            found_any = true;
         } else if let Some(pos) = line_lower.find("tokens:") {
             // Only match standalone "tokens:" — skip if preceded by a letter or
             // underscore (e.g. "input_tokens:" or "output_tokens:" already
@@ -84,16 +79,104 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
     if found_any { Some(usage) } else { None }
 }
 
+fn parse_usage_json_line(line: &str, usage: &mut TokenUsage) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+        return false;
+    };
+    let usage_value = value.get("usage").unwrap_or(&value);
+    let mut found_any = false;
+
+    if let Some(value) = json_u64_any(usage_value, &[&["input_tokens"], &["prompt_tokens"]]) {
+        usage.input_tokens = Some(value);
+        found_any = true;
+    }
+    if let Some(value) = json_u64_any(usage_value, &[&["output_tokens"], &["completion_tokens"]]) {
+        usage.output_tokens = Some(value);
+        found_any = true;
+    }
+    if let Some(value) = json_u64_any(usage_value, &[&["total_tokens"]]) {
+        usage.total_tokens = Some(value);
+        found_any = true;
+    }
+    if let Some(value) = json_u64_any(
+        usage_value,
+        &[
+            &["cache_read_input_tokens"],
+            &["cached_input_tokens"],
+            &["input_tokens_details", "cached_tokens"],
+            &["prompt_tokens_details", "cached_tokens"],
+        ],
+    ) {
+        usage.cache_read_input_tokens = Some(value);
+        found_any = true;
+    }
+    if let Some(value) = json_u64_any(
+        usage_value,
+        &[
+            &["reasoning_output_tokens"],
+            &["output_tokens_details", "reasoning_tokens"],
+            &["completion_tokens_details", "reasoning_tokens"],
+            &["reasoning_tokens"],
+        ],
+    ) {
+        usage.reasoning_output_tokens = Some(value);
+        found_any = true;
+    }
+
+    found_any
+}
+
+fn json_u64_any(value: &serde_json::Value, paths: &[&[&str]]) -> Option<u64> {
+    paths.iter().find_map(|path| json_u64_path(value, path))
+}
+
+fn json_u64_path(value: &serde_json::Value, path: &[&str]) -> Option<u64> {
+    let mut cursor = value;
+    for segment in path {
+        cursor = cursor.get(*segment)?;
+    }
+    cursor.as_u64()
+}
+
+fn extract_key_number(line: &str, line_lower: &str, key: &str) -> Option<u64> {
+    let mut search_start = 0;
+    while let Some(relative_pos) = line_lower[search_start..].find(key) {
+        let pos = search_start + relative_pos;
+        let key_end = pos + key.len();
+        if is_key_boundary(line_lower.as_bytes(), pos, key_end) {
+            return extract_number(&line[pos..]);
+        }
+        search_start = key_end;
+    }
+    None
+}
+
+fn is_key_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
+    let valid_prev = start == 0 || !is_identifier_byte(bytes[start - 1]);
+    let valid_next = bytes.get(end).is_none_or(|next| !is_identifier_byte(*next));
+    valid_prev && valid_next
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 /// Extract a number after colon or equals sign.
 pub(crate) fn extract_number(text: &str) -> Option<u64> {
-    // Find colon or equals
-    let start = text.find(':')?;
-    let after_colon = &text[start + 1..];
+    let colon = text.find(':');
+    let equals = text.find('=');
+    let start = match (colon, equals) {
+        (Some(colon), Some(equals)) => colon.min(equals),
+        (Some(colon), None) => colon,
+        (None, Some(equals)) => equals,
+        (None, None) => return None,
+    };
+    let after_separator = &text[start + 1..];
 
     // Take first word after colon
-    let num_str: String = after_colon
+    let num_str: String = after_separator
         .chars()
-        .skip_while(|c| c.is_whitespace())
+        .skip_while(|c| c.is_whitespace() || *c == '"')
         .take_while(|c| c.is_ascii_digit())
         .collect();
 

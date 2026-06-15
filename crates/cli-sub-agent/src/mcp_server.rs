@@ -5,6 +5,7 @@ use std::io::{BufRead, Write};
 use tracing::{debug, error, info};
 
 use crate::startup_env::StartupSubtreeEnv;
+use crate::token_usage_display::compact_token_usage;
 #[cfg(test)]
 use csa_core::types::ToolName;
 #[cfg(test)]
@@ -403,28 +404,7 @@ async fn handle_session_list_tool(args: Value) -> Result<Value> {
                     .join(", ")
             };
 
-            let tokens_str = if let Some(ref usage) = session.total_token_usage {
-                if let Some(total) = usage.total_tokens {
-                    if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{total}tok ${cost:.4}")
-                    } else {
-                        format!("{total}tok")
-                    }
-                } else if let (Some(input), Some(output)) =
-                    (usage.input_tokens, usage.output_tokens)
-                {
-                    let total = input + output;
-                    if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{total}tok ${cost:.4}")
-                    } else {
-                        format!("{total}tok")
-                    }
-                } else {
-                    "-".to_string()
-                }
-            } else {
-                "-".to_string()
-            };
+            let tokens_str = compact_token_usage(session.total_token_usage.as_ref());
 
             content_text.push_str(&format!(
                 "{:<11}  {:<19}  {:<30}  {:<20}  {}\n",

@@ -219,6 +219,66 @@ fn test_session_phase_serde_snake_case() {
     assert!(tool_exhausted_toml.contains("tool_exhausted"));
 }
 
+#[test]
+fn token_usage_derived_cache_fields_require_reported_inputs() {
+    let usage = TokenUsage {
+        input_tokens: Some(1_000),
+        output_tokens: Some(200),
+        reasoning_output_tokens: Some(75),
+        total_tokens: Some(1_200),
+        estimated_cost_usd: None,
+        cache_read_input_tokens: Some(850),
+    };
+
+    assert_eq!(usage.uncached_input_tokens(), Some(150));
+    let ratio = usage.cache_read_ratio().expect("cache ratio");
+    assert!((ratio - 0.85).abs() < f64::EPSILON);
+    let hit_ratio = usage.cache_hit_ratio().expect("cache hit ratio");
+    assert!((hit_ratio - 0.85).abs() < f64::EPSILON);
+
+    let missing_cache = TokenUsage {
+        input_tokens: Some(1_000),
+        ..Default::default()
+    };
+    assert_eq!(missing_cache.uncached_input_tokens(), None);
+    assert_eq!(missing_cache.cache_read_ratio(), None);
+}
+
+#[test]
+fn token_usage_deserializes_legacy_missing_cache_metadata_as_unavailable() {
+    let raw = r#"
+input_tokens = 100
+output_tokens = 25
+total_tokens = 125
+"#;
+
+    let usage: TokenUsage = toml::from_str(raw).expect("legacy token usage should deserialize");
+
+    assert_eq!(usage.input_tokens, Some(100));
+    assert_eq!(usage.output_tokens, Some(25));
+    assert_eq!(usage.total_tokens, Some(125));
+    assert_eq!(usage.cache_read_input_tokens, None);
+    assert_eq!(usage.reasoning_output_tokens, None);
+    assert_eq!(usage.uncached_input_tokens(), None);
+}
+
+#[test]
+fn token_usage_serializes_optional_cache_metadata_when_present() {
+    let usage = TokenUsage {
+        input_tokens: Some(100),
+        output_tokens: Some(25),
+        reasoning_output_tokens: Some(5),
+        total_tokens: Some(125),
+        estimated_cost_usd: None,
+        cache_read_input_tokens: Some(40),
+    };
+
+    let serialized = toml::to_string(&usage).expect("serialize token usage");
+
+    assert!(serialized.contains("cache_read_input_tokens = 40"));
+    assert!(serialized.contains("reasoning_output_tokens = 5"));
+}
+
 // ── Error message content ──────────────────────────────────────
 
 #[test]

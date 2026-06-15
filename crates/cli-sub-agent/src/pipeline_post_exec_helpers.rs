@@ -119,21 +119,21 @@ pub(super) fn update_cumulative_tokens(
     let cumulative = session
         .total_token_usage
         .get_or_insert(TokenUsage::default());
-    cumulative.input_tokens =
-        Some(cumulative.input_tokens.unwrap_or(0) + new_usage.input_tokens.unwrap_or(0));
-    cumulative.output_tokens =
-        Some(cumulative.output_tokens.unwrap_or(0) + new_usage.output_tokens.unwrap_or(0));
-    cumulative.total_tokens =
-        Some(cumulative.total_tokens.unwrap_or(0) + new_usage.total_tokens.unwrap_or(0));
-    cumulative.estimated_cost_usd = Some(
-        cumulative.estimated_cost_usd.unwrap_or(0.0) + new_usage.estimated_cost_usd.unwrap_or(0.0),
+    accumulate_u64(&mut cumulative.input_tokens, new_usage.input_tokens);
+    accumulate_u64(&mut cumulative.output_tokens, new_usage.output_tokens);
+    accumulate_u64(
+        &mut cumulative.reasoning_output_tokens,
+        new_usage.reasoning_output_tokens,
     );
-    // Accumulate cache-read tokens only when the new usage reports a value;
-    // missing fields must not zero out a previously recorded total.
-    if let Some(new_cache_read) = new_usage.cache_read_input_tokens {
-        cumulative.cache_read_input_tokens =
-            Some(cumulative.cache_read_input_tokens.unwrap_or(0) + new_cache_read);
-    }
+    accumulate_u64(&mut cumulative.total_tokens, new_usage.total_tokens);
+    accumulate_f64(
+        &mut cumulative.estimated_cost_usd,
+        new_usage.estimated_cost_usd,
+    );
+    accumulate_u64(
+        &mut cumulative.cache_read_input_tokens,
+        new_usage.cache_read_input_tokens,
+    );
 
     // Update token budget tracking
     if let Some(ref mut budget) = session.token_budget {
@@ -155,5 +155,17 @@ pub(super) fn update_cumulative_tokens(
                 "Token budget soft threshold reached"
             );
         }
+    }
+}
+
+fn accumulate_u64(total: &mut Option<u64>, new_value: Option<u64>) {
+    if let Some(value) = new_value {
+        *total = Some(total.unwrap_or(0).saturating_add(value));
+    }
+}
+
+fn accumulate_f64(total: &mut Option<f64>, new_value: Option<f64>) {
+    if let Some(value) = new_value {
+        *total = Some(total.unwrap_or(0.0) + value);
     }
 }

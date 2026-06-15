@@ -3,7 +3,7 @@ use super::super::list::{
 };
 use super::{sample_session_state, session_to_json};
 use chrono::{Duration, Utc};
-use csa_session::SessionPhase;
+use csa_session::{SessionPhase, TokenUsage};
 
 #[test]
 fn format_compact_duration_basics() {
@@ -79,4 +79,27 @@ fn session_to_json_includes_started_at_and_elapsed() {
         value.get("task_type").and_then(|v| v.as_str()),
         Some("plan")
     );
+}
+
+#[test]
+fn session_to_json_includes_token_cache_derived_fields() {
+    let mut session = sample_session_state();
+    session.total_token_usage = Some(TokenUsage {
+        input_tokens: Some(1_000),
+        output_tokens: Some(250),
+        reasoning_output_tokens: Some(100),
+        total_tokens: None,
+        estimated_cost_usd: None,
+        cache_read_input_tokens: Some(750),
+    });
+
+    let value = session_to_json(&session);
+    let usage = &value["total_token_usage"];
+
+    assert_eq!(usage["input_tokens"], 1_000);
+    assert_eq!(usage["output_tokens"], 250);
+    assert_eq!(usage["reasoning_output_tokens"], 100);
+    assert_eq!(usage["total_tokens"], 1_250);
+    assert_eq!(usage["uncached_input_tokens"], 250);
+    assert_eq!(usage["cache_read_ratio"], serde_json::json!(0.75));
 }

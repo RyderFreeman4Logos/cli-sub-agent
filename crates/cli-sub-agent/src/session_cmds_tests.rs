@@ -392,6 +392,7 @@ fn sample_session_state() -> MetaSessionState {
         total_token_usage: Some(TokenUsage {
             input_tokens: Some(10),
             output_tokens: Some(20),
+            reasoning_output_tokens: None,
             total_tokens: Some(30),
             estimated_cost_usd: None,
             cache_read_input_tokens: None,

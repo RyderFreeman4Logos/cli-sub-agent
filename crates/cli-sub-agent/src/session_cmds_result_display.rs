@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use super::{StructuredOutputOpts, TranscriptSummary};
+use crate::token_usage_display::{display_total_tokens, token_usage_json_value};
 
 pub(super) fn display_result_json(
     result: &SessionResultView,
@@ -92,6 +93,7 @@ fn print_token_usage(usage: &TokenUsage) {
 pub(super) fn render_token_usage_lines(usage: &TokenUsage) -> Vec<String> {
     let any_field = usage.input_tokens.is_some()
         || usage.output_tokens.is_some()
+        || usage.reasoning_output_tokens.is_some()
         || usage.total_tokens.is_some()
         || usage.estimated_cost_usd.is_some()
         || usage.cache_read_input_tokens.is_some();
@@ -103,14 +105,8 @@ pub(super) fn render_token_usage_lines(usage: &TokenUsage) -> Vec<String> {
     if let Some(v) = usage.input_tokens {
         lines.push(format!("  Input:  {} tokens", format_thousands(v)));
     }
-    if let Some(v) = usage.output_tokens {
-        lines.push(format!("  Output: {} tokens", format_thousands(v)));
-    }
-    if let Some(v) = display_total_tokens(usage) {
-        lines.push(format!("  Total:  {} tokens", format_thousands(v)));
-    }
     if let Some(v) = usage.cache_read_input_tokens {
-        if let Some(ratio) = usage.cache_hit_ratio() {
+        if let Some(ratio) = usage.cache_read_ratio() {
             lines.push(format!(
                 "  Cache read: {} tokens ({:.0}% hit rate)",
                 format_thousands(v),
@@ -120,17 +116,25 @@ pub(super) fn render_token_usage_lines(usage: &TokenUsage) -> Vec<String> {
             lines.push(format!("  Cache read: {} tokens", format_thousands(v)));
         }
     }
+    if let Some(v) = usage.uncached_input_tokens() {
+        lines.push(format!("  Uncached input: {} tokens", format_thousands(v)));
+    }
+    if let Some(v) = usage.output_tokens {
+        lines.push(format!("  Output: {} tokens", format_thousands(v)));
+    }
+    if let Some(v) = usage.reasoning_output_tokens {
+        lines.push(format!(
+            "  Reasoning output: {} tokens",
+            format_thousands(v)
+        ));
+    }
+    if let Some(v) = display_total_tokens(usage) {
+        lines.push(format!("  Total:  {} tokens", format_thousands(v)));
+    }
     if let Some(cost) = usage.estimated_cost_usd {
         lines.push(format!("  Cost:   ${cost:.4}"));
     }
     lines
-}
-
-fn display_total_tokens(usage: &TokenUsage) -> Option<u64> {
-    match (usage.input_tokens, usage.output_tokens) {
-        (Some(input), Some(output)) => input.checked_add(output),
-        _ => usage.total_tokens,
-    }
 }
 
 fn format_thousands(n: u64) -> String {
@@ -185,11 +189,7 @@ pub(super) fn build_result_json_payload(
     }
     if let Some(usage) = token_usage {
         let usage = normalized_token_usage_for_output(usage);
-        let mut value = serde_json::to_value(&usage)?;
-        if let Some(ratio) = usage.cache_hit_ratio() {
-            value["cache_hit_ratio"] = serde_json::json!(ratio);
-        }
-        payload["total_token_usage"] = value;
+        payload["total_token_usage"] = token_usage_json_value(&usage);
     }
     Ok(payload)
 }
