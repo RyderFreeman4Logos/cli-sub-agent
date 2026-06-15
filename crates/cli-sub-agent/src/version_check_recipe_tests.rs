@@ -128,7 +128,7 @@ enum CargoInstallRoot {
 }
 
 #[cfg(unix)]
-fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (String, String) {
+fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (PathBuf, PathBuf) {
     let repo = init_version_check_repo();
     let fake_bin = repo.path().join("fake-bin");
     install_fake_cargo(&fake_bin);
@@ -179,24 +179,36 @@ fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (String, St
     );
     let observed_install_root =
         fs::read_to_string(&capture_path).expect("fake cargo should capture install root");
-    (
-        observed_install_root.trim().to_string(),
-        expected_install_root.to_string_lossy().into_owned(),
-    )
+    let observed_install_root = PathBuf::from(observed_install_root.trim());
+    // macOS temp paths may be reported through canonical aliases such as
+    // `/private/var` instead of `/var`, so compare resolved filesystem paths
+    // while the temporary repository still exists.
+    let observed_install_root = observed_install_root
+        .canonicalize()
+        .expect("canonicalize observed install root");
+    let expected_install_root = expected_install_root
+        .canonicalize()
+        .expect("canonicalize expected install root");
+    (observed_install_root, expected_install_root)
+}
+
+#[cfg(unix)]
+fn assert_same_install_root(observed: &Path, expected: &Path) {
+    assert_eq!(observed, expected);
 }
 
 #[test]
 #[cfg(unix)]
 fn check_version_bumped_ignores_read_only_cargo_install_root() {
     let (observed, expected) = run_check_version_bumped(CargoInstallRoot::Value("/usr/local"));
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
 
 #[test]
 #[cfg(unix)]
 fn check_version_bumped_works_when_cargo_install_root_is_unset() {
     let (observed, expected) = run_check_version_bumped(CargoInstallRoot::Unset);
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
 
 #[test]
@@ -204,5 +216,5 @@ fn check_version_bumped_works_when_cargo_install_root_is_unset() {
 fn check_version_bumped_preserves_explicit_cargo_install_root() {
     let (observed, expected) =
         run_check_version_bumped(CargoInstallRoot::RepoLocal("explicit-cargo-install-root"));
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
