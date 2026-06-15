@@ -25,6 +25,7 @@ fn test_save_result_persists_manager_fields_sidecar() {
         raw_process_exit_code: None,
         uncommitted_changes: None,
         large_diff_warning: None,
+        require_commit_recovery: None,
         manager_fields: crate::result::SessionManagerFields {
             artifacts: Some(
                 toml::toml! {

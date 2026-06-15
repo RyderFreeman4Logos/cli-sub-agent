@@ -497,6 +497,8 @@ pub(crate) struct SessionExecutionResult {
     pub provider_session_id: Option<String>,
     /// Paths changed by this session when git snapshots were available.
     pub changed_paths: Option<Vec<String>>,
+    /// Whether post-run commit policy observed HEAD advancing for this run.
+    pub commit_created: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]

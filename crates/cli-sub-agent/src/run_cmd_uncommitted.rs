@@ -13,6 +13,8 @@ const DIFF_BYTES_PER_TOKEN: usize = 4;
 const DIFF_TOKEN_READ_BUF_BYTES: usize = 16 * 1024;
 const REQUIRE_COMMIT_REASON: &str =
     "writer session ended with uncommitted changes (--require-commit set)";
+const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
+const REDACTED_PATH: &str = "[redacted-path]";
 const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
 
 pub(crate) fn is_writer_session(sa_mode: bool, task_type: Option<&str>) -> bool {
@@ -106,6 +108,7 @@ pub(crate) fn record_run_dirty(
     session_id: Option<&str>,
     result: &mut csa_process::ExecutionResult,
     changed_paths: Option<&[String]>,
+    commit_created: Option<bool>,
     cli_require_commit: bool,
     config: Option<&csa_config::ProjectConfig>,
 ) -> Option<csa_session::LargeDiffWarningReport> {
@@ -120,29 +123,39 @@ pub(crate) fn record_run_dirty(
         project_root,
         session_id,
         result,
-        sa_mode,
-        effective_writer_must_commit(cli_require_commit, config),
-        changed_paths,
-        &large_diff_config,
+        WriterUncommittedRecord {
+            sa_mode,
+            require_commit: effective_writer_must_commit(cli_require_commit, config),
+            changed_paths,
+            commit_created,
+            large_diff_config: &large_diff_config,
+        },
     )
+}
+
+struct WriterUncommittedRecord<'a> {
+    sa_mode: bool,
+    require_commit: bool,
+    changed_paths: Option<&'a [String]>,
+    commit_created: Option<bool>,
+    large_diff_config: &'a RunLargeDiffWarningConfig,
 }
 
 fn record_writer_uncommitted_changes_with_config(
     project_root: &Path,
     session_id: Option<&str>,
     result: &mut csa_process::ExecutionResult,
-    sa_mode: bool,
-    require_commit: bool,
-    changed_paths: Option<&[String]>,
-    large_diff_config: &RunLargeDiffWarningConfig,
+    record: WriterUncommittedRecord<'_>,
 ) -> Option<csa_session::LargeDiffWarningReport> {
-    if !is_writer_session(sa_mode, Some("run")) {
+    if !is_writer_session(record.sa_mode, Some("run")) {
         return None;
     }
     let session_id = session_id?;
-    let token_threshold = tracked_diff_token_threshold(large_diff_config);
-    let changes = collect_uncommitted_changes_with_token_threshold(project_root, token_threshold)?;
-    let warning_changes = changed_paths
+    let token_threshold = tracked_diff_token_threshold(record.large_diff_config);
+    let full_changes =
+        collect_uncommitted_changes_with_token_threshold(project_root, token_threshold)?;
+    let changes = record
+        .changed_paths
         .map(|paths| {
             collect_uncommitted_changes_for_changed_paths_with_token_threshold(
                 project_root,
@@ -150,18 +163,21 @@ fn record_writer_uncommitted_changes_with_config(
                 token_threshold,
             )
         })
-        .unwrap_or_else(|| Some(changes.clone()));
-    let warning = warning_changes
-        .as_ref()
-        .and_then(|changes| large_diff_warning_report(changes, large_diff_config));
+        .unwrap_or_else(|| Some(full_changes.clone()))?;
+    let warning = large_diff_warning_report(&changes, record.large_diff_config);
+    let require_commit_contract_failure =
+        record.require_commit && !record.commit_created.unwrap_or(false);
 
     match csa_session::load_result(project_root, session_id) {
         Ok(Some(mut session_result)) => {
+            let recovery = require_commit_contract_failure
+                .then(|| build_require_commit_recovery_diagnostic(&session_result, &changes));
             apply_uncommitted_changes_to_result(
                 &mut session_result,
                 changes.clone(),
                 warning.clone(),
-                require_commit,
+                require_commit_contract_failure,
+                recovery,
             );
             if let Err(err) = csa_session::save_result(project_root, session_id, &session_result) {
                 warn!(
@@ -186,7 +202,7 @@ fn record_writer_uncommitted_changes_with_config(
         }
     }
 
-    if require_commit {
+    if require_commit_contract_failure {
         result.mark_gate_failure("writer-uncommitted");
         result.summary = REQUIRE_COMMIT_REASON.to_string();
         if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
@@ -202,15 +218,85 @@ pub(crate) fn apply_uncommitted_changes_to_result(
     result: &mut csa_session::SessionResult,
     changes: csa_session::UncommittedChanges,
     large_diff_warning: Option<csa_session::LargeDiffWarningReport>,
-    require_commit: bool,
+    require_commit_contract_failure: bool,
+    recovery: Option<csa_session::RequireCommitRecoveryDiagnostic>,
 ) {
     result.uncommitted_changes = Some(changes);
     result.large_diff_warning = large_diff_warning;
-    if require_commit {
+    result.require_commit_recovery = recovery;
+    if require_commit_contract_failure {
+        remove_incidental_downgrade_warnings(&mut result.warnings);
         result.exit_code = 1;
         result.status = csa_session::SessionResult::status_from_exit_code(1);
         result.summary = REQUIRE_COMMIT_REASON.to_string();
     }
+}
+
+fn build_require_commit_recovery_diagnostic(
+    result: &csa_session::SessionResult,
+    changes: &csa_session::UncommittedChanges,
+) -> csa_session::RequireCommitRecoveryDiagnostic {
+    let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
+    let termination_status = result
+        .raw_process_exit_code
+        .map(raw_termination_status_from_exit_code)
+        .unwrap_or_else(|| result.status.clone());
+    csa_session::RequireCommitRecoveryDiagnostic {
+        require_commit: true,
+        commit_created: false,
+        dirty_worktree: true,
+        changed_paths: changes
+            .files
+            .iter()
+            .map(|path| sanitize_diagnostic_path(path))
+            .collect(),
+        changed_paths_truncated: changes.truncated,
+        termination_status,
+        exit_code: termination_exit_code,
+        termination_signal: result
+            .kill_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.signal)
+            .or_else(|| infer_signal_from_exit_code(termination_exit_code)),
+        kill_hint: result.kill_hint.clone(),
+        suggested_recovery_action: REQUIRE_COMMIT_RECOVERY_ACTION.to_string(),
+    }
+}
+
+fn raw_termination_status_from_exit_code(exit_code: i32) -> String {
+    match exit_code {
+        0 => "success".to_string(),
+        124 => "timeout".to_string(),
+        137 | 143 => "signal".to_string(),
+        _ => "failure".to_string(),
+    }
+}
+
+fn remove_incidental_downgrade_warnings(warnings: &mut Vec<String>) {
+    warnings.retain(|warning| !is_incidental_downgrade_warning(warning));
+}
+
+fn is_incidental_downgrade_warning(warning: &str) -> bool {
+    warning.contains("incidental nonzero exit") && warning.contains("treated as success")
+}
+
+fn infer_signal_from_exit_code(exit_code: i32) -> Option<i32> {
+    (129..=255).contains(&exit_code).then_some(exit_code - 128)
+}
+
+fn sanitize_diagnostic_path(path: &str) -> String {
+    let path = path.strip_prefix("./").unwrap_or(path);
+    if path.is_empty() || path.starts_with('/') || has_unsafe_path_component(path) {
+        return REDACTED_PATH.to_string();
+    }
+
+    path.chars()
+        .map(|ch| if ch.is_control() { '�' } else { ch })
+        .collect()
+}
+
+fn has_unsafe_path_component(path: &str) -> bool {
+    path.split('/').any(|part| matches!(part, ".." | ".git"))
 }
 
 pub(crate) fn format_uncommitted_warning(changes: &csa_session::UncommittedChanges) -> String {
@@ -558,6 +644,10 @@ fn parse_numstat_totals(numstat: &str) -> (u64, u64) {
 
     (insertions, deletions)
 }
+
+#[cfg(test)]
+#[path = "run_cmd_uncommitted_incidental_tests.rs"]
+mod incidental_tests;
 
 #[cfg(test)]
 #[path = "run_cmd_uncommitted_tests.rs"]

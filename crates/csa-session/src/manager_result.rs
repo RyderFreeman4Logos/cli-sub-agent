@@ -12,7 +12,7 @@ pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
 const LEGACY_KILL_REASON_KEY: &str = "kill_reason";
-const RUNTIME_RESULT_KEYS: [&str; 23] = [
+const RUNTIME_RESULT_KEYS: [&str; 24] = [
     "status",
     "exit_code",
     "summary",
@@ -32,6 +32,7 @@ const RUNTIME_RESULT_KEYS: [&str; 23] = [
     "raw_process_exit_code",
     "uncommitted_changes",
     "large_diff_warning",
+    "require_commit_recovery",
     "kill_hint",
     "kill_diagnostics",
     LEGACY_KILL_REASON_KEY,
@@ -441,9 +442,11 @@ fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
         "gate_timeout" => value.is_bool(),
         "warnings" => value.is_array(),
         "artifacts" => artifacts_value_matches_runtime_schema(value),
-        "post_exec_gate" | "uncommitted_changes" | "large_diff_warning" | "kill_diagnostics" => {
-            value.is_table()
-        }
+        "post_exec_gate"
+        | "uncommitted_changes"
+        | "large_diff_warning"
+        | "require_commit_recovery"
+        | "kill_diagnostics" => value.is_table(),
         _ => false,
     }
 }

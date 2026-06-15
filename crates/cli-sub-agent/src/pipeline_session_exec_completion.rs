@@ -120,11 +120,13 @@ pub(super) async fn complete_session_execution(
         post_fingerprints.as_ref(),
     );
     let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
+    let mut commit_created = None;
     if commit_guard_enabled {
         let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
             pre_run_workspace.as_ref(),
             post_run_workspace.as_ref(),
         );
+        commit_created = commit_guard.as_ref().map(|guard| guard.head_changed);
         let policy_evaluation_failed = require_commit_on_mutation
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
@@ -186,6 +188,7 @@ pub(super) async fn complete_session_execution(
         meta_session_id: session.meta_session_id.clone(),
         provider_session_id,
         changed_paths: snapshots_available.then_some(changed_paths),
+        commit_created,
     })
 }
 

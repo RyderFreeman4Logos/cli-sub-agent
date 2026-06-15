@@ -21,6 +21,7 @@ pub(super) enum AttemptExecution {
     Finished {
         result: Box<Result<csa_process::ExecutionResult, anyhow::Error>>,
         changed_paths: Option<Vec<String>>,
+        commit_created: Option<bool>,
     },
     Exit(i32),
     TimedOut,
@@ -71,6 +72,7 @@ pub(super) async fn run_ephemeral_with_timeout(
         Ok(result) => AttemptExecution::Finished {
             result: Box::new(result),
             changed_paths: None,
+            commit_created: None,
         },
         Err(_) => AttemptExecution::TimedOut,
     };
@@ -103,6 +105,7 @@ pub(super) async fn run_ephemeral_without_timeout(
                 .await,
         ),
         changed_paths: None,
+        commit_created: None,
     })
 }
 
@@ -357,6 +360,7 @@ async fn execute_persistent(
             AttemptExecution::Finished {
                 result: Box::new(Ok(session_result.execution)),
                 changed_paths: session_result.changed_paths,
+                commit_created: session_result.commit_created,
             }
         }
         Err(e) => {
@@ -377,6 +381,7 @@ async fn execute_persistent(
                 AttemptExecution::Finished {
                     result: Box::new(Err(e)),
                     changed_paths: None,
+                    commit_created: None,
                 }
             }
         }

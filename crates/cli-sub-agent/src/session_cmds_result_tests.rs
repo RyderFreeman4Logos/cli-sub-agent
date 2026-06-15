@@ -40,6 +40,8 @@ mod daemon_completion;
 mod issue_2016;
 #[path = "session_cmds_result_kill_diagnostics_tests.rs"]
 mod kill_diagnostics;
+#[path = "session_cmds_result_require_commit_recovery_tests.rs"]
+mod require_commit_recovery;
 #[path = "session_cmds_result_resume_wrapper_tests.rs"]
 mod resume_wrapper;
 

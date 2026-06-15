@@ -18,6 +18,7 @@ fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
             meta_session_id: "01TESTRESULT".to_string(),
             provider_session_id: None,
             changed_paths: None,
+            commit_created: None,
         },
         persistable_session_id: Some("01TESTRESULT".to_string()),
         executed_tool: ToolName::Codex,
