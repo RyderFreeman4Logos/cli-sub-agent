@@ -46,13 +46,24 @@ fn init_version_check_repo() -> TempDir {
 }
 
 #[cfg(unix)]
-fn install_failing_cargo(bin_dir: &Path) {
+fn install_executable(bin_dir: &Path, name: &str, contents: &str) {
     use std::os::unix::fs::PermissionsExt;
 
     fs::create_dir_all(bin_dir).expect("create fake bin dir");
-    let cargo_path = bin_dir.join("cargo");
-    fs::write(
-        &cargo_path,
+    let path = bin_dir.join(name);
+    fs::write(&path, contents).unwrap_or_else(|err| panic!("write fake {name}: {err}"));
+    let mut perms = fs::metadata(&path)
+        .unwrap_or_else(|err| panic!("fake {name} metadata: {err}"))
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).unwrap_or_else(|err| panic!("chmod fake {name}: {err}"));
+}
+
+#[cfg(unix)]
+fn install_fake_cargo(bin_dir: &Path) {
+    install_executable(
+        bin_dir,
+        "cargo",
         r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" != "metadata" ]; then
@@ -73,13 +84,41 @@ cat <<'JSON'
 {"packages":[{"name":"cli-sub-agent","version":"0.1.1"}]}
 JSON
 "#,
-    )
-    .expect("write fake cargo");
-    let mut perms = fs::metadata(&cargo_path)
-        .expect("fake cargo metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&cargo_path, perms).expect("chmod fake cargo");
+    );
+}
+
+#[cfg(unix)]
+fn install_fake_jq(bin_dir: &Path) {
+    install_executable(
+        bin_dir,
+        "jq",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+if [ "${1:-}" != "-r" ]; then
+    echo "fake jq only supports -r; args=$*" >&2
+    exit 45
+fi
+expected='.packages[] | select(.name == "cli-sub-agent") | .version'
+if [ "${2:-}" != "$expected" ]; then
+    echo "fake jq saw unexpected filter: ${2:-<missing>}" >&2
+    exit 46
+fi
+printf '0.1.1\n'
+"#,
+    );
+}
+
+#[cfg(unix)]
+fn install_failing_just(bin_dir: &Path) {
+    install_executable(
+        bin_dir,
+        "just",
+        r#"#!/usr/bin/env bash
+echo "fake just should not be invoked by version_check_recipe_tests" >&2
+exit 127
+"#,
+    );
 }
 
 enum CargoInstallRoot {
@@ -89,10 +128,12 @@ enum CargoInstallRoot {
 }
 
 #[cfg(unix)]
-fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (String, String) {
+fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (PathBuf, PathBuf) {
     let repo = init_version_check_repo();
     let fake_bin = repo.path().join("fake-bin");
-    install_failing_cargo(&fake_bin);
+    install_fake_cargo(&fake_bin);
+    install_fake_jq(&fake_bin);
+    install_failing_just(&fake_bin);
     let capture_path = repo.path().join("fake-cargo-install-root.txt");
     let default_install_root = repo.path().join("target/cargo-install-root");
 
@@ -101,14 +142,10 @@ fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (String, St
         fake_bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let mut command = Command::new("just");
+    let mut command = Command::new("bash");
     command
-        .arg("--no-dotenv")
-        .arg("--justfile")
-        .arg(workspace_root().join("justfile"))
-        .arg("--working-directory")
-        .arg(repo.path())
-        .arg("check-version-bumped")
+        .arg(workspace_root().join("scripts/check-version-bumped.sh"))
+        .current_dir(repo.path())
         .env("PATH", path)
         .env("FAKE_CARGO_INSTALL_ROOT_CAPTURE", &capture_path)
         .env_remove("CSA_SKIP_VERSION_CHECK");
@@ -133,33 +170,45 @@ fn run_check_version_bumped(cargo_install_root: CargoInstallRoot) -> (String, St
         }
     };
 
-    let output = command.output().expect("just should execute");
+    let output = command.output().expect("bash should execute");
     assert!(
         output.status.success(),
-        "check-version-bumped should invoke cargo with a writable install root: stdout={}, stderr={}",
+        "check-version-bumped script should invoke cargo with a writable install root without spawning just: stdout={}, stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let observed_install_root =
         fs::read_to_string(&capture_path).expect("fake cargo should capture install root");
-    (
-        observed_install_root.trim().to_string(),
-        expected_install_root.to_string_lossy().into_owned(),
-    )
+    let observed_install_root = PathBuf::from(observed_install_root.trim());
+    // macOS temp paths may be reported through canonical aliases such as
+    // `/private/var` instead of `/var`, so compare resolved filesystem paths
+    // while the temporary repository still exists.
+    let observed_install_root = observed_install_root
+        .canonicalize()
+        .expect("canonicalize observed install root");
+    let expected_install_root = expected_install_root
+        .canonicalize()
+        .expect("canonicalize expected install root");
+    (observed_install_root, expected_install_root)
+}
+
+#[cfg(unix)]
+fn assert_same_install_root(observed: &Path, expected: &Path) {
+    assert_eq!(observed, expected);
 }
 
 #[test]
 #[cfg(unix)]
 fn check_version_bumped_ignores_read_only_cargo_install_root() {
     let (observed, expected) = run_check_version_bumped(CargoInstallRoot::Value("/usr/local"));
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
 
 #[test]
 #[cfg(unix)]
 fn check_version_bumped_works_when_cargo_install_root_is_unset() {
     let (observed, expected) = run_check_version_bumped(CargoInstallRoot::Unset);
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
 
 #[test]
@@ -167,5 +216,5 @@ fn check_version_bumped_works_when_cargo_install_root_is_unset() {
 fn check_version_bumped_preserves_explicit_cargo_install_root() {
     let (observed, expected) =
         run_check_version_bumped(CargoInstallRoot::RepoLocal("explicit-cargo-install-root"));
-    assert_eq!(observed, expected);
+    assert_same_install_root(&observed, &expected);
 }
