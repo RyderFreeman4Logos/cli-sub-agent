@@ -1,14 +1,16 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use csa_core::types::ReviewDecision;
-use csa_session::{MetaSessionState, SessionArtifact};
+use csa_session::{MetaSessionState, SessionArtifact, SessionResult};
 use tracing::warn;
 
 use super::completion::DaemonCompletionPacket;
 
 const REVIEW_DAEMON_NO_RESULT_REASON: &str = "daemon_completion_before_result";
 const REVIEW_VERDICT_ARTIFACT_PATH: &str = "output/review-verdict.json";
+const REVIEW_DAEMON_TOOL_LAUNCH_METADATA_ABSENT: &str = "tool_launch_metadata_absent";
 
 pub(crate) fn has_review_no_result_diagnostic(session: &MetaSessionState) -> bool {
     is_review_daemon_session(session)
@@ -30,6 +32,50 @@ pub(crate) fn append_review_no_result_diagnostic_artifacts(
     artifacts.push(SessionArtifact::new(REVIEW_VERDICT_ARTIFACT_PATH));
 }
 
+pub(crate) fn review_result_from_existing_artifacts(
+    project_root: &Path,
+    session_dir: &Path,
+    session: &MetaSessionState,
+    packet: &DaemonCompletionPacket,
+    completed_at: DateTime<Utc>,
+) -> Option<SessionResult> {
+    if !is_review_daemon_session(session) {
+        return None;
+    }
+
+    let verdict = recoverable_review_verdict(session_dir)?;
+    let meta = recover_or_persist_review_meta_from_verdict(session_dir, session, &verdict)?;
+    let exit_code = meta.exit_code;
+    let mut artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(
+        project_root,
+        &session.meta_session_id,
+    );
+    ensure_review_verdict_artifact(&mut artifacts);
+
+    let raw_process_exit_code = (packet.exit_code != exit_code).then_some(packet.exit_code);
+    let warnings = raw_process_exit_code
+        .map(|raw_exit_code| {
+            vec![format!(
+                "daemon completion exit code ({raw_exit_code}) arrived before result.toml; using existing review verdict artifacts"
+            )]
+        })
+        .unwrap_or_default();
+
+    Some(SessionResult {
+        status: SessionResult::status_from_exit_code(exit_code),
+        exit_code,
+        summary: review_artifact_result_summary(&meta),
+        tool: meta.tool.clone(),
+        started_at: session.last_accessed,
+        completed_at,
+        events_count: 0,
+        artifacts,
+        raw_process_exit_code,
+        warnings,
+        ..Default::default()
+    })
+}
+
 impl DaemonCompletionPacket {
     pub(crate) fn persist_review_diag(
         &self,
@@ -39,6 +85,15 @@ impl DaemonCompletionPacket {
         session: &MetaSessionState,
     ) {
         if !has_review_no_result_diagnostic(session) {
+            return;
+        }
+
+        if recoverable_review_verdict(session_dir).is_some() {
+            warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "existing_review_artifacts_preserved",
+                "Skipped review daemon no-result diagnostic sidecars because recoverable review artifacts already exist"
+            );
             return;
         }
 
@@ -187,6 +242,133 @@ fn review_no_result_tool(session_dir: &Path, session: &MetaSessionState) -> Stri
                 .map(|metadata| metadata.tool)
         })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn read_review_meta(session_dir: &Path) -> Option<csa_session::ReviewSessionMeta> {
+    std::fs::read_to_string(session_dir.join("review_meta.json"))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+}
+
+fn read_review_verdict(session_dir: &Path) -> Option<csa_session::ReviewVerdictArtifact> {
+    std::fs::read_to_string(session_dir.join(REVIEW_VERDICT_ARTIFACT_PATH))
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+}
+
+fn recoverable_review_verdict(session_dir: &Path) -> Option<csa_session::ReviewVerdictArtifact> {
+    let verdict = read_review_verdict(session_dir)?;
+    (!is_review_no_result_verdict(&verdict)).then_some(verdict)
+}
+
+fn is_review_no_result_meta(meta: &csa_session::ReviewSessionMeta) -> bool {
+    meta.decision == ReviewDecision::Unavailable.as_str()
+        && (meta.status_reason.as_deref() == Some(REVIEW_DAEMON_NO_RESULT_REASON)
+            || matches!(
+                meta.primary_failure.as_deref(),
+                Some(REVIEW_DAEMON_NO_RESULT_REASON | REVIEW_DAEMON_TOOL_LAUNCH_METADATA_ABSENT)
+            ))
+}
+
+fn is_review_no_result_verdict(verdict: &csa_session::ReviewVerdictArtifact) -> bool {
+    verdict.decision == ReviewDecision::Unavailable
+        && matches!(
+            verdict.primary_failure.as_deref(),
+            Some(REVIEW_DAEMON_NO_RESULT_REASON | REVIEW_DAEMON_TOOL_LAUNCH_METADATA_ABSENT)
+        )
+}
+
+fn recover_or_persist_review_meta_from_verdict(
+    session_dir: &Path,
+    session: &MetaSessionState,
+    verdict: &csa_session::ReviewVerdictArtifact,
+) -> Option<csa_session::ReviewSessionMeta> {
+    let existing_meta = read_review_meta(session_dir);
+    match existing_meta.as_ref() {
+        Some(meta) if !is_review_no_result_meta(meta) => return Some(meta.clone()),
+        _ => {}
+    }
+
+    let meta = review_meta_from_verdict(session_dir, session, verdict, existing_meta.as_ref());
+    if let Err(err) = csa_session::write_review_meta(session_dir, &meta) {
+        warn!(
+            session_id = %session.meta_session_id,
+            path = %session_dir.join("review_meta.json").display(),
+            error = %err,
+            "Failed to recover review metadata from existing review verdict artifact"
+        );
+        return None;
+    }
+    Some(meta)
+}
+
+fn review_meta_from_verdict(
+    session_dir: &Path,
+    session: &MetaSessionState,
+    verdict: &csa_session::ReviewVerdictArtifact,
+    previous_meta: Option<&csa_session::ReviewSessionMeta>,
+) -> csa_session::ReviewSessionMeta {
+    let decision = verdict.decision;
+    let fallback_tool = review_no_result_tool(session_dir, session);
+    csa_session::ReviewSessionMeta {
+        session_id: session.meta_session_id.clone(),
+        head_sha: previous_meta
+            .map(|meta| meta.head_sha.clone())
+            .filter(|head| !head.trim().is_empty())
+            .or_else(|| session.git_head_at_creation.clone())
+            .unwrap_or_default(),
+        decision: decision.as_str().to_string(),
+        verdict: verdict.verdict_legacy.clone(),
+        review_mode: verdict
+            .review_mode
+            .clone()
+            .or_else(|| previous_meta.and_then(|meta| meta.review_mode.clone())),
+        status_reason: None,
+        routed_to: verdict.routed_to.clone(),
+        primary_failure: verdict.primary_failure.clone(),
+        failure_reason: verdict.failure_reason.clone(),
+        tool: previous_meta
+            .map(|meta| meta.tool.clone())
+            .filter(|tool| !tool.trim().is_empty() && tool != "unknown")
+            .unwrap_or(fallback_tool),
+        scope: previous_meta
+            .map(|meta| meta.scope.clone())
+            .filter(|scope| !scope.trim().is_empty())
+            .unwrap_or_else(|| canonical_review_scope(session)),
+        exit_code: crate::verdict_exit_code::exit_code_from_review_decision(decision),
+        fix_attempted: previous_meta.is_some_and(|meta| meta.fix_attempted),
+        fix_rounds: previous_meta.map_or(0, |meta| meta.fix_rounds),
+        review_iterations: previous_meta.map_or(1, |meta| meta.review_iterations),
+        timestamp: Utc::now(),
+        diff_fingerprint: previous_meta.and_then(|meta| meta.diff_fingerprint.clone()),
+        fix_convergence: previous_meta.and_then(|meta| meta.fix_convergence.clone()),
+    }
+}
+
+fn review_artifact_result_summary(meta: &csa_session::ReviewSessionMeta) -> String {
+    let verdict = meta.verdict.trim();
+    let decision = meta.decision.trim();
+    if verdict.is_empty() {
+        format!(
+            "review completed with decision {decision}; recovered existing review artifacts before daemon completion result.toml was published"
+        )
+    } else {
+        format!(
+            "review completed with verdict {verdict} ({decision}); recovered existing review artifacts before daemon completion result.toml was published"
+        )
+    }
+}
+
+fn ensure_review_verdict_artifact(artifacts: &mut Vec<SessionArtifact>) {
+    if artifacts
+        .iter()
+        .any(|artifact| artifact.path == REVIEW_VERDICT_ARTIFACT_PATH)
+    {
+        return;
+    }
+    artifacts.push(csa_session::observed_session_artifact(
+        REVIEW_VERDICT_ARTIFACT_PATH,
+    ));
 }
 
 fn persist_review_no_result_meta(

@@ -144,6 +144,89 @@ fn review_daemon_no_result_diagnostic_canonicalizes_review_description_scopes() 
 
 #[cfg(unix)]
 #[test]
+fn daemon_completion_before_result_uses_existing_review_verdict_artifact() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let mut session = create_session(
+        project,
+        Some("review: range:main...HEAD"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    session.git_head_at_creation = Some("abcdef1234567890".to_string());
+    session.task_context = csa_session::TaskContext {
+        task_type: Some("review".to_string()),
+        tier_name: None,
+    };
+    save_session(&session).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    csa_session::write_review_verdict(
+        &session_dir,
+        &csa_session::ReviewVerdictArtifact::from_parts(
+            session_id.clone(),
+            csa_core::types::ReviewDecision::Pass,
+            "CLEAN",
+            &[],
+            Vec::new(),
+        ),
+    )
+    .unwrap();
+
+    seed_daemon_session_env(&session_id, Some(project.to_string_lossy().as_ref()));
+    persist_daemon_completion_from_env(1);
+
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("daemon completion should synthesize a result from review artifacts");
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        !result
+            .summary
+            .contains("no tool launch metadata was recorded"),
+        "existing review artifacts must not be converted into no-result diagnostics: {}",
+        result.summary
+    );
+    assert!(
+        result
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/review-verdict.json"),
+        "recovered result should advertise the existing review verdict artifact"
+    );
+
+    let review_meta: csa_session::ReviewSessionMeta = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("review_meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(review_meta.session_id, session_id);
+    assert_eq!(review_meta.head_sha, "abcdef1234567890");
+    assert_eq!(review_meta.scope, "range:main...HEAD");
+    assert_eq!(review_meta.decision, "pass");
+    assert_eq!(review_meta.verdict, "CLEAN");
+    assert_eq!(review_meta.exit_code, 0);
+    assert_eq!(review_meta.status_reason, None);
+    assert_eq!(review_meta.primary_failure, None);
+
+    let verdict: csa_session::ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(verdict.decision, csa_core::types::ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert_eq!(verdict.primary_failure, None);
+}
+
+#[cfg(unix)]
+#[test]
 fn daemon_completion_reconcile_late_real_review_result_does_not_keep_unavailable_diagnostics() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
