@@ -613,8 +613,14 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
 #[path = "session_cmds_daemon_attach_proptest.rs"]
 mod session_cmds_daemon_attach_proptest;
 #[cfg(test)]
+#[path = "session_cmds_daemon_kill_tests.rs"]
+mod session_cmds_daemon_kill_tests;
+#[cfg(test)]
 #[path = "session_cmds_daemon_routing_proptest.rs"]
 mod session_cmds_daemon_routing_proptest;
+#[cfg(test)]
+#[path = "session_cmds_daemon_test_support.rs"]
+mod session_cmds_daemon_test_support;
 #[cfg(test)]
 #[path = "session_cmds_daemon_tests.rs"]
 mod tests;

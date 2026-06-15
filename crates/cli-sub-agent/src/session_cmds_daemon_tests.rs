@@ -3,6 +3,10 @@ use crate::cli::{Cli, Commands, SessionCommands};
 use clap::Parser;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::session_cmds_daemon_test_support::{
+    attach_test_daemon_pid_record, spawn_daemon_like_process,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_env_lock::TEST_ENV_LOCK;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -527,35 +531,6 @@ fn attach_primary_output_uses_stdout_for_persisted_codex_cli_runtime_binary() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn spawn_daemon_like_process(session_id: &str) -> std::process::Child {
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
-
-    let mut cmd = Command::new("sh");
-    cmd.args(["-c", "sleep 60", "csa-daemon", session_id]);
-    // SAFETY: test fixture only; makes the child its own session leader like a daemon.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn().expect("spawn daemon-like child")
-}
-
-#[cfg(target_os = "linux")]
-fn attach_test_daemon_pid_record(pid: u32) -> String {
-    format!("{pid}\n")
-}
-
-#[cfg(target_os = "macos")]
-fn attach_test_daemon_pid_record(pid: u32) -> String {
-    format!("{pid} 0\n")
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packet() {
     use std::sync::mpsc;
@@ -753,51 +728,6 @@ fn handle_session_kill_uses_lock_file_for_inline_session() {
     assert!(
         !status.success(),
         "inline session process should be terminated by session kill"
-    );
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn handle_session_kill_accepts_legacy_stderr_pid() {
-    let td = tempfile::tempdir().expect("tempdir");
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).expect("create state home");
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
-
-    let session =
-        csa_session::create_session(project, Some("kill-legacy-stderr"), None, Some("opencode"))
-            .expect("create session");
-    let session_id = session.meta_session_id;
-    let session_dir = csa_session::get_session_dir(project, &session_id).expect("session dir");
-
-    let mut child = spawn_daemon_like_process(&session_id);
-    let child_pid = child.id();
-    std::fs::write(
-        session_dir.join("stderr.log"),
-        format!(
-            "<!-- CSA:SESSION_STARTED id={} pid={} dir=\"{}\" wait_cmd=\"\" attach_cmd=\"\" -->\n",
-            session_id,
-            child_pid,
-            session_dir.display()
-        ),
-    )
-    .expect("write legacy stderr pid");
-
-    let reaper = std::thread::spawn(move || child.wait().expect("wait child"));
-
-    handle_session_kill(
-        session_id.clone(),
-        Some(project.to_string_lossy().into_owned()),
-    )
-    .expect("legacy kill should succeed");
-
-    let status = reaper.join().expect("reaper join");
-    assert!(
-        !status.success(),
-        "legacy daemon process should be terminated by session kill"
     );
 }
 
