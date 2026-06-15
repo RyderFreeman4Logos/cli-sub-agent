@@ -3,11 +3,15 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use csa_session::{ReviewVerdictArtifact, SessionArtifact, SessionResult};
+use csa_session::{SessionArtifact, SessionResult};
 use tracing::debug;
 
 #[path = "session_observability_gate.rs"]
 mod gate;
+#[path = "session_observability_legacy_review_pass.rs"]
+mod legacy_review_pass;
+#[path = "session_observability_review_verdict.rs"]
+mod review_verdict;
 
 const SUMMARY_MAX_CHARS: usize = 200;
 const REVIEW_SUMMARY_FAIL_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];
@@ -60,7 +64,19 @@ pub(crate) fn refresh_and_repair_result_from_dir(
         result.events_count = events_count;
         changed = true;
     }
-    if sync_review_verdict_exit_code(session_dir, &mut result)? {
+    if legacy_review_pass::recover_legacy_plain_pass_review_sidecars_from_dir(
+        session_dir,
+        &mut result,
+    )? {
+        changed = true;
+    }
+    let force_review_failure =
+        human_review_summary_requires_failed_gate(session_dir, &result.summary);
+    if review_verdict::sync_review_verdict_exit_code(
+        session_dir,
+        &mut result,
+        force_review_failure,
+    )? {
         changed = true;
     }
     if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, &mut result)? {
@@ -99,7 +115,18 @@ pub(crate) fn enrich_result_from_session_dir(
         changed = true;
     }
 
-    if sync_review_verdict_exit_code(session_dir, result)? {
+    if legacy_review_pass::recover_legacy_plain_pass_review_sidecars(
+        project_root,
+        session_id,
+        session_dir,
+        result,
+    )? {
+        changed = true;
+    }
+
+    let force_review_failure =
+        human_review_summary_requires_failed_gate(session_dir, &result.summary);
+    if review_verdict::sync_review_verdict_exit_code(session_dir, result, force_review_failure)? {
         changed = true;
     }
 
@@ -116,18 +143,6 @@ pub(crate) fn enrich_result_from_session_dir(
     Ok(changed)
 }
 
-fn sync_review_verdict_exit_code(session_dir: &Path, result: &mut SessionResult) -> Result<bool> {
-    let exit_code = if human_review_summary_requires_failed_gate(session_dir, &result.summary) {
-        Some(1)
-    } else {
-        read_review_verdict_exit_code(session_dir)?
-    };
-    let Some(exit_code) = exit_code else {
-        return Ok(false);
-    };
-    Ok(sync_result_exit_code(result, exit_code))
-}
-
 pub(crate) fn human_review_summary_requires_failed_gate(
     session_dir: &Path,
     raw_summary: &str,
@@ -135,10 +150,15 @@ pub(crate) fn human_review_summary_requires_failed_gate(
     crate::session_summary_text::human_session_summary(session_dir, raw_summary).is_some_and(
         |summary| {
             review_summary_has_fail_verdict(&summary)
-                || session_dir.join("review_meta.json").is_file()
+                || human_review_summary_can_apply_blocking_outcomes(session_dir)
                     && review_summary_has_blocking_outcome(&summary)
         },
     )
+}
+
+fn human_review_summary_can_apply_blocking_outcomes(session_dir: &Path) -> bool {
+    session_dir.join("review_meta.json").is_file()
+        || legacy_review_pass::is_review_session_dir(session_dir)
 }
 
 fn review_summary_has_fail_verdict(summary: &str) -> bool {
@@ -382,30 +402,6 @@ fn summary_verdict_token_is_bounded(rest: &str) -> bool {
             .is_none_or(|next| !next.is_ascii_alphanumeric() && next != '_'),
         _ => true,
     }
-}
-
-fn sync_result_exit_code(result: &mut SessionResult, exit_code: i32) -> bool {
-    let status = SessionResult::status_from_exit_code(exit_code);
-    if result.exit_code == exit_code && result.status == status {
-        return false;
-    }
-
-    result.exit_code = exit_code;
-    result.status = status;
-    true
-}
-
-fn read_review_verdict_exit_code(session_dir: &Path) -> Result<Option<i32>> {
-    let verdict_path = session_dir.join("output").join("review-verdict.json");
-    if !verdict_path.is_file() {
-        return Ok(None);
-    }
-
-    let raw = fs::read_to_string(&verdict_path)?;
-    let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)?;
-    Ok(Some(
-        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision),
-    ))
 }
 
 pub(crate) fn build_missing_result_diagnostic(

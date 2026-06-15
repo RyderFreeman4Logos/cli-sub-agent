@@ -23,6 +23,7 @@ use csa_session::state::ReviewSessionMeta;
 use tracing::{debug, error, warn};
 #[path = "review_cmd_output.rs"]
 mod output;
+pub(crate) use output::clean_detection::detect_bounded_clean_verdict_token;
 use output::{is_worktree_submodule, persist_review_result_exit_code};
 #[path = "review_cmd_artifact_parse.rs"]
 mod artifact_parse;

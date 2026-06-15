@@ -74,6 +74,10 @@ fn verdict_token_pass_or_clean(text: &str) -> bool {
     verdict_token_matches(text, PASS_VERDICT_TOKENS, MatchCase::Sensitive)
 }
 
+pub(crate) fn detect_bounded_clean_verdict_token(text: &str) -> bool {
+    verdict_token_pass_or_clean(text)
+}
+
 /// Detect an affirmative FAIL verdict token (`FAIL`/`HAS_ISSUES`/`REJECT`),
 /// mirroring [`verdict_token_pass_or_clean`]. Matches ONLY bounded verdict tokens
 /// (bare line, `Verdict:`-labeled, or `**`/`__`-emphasized) — never the substring

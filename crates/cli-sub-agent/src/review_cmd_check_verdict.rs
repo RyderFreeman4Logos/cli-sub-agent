@@ -114,7 +114,9 @@ pub(crate) fn check_review_verdict_for_session(
         return Ok(None);
     }
 
-    let Some(meta) = read_review_meta(&session_dir)? else {
+    let Some(meta) =
+        read_review_meta_after_recovery(project_root, &resolved.session_id, &session_dir)?
+    else {
         debug!(
             session_id = %resolved.session_id,
             session_dir = %session_dir.display(),
@@ -182,16 +184,14 @@ pub(crate) fn check_review_verdict_for_target(
     expected_diff_fingerprint: Option<&str>,
     required_mode: Option<&str>,
 ) -> Result<Option<ReviewVerdictMatch>> {
-    if let Some(found) = check_review_verdict_marker(
+    let marker_candidate = check_review_verdict_marker(
         project_root,
         branch,
         head_sha,
         required_scope,
         expected_diff_fingerprint,
         required_mode,
-    )? {
-        return Ok(Some(found));
-    }
+    )?;
 
     let session_root = csa_session::get_session_root(project_root).with_context(|| {
         format!(
@@ -211,6 +211,9 @@ pub(crate) fn check_review_verdict_for_target(
     );
 
     let mut candidates = Vec::new();
+    if let Some(candidate) = marker_candidate {
+        candidates.push(candidate);
+    }
     for session in sessions {
         let session_branch = session_branch(&session);
         debug!(
@@ -229,7 +232,9 @@ pub(crate) fn check_review_verdict_for_target(
             continue;
         }
         let session_dir = session_root.join("sessions").join(&session.meta_session_id);
-        let Some(meta) = read_review_meta(&session_dir)? else {
+        let Some(meta) =
+            read_review_meta_after_recovery(project_root, &session.meta_session_id, &session_dir)?
+        else {
             debug!(
                 session_id = %session.meta_session_id,
                 session_dir = %session_dir.display(),
@@ -330,7 +335,7 @@ fn check_review_verdict_marker(
     required_scope: &str,
     expected_diff_fingerprint: Option<&str>,
     required_mode: Option<&str>,
-) -> Result<Option<ReviewVerdictMatch>> {
+) -> Result<Option<ReviewVerdictCandidate>> {
     let Some(marker) = crate::review_gate::read_review_gate_marker(project_root, branch, head_sha)
     else {
         return Ok(None);
@@ -438,12 +443,14 @@ fn check_review_verdict_marker(
         session_id = %meta.session_id,
         scope = %meta.scope,
         head_sha = %meta.head_sha,
-        "Review verdict marker matched PASS/CLEAN session"
+        "Review verdict marker matched PASS/CLEAN candidate"
     );
-    Ok(Some(ReviewVerdictMatch {
+    Ok(Some(ReviewVerdictCandidate {
         session_id: meta.session_id,
         scope: meta.scope,
         head_sha: meta.head_sha,
+        timestamp: meta.timestamp,
+        is_pass: true,
         severity_counts: pass_status.severity_counts,
     }))
 }
@@ -526,6 +533,30 @@ fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
     let meta = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(Some(meta))
+}
+
+fn read_review_meta_after_recovery(
+    project_root: &Path,
+    session_id: &str,
+    session_dir: &Path,
+) -> Result<Option<ReviewSessionMeta>> {
+    if let Some(meta) = read_review_meta(session_dir)? {
+        return Ok(Some(meta));
+    }
+    recover_review_sidecars_before_meta(project_root, session_id);
+    read_review_meta(session_dir)
+}
+
+fn recover_review_sidecars_before_meta(project_root: &Path, session_id: &str) {
+    if let Err(error) =
+        crate::session_observability::refresh_and_repair_result(project_root, session_id)
+    {
+        debug!(
+            session_id,
+            error = %error,
+            "Review verdict sidecar recovery failed before metadata lookup"
+        );
+    }
 }
 
 fn diff_fingerprint_matches(
@@ -642,6 +673,22 @@ fn zero_severity_counts() -> BTreeMap<Severity, u32> {
 #[cfg(test)]
 #[path = "review_cmd_check_verdict_daemon_completion_tests.rs"]
 mod daemon_completion_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_check_verdict_2236_tests.rs"]
+mod issue_2236_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_check_verdict_2236_clean_summary_tests.rs"]
+mod issue_2236_clean_summary_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_check_verdict_2236_blocking_legacy_tests.rs"]
+mod issue_2236_blocking_legacy_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_check_verdict_compound_legacy_tests.rs"]
+mod compound_legacy_tests;
 
 #[cfg(test)]
 #[path = "review_cmd_check_verdict_tests.rs"]
