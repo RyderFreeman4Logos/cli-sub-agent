@@ -110,6 +110,13 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
+pub(crate) fn compute_review_diff_fingerprint(
+    project_root: &std::path::Path,
+    scope: &str,
+) -> Option<String> {
+    compute_diff_fingerprint(project_root, scope)
+}
+
 pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
     session_fix::validate_session_fix_before_daemon(args)?;
     fix_finding::validate_fix_finding_before_daemon(args)

@@ -44,7 +44,8 @@ pub(crate) fn review_result_from_existing_artifacts(
     }
 
     let verdict = recoverable_review_verdict(session_dir)?;
-    let meta = recover_or_persist_review_meta_from_verdict(session_dir, session, &verdict)?;
+    let meta =
+        recover_or_persist_review_meta_from_verdict(project_root, session_dir, session, &verdict)?;
     let exit_code = crate::verdict_exit_code::exit_code_from_review_decision(verdict.decision);
     let mut artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(
         project_root,
@@ -279,19 +280,48 @@ fn is_review_no_result_verdict(verdict: &csa_session::ReviewVerdictArtifact) -> 
 }
 
 fn recover_or_persist_review_meta_from_verdict(
+    project_root: &Path,
     session_dir: &Path,
     session: &MetaSessionState,
     verdict: &csa_session::ReviewVerdictArtifact,
 ) -> Option<csa_session::ReviewSessionMeta> {
     let existing_meta = read_review_meta(session_dir);
-    if existing_meta.as_ref().is_some_and(|meta| {
-        !is_review_no_result_meta(meta) && review_meta_matches_verdict(meta, verdict)
-    }) {
-        return existing_meta;
+    if let Some(meta) = existing_meta.as_ref()
+        && !is_review_no_result_meta(meta)
+        && review_meta_matches_verdict(meta, verdict)
+    {
+        let Some(diff_fingerprint) = meta.diff_fingerprint.clone().or_else(|| {
+            crate::review_cmd::compute_review_diff_fingerprint(project_root, &meta.scope)
+        }) else {
+            return existing_meta;
+        };
+        if meta.diff_fingerprint.as_deref() == Some(diff_fingerprint.as_str()) {
+            return existing_meta;
+        }
+
+        let mut recovered_meta = meta.clone();
+        recovered_meta.diff_fingerprint = Some(diff_fingerprint);
+        persist_recovered_review_meta(session_dir, session, &recovered_meta);
+        return Some(recovered_meta);
     }
 
-    let meta = review_meta_from_verdict(session_dir, session, verdict, existing_meta.as_ref());
-    if let Err(err) = csa_session::write_review_meta(session_dir, &meta) {
+    let meta = review_meta_from_verdict(
+        project_root,
+        session_dir,
+        session,
+        verdict,
+        existing_meta.as_ref(),
+    );
+    persist_recovered_review_meta(session_dir, session, &meta);
+    Some(meta)
+}
+
+fn persist_recovered_review_meta(
+    session_dir: &Path,
+    session: &MetaSessionState,
+    meta: &csa_session::ReviewSessionMeta,
+) {
+    if let Err(err) = csa_session::write_review_meta(session_dir, meta) {
         warn!(
             session_id = %session.meta_session_id,
             path = %session_dir.join("review_meta.json").display(),
@@ -299,7 +329,6 @@ fn recover_or_persist_review_meta_from_verdict(
             "Failed to persist recovered review metadata from existing review verdict artifact; using in-memory metadata"
         );
     }
-    Some(meta)
 }
 
 fn review_meta_matches_verdict(
@@ -313,6 +342,7 @@ fn review_meta_matches_verdict(
 }
 
 fn review_meta_from_verdict(
+    project_root: &Path,
     session_dir: &Path,
     session: &MetaSessionState,
     verdict: &csa_session::ReviewVerdictArtifact,
@@ -320,6 +350,13 @@ fn review_meta_from_verdict(
 ) -> csa_session::ReviewSessionMeta {
     let decision = verdict.decision;
     let fallback_tool = review_no_result_tool(session_dir, session);
+    let scope = previous_meta
+        .map(|meta| meta.scope.clone())
+        .filter(|scope| !scope.trim().is_empty())
+        .unwrap_or_else(|| canonical_review_scope(session));
+    let diff_fingerprint = previous_meta
+        .and_then(|meta| meta.diff_fingerprint.clone())
+        .or_else(|| crate::review_cmd::compute_review_diff_fingerprint(project_root, &scope));
     csa_session::ReviewSessionMeta {
         session_id: session.meta_session_id.clone(),
         head_sha: previous_meta
@@ -341,16 +378,13 @@ fn review_meta_from_verdict(
             .map(|meta| meta.tool.clone())
             .filter(|tool| !tool.trim().is_empty() && tool != "unknown")
             .unwrap_or(fallback_tool),
-        scope: previous_meta
-            .map(|meta| meta.scope.clone())
-            .filter(|scope| !scope.trim().is_empty())
-            .unwrap_or_else(|| canonical_review_scope(session)),
+        scope,
         exit_code: crate::verdict_exit_code::exit_code_from_review_decision(decision),
         fix_attempted: previous_meta.is_some_and(|meta| meta.fix_attempted),
         fix_rounds: previous_meta.map_or(0, |meta| meta.fix_rounds),
         review_iterations: previous_meta.map_or(1, |meta| meta.review_iterations),
         timestamp: Utc::now(),
-        diff_fingerprint: previous_meta.and_then(|meta| meta.diff_fingerprint.clone()),
+        diff_fingerprint,
         fix_convergence: previous_meta.and_then(|meta| meta.fix_convergence.clone()),
     }
 }
