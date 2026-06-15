@@ -567,6 +567,10 @@ mod blocked;
 mod tests;
 
 #[cfg(test)]
+#[path = "pipeline_tests_token_usage.rs"]
+mod token_usage_tests;
+
+#[cfg(test)]
 #[path = "pipeline_tests_no_op_gate.rs"]
 mod no_op_gate_tests;
 

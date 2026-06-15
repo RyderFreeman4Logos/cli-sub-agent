@@ -123,6 +123,7 @@ mod todo_errors_cmd;
 mod todo_hooks;
 mod todo_persist_cmd;
 mod todo_ref_cmd;
+mod token_usage_display;
 mod tool_version;
 mod triage_cmd;
 mod untracked_size;

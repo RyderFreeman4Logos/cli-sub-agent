@@ -207,8 +207,11 @@ fn render_wait_result_json(
         serde_json::json!({
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
+            "reasoning_output_tokens": usage.reasoning_output_tokens,
             "total_tokens": usage.total_tokens,
             "cache_read_input_tokens": usage.cache_read_input_tokens,
+            "uncached_input_tokens": usage.uncached_input_tokens(),
+            "cache_read_ratio": usage.cache_read_ratio(),
         })
     });
     let value = serde_json::json!({
@@ -290,6 +293,7 @@ fn format_wait_elapsed(result: &csa_session::SessionResult) -> String {
 struct WaitTokenSummary {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    reasoning_output_tokens: Option<u64>,
     total_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
 }
@@ -303,13 +307,37 @@ impl WaitTokenSummary {
         if let Some(output) = self.output_tokens {
             parts.push(format!("output={output}"));
         }
+        if let Some(reasoning) = self.reasoning_output_tokens {
+            parts.push(format!("reasoning_output={reasoning}"));
+        }
         if let Some(total) = self.total_tokens {
             parts.push(format!("total={total}"));
         }
         if let Some(cache_read) = self.cache_read_input_tokens {
             parts.push(format!("cache_read={cache_read}"));
         }
+        if let Some(uncached) = self.uncached_input_tokens() {
+            parts.push(format!("uncached={uncached}"));
+        }
+        if let Some(ratio) = self.cache_read_ratio() {
+            parts.push(format!("cache={:.0}%", ratio * 100.0));
+        }
         parts.join(", ")
+    }
+
+    fn uncached_input_tokens(self) -> Option<u64> {
+        Some(
+            self.input_tokens?
+                .saturating_sub(self.cache_read_input_tokens?),
+        )
+    }
+
+    fn cache_read_ratio(self) -> Option<f64> {
+        let input = self.input_tokens? as f64;
+        if input == 0.0 {
+            return None;
+        }
+        Some(self.cache_read_input_tokens? as f64 / input)
     }
 }
 
@@ -322,6 +350,20 @@ fn extract_wait_token_summary(result: &csa_session::SessionResult) -> Option<Wai
     let output_tokens = usage
         .get("output_tokens")
         .and_then(serde_json::Value::as_u64);
+    let reasoning_output_tokens = usage
+        .get("reasoning_output_tokens")
+        .or_else(|| usage.get("reasoning_tokens"))
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(|details| details.get("reasoning_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .get("completion_tokens_details")
+                .and_then(|details| details.get("reasoning_tokens"))
+        })
+        .and_then(serde_json::Value::as_u64);
     let total_tokens = usage
         .get("total_tokens")
         .and_then(serde_json::Value::as_u64)
@@ -333,10 +375,21 @@ fn extract_wait_token_summary(result: &csa_session::SessionResult) -> Option<Wai
     let cache_read_input_tokens = usage
         .get("cache_read_input_tokens")
         .or_else(|| usage.get("cached_input_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(|details| details.get("cached_tokens"))
+        })
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|details| details.get("cached_tokens"))
+        })
         .and_then(serde_json::Value::as_u64);
     Some(WaitTokenSummary {
         input_tokens,
         output_tokens,
+        reasoning_output_tokens,
         total_tokens,
         cache_read_input_tokens,
     })

@@ -421,6 +421,7 @@ fn test_note_from_session() {
         total_token_usage: Some(crate::state::TokenUsage {
             input_tokens: Some(1000),
             output_tokens: Some(500),
+            reasoning_output_tokens: None,
             total_tokens: Some(1500),
             estimated_cost_usd: None,
             cache_read_input_tokens: None,

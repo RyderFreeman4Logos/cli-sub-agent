@@ -535,6 +535,10 @@ mod tests;
 mod tests_prompt;
 
 #[cfg(test)]
+#[path = "run_helpers_token_usage_tests.rs"]
+mod token_usage_tests;
+
+#[cfg(test)]
 #[path = "run_helpers_tests_tail.rs"]
 mod tests_tail;
 

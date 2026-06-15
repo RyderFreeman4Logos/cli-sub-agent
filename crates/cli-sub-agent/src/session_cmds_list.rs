@@ -285,6 +285,10 @@ pub(super) fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
     let status = resolve_session_status(session);
     let created_at = session_created_at(session);
     let now = Utc::now();
+    let total_token_usage = session
+        .total_token_usage
+        .as_ref()
+        .map(crate::token_usage_display::token_usage_json_value);
     let mut value = serde_json::json!({
         "session_id": session.meta_session_id,
         "started_at": created_at,
@@ -297,7 +301,7 @@ pub(super) fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
         "branch": session.branch,
         "csa_version": session.csa_version,
         "task_type": session.task_context.task_type,
-        "total_token_usage": session.total_token_usage,
+        "total_token_usage": total_token_usage,
         "is_fork": session.genealogy.is_fork(),
     });
     if let Some(ref fork_of) = session.genealogy.fork_of_session_id {

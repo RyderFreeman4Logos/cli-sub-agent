@@ -5,6 +5,7 @@ use csa_core::types::OutputFormat;
 use csa_session::{delete_session, get_session_dir, list_sessions, list_sessions_tree_filtered};
 
 use crate::stdout_write::{write_stdout, write_stdout_line};
+use crate::token_usage_display::compact_token_usage;
 
 // Re-export types and functions from session_cmds_result so that
 // callers can continue using `session_cmds::*`.
@@ -258,29 +259,7 @@ pub(crate) fn handle_session_list(
                     let branch_str = session.branch.as_deref().unwrap_or("-");
                     let csa_version_str = session.csa_version.as_deref().unwrap_or("-");
 
-                    // Format token usage
-                    let tokens_str = if let Some(ref usage) = session.total_token_usage {
-                        if let Some(total) = usage.total_tokens {
-                            if let Some(cost) = usage.estimated_cost_usd {
-                                format!("{total}tok ${cost:.4}")
-                            } else {
-                                format!("{total}tok")
-                            }
-                        } else if let (Some(input), Some(output)) =
-                            (usage.input_tokens, usage.output_tokens)
-                        {
-                            let total = input + output;
-                            if let Some(cost) = usage.estimated_cost_usd {
-                                format!("{total}tok ${cost:.4}")
-                            } else {
-                                format!("{total}tok")
-                            }
-                        } else {
-                            "-".to_string()
-                        }
-                    } else {
-                        "-".to_string()
-                    };
+                    let tokens_str = compact_token_usage(session.total_token_usage.as_ref());
 
                     // Fork indicator appended after tokens
                     let fork_suffix =

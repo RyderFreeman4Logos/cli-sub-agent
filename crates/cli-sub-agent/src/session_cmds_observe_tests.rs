@@ -177,6 +177,7 @@ fn stats_report_filters_since_and_groups_by_issue_and_tool() {
         input_tokens: Some(1_000),
         cache_read_input_tokens: Some(250),
         output_tokens: Some(400),
+        reasoning_output_tokens: None,
         total_tokens: Some(1_400),
         estimated_cost_usd: None,
     });
@@ -201,6 +202,7 @@ fn stats_report_filters_since_and_groups_by_issue_and_tool() {
         input_tokens: Some(500),
         cache_read_input_tokens: None,
         output_tokens: Some(100),
+        reasoning_output_tokens: None,
         total_tokens: None,
         estimated_cost_usd: Some(0.125),
     });
@@ -268,6 +270,7 @@ fn stats_cost_is_unknown_without_positive_recorded_estimate() {
     session.total_token_usage = Some(TokenUsage {
         input_tokens: Some(100),
         output_tokens: Some(50),
+        reasoning_output_tokens: None,
         total_tokens: Some(150),
         estimated_cost_usd: Some(0.0),
         cache_read_input_tokens: None,
