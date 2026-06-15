@@ -101,8 +101,7 @@ use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_readonly_configured,
     resolve_review_readonly_project_root, resolve_review_stream_mode, resolve_review_thinking,
-    resolve_review_tier_name, review_scope_allows_auto_discovery,
-    validate_review_direct_tool_tier_restriction, verify_review_skill_available,
+    resolve_review_tier_name, review_scope_allows_auto_discovery, verify_review_skill_available,
 };
 use result_handling::resolve_single_review_result;
 #[rustfmt::skip]
@@ -110,6 +109,13 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 #[cfg(test)]
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
+
+pub(crate) fn compute_review_diff_fingerprint(
+    project_root: &std::path::Path,
+    scope: &str,
+) -> Option<String> {
+    compute_diff_fingerprint(project_root, scope)
+}
 
 pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
     session_fix::validate_session_fix_before_daemon(args)?;
@@ -149,13 +155,12 @@ pub(crate) async fn handle_review(
         effective_tier.as_deref(),
         &project_root,
     )?;
-    validate_review_direct_tool_tier_restriction(
-        selection.direct_tool_requested,
+    prior_rounds::validate_direct_tool_gate(
+        &args,
+        &project_root,
         config.as_ref(),
         effective_tier.as_deref(),
-        args.force_override_user_config,
-        args.force_ignore_tier_setting,
-        args.model_spec.is_some(),
+        selection.direct_tool_requested,
     )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let review_pattern = verify_review_skill_available(&project_root, args.allow_fallback)?;

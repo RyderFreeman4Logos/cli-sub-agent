@@ -197,6 +197,16 @@ pub(crate) fn daemon_completion_result(
     packet: &DaemonCompletionPacket,
     completed_at: chrono::DateTime<chrono::Utc>,
 ) -> SessionResult {
+    if let Some(result) = super::review_diagnostic::review_result_from_existing_artifacts(
+        project_root,
+        session_dir,
+        session,
+        packet,
+        completed_at,
+    ) {
+        return result;
+    }
+
     let tool_name = session
         .tools
         .iter()

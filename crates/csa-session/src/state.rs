@@ -215,7 +215,10 @@ pub struct ReviewSessionMeta {
     /// Number of outer review cycles observed on the same branch/PR.
     #[serde(default = "default_review_iterations")]
     pub review_iterations: u32,
-    /// ISO 8601 timestamp of when this metadata was written.
+    /// ISO 8601 review timestamp used to order candidate verdicts.
+    ///
+    /// Recovered metadata preserves the original review/verdict time rather than
+    /// the recovery write time so stale reviews cannot be reordered as newest.
     pub timestamp: DateTime<Utc>,
     /// Content hash of the diff being reviewed (e.g., "sha256:abc123...").
     /// Enables deduplication: revert-revert scenarios with identical diffs

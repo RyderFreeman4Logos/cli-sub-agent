@@ -761,6 +761,8 @@ fn has_structured_review_content_requires_non_empty_sections() {
 mod bug_class_tests;
 #[path = "review_cmd_tests_cli_flags.rs"]
 mod cli_flags_tests;
+#[path = "review_cmd_tests_daemon_pre_exec.rs"]
+mod daemon_pre_exec_tests;
 #[path = "review_cmd_tests_explicit_tool_tier_fallback.rs"]
 mod explicit_tool_tier_fallback_tests;
 #[path = "review_cmd_tests/model_spec_tests.rs"]

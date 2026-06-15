@@ -640,5 +640,9 @@ fn zero_severity_counts() -> BTreeMap<Severity, u32> {
 }
 
 #[cfg(test)]
+#[path = "review_cmd_check_verdict_daemon_completion_tests.rs"]
+mod daemon_completion_tests;
+
+#[cfg(test)]
 #[path = "review_cmd_check_verdict_tests.rs"]
 mod tests;
