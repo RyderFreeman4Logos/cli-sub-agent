@@ -46,12 +46,15 @@ mod no_op;
 mod progress;
 #[path = "pipeline_post_exec_result_sidecar.rs"]
 mod result_sidecar;
+#[path = "pipeline_post_exec_signal.rs"]
+mod signal;
 // Re-exported privately so existing call sites (and the test submodule's
 // `use super::*`) reach these mechanical helpers unqualified.
 use helpers::{
     is_codex_exec_initial_stall_summary, maybe_compress_tool_output, update_cumulative_tokens,
     update_tool_state,
 };
+use signal::record_signal_session_metadata;
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
     pub executor: &'a Executor,
@@ -421,6 +424,12 @@ pub(crate) async fn process_execution_result(
     ) {
         warn!("Failed to save session result: {}", e);
     }
+    record_signal_session_metadata(
+        session,
+        ctx.executor.tool_name(),
+        &session_result,
+        result.terminal_reason.as_deref(),
+    );
     // Best-effort cooldown marker (ctx already holds session_dir)
     csa_session::write_cooldown_marker_from_session_dir(
         &ctx.session_dir,

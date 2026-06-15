@@ -205,6 +205,18 @@ impl LegacyTransport {
             .sandbox
             .map(|s| (s.tool_name.as_str(), s.session_id.as_str()))
             .unwrap_or(("", ""));
+        let diagnostic_session_id = if session_id.trim().is_empty() {
+            session.meta_session_id.as_str()
+        } else {
+            session_id
+        };
+        let diagnostic_path = transport_meta::memory_soft_limit_diagnostic_path(
+            Path::new(&session.project_path),
+            diagnostic_session_id,
+        );
+        if let Some(path) = diagnostic_path.as_deref() {
+            csa_resource::memory_monitor::clear_soft_limit_diagnostic(path);
+        }
 
         let spawn_options = SpawnOptions {
             stdin_write_timeout: std::time::Duration::from_secs(
@@ -260,6 +272,7 @@ impl LegacyTransport {
                     child.id().unwrap_or(0),
                     plan,
                     std::time::Duration::from_secs(options.termination_grace_period_seconds),
+                    diagnostic_path.clone(),
                 )
             })
         } else {

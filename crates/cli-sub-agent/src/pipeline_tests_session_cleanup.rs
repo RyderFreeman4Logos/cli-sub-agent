@@ -496,6 +496,7 @@ async fn state_dir_cap_failure_overwrites_stale_result_for_resume() {
             artifacts: Vec::new(),
             peak_memory_mb: None,
             kill_hint: None,
+            kill_diagnostics: None,
             last_item: None,
             fallback_chain: None,
             gate_timeout: false,

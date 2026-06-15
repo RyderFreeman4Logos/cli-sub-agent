@@ -48,6 +48,12 @@ pub(super) async fn run_acp_sandboxed(
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
 
+    let diagnostic_path =
+        super::transport_meta::memory_soft_limit_diagnostic_path(working_dir, session_id);
+    if let Some(path) = diagnostic_path.as_deref() {
+        csa_resource::memory_monitor::clear_soft_limit_diagnostic(path);
+    }
+
     let (connection, sandbox_handle) = match AcpConnection::spawn_sandboxed(
         AcpSpawnRequest {
             command,
@@ -85,7 +91,13 @@ pub(super) async fn run_acp_sandboxed(
         .scope_name()
         .zip(connection.child_pid())
         .and_then(|(scope, pid)| {
-            start_memory_monitor(scope, pid, isolation_plan, termination_grace_period)
+            start_memory_monitor(
+                scope,
+                pid,
+                isolation_plan,
+                termination_grace_period,
+                diagnostic_path.clone(),
+            )
         });
 
     // Inner block: all fallible operations after spawn. peak_memory_mb is

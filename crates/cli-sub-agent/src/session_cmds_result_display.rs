@@ -42,6 +42,12 @@ pub(super) fn display_result_text(
     if let Some(summary) = result_display_summary(session_dir, envelope) {
         println!("Summary: {summary}");
     }
+    if let Some(kill_hint) = envelope.kill_hint.as_deref() {
+        println!("Kill hint: {kill_hint}");
+    }
+    if let Some(diagnostics) = envelope.kill_diagnostics.as_ref() {
+        println!("Kill diagnostics: {}", format_kill_diagnostics(diagnostics));
+    }
     if !envelope.artifacts.is_empty() {
         println!("Artifacts:");
         for a in &envelope.artifacts {
@@ -203,6 +209,29 @@ fn result_display_summary(
     }
     crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
         .map(|summary| crate::session_summary_text::enrich_review_summary(session_dir, &summary))
+}
+
+fn format_kill_diagnostics(diagnostics: &csa_session::KillDiagnosticReport) -> String {
+    let mut parts = vec![format!("source={}", diagnostics.source)];
+    if let Some(signal) = diagnostics.signal {
+        parts.push(format!("signal={signal}"));
+    }
+    if let Some(current_mb) = diagnostics.current_mb {
+        parts.push(format!("current_mb={current_mb}"));
+    }
+    if let Some(threshold_mb) = diagnostics.threshold_mb {
+        parts.push(format!("threshold_mb={threshold_mb}"));
+    }
+    if let Some(memory_max_mb) = diagnostics.memory_max_mb {
+        parts.push(format!("memory_max_mb={memory_max_mb}"));
+    }
+    if let Some(soft_limit_percent) = diagnostics.soft_limit_percent {
+        parts.push(format!("soft_limit_percent={soft_limit_percent}"));
+    }
+    if let Some(scope_name) = diagnostics.scope_name.as_deref() {
+        parts.push(format!("scope_name={scope_name}"));
+    }
+    parts.join(", ")
 }
 
 fn normalized_token_usage_for_output(usage: &TokenUsage) -> TokenUsage {

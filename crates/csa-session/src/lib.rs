@@ -10,6 +10,8 @@ pub mod finding_id;
 pub mod genealogy;
 pub mod git;
 pub mod jj_journal;
+pub mod kill_diagnostics;
+pub mod large_diff_warning;
 pub mod manager;
 pub mod metadata;
 pub mod output_parser;
@@ -64,6 +66,8 @@ pub use metadata::SessionMetadata;
 pub use event_writer::{EventWriteStats, EventWriter};
 pub use finding_id::{FindingId, anchor_hash, normalize_path};
 pub use jj_journal::JjJournal;
+pub use kill_diagnostics::KillDiagnosticReport;
+pub use large_diff_warning::LargeDiffWarningReport;
 pub use output_parser::{
     estimate_tokens, load_output_index, parse_return_packet, persist_structured_output,
     persist_structured_output_from_file, read_all_sections, read_section,
@@ -80,10 +84,7 @@ pub use post_exec_gate_report::{
 };
 pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};
-pub use result::{
-    LargeDiffWarningReport, SessionArtifact, SessionManagerFields, SessionResult,
-    UncommittedChanges,
-};
+pub use result::{SessionArtifact, SessionManagerFields, SessionResult, UncommittedChanges};
 pub use review_artifact::{
     Finding, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewDiffSize,
     ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,

@@ -5,6 +5,9 @@ use super::{
     render_wait_result_summary,
 };
 
+#[path = "session_cmds_daemon_wait_summary_kill_tests.rs"]
+mod kill_diagnostics;
+
 #[test]
 fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
@@ -150,37 +153,6 @@ fn compact_summary_includes_nested_input_cache_details() {
 }
 
 #[test]
-fn compact_summary_includes_signal_kill_hint() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
-    let now = Utc::now();
-    let diagnostic = "CSA diagnostic: signal kill hint: memory pressure (MemAvailable: 512 MB / MemTotal: 8192 MB, earlyoom running). Re-dispatch when host memory frees.";
-    let result = csa_session::SessionResult {
-        post_exec_gate: None,
-        status: "signal".to_string(),
-        exit_code: 143,
-        summary: diagnostic.to_string(),
-        tool: "codex".to_string(),
-        original_tool: None,
-        fallback_tool: None,
-        fallback_reason: None,
-        started_at: now,
-        completed_at: now,
-        events_count: 0,
-        artifacts: Vec::new(),
-        peak_memory_mb: None,
-        kill_hint: Some("memory_pressure".to_string()),
-        last_item: None,
-        fallback_chain: None,
-        ..Default::default()
-    };
-
-    let summary = render_wait_result_summary(temp.path(), "01TESTWAITKILL", &result);
-
-    assert!(summary.contains("Kill hint: memory_pressure"));
-    assert!(summary.contains("CSA diagnostic: signal kill hint: memory pressure"));
-}
-
-#[test]
 fn compact_summary_prefers_post_exec_gate_failure_over_success_markdown() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let output_dir = temp.path().join("output");
@@ -315,6 +287,7 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         kill_hint: None,
+        kill_diagnostics: None,
         last_item: None,
         fallback_chain: None,
         gate_timeout: false,
@@ -439,6 +412,7 @@ fn compact_summary_includes_writer_uncommitted_warning() {
         artifacts: Vec::new(),
         peak_memory_mb: None,
         kill_hint: None,
+        kill_diagnostics: None,
         last_item: None,
         fallback_chain: None,
         gate_timeout: false,
