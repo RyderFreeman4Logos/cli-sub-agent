@@ -12,6 +12,7 @@ pub(crate) use sidecar::sync_subtree_model_pin_sidecar;
 
 use crate::run_cmd_tool_selection::SkillResolution;
 use crate::startup_env::StartupSubtreeEnv;
+use csa_core::types::ToolArg;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InheritedModelPin {
@@ -355,6 +356,49 @@ pub(crate) fn resolve_handle_run_model_pin(
         inherited_trusted_pin: inherited_pin_active,
         subtree_model_pin_active,
     }
+}
+
+pub(crate) fn explicit_tool_no_failover_from_inherited_pin(
+    explicit_tool: Option<&ToolArg>,
+    inherited_pin_active: bool,
+    allow_fallback: bool,
+) -> bool {
+    inherited_pin_active
+        && explicit_tool.is_some_and(|arg| matches!(arg, ToolArg::Specific(_)))
+        && !allow_fallback
+}
+
+pub(crate) fn validate_inherited_model_pin_allows_explicit_tool(
+    explicit_tool: Option<&ToolArg>,
+    inherited_pin_active: bool,
+    model_spec: Option<&str>,
+) -> anyhow::Result<()> {
+    if !inherited_pin_active {
+        return Ok(());
+    }
+
+    let Some(ToolArg::Specific(requested_tool)) = explicit_tool else {
+        return Ok(());
+    };
+    let Some(model_spec) = model_spec else {
+        return Ok(());
+    };
+
+    let parsed = csa_executor::ModelSpec::parse(model_spec)?;
+    if parsed.tool == requested_tool.as_str() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "explicit --tool {} conflicts with inherited CSA_MODEL_SPEC {model_spec} \
+         (tool {}); refusing to route the explicit {} request through {}. \
+         Use a matching --model-spec, clear the inherited subtree pin, or choose --tool {}.",
+        requested_tool.as_str(),
+        parsed.tool,
+        requested_tool.as_str(),
+        parsed.tool,
+        parsed.tool
+    )
 }
 
 /// Resolve CSA's authoritative subtree model pin for a spawn (#1741).

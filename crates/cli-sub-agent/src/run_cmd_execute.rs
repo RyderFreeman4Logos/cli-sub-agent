@@ -12,7 +12,9 @@ use crate::pipeline;
 use crate::run_cmd_caller_fork::resolve_fork_from_caller;
 use crate::run_cmd_fork::try_auto_seed_fork;
 use crate::run_cmd_model_pin::{
-    RunModelPinInput, inherited_model_pin_from_startup, resolve_handle_run_model_pin,
+    RunModelPinInput, explicit_tool_no_failover_from_inherited_pin,
+    inherited_model_pin_from_startup, resolve_handle_run_model_pin,
+    validate_inherited_model_pin_allows_explicit_tool,
 };
 use crate::run_cmd_post::{
     handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy,
@@ -226,6 +228,7 @@ pub(crate) async fn handle_run(
         &mut global_config,
     )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
+    let cli_tool_arg = tool.clone();
     let mut user_explicit_tool = tool.is_some();
     let prompt = resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
 
@@ -262,6 +265,18 @@ pub(crate) async fn handle_run(
     auto_route = model_pin_resolution.auto_route;
     force_ignore_tier_setting = model_pin_resolution.force_ignore_tier_setting;
     no_failover = model_pin_resolution.no_failover;
+    if explicit_tool_no_failover_from_inherited_pin(
+        cli_tool_arg.as_ref(),
+        model_pin_resolution.inherited_trusted_pin,
+        allow_fallback,
+    ) {
+        no_failover = true;
+    }
+    validate_inherited_model_pin_allows_explicit_tool(
+        cli_tool_arg.as_ref(),
+        model_pin_resolution.inherited_trusted_pin,
+        model_spec.as_deref(),
+    )?;
     let resolved_skill = skill_res.resolved_skill;
     let gate_prompt_text = skill_res.prompt_text.clone();
     let frontmatter_difficulty = skill_res.frontmatter_difficulty.clone();
@@ -375,6 +390,7 @@ pub(crate) async fn handle_run(
         &merged_aliases,
         user_explicit_tool,
         effective_tier.is_some(),
+        allow_fallback,
     )?;
     let tier_failover_tool_filter = tool_strategy.tier_failover_tool_filter;
     let strategy = tool_strategy.strategy;
@@ -669,6 +685,10 @@ pub(crate) async fn handle_run(
 
     Ok(result.exit_code)
 }
+
+#[cfg(test)]
+#[path = "run_cmd_execute_codex_no_failover_tests.rs"]
+mod codex_no_failover_tests;
 
 #[cfg(test)]
 #[path = "run_cmd_execute_pre_exec_tests.rs"]

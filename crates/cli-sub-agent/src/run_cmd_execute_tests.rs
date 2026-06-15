@@ -522,8 +522,8 @@ fn run_explicit_tool_defaults_to_no_failover() {
 }
 
 #[test]
-fn run_explicit_tool_with_tier_keeps_failover_enabled() {
-    assert!(!resolve_run_no_failover(
+fn run_explicit_tool_with_tier_defaults_to_no_failover() {
+    assert!(resolve_run_no_failover(
         true,
         true,
         &ToolSelectionStrategy::Explicit(ToolName::Codex),

@@ -118,11 +118,22 @@ fn compound_tier_tool_selector_sets_explicit_tool_failover_filter() {
     let tier_failover_tool_filter = resolve_tier_failover_tool_filter(
         user_explicit_tool,
         effective_tier.is_some(),
+        false,
         &resolved_tool_arg,
     );
 
     assert_eq!(worker.tool, ToolName::Codex);
     assert_eq!(tier_failover_tool_filter, Some(ToolName::Codex));
+    assert_eq!(
+        resolve_tier_failover_tool_filter(
+            user_explicit_tool,
+            effective_tier.is_some(),
+            true,
+            &resolved_tool_arg,
+        ),
+        None,
+        "--allow-fallback must opt explicit tool tier runs back into cross-tool fallback"
+    );
 }
 
 #[test]
@@ -183,6 +194,7 @@ fn explicit_auto_and_any_available_tier_runs_do_not_set_failover_tool_filter() {
         let tier_failover_tool_filter = resolve_tier_failover_tool_filter(
             user_explicit_tool,
             effective_tier.is_some(),
+            false,
             &resolved_tool_arg,
         );
 

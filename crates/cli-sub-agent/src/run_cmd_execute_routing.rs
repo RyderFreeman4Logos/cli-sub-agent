@@ -7,14 +7,13 @@ use weave::parser::AgentConfig;
 
 pub(super) fn resolve_run_no_failover(
     user_explicit_tool: bool,
-    active_tier: bool,
+    _active_tier: bool,
     strategy: &ToolSelectionStrategy,
     no_failover: bool,
     allow_fallback: bool,
 ) -> bool {
     no_failover
         || (user_explicit_tool
-            && !active_tier
             && matches!(strategy, ToolSelectionStrategy::Explicit(_))
             && !allow_fallback)
 }
@@ -22,9 +21,10 @@ pub(super) fn resolve_run_no_failover(
 pub(super) fn resolve_tier_failover_tool_filter(
     user_explicit_tool: bool,
     active_tier: bool,
+    allow_fallback: bool,
     resolved_tool_arg: &ToolArg,
 ) -> Option<ToolName> {
-    if !user_explicit_tool || !active_tier {
+    if !user_explicit_tool || !active_tier || allow_fallback {
         return None;
     }
 
@@ -44,13 +44,18 @@ pub(super) fn resolve_run_tool_strategy(
     tool_aliases: &HashMap<String, String>,
     user_explicit_tool: bool,
     active_tier: bool,
+    allow_fallback: bool,
 ) -> Result<RunToolStrategySelection> {
     let resolved_tool_arg = tool_arg
         .unwrap_or(ToolArg::Auto)
         .resolve_alias(tool_aliases)
         .map_err(anyhow::Error::msg)?;
-    let tier_failover_tool_filter =
-        resolve_tier_failover_tool_filter(user_explicit_tool, active_tier, &resolved_tool_arg);
+    let tier_failover_tool_filter = resolve_tier_failover_tool_filter(
+        user_explicit_tool,
+        active_tier,
+        allow_fallback,
+        &resolved_tool_arg,
+    );
 
     Ok(RunToolStrategySelection {
         strategy: resolved_tool_arg.into_strategy(),
