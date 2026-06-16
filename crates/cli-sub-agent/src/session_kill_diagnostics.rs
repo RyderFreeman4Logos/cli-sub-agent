@@ -1,7 +1,7 @@
 //! Best-effort diagnostics for signal exits that often mean host OOM pressure
 //! or a bounded in-turn child command timing out.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use csa_resource::memory_monitor::{MEMORY_SOFT_LIMIT_KILL_HINT, MemorySoftLimitKillDiagnostic};
@@ -13,7 +13,13 @@ use csa_session::{
 #[path = "session_kill_diagnostics_memory.rs"]
 mod memory;
 
+#[cfg(target_os = "linux")]
+#[path = "session_kill_diagnostics_cgroup.rs"]
+mod cgroup;
+
 mod child_timeout;
+#[cfg(target_os = "linux")]
+use cgroup::read_session_cgroup_memory_events;
 use child_timeout::{
     ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance, redact_command_text,
     truncate_one_line,
@@ -576,24 +582,6 @@ pub(crate) fn parse_meminfo(content: &str) -> Option<MemInfo> {
     })
 }
 
-fn parse_memory_events(content: &str) -> CgroupMemoryEvents {
-    let mut events = CgroupMemoryEvents {
-        oom: 0,
-        oom_kill: 0,
-    };
-    for line in content.lines() {
-        let mut fields = line.split_whitespace();
-        let key = fields.next();
-        let value = fields.next().and_then(|raw| raw.parse::<u64>().ok());
-        match (key, value) {
-            (Some("oom"), Some(value)) => events.oom = value,
-            (Some("oom_kill"), Some(value)) => events.oom_kill = value,
-            _ => {}
-        }
-    }
-    events
-}
-
 #[cfg(target_os = "linux")]
 fn read_meminfo_from_path(path: &Path) -> Option<MemInfo> {
     std::fs::read_to_string(path)
@@ -616,54 +604,6 @@ fn earlyoom_running() -> bool {
         }
         std::fs::read_to_string(entry.path().join("comm"))
             .is_ok_and(|comm| comm.trim() == "earlyoom")
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn read_session_cgroup_memory_events(
-    tool_name: &str,
-    session_id: &str,
-) -> Option<CgroupMemoryEvents> {
-    let scope = csa_resource::cgroup::scope_unit_name(tool_name, session_id);
-    let mut first_readable = None;
-    for path in cgroup_memory_event_candidates(&scope) {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let events = parse_memory_events(&content);
-        if events.has_oom_event() {
-            return Some(events);
-        }
-        first_readable.get_or_insert(events);
-    }
-    first_readable
-}
-
-#[cfg(target_os = "linux")]
-fn cgroup_memory_event_candidates(scope: &str) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(uid) = effective_uid_from_proc_status() {
-        candidates.push(PathBuf::from(format!(
-            "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/{scope}/memory.events"
-        )));
-        candidates.push(PathBuf::from(format!(
-            "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/{scope}/memory.events"
-        )));
-    }
-    candidates.push(PathBuf::from(format!(
-        "/sys/fs/cgroup/system.slice/{scope}/memory.events"
-    )));
-    candidates
-}
-
-#[cfg(target_os = "linux")]
-fn effective_uid_from_proc_status() -> Option<u32> {
-    let content = std::fs::read_to_string("/proc/self/status").ok()?;
-    content.lines().find_map(|line| {
-        let rest = line.strip_prefix("Uid:")?;
-        rest.split_whitespace()
-            .next()
-            .and_then(|value| value.parse().ok())
     })
 }
 
