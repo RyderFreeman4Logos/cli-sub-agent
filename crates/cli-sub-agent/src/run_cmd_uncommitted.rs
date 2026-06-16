@@ -12,7 +12,7 @@ const MAX_UNCOMMITTED_FILES: usize = 20;
 const DIFF_BYTES_PER_TOKEN: usize = 4;
 const DIFF_TOKEN_READ_BUF_BYTES: usize = 16 * 1024;
 const REQUIRE_COMMIT_REASON: &str =
-    "writer session ended with uncommitted changes (--require-commit set)";
+    "writer session ended without required commit (--require-commit set)";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
 const REDACTED_PATH: &str = "[redacted-path]";
 const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
@@ -150,10 +150,9 @@ fn record_writer_uncommitted_changes_with_config(
     if !is_writer_session(record.sa_mode, Some("run")) {
         return None;
     }
-    let session_id = session_id?;
     let token_threshold = tracked_diff_token_threshold(record.large_diff_config);
     let full_changes =
-        collect_uncommitted_changes_with_token_threshold(project_root, token_threshold)?;
+        collect_uncommitted_changes_with_token_threshold(project_root, token_threshold);
     let changes = record
         .changed_paths
         .map(|paths| {
@@ -163,22 +162,43 @@ fn record_writer_uncommitted_changes_with_config(
                 token_threshold,
             )
         })
-        .unwrap_or_else(|| Some(full_changes.clone()))?;
-    let warning = large_diff_warning_report(&changes, record.large_diff_config);
+        .unwrap_or_else(|| full_changes.clone());
+    let warning = changes
+        .as_ref()
+        .and_then(|changes| large_diff_warning_report(changes, record.large_diff_config));
     let require_commit_contract_failure =
         record.require_commit && !record.commit_created.unwrap_or(false);
 
+    if changes.is_none() && !require_commit_contract_failure {
+        return warning;
+    }
+
+    let Some(session_id) = session_id else {
+        if require_commit_contract_failure {
+            mark_require_commit_contract_failure(result);
+        }
+        return warning;
+    };
+
     match csa_session::load_result(project_root, session_id) {
         Ok(Some(mut session_result)) => {
-            let recovery = require_commit_contract_failure
-                .then(|| build_require_commit_recovery_diagnostic(&session_result, &changes));
-            apply_uncommitted_changes_to_result(
-                &mut session_result,
-                changes.clone(),
-                warning.clone(),
-                require_commit_contract_failure,
-                recovery,
-            );
+            let recovery = require_commit_contract_failure.then(|| {
+                build_require_commit_recovery_diagnostic_for_state(
+                    &session_result,
+                    changes.as_ref(),
+                )
+            });
+            if let Some(changes) = changes.clone() {
+                apply_uncommitted_changes_to_result(
+                    &mut session_result,
+                    changes,
+                    warning.clone(),
+                    require_commit_contract_failure,
+                    recovery,
+                );
+            } else if let Some(recovery) = recovery {
+                apply_require_commit_contract_failure_to_result(&mut session_result, recovery);
+            }
             if let Err(err) = csa_session::save_result(project_root, session_id, &session_result) {
                 warn!(
                     session = %session_id,
@@ -203,13 +223,7 @@ fn record_writer_uncommitted_changes_with_config(
     }
 
     if require_commit_contract_failure {
-        result.mark_gate_failure("writer-uncommitted");
-        result.summary = REQUIRE_COMMIT_REASON.to_string();
-        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        result.stderr_output.push_str(REQUIRE_COMMIT_REASON);
-        result.stderr_output.push('\n');
+        mark_require_commit_contract_failure(result);
     }
     warning
 }
@@ -225,16 +239,38 @@ pub(crate) fn apply_uncommitted_changes_to_result(
     result.large_diff_warning = large_diff_warning;
     result.require_commit_recovery = recovery;
     if require_commit_contract_failure {
-        remove_incidental_downgrade_warnings(&mut result.warnings);
-        result.exit_code = 1;
-        result.status = csa_session::SessionResult::status_from_exit_code(1);
-        result.summary = REQUIRE_COMMIT_REASON.to_string();
+        let recovery = result.require_commit_recovery.take().unwrap_or_else(|| {
+            build_require_commit_recovery_diagnostic_for_state(
+                result,
+                result.uncommitted_changes.as_ref(),
+            )
+        });
+        apply_require_commit_contract_failure_to_result(result, recovery);
     }
 }
 
+fn apply_require_commit_contract_failure_to_result(
+    result: &mut csa_session::SessionResult,
+    recovery: csa_session::RequireCommitRecoveryDiagnostic,
+) {
+    remove_incidental_downgrade_warnings(&mut result.warnings);
+    result.exit_code = 1;
+    result.status = csa_session::SessionResult::status_from_exit_code(1);
+    result.summary = REQUIRE_COMMIT_REASON.to_string();
+    result.require_commit_recovery = Some(recovery);
+}
+
+#[cfg(test)]
 fn build_require_commit_recovery_diagnostic(
     result: &csa_session::SessionResult,
     changes: &csa_session::UncommittedChanges,
+) -> csa_session::RequireCommitRecoveryDiagnostic {
+    build_require_commit_recovery_diagnostic_for_state(result, Some(changes))
+}
+
+fn build_require_commit_recovery_diagnostic_for_state(
+    result: &csa_session::SessionResult,
+    changes: Option<&csa_session::UncommittedChanges>,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
     let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
     let termination_status = result
@@ -244,13 +280,17 @@ fn build_require_commit_recovery_diagnostic(
     csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
         commit_created: false,
-        dirty_worktree: true,
+        dirty_worktree: changes.is_some(),
         changed_paths: changes
-            .files
-            .iter()
-            .map(|path| sanitize_diagnostic_path(path))
-            .collect(),
-        changed_paths_truncated: changes.truncated,
+            .map(|changes| {
+                changes
+                    .files
+                    .iter()
+                    .map(|path| sanitize_diagnostic_path(path))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        changed_paths_truncated: changes.map(|changes| changes.truncated).unwrap_or_default(),
         termination_status,
         exit_code: termination_exit_code,
         termination_signal: result
@@ -261,6 +301,16 @@ fn build_require_commit_recovery_diagnostic(
         kill_hint: result.kill_hint.clone(),
         suggested_recovery_action: REQUIRE_COMMIT_RECOVERY_ACTION.to_string(),
     }
+}
+
+fn mark_require_commit_contract_failure(result: &mut csa_process::ExecutionResult) {
+    result.mark_gate_failure("writer-uncommitted");
+    result.summary = REQUIRE_COMMIT_REASON.to_string();
+    if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+        result.stderr_output.push('\n');
+    }
+    result.stderr_output.push_str(REQUIRE_COMMIT_REASON);
+    result.stderr_output.push('\n');
 }
 
 fn raw_termination_status_from_exit_code(exit_code: i32) -> String {

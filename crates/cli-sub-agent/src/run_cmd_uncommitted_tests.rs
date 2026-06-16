@@ -202,7 +202,7 @@ fn require_commit_with_commit_created_does_not_record_recovery_or_fail_result() 
 }
 
 #[test]
-fn require_commit_with_no_session_dirty_paths_does_not_fail_or_diagnose() {
+fn require_commit_without_created_commit_fails_even_without_session_dirty_paths() {
     let temp = init_repo_with_initial_commit();
     let root = temp.path();
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
@@ -233,10 +233,16 @@ fn require_commit_with_no_session_dirty_paths_does_not_fail_or_diagnose() {
     let loaded = csa_session::load_result(root, &session.meta_session_id)
         .expect("load result")
         .expect("result should exist");
-    assert_eq!(execution.exit_code, 0);
-    assert_eq!(loaded.status, "success");
+    assert_eq!(execution.exit_code, 1);
+    assert_eq!(loaded.status, "failure");
     assert!(loaded.uncommitted_changes.is_none());
-    assert!(loaded.require_commit_recovery.is_none());
+    let recovery = loaded
+        .require_commit_recovery
+        .expect("require-commit failure should be machine-readable");
+    assert!(recovery.require_commit);
+    assert!(!recovery.commit_created);
+    assert!(!recovery.dirty_worktree);
+    assert!(recovery.changed_paths.is_empty());
 }
 
 #[test]

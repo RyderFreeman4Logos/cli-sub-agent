@@ -7,7 +7,7 @@ fn build_result_json_payload_includes_require_commit_recovery() {
         envelope: SessionResult {
             status: "failure".to_string(),
             exit_code: 1,
-            summary: "writer session ended with uncommitted changes (--require-commit set)"
+            summary: "writer session ended without required commit (--require-commit set)"
                 .to_string(),
             tool: "codex".to_string(),
             started_at: now,
