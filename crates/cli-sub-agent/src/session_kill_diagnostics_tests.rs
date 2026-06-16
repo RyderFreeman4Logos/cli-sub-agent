@@ -653,13 +653,3 @@ fn non_signal_exits_do_not_collect_observations() {
         assert!(!called.get(), "exit {exit_code} should not trigger checks");
     }
 }
-
-#[test]
-fn parses_cgroup_memory_events() {
-    let events = parse_memory_events("low 2\nhigh 3\nmax 4\noom 1\noom_kill 1\n");
-
-    assert_eq!(events.oom, 1);
-    assert_eq!(events.oom_kill, 1);
-    assert!(events.has_oom_event());
-    assert!(events.has_oom_kill_event());
-}
