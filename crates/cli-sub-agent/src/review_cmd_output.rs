@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 #[path = "review_cmd_output_artifacts.rs"]
 mod artifacts;
 #[path = "review_cmd_output_clean.rs"]
-mod clean_detection;
+pub(super) mod clean_detection;
 #[path = "review_cmd_output_consistency.rs"]
 mod consistency;
 #[path = "review_cmd_output_diagnostics.rs"]
