@@ -14,6 +14,11 @@ use crate::run_cmd_post_exec_gate_capture::{
     BoundedTailCapture, drain_pumps_and_reap, kill_gate_process_group, tee_gate_stream,
 };
 
+#[path = "run_cmd_execute_post_exec_gate_index.rs"]
+mod gate_index;
+
+use gate_index::post_exec_gate_env_with_temp_index;
+
 /// Outcome of running the post-exec gate command, including the combined
 /// stdout+stderr captured for structured failure surfacing (#1726). The output
 /// is always tee'd to the parent's stdout/stderr too, so the raw transcript
@@ -422,6 +427,8 @@ where
     }
 
     let branch = super::run_context::current_branch_name(project_root);
+    let (extra_env, _temp_index) =
+        post_exec_gate_env_with_temp_index(project_root, changed_paths, extra_env)?;
     let outcome = runner(
         &gate_config.command,
         project_root,
@@ -606,3 +613,7 @@ where
 #[cfg(test)]
 #[path = "run_cmd_execute_post_exec_tests.rs"]
 mod post_exec_tests;
+
+#[cfg(test)]
+#[path = "run_cmd_execute_post_exec_staged_gate_tests.rs"]
+mod post_exec_staged_gate_tests;
