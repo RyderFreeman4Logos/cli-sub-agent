@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
@@ -16,8 +17,8 @@ fn git_binary() -> &'static Path {
 pub(crate) struct TrackedFileEditGuard {
     project_root: PathBuf,
     pre_dirty_paths: BTreeSet<PathBuf>,
-    pre_staged_paths: BTreeSet<PathBuf>,
     pre_dirty_snapshots: HashMap<PathBuf, PathState>,
+    pre_staged_patches: HashMap<PathBuf, Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -293,17 +294,23 @@ impl TrackedFileEditGuard {
             .collect::<BTreeSet<_>>();
 
         let mut pre_dirty_snapshots = HashMap::new();
+        let mut pre_staged_patches = HashMap::new();
         for path in &pre_dirty_paths {
             let snapshot = capture_path_state(&project_root.join(path))
                 .with_context(|| format!("failed to snapshot dirty file '{}'", path.display()))?;
             pre_dirty_snapshots.insert(path.clone(), snapshot);
+            let staged_patch =
+                git_diff_cached_binary_for_path(project_root, path).with_context(|| {
+                    format!("failed to snapshot staged diff for '{}'", path.display())
+                })?;
+            pre_staged_patches.insert(path.clone(), staged_patch);
         }
 
         Ok(Self {
             project_root: project_root.to_path_buf(),
             pre_dirty_paths,
-            pre_staged_paths,
             pre_dirty_snapshots,
+            pre_staged_patches,
         })
     }
 
@@ -331,7 +338,18 @@ impl TrackedFileEditGuard {
             };
             let current_state = capture_path_state(&self.project_root.join(path))
                 .with_context(|| format!("failed to inspect dirty file '{}'", path.display()))?;
-            if &current_state != previous_state {
+            let current_staged_patch = git_diff_cached_binary_for_path(&self.project_root, path)
+                .with_context(|| {
+                    format!("failed to inspect staged diff for '{}'", path.display())
+                })?;
+            let previous_staged_patch = self
+                .pre_staged_patches
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if &current_state != previous_state
+                || current_staged_patch.as_slice() != previous_staged_patch
+            {
                 violating_paths.insert(path.clone());
             }
         }
@@ -363,20 +381,17 @@ impl TrackedFileEditGuard {
             let Some(previous_state) = self.pre_dirty_snapshots.get(path) else {
                 continue;
             };
+            let previous_staged_patch = self
+                .pre_staged_patches
+                .get(path)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
 
+            restore_index_state(&self.project_root, path, previous_staged_patch)
+                .with_context(|| format!("failed to restore index for '{}'", path.display()))?;
             restore_path_state(&self.project_root.join(path), previous_state)
                 .with_context(|| format!("failed to restore dirty file '{}'", path.display()))?;
             restored_paths.insert(path.clone());
-
-            if !self.pre_staged_paths.contains(path) && post_staged_paths.contains(path) {
-                git_restore_paths(&self.project_root, std::slice::from_ref(path), true, false)
-                    .with_context(|| {
-                        format!(
-                            "failed to unstage file '{}' after restoring dirty snapshot",
-                            path.display()
-                        )
-                    })?;
-            }
         }
 
         Ok(Some(EditRestrictionViolation {
@@ -476,6 +491,76 @@ fn git_restore_paths(
         ));
     }
 
+    Ok(())
+}
+
+fn git_diff_cached_binary_for_path(project_root: &Path, path: &Path) -> Result<Vec<u8>> {
+    let output = Command::new(git_binary())
+        .current_dir("/")
+        .arg("-C")
+        .arg(project_root)
+        .args(["diff", "--cached", "--binary", "--"])
+        .arg(path)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run git diff --cached in '{}', path='{}'",
+                project_root.display(),
+                path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "git diff --cached failed in '{}': {}",
+            project_root.display(),
+            stderr.trim()
+        ));
+    }
+
+    Ok(output.stdout)
+}
+
+fn restore_index_state(project_root: &Path, path: &PathBuf, staged_patch: &[u8]) -> Result<()> {
+    git_restore_paths(project_root, std::slice::from_ref(path), true, false)
+        .with_context(|| format!("failed to reset index for '{}'", path.display()))?;
+    if staged_patch.is_empty() {
+        return Ok(());
+    }
+    git_apply_cached_patch(project_root, staged_patch)
+}
+
+fn git_apply_cached_patch(project_root: &Path, patch: &[u8]) -> Result<()> {
+    let mut child = Command::new(git_binary())
+        .current_dir("/")
+        .arg("-C")
+        .arg(project_root)
+        .args(["apply", "--cached", "--binary", "--whitespace=nowarn"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn git apply in '{}'", project_root.display()))?;
+
+    child
+        .stdin
+        .take()
+        .context("git apply stdin unavailable")?
+        .write_all(patch)
+        .context("failed to write staged patch to git apply")?;
+
+    let output = child
+        .wait_with_output()
+        .context("failed to wait for git apply")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "git apply --cached failed in '{}': {}",
+            project_root.display(),
+            stderr.trim()
+        ));
+    }
     Ok(())
 }
 
@@ -615,163 +700,8 @@ fn remove_existing_path(path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::sync::OnceLock;
-    use tempfile::TempDir;
-
-    fn git_binary() -> &'static Path {
-        static GIT_BINARY: OnceLock<PathBuf> = OnceLock::new();
-        GIT_BINARY.get_or_init(|| which::which("git").unwrap_or_else(|_| PathBuf::from("git")))
-    }
-
-    fn run_git(repo: &Path, args: &[&str]) {
-        let output = Command::new(git_binary())
-            .current_dir("/")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .output()
-            .expect("git command should execute");
-        assert!(
-            output.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    pub(super) fn setup_git_repo() -> TempDir {
-        let temp = TempDir::new().expect("create tempdir");
-        run_git(temp.path(), &["init"]);
-        run_git(temp.path(), &["config", "user.email", "test@example.com"]);
-        run_git(temp.path(), &["config", "user.name", "Test User"]);
-
-        fs::write(temp.path().join("tracked.txt"), "baseline\n").expect("write tracked file");
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial"]);
-
-        temp
-    }
-
-    pub(super) fn git_status_porcelain(repo: &Path) -> String {
-        let output = Command::new("git")
-            .current_dir("/")
-            .arg("-C")
-            .arg(repo)
-            .args(["status", "--porcelain"])
-            .output()
-            .expect("git status should run");
-        assert!(output.status.success());
-        String::from_utf8_lossy(&output.stdout).to_string()
-    }
-
-    #[test]
-    fn returns_none_for_non_git_directory() {
-        let temp = TempDir::new().expect("create tempdir");
-        let guard = maybe_capture_tracked_file_guard(temp.path()).expect("capture should succeed");
-        assert!(guard.is_none());
-    }
-
-    #[test]
-    fn allows_new_untracked_file_creation() {
-        let repo = setup_git_repo();
-        let guard = maybe_capture_tracked_file_guard(repo.path())
-            .expect("capture should succeed")
-            .expect("git repo should return guard");
-
-        fs::write(repo.path().join("new.md"), "new file\n").expect("write untracked file");
-
-        let violation = guard.enforce_and_restore().expect("enforce should run");
-        assert!(violation.is_none(), "new untracked files should be allowed");
-        assert!(repo.path().join("new.md").exists());
-    }
-
-    #[test]
-    fn restores_newly_modified_tracked_file() {
-        let repo = setup_git_repo();
-        let guard = maybe_capture_tracked_file_guard(repo.path())
-            .expect("capture should succeed")
-            .expect("git repo should return guard");
-
-        fs::write(repo.path().join("tracked.txt"), "tool mutation\n").expect("mutate tracked file");
-
-        let violation = guard
-            .enforce_and_restore()
-            .expect("enforce should succeed")
-            .expect("should detect violation");
-
-        assert_eq!(
-            fs::read_to_string(repo.path().join("tracked.txt")).expect("read restored file"),
-            "baseline\n"
-        );
-        assert!(
-            violation
-                .modified_paths
-                .iter()
-                .any(|path| path == Path::new("tracked.txt"))
-        );
-        assert!(git_status_porcelain(repo.path()).trim().is_empty());
-    }
-
-    #[test]
-    fn restores_dirty_file_to_pre_run_snapshot() {
-        let repo = setup_git_repo();
-
-        fs::write(repo.path().join("tracked.txt"), "pre-existing dirty\n")
-            .expect("create dirty baseline");
-
-        let guard = maybe_capture_tracked_file_guard(repo.path())
-            .expect("capture should succeed")
-            .expect("git repo should return guard");
-
-        fs::write(repo.path().join("tracked.txt"), "tool mutation\n").expect("mutate dirty file");
-
-        let violation = guard
-            .enforce_and_restore()
-            .expect("enforce should succeed")
-            .expect("should detect violation");
-
-        assert_eq!(
-            fs::read_to_string(repo.path().join("tracked.txt")).expect("read restored file"),
-            "pre-existing dirty\n"
-        );
-        assert!(
-            violation
-                .modified_paths
-                .iter()
-                .any(|path| path == Path::new("tracked.txt"))
-        );
-
-        let status = git_status_porcelain(repo.path());
-        assert!(status.contains(" M tracked.txt"));
-    }
-
-    #[test]
-    fn restores_staged_mutation_on_clean_file() {
-        let repo = setup_git_repo();
-        let guard = maybe_capture_tracked_file_guard(repo.path())
-            .expect("capture should succeed")
-            .expect("git repo should return guard");
-
-        fs::write(repo.path().join("tracked.txt"), "tool mutation\n").expect("mutate tracked file");
-        run_git(repo.path(), &["add", "tracked.txt"]);
-
-        let violation = guard
-            .enforce_and_restore()
-            .expect("enforce should succeed")
-            .expect("should detect violation");
-
-        assert!(
-            violation
-                .restored_paths
-                .iter()
-                .any(|path| path == Path::new("tracked.txt"))
-        );
-        assert!(git_status_porcelain(repo.path()).trim().is_empty());
-    }
-}
+#[path = "edit_restriction_guard_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "edit_restriction_guard_tests_tail.rs"]
