@@ -111,12 +111,7 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 #[rustfmt::skip]
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
-pub(crate) fn compute_review_diff_fingerprint(
-    project_root: &std::path::Path,
-    scope: &str,
-) -> Option<String> {
-    compute_diff_fingerprint(project_root, scope)
-}
+pub(crate) use execute::compute_diff_fingerprint as compute_review_diff_fingerprint;
 
 pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
     session_fix::validate_session_fix_before_daemon(args)?;
@@ -363,6 +358,7 @@ pub(crate) async fn handle_review(
             &args.extra_writable,
             &args.extra_readable,
             args.error_marker_scan_override(),
+            args.resource_overrides(),
             current_depth,
             startup_env,
         );
@@ -544,6 +540,7 @@ pub(crate) async fn handle_review(
             fast_but_more_cost: args.fast_but_more_cost,
             no_fs_sandbox: args.no_fs_sandbox,
             error_marker_scan_override: args.error_marker_scan_override(),
+            resource_overrides: args.resource_overrides(),
             extra_writable: &args.extra_writable,
             extra_readable: &args.extra_readable,
             timeout: args.timeout,

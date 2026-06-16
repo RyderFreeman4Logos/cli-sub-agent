@@ -51,7 +51,9 @@ use self::session_exec_pre_exec::{
     check_resources_before_spawn, persist_pipeline_pre_exec_failure,
     write_fatal_error_marker_sidecar,
 };
-pub(crate) use session_exec_api::{execute_with_session, execute_with_session_and_meta};
+pub(crate) use session_exec_api::execute_with_session;
+#[cfg(test)]
+pub(crate) use session_exec_api::execute_with_session_and_meta;
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]

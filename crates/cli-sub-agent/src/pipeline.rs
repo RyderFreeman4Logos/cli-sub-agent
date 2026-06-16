@@ -52,9 +52,10 @@ mod session_hooks;
 pub(crate) mod lefthook_auto_install;
 
 // Re-export session execution API so callers keep using `crate::pipeline::*`.
+#[cfg(test)]
+pub(crate) use session_exec::execute_with_session_and_meta;
 pub(crate) use session_exec::{
-    execute_with_session, execute_with_session_and_meta,
-    execute_with_session_and_meta_with_parent_source,
+    execute_with_session, execute_with_session_and_meta_with_parent_source,
 };
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;

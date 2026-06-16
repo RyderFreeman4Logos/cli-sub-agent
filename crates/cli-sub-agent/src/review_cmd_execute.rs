@@ -31,6 +31,7 @@ use tracing::{info, warn};
 use crate::review_routing::{
     ReviewRoutingMetadata, persist_review_routing_artifact_with_fallback_chain,
 };
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, earliest_backend_reset_window,
@@ -192,6 +193,7 @@ pub(crate) async fn execute_review(
         extra_writable,
         extra_readable,
         error_marker_scan_override,
+        RunResourceOverrides::default(),
         0,
         &startup_env,
     )
@@ -230,6 +232,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     error_marker_scan_override: Option<bool>,
+    resource_overrides: RunResourceOverrides,
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ReviewExecutionOutcome> {
@@ -364,6 +367,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             extra_writable,
             extra_readable,
             error_marker_scan_override,
+            resource_overrides,
             startup_env,
         )
         .await
@@ -534,6 +538,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                     extra_writable,
                     extra_readable,
                     error_marker_scan_override,
+                    resource_overrides,
                     startup_env,
                 )
                 .await
@@ -757,7 +762,7 @@ pub(crate) async fn execute_review_with_tier_filter(
 /// The fingerprint enables diff-level deduplication: if two review
 /// invocations produce the same diff content (e.g., revert-then-revert),
 /// the second can reuse the first review's result.
-pub(super) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Option<String> {
+pub(crate) fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Option<String> {
     use sha2::{Digest, Sha256};
 
     let diff_args: Vec<&str> = if scope == "uncommitted" {
