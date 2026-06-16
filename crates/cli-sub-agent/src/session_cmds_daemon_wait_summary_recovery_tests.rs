@@ -8,7 +8,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     let result = csa_session::SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: "writer session ended with uncommitted changes (--require-commit set)".to_string(),
+        summary: "writer session ended without required commit (--require-commit set)".to_string(),
         tool: "codex".to_string(),
         started_at: now,
         completed_at: now + chrono::TimeDelta::seconds(65),

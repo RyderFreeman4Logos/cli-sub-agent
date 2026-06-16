@@ -200,8 +200,8 @@ impl UncommittedChanges {
     }
 }
 
-/// Machine-readable recovery detail for a `--require-commit` writer run that
-/// ended with session-created dirty worktree changes but no commit.
+/// Machine-readable recovery detail for a writer run that was required to
+/// create a commit but ended without one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequireCommitRecoveryDiagnostic {
     /// The run was governed by the require-commit contract.

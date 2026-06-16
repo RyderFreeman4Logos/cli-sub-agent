@@ -102,7 +102,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
     let result = SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: "writer session ended with uncommitted changes (--require-commit set)".to_string(),
+        summary: "writer session ended without required commit (--require-commit set)".to_string(),
         tool: "codex".to_string(),
         started_at: now,
         completed_at: now,

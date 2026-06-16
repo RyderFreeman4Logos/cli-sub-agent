@@ -125,6 +125,10 @@ pub(crate) struct GoalRunRequest {
     pub(crate) startup_env: StartupSubtreeEnv,
 }
 
+fn effective_require_commit(require_commit: bool, skill: Option<&str>) -> bool {
+    require_commit || skill == Some("commit")
+}
+
 struct FailureContext {
     iteration: u32,
     exit_code: i32,
@@ -144,6 +148,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         return handle_goal_run(request).await;
     }
 
+    let require_commit = effective_require_commit(request.require_commit, request.skill.as_deref());
     crate::run_cmd::handle_run(
         request.tool,
         request.auto_route,
@@ -192,7 +197,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.no_hook_bypass_scan,
         request.no_preflight,
         request.no_post_exec_gate,
-        request.require_commit,
+        require_commit,
         request.allow_git_push,
         request.extra_writable,
         request.extra_readable,
@@ -358,7 +363,7 @@ async fn run_goal_iteration(
         request.no_hook_bypass_scan,
         request.no_preflight,
         request.no_post_exec_gate,
-        request.require_commit,
+        effective_require_commit(request.require_commit, request.skill.as_deref()),
         request.allow_git_push,
         request.extra_writable.clone(),
         request.extra_readable.clone(),
@@ -465,5 +470,13 @@ mod tests {
             goal_loop.should_continue(),
             GoalDecision::BudgetExhausted("max tokens")
         );
+    }
+
+    #[test]
+    fn commit_skill_implies_require_commit_contract() {
+        assert!(effective_require_commit(false, Some("commit")));
+        assert!(effective_require_commit(true, Some("review")));
+        assert!(!effective_require_commit(false, Some("review")));
+        assert!(!effective_require_commit(false, None));
     }
 }
