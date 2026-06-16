@@ -1,6 +1,5 @@
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolSelectionStrategy;
 use std::time::Instant;
 use tracing::warn;
 
@@ -9,8 +8,14 @@ use super::attempt_exec::{
     run_ephemeral_without_timeout, run_persistent_with_timeout, run_persistent_without_timeout,
 };
 use super::attempt_support::{
-    allow_cross_tool_failover, merge_run_loop_changed_paths,
-    persist_fork_timeout_result_if_missing, resolve_attempt_initial_response_timeout_seconds,
+    CommitSkillWorkspaceGuard as Cg, allow_cross_tool_failover,
+    capture_commit_skill_workspace_guard as capture_cg, codex_fast_mode_enabled as codex_fast,
+    merge_run_loop_changed_paths as merge_changed,
+    persist_fork_timeout_result_if_missing as persist_timeout,
+    resolve_attempt_initial_response_timeout_seconds as initial_timeout,
+    resolve_max_failover_attempts as max_failovers,
+    resolve_runtime_fallback_enabled as runtime_fallback,
+    restore_failed_commit_skill_workspace as restore_cg, strategy_is_explicit,
 };
 use super::resume::{emit_run_timeout, resolve_remaining_run_timeout};
 use crate::pipeline;
@@ -19,6 +24,7 @@ use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
 
 #[path = "run_cmd_attempt_types.rs"]
 mod types;
+use RunLoopCompletion::Exit;
 pub(crate) use types::{RunLoopCompletion, RunLoopOutcome, RunLoopRequest};
 #[path = "run_cmd_attempt_outcome.rs"]
 mod outcome;
@@ -37,20 +43,16 @@ use prompt::resolve_attempt_subtree_model_pin_spec;
 use prompt::{AttemptPromptRequest, build_attempt_prompt};
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
-    let max_failover_attempts = if request.no_failover {
-        1
-    } else {
-        request
-            .config
-            .map(|cfg| {
-                cfg.tiers
-                    .values()
-                    .map(|t| t.models.len())
-                    .sum::<usize>()
-                    .max(1)
-            })
-            .unwrap_or(1)
-    };
+    let mut g = capture_cg(request.project_root, request.skill)?;
+    let o = ri(request, &mut g).await;
+    if matches!(o, Err(_) | Ok(Exit(_))) {
+        restore_cg(&mut g, None, None)?;
+    }
+    o
+}
+
+async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion> {
+    let max_failover_attempts = max_failovers(request.no_failover, request.config);
 
     let slots_dir = GlobalConfig::slots_dir()?;
     let mut current_tool = request.initial_tool;
@@ -60,10 +62,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut tried_specs: Vec<String> = Vec::new();
     let mut fallback_chain: csa_scheduler::FallbackChain = Vec::new();
     let mut attempts = 0;
-    let runtime_fallback_enabled = matches!(
-        request.strategy,
-        ToolSelectionStrategy::HeterogeneousPreferred
-    ) && !request.no_failover;
+    let runtime_fallback_enabled = runtime_fallback(&request.strategy, request.no_failover);
     let mut runtime_fallback_candidates = request.runtime_fallback_candidates;
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
@@ -86,7 +85,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let mut accumulated_changed_paths: Vec<String> = Vec::new();
     let mut all_attempt_change_snapshots_available = true;
-    let (result, changed_paths, commit_created) = loop {
+    let (mut result, changed_paths, commit_created) = loop {
         attempts += 1;
         let mut fresh_spawn_preflight_override = false;
 
@@ -101,27 +100,19 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             },
             enforce_tier,
             request.force_override_user_config,
-            matches!(request.strategy, ToolSelectionStrategy::Explicit(_)),
+            strategy_is_explicit(&request.strategy),
         )
         .await?;
-        let fast_mode = request.fast_but_more_cost
-            || request
-                .config
-                .and_then(|c| c.tools.get("codex"))
-                .and_then(|t| t.fast_mode)
-                .unwrap_or(false)
-            || request
-                .global_config
-                .tools
-                .get("codex")
-                .and_then(|t| t.fast_mode)
-                .unwrap_or(false);
-        if fast_mode {
+        if codex_fast(
+            request.fast_but_more_cost,
+            request.config,
+            request.global_config,
+        ) {
             executor.enable_codex_fast_mode();
         }
 
         let tool_name_str = executor.tool_name();
-        let initial_response_timeout_seconds = resolve_attempt_initial_response_timeout_seconds(
+        let initial_response_timeout_seconds = initial_timeout(
             request.config,
             request.cli_initial_response_timeout,
             request.cli_idle_timeout,
@@ -156,7 +147,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 }
                 continue;
             }
-            AttemptSlotOutcome::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
+            AttemptSlotOutcome::Exit(exit_code) => {
+                return Ok(Exit(exit_code));
+            }
         };
 
         if request.fork_call {
@@ -173,7 +166,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 Ok(child_slot) => _slot_guard = Some(child_slot),
                 Err(e) => {
                     eprintln!("{e}");
-                    return Ok(RunLoopCompletion::Exit(1));
+                    return Ok(Exit(1));
                 }
             }
         }
@@ -200,7 +193,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                         is_fork = false;
                         session_arg = None;
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             } else if !is_auto_seed_fork {
                 anyhow::bail!("Fork requested but no source session resolved");
@@ -216,7 +211,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             &request.branch_guard,
             branch_state,
         ) {
-            return Ok(RunLoopCompletion::Exit(exit_code));
+            return Ok(Exit(exit_code));
         }
 
         if let Some(ref fork_res) = fork_resolution {
@@ -262,7 +257,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .clone()
                 .or_else(|| pre_created_fork_session_id.clone())
                 .or_else(|| effective_session_arg.clone());
-            persist_fork_timeout_result_if_missing(
+            persist_timeout(
                 request.project_root,
                 is_fork,
                 current_tool,
@@ -281,7 +276,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 request.skill,
                 timeout_resume_session.as_deref(),
             )?;
-            return Ok(RunLoopCompletion::Exit(exit_code));
+            return Ok(Exit(exit_code));
         }
 
         let attempt_started_at = Instant::now();
@@ -397,7 +392,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     .clone()
                     .or_else(|| pre_created_fork_session_id.clone())
                     .or_else(|| effective_session_arg.clone());
-                persist_fork_timeout_result_if_missing(
+                persist_timeout(
                     request.project_root,
                     is_fork,
                     current_tool,
@@ -416,9 +411,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.skill,
                     timeout_resume_session.as_deref(),
                 )?;
-                return Ok(RunLoopCompletion::Exit(exit_code));
+                return Ok(Exit(exit_code));
             }
-            AttemptExecution::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
+            AttemptExecution::Exit(exit_code) => {
+                return Ok(Exit(exit_code));
+            }
             AttemptExecution::Finished {
                 result,
                 changed_paths: attempt_changed_paths,
@@ -463,9 +460,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     },
                 )? {
                     AttemptErrorAction::Exit(exit_code) => {
-                        return Ok(RunLoopCompletion::Exit(exit_code));
+                        return Ok(Exit(exit_code));
                     }
-                    AttemptErrorAction::Error(error) => return Err(error),
+                    AttemptErrorAction::Error(error) => {
+                        return Err(error);
+                    }
                     AttemptErrorAction::Retry(action) => {
                         AttemptRetryState {
                             failover_context: &mut failover_context_addendum,
@@ -536,7 +535,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             }
         }
     };
-    let changed_paths = merge_run_loop_changed_paths(
+    restore_cg(g, commit_created, Some(&mut result))?;
+    let changed_paths = merge_changed(
         accumulated_changed_paths,
         all_attempt_change_snapshots_available,
         changed_paths,
