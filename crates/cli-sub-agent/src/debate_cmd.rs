@@ -334,6 +334,10 @@ fn resolve_debate_cli_tool(
 mod tests;
 
 #[cfg(test)]
+#[path = "debate_cmd_resource_override_tests.rs"]
+mod resource_override_tests;
+
+#[cfg(test)]
 #[path = "debate_cmd_readonly_tests.rs"]
 mod readonly_tests;
 

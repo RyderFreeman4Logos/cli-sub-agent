@@ -106,6 +106,8 @@ mod tests {
             thinking: None,
             no_failover: false,
             fast_but_more_cost: false,
+            memory_max_mb: None,
+            min_free_memory_mb: None,
             build_jobs: None,
             diff: false,
             full_consistency: false,

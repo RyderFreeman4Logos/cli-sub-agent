@@ -104,6 +104,29 @@ fn parse_or_validate_review_error(argv: &[&str]) -> clap::Error {
     }
 }
 
+#[test]
+fn review_cli_accepts_resource_override_flags() {
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--memory-max-mb",
+        "6144",
+        "--min-free-memory-mb",
+        "256",
+        "--diff",
+    ]);
+
+    assert_eq!(args.memory_max_mb, Some(6144));
+    assert_eq!(args.min_free_memory_mb, Some(256));
+}
+
+#[test]
+fn review_cli_rejects_memory_override_below_config_minimum() {
+    let err = parse_review_error(&["csa", "review", "--memory-max-mb", "255", "--diff"]);
+
+    assert_eq!(err.kind(), ErrorKind::ValueValidation);
+}
+
 fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
     SpecDocument {
         schema_version: 1,

@@ -11,6 +11,7 @@ use crate::review_context::{
 };
 use crate::review_prior_rounds::REVIEW_FINDINGS_TOML_INSTRUCTION;
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
+use crate::run_resource_overrides::RunResourceOverrides;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
@@ -22,6 +23,12 @@ pub(crate) use selection::resolve_review_tool;
 pub(crate) use selection::{
     resolve_review_selection, validate_review_direct_tool_tier_restriction,
 };
+
+impl ReviewArgs {
+    pub(crate) fn resource_overrides(&self) -> RunResourceOverrides {
+        RunResourceOverrides::new(self.memory_max_mb, self.min_free_memory_mb)
+    }
+}
 
 /// Verify the review pattern is installed before attempting execution.
 ///

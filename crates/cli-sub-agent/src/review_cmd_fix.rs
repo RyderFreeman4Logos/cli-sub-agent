@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
 use crate::review_routing::ReviewRoutingMetadata;
+use crate::run_resource_overrides::RunResourceOverrides;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::{
@@ -63,6 +64,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub no_fs_sandbox: bool,
     /// #1652 scan override (#1745, #1847).
     pub error_marker_scan_override: Option<bool>,
+    pub resource_overrides: RunResourceOverrides,
     pub extra_writable: &'a [PathBuf],
     pub extra_readable: &'a [PathBuf],
     pub timeout: Option<u64>,
@@ -161,6 +163,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.extra_writable,
             ctx.extra_readable,
             ctx.error_marker_scan_override,
+            ctx.resource_overrides,
             ctx.current_depth,
             ctx.startup_env,
         );

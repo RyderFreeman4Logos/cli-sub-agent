@@ -7,6 +7,7 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::Executor;
 
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 use super::failures::enforce_review_artifact_contract;
@@ -35,6 +36,7 @@ async fn execute_review_once(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     error_marker_scan_override: Option<bool>,
+    resource_overrides: RunResourceOverrides,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     crate::pipeline::execute_with_session_and_meta_with_parent_source(
@@ -63,7 +65,7 @@ async fn execute_review_once(
         pre_session_hook,
         crate::pipeline::ParentSessionSource::ExplicitOnly,
         crate::pipeline::SessionCreationMode::DaemonManaged,
-        Default::default(),
+        resource_overrides,
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
@@ -97,6 +99,7 @@ pub(super) async fn execute_review_once_with_artifact_guard(
     extra_writable: &[PathBuf],
     extra_readable: &[PathBuf],
     error_marker_scan_override: Option<bool>,
+    resource_overrides: RunResourceOverrides,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let invocation_started_at = Utc::now();
@@ -121,6 +124,7 @@ pub(super) async fn execute_review_once_with_artifact_guard(
         extra_writable,
         extra_readable,
         error_marker_scan_override,
+        resource_overrides,
         startup_env,
     )
     .await

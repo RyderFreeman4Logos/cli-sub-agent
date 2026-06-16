@@ -9,6 +9,7 @@ use tracing::{debug, error, warn};
 use crate::cli::DebateArgs;
 use crate::debate_cmd_output::DebateOutputHeader;
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{self, TierAttemptFailure};
 
@@ -39,6 +40,10 @@ impl DebateArgs {
             self.error_marker_scan,
             self.no_error_marker_scan,
         )
+    }
+
+    pub(crate) fn resource_overrides(&self) -> RunResourceOverrides {
+        RunResourceOverrides::new(self.memory_max_mb, self.min_free_memory_mb)
     }
 }
 
@@ -147,7 +152,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             ensure_debate_wall_clock_within_timeout(wall_clock_start, request.timeout_seconds)?;
 
             let attempt_started_at = Instant::now();
-            let execute_future = crate::pipeline::execute_with_session_and_meta(
+            let execute_future = crate::pipeline::execute_with_session_and_meta_with_parent_source(
                 &executor,
                 attempt_tool,
                 request.prompt,
@@ -160,6 +165,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 request.config,
                 extra_env,
                 subtree_pin.as_ref(),
+                false,
                 Some("debate"),
                 request.resolved_tier_name,
                 None,
@@ -170,6 +176,9 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 None,
                 Some(request.global_config),
                 request.pre_session_hook.clone(),
+                crate::pipeline::ParentSessionSource::ExplicitOrEnv,
+                crate::pipeline::SessionCreationMode::DaemonManaged,
+                request.args.resource_overrides(),
                 request.args.no_fs_sandbox,
                 request.readonly_project_root,
                 &request.args.extra_writable,

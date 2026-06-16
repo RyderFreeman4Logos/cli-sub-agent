@@ -91,6 +91,14 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub fast_but_more_cost: bool,
 
+    /// Override per-session memory cap/projection for this review invocation.
+    #[arg(long, value_name = "MB", value_parser = clap::value_parser!(u64).range(256..))]
+    pub memory_max_mb: Option<u64>,
+
+    /// Override minimum MemAvailable reserve for this review invocation.
+    #[arg(long, value_name = "MB")]
+    pub min_free_memory_mb: Option<u64>,
+
     /// Cap build (CARGO_BUILD_JOBS) and test (NEXTEST_TEST_THREADS)
     /// parallelism of the validation gate to N. Use on memory-tight hosts
     /// to avoid OOM-kills / spawn flakes. Unset = uncapped (honors an
@@ -490,6 +498,14 @@ pub struct DebateArgs {
     /// Enable Codex fast_mode for faster responses at higher cost. Only affects codex.
     #[arg(long)]
     pub fast_but_more_cost: bool,
+
+    /// Override per-session memory cap/projection for this debate invocation.
+    #[arg(long, value_name = "MB", value_parser = clap::value_parser!(u64).range(256..))]
+    pub memory_max_mb: Option<u64>,
+
+    /// Override minimum MemAvailable reserve for this debate invocation.
+    #[arg(long, value_name = "MB")]
+    pub min_free_memory_mb: Option<u64>,
 
     /// Number of debate rounds (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]

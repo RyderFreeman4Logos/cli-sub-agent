@@ -134,6 +134,7 @@ pub(crate) async fn handle_fix_finding(
         &args.extra_writable,
         &args.extra_readable,
         args.error_marker_scan_override(),
+        args.resource_overrides(),
         current_depth,
         startup_env,
     );
