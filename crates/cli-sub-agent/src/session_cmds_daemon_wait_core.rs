@@ -41,6 +41,33 @@ type TerminalOutputEmitter<'a> = Box<
 >;
 type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
 
+fn session_has_live_execution(
+    project_root: &Path,
+    session_dir: &Path,
+    resolved_session_id: &str,
+    result_session_id: &str,
+) -> bool {
+    session_has_terminal_process(session_dir)
+        || session_holds_worktree_write_lock(project_root, result_session_id)
+        || (resolved_session_id != result_session_id
+            && session_holds_worktree_write_lock(project_root, resolved_session_id))
+}
+
+fn session_holds_worktree_write_lock(project_root: &Path, session_id: &str) -> bool {
+    match csa_lock::worktree_write_lock_is_held_by_session(project_root, session_id) {
+        Ok(held) => held,
+        Err(error) => {
+            tracing::debug!(
+                session_id,
+                project_root = %project_root.display(),
+                error = %error,
+                "failed to probe live worktree write lock for session wait"
+            );
+            false
+        }
+    }
+}
+
 pub(crate) struct WaitEmitters<'a> {
     pub(crate) reconcile_dead_active_session: ReconcileEmitter<'a>,
     pub(crate) emit_completion_signal: CompletionSignalEmitter<'a>,
@@ -157,9 +184,15 @@ pub(crate) fn handle_session_wait_with_emitters(
     }
 
     loop {
-        if let Some(completion) = load_daemon_completion_packet(&session_dir)?
-            && (completion.is_legacy_complete_marker()
-                || !session_has_terminal_process(observed_session_dir))
+        let session_live = session_has_live_execution(
+            effective_root,
+            observed_session_dir,
+            &resolved.session_id,
+            result_session_id,
+        );
+        let completion_packet = load_daemon_completion_packet(&session_dir)?;
+        if let Some(completion) = completion_packet
+            .filter(|completion| completion.is_legacy_complete_marker() || !session_live)
         {
             let refreshed_result = refresh_result_for_wait(
                 effective_root,
@@ -244,9 +277,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 return Ok(exit_code);
             }
 
-            if session_has_terminal_process(observed_session_dir)
-                || csa_process::ToolLiveness::is_alive(observed_session_dir)
-            {
+            if session_live || csa_process::ToolLiveness::is_alive(observed_session_dir) {
                 tracing::debug!(
                     session_id = %result_session_id,
                     completion_status = %completion.status,
@@ -266,14 +297,17 @@ pub(crate) fn handle_session_wait_with_emitters(
             }
         }
 
-        if !session_has_terminal_process(observed_session_dir)
-            && let Some(result) = load_completed_daemon_result_with_fallback(
+        let completed_result = if session_live {
+            None
+        } else {
+            load_completed_daemon_result_with_fallback(
                 effective_root,
                 result_session_id,
                 &result_session_dir,
                 is_cross_project,
             )?
-        {
+        };
+        if let Some(result) = completed_result {
             let streamed_output = (emitters.emit_terminal_output)(
                 &result_session_dir,
                 result_session_id,
@@ -294,47 +328,52 @@ pub(crate) fn handle_session_wait_with_emitters(
             return Ok(exit_code);
         }
 
-        // Synthesize terminal result for dead Active sessions.
-        let reconciled = (emitters.reconcile_dead_active_session)(
-            effective_root,
-            result_session_id,
-            "session wait",
-        )?;
-        if reconciled.result_became_available
-            && let Some(result) = load_completed_daemon_result_with_fallback(
+        if !session_live {
+            // Synthesize terminal result for dead Active sessions.
+            let reconciled = (emitters.reconcile_dead_active_session)(
                 effective_root,
                 result_session_id,
-                &result_session_dir,
-                is_cross_project,
-            )?
-        {
-            let streamed_output = (emitters.emit_terminal_output)(
-                &result_session_dir,
-                result_session_id,
-                Some(&result),
-                wait_options.output_mode,
+                "session wait",
             )?;
-            (emitters.emit_next_step)(&result_session_dir)?;
-            #[rustfmt::skip]
-            let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
-            emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
-            (emitters.emit_completion_signal)(
-                &resolved.session_id,
-                completion_status.as_ref(),
-                exit_code,
-                reconciled.synthetic,
-                !streamed_output,
-            );
-            if reconciled.synthetic && !streamed_output {
-                eprintln!(
-                    "Session {} reached a synthesized terminal result because no live daemon process remained.",
-                    resolved.session_id,
+            let reconciled_result = if reconciled.result_became_available {
+                load_completed_daemon_result_with_fallback(
+                    effective_root,
+                    result_session_id,
+                    &result_session_dir,
+                    is_cross_project,
+                )?
+            } else {
+                None
+            };
+            if let Some(result) = reconciled_result {
+                let streamed_output = (emitters.emit_terminal_output)(
+                    &result_session_dir,
+                    result_session_id,
+                    Some(&result),
+                    wait_options.output_mode,
+                )?;
+                (emitters.emit_next_step)(&result_session_dir)?;
+                #[rustfmt::skip]
+                let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
+                emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
+                (emitters.emit_completion_signal)(
+                    &resolved.session_id,
+                    completion_status.as_ref(),
+                    exit_code,
+                    reconciled.synthetic,
+                    !streamed_output,
                 );
+                if reconciled.synthetic && !streamed_output {
+                    eprintln!(
+                        "Session {} reached a synthesized terminal result because no live daemon process remained.",
+                        resolved.session_id,
+                    );
+                }
+                return Ok(exit_code);
             }
-            return Ok(exit_code);
         }
 
-        if !session_has_terminal_process(observed_session_dir) {
+        if !session_live {
             if let Some(result) = load_completed_daemon_result_with_fallback(
                 effective_root,
                 result_session_id,
@@ -377,9 +416,13 @@ pub(crate) fn handle_session_wait_with_emitters(
             }
         }
 
-        if let (Some(limit_mb), Some(sample_at)) = (memory_warn_mb, next_memory_sample_at)
-            && std::time::Instant::now() >= sample_at
-        {
+        let memory_sample_limit_mb = match (memory_warn_mb, next_memory_sample_at) {
+            (Some(limit_mb), Some(sample_at)) if std::time::Instant::now() >= sample_at => {
+                Some(limit_mb)
+            }
+            _ => None,
+        };
+        if let Some(limit_mb) = memory_sample_limit_mb {
             match (emitters.sample_session_tree_rss_mb)(effective_root, result_session_id) {
                 Ok(actual_rss_mb) => {
                     if actual_rss_mb > limit_mb {
@@ -416,8 +459,12 @@ pub(crate) fn handle_session_wait_with_emitters(
                 .as_ref()
                 .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
                 .unwrap_or_default();
-            let session_alive = session_has_terminal_process(observed_session_dir)
-                || csa_process::ToolLiveness::is_alive(observed_session_dir);
+            let session_alive = session_has_live_execution(
+                effective_root,
+                observed_session_dir,
+                &resolved.session_id,
+                result_session_id,
+            ) || csa_process::ToolLiveness::is_alive(observed_session_dir);
             if session_alive {
                 let wait_cmd = format!(
                     "csa session wait --session {}{}",

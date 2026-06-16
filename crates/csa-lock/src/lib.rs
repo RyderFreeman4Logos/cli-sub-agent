@@ -12,7 +12,9 @@
 pub mod slot;
 mod worktree;
 
-pub use worktree::{WorktreeWriteLock, acquire_worktree_write_lock};
+pub use worktree::{
+    WorktreeWriteLock, acquire_worktree_write_lock, worktree_write_lock_is_held_by_session,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

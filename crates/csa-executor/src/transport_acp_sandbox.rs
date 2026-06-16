@@ -280,12 +280,46 @@ async fn run_acp_sandboxed_inner(
         )
         .await;
 
+    if sandboxed_prompt_error_should_kill_session(result.is_err(), resume_session_id) {
+        let _ = connection.kill().await;
+    }
+
     // Stop memory monitor before capturing peak memory (done by caller).
     if let Some(monitor) = memory_monitor {
         monitor.stop().await;
     }
 
     result.map(|r| (r, acp_session_id))
+}
+
+fn sandboxed_prompt_error_should_kill_session(
+    prompt_failed: bool,
+    resume_session_id: Option<&str>,
+) -> bool {
+    prompt_failed && resume_session_id.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sandboxed_prompt_error_should_kill_session;
+
+    #[test]
+    fn kills_fresh_sandboxed_acp_session_after_prompt_error() {
+        assert!(sandboxed_prompt_error_should_kill_session(true, None));
+    }
+
+    #[test]
+    fn preserves_resumed_sandboxed_acp_session_after_prompt_error() {
+        assert!(!sandboxed_prompt_error_should_kill_session(
+            true,
+            Some("provider-session-id")
+        ));
+    }
+
+    #[test]
+    fn does_not_kill_successful_sandboxed_acp_prompt() {
+        assert!(!sandboxed_prompt_error_should_kill_session(false, None));
+    }
 }
 
 pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {

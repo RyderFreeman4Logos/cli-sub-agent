@@ -3,8 +3,9 @@ use crate::{
     read_lock_diagnostic,
 };
 use anyhow::Result;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// Guard for a write-capable CSA session sharing one git worktree.
@@ -116,6 +117,67 @@ impl Drop for WorktreeWriteLock {
             }
         }
     }
+}
+
+/// Return true only when the canonical worktree write lock is actively held by
+/// `session_id`.
+///
+/// This is a non-mutating liveness probe for wait/recovery paths: a stale
+/// diagnostic file without an fd-level flock is not live, and a live flock whose
+/// diagnostic names another session is not treated as this session's lock.
+pub fn worktree_write_lock_is_held_by_session(
+    worktree_root: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        anyhow::bail!("session id cannot be empty");
+    }
+
+    let (lock_path, _lock_name, _canonical_root) =
+        project_resource_lock_path(worktree_root, "worktree-write", "exclusive")?;
+    if !lock_path.exists() {
+        return Ok(false);
+    }
+    let diagnostic = match read_lock_diagnostic(&lock_path) {
+        Ok(Some(diagnostic)) => diagnostic,
+        Ok(None) => return Ok(false),
+        Err(error) if !lock_path.exists() => {
+            tracing::debug!(
+                lock_path = %lock_path.display(),
+                error = %error,
+                "worktree lock disappeared during live-holder probe"
+            );
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    if diagnostic.holder_session_id.as_deref() != Some(session_id) {
+        return Ok(false);
+    }
+
+    let file = match OpenOptions::new().read(true).write(true).open(&lock_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    // SAFETY: `file` owns a valid fd, and LOCK_EX | LOCK_NB is a non-blocking
+    // advisory lock probe. If it succeeds, this process briefly acquired the
+    // stale lock and immediately releases it before returning false.
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret == 0 {
+        // SAFETY: same valid fd; release the probe lock before closing `file`.
+        unsafe {
+            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+        }
+        return Ok(false);
+    }
+
+    let error = std::io::Error::last_os_error();
+    if error.kind() == ErrorKind::WouldBlock {
+        return Ok(true);
+    }
+    Err(error.into())
 }
 
 /// Acquire a fail-fast exclusive write lock for a canonical git worktree root.

@@ -445,6 +445,9 @@ fn check_session_stale_before_wait(
                 let now = Utc::now();
                 let elapsed = now.signed_duration_since(session.last_accessed);
 
+                if session_holds_worktree_write_lock(project_root, session_id) {
+                    return Ok(());
+                }
                 if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
                     if session_has_terminal_process(session_dir) {
                         return Ok(());
@@ -463,6 +466,21 @@ fn check_session_stale_before_wait(
     }
 
     Ok(())
+}
+
+fn session_holds_worktree_write_lock(project_root: &Path, session_id: &str) -> bool {
+    match csa_lock::worktree_write_lock_is_held_by_session(project_root, session_id) {
+        Ok(held) => held,
+        Err(error) => {
+            tracing::debug!(
+                session_id,
+                project_root = %project_root.display(),
+                error = %error,
+                "failed to probe live worktree write lock during stale precheck"
+            );
+            false
+        }
+    }
 }
 
 fn load_session_for_stale_precheck(

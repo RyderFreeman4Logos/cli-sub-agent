@@ -279,7 +279,7 @@ pub async fn run_prompt_with_io(
         termination_grace_period: options.termination_grace_period,
     })
     .await?;
-    let result = session
+    let result = match session
         .prompt_with_idle_timeout_and_io(
             prompt,
             options.idle_timeout,
@@ -292,7 +292,16 @@ pub async fn run_prompt_with_io(
                 tool_output_compaction: options.io.tool_output_compaction,
             },
         )
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            if !has_resume_session {
+                let _ = session.connection().kill().await;
+            }
+            return Err(error);
+        }
+    };
 
     // ACP processes may stay alive across prompts. If the prompt itself succeeded
     // (no error above), a still-running process is normal — default to exit_code=0.
