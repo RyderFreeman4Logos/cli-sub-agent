@@ -174,6 +174,7 @@ pub(crate) fn handle_session_wait_with_emitters(
         result_session_id,
         observed_session_dir,
         wait_options.behavior,
+        &[resolved.session_id.as_str(), result_session_id],
     ) {
         eprintln!("Session {} appears stale: {}", result_session_id, stale_err);
         eprintln!(

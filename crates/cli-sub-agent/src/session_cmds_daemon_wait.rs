@@ -416,6 +416,7 @@ fn check_session_stale_before_wait(
     session_id: &str,
     session_dir: &Path,
     wait_behavior: WaitBehavior,
+    worktree_lock_session_ids: &[&str],
 ) -> anyhow::Result<()> {
     // Load the session to check its phase and last_accessed time.
     // Only flag truly stale sessions (Active phase, no daemon, no recent progress).
@@ -445,7 +446,7 @@ fn check_session_stale_before_wait(
                 let now = Utc::now();
                 let elapsed = now.signed_duration_since(session.last_accessed);
 
-                if session_holds_worktree_write_lock(project_root, session_id) {
+                if any_session_holds_worktree_write_lock(project_root, worktree_lock_session_ids) {
                     return Ok(());
                 }
                 if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
@@ -466,6 +467,17 @@ fn check_session_stale_before_wait(
     }
 
     Ok(())
+}
+
+fn any_session_holds_worktree_write_lock(project_root: &Path, session_ids: &[&str]) -> bool {
+    session_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(index, session_id)| {
+            !session_ids[..index].contains(&session_id)
+                && session_holds_worktree_write_lock(project_root, session_id)
+        })
 }
 
 fn session_holds_worktree_write_lock(project_root: &Path, session_id: &str) -> bool {

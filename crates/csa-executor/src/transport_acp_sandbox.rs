@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
@@ -280,9 +281,10 @@ async fn run_acp_sandboxed_inner(
         )
         .await;
 
-    if sandboxed_prompt_error_should_kill_session(result.is_err(), resume_session_id) {
+    kill_after_fresh_sandboxed_prompt_error(result.is_err(), resume_session_id, || async {
         let _ = connection.kill().await;
-    }
+    })
+    .await;
 
     // Stop memory monitor before capturing peak memory (done by caller).
     if let Some(monitor) = memory_monitor {
@@ -299,9 +301,29 @@ fn sandboxed_prompt_error_should_kill_session(
     prompt_failed && resume_session_id.is_none()
 }
 
+async fn kill_after_fresh_sandboxed_prompt_error<F, Fut>(
+    prompt_failed: bool,
+    resume_session_id: Option<&str>,
+    kill: F,
+) where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if sandboxed_prompt_error_should_kill_session(prompt_failed, resume_session_id) {
+        kill().await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sandboxed_prompt_error_should_kill_session;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::{
+        kill_after_fresh_sandboxed_prompt_error, sandboxed_prompt_error_should_kill_session,
+    };
 
     #[test]
     fn kills_fresh_sandboxed_acp_session_after_prompt_error() {
@@ -319,6 +341,61 @@ mod tests {
     #[test]
     fn does_not_kill_successful_sandboxed_acp_prompt() {
         assert!(!sandboxed_prompt_error_should_kill_session(false, None));
+    }
+
+    #[tokio::test]
+    async fn kills_fresh_sandboxed_acp_connection_after_prompt_error() {
+        let kills = Arc::new(AtomicUsize::new(0));
+        let kills_for_closure = Arc::clone(&kills);
+
+        kill_after_fresh_sandboxed_prompt_error(true, None, move || async move {
+            kills_for_closure.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+
+        assert_eq!(
+            kills.load(Ordering::SeqCst),
+            1,
+            "fresh sandboxed ACP prompt errors must kill the child connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_resumed_sandboxed_acp_connection_after_prompt_error() {
+        let kills = Arc::new(AtomicUsize::new(0));
+        let kills_for_closure = Arc::clone(&kills);
+
+        kill_after_fresh_sandboxed_prompt_error(
+            true,
+            Some("provider-session-id"),
+            move || async move {
+                kills_for_closure.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+
+        assert_eq!(
+            kills.load(Ordering::SeqCst),
+            0,
+            "resumed sandboxed ACP prompt errors must leave the child connection alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_kill_successful_sandboxed_acp_connection() {
+        let kills = Arc::new(AtomicUsize::new(0));
+        let kills_for_closure = Arc::clone(&kills);
+
+        kill_after_fresh_sandboxed_prompt_error(false, None, move || async move {
+            kills_for_closure.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+
+        assert_eq!(
+            kills.load(Ordering::SeqCst),
+            0,
+            "successful sandboxed ACP prompts must not use the prompt-error kill path"
+        );
     }
 }
 

@@ -174,6 +174,59 @@ fn handle_session_wait_on_resume_wrapper_continues_while_worker_target_alive_wit
 
 #[cfg(unix)]
 #[test]
+fn handle_session_wait_on_resume_wrapper_treats_wrapper_worktree_lock_as_live_in_stale_precheck() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let mut worker = create_session(
+        project,
+        Some("worker-stale-wrapper-lock"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let wrapper = create_session(project, Some("wrapper-holds-lock"), None, None).unwrap();
+    worker.last_accessed = chrono::Utc::now() - chrono::Duration::hours(24);
+    let worker_id = worker.meta_session_id.clone();
+    let wrapper_id = wrapper.meta_session_id;
+    save_session(&worker).unwrap();
+    csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
+    let _worktree_lock =
+        csa_lock::acquire_worktree_write_lock(project, &wrapper_id, &[], |_| false)
+            .expect("wrapper worktree lock should be held");
+
+    let mut emitted_completion = false;
+    let exit_code = handle_session_wait_with_hooks(
+        wrapper_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("wrapper-held worktree lock should keep stale precheck nonterminal")
+        },
+        |_sid: &str, _status: &str, _exit_code, _synthetic, _mirror_to_stdout| {
+            emitted_completion = true;
+        },
+    )
+    .expect("wrapper-held worktree lock should not fail stale precheck");
+
+    assert_eq!(exit_code, 0);
+    assert!(
+        !emitted_completion,
+        "live wrapper lock should produce a healthy wait cap, not terminal completion"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn handle_session_wait_on_resume_wrapper_memory_warn_samples_worker_target() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
