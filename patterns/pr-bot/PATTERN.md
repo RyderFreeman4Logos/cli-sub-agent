@@ -2160,6 +2160,7 @@ DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
+echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 # shellcheck disable=SC2086
 gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
@@ -2180,7 +2181,6 @@ touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 MERGE_COMPLETED=true
 echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
-echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 
@@ -2217,6 +2217,7 @@ DELETE_BRANCH_FLAG=""
 if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
+echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 # shellcheck disable=SC2086
 gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}
 
@@ -2237,7 +2238,6 @@ touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 MERGE_COMPLETED=true
 echo "CSA_VAR:MERGE_COMPLETED=$MERGE_COMPLETED"
-echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}"
 echo '<!-- CSA:NEXT_STEP cmd="post-merge default branch checkout (Step 13)" required=true -->'
 ```
 

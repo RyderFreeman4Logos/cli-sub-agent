@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 const MERGE_COMMAND: &str = r#"gh pr merge "${MERGED_PR_VERIFY_REF}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} ${CSA_REAL_GH:+--force-skip-pr-bot}"#;
+const MERGE_REF_MARKER: &str = r#"echo "CSA_VAR:MERGED_PR_VERIFY_REF=${MERGED_PR_VERIFY_REF}""#;
 const VERSION_GATE_COMMAND: &str = r#"bash "${CSA_WORKFLOW_DIR:-patterns/pr-bot}/scripts/pre-merge-version-check.sh" "${REMOTE_NAME}" "${DEFAULT_BRANCH}""#;
 const PRE_MERGE_PUSH: &str = r#"git push "${REMOTE_NAME}" "${WORKFLOW_BRANCH}""#;
 
@@ -87,6 +88,27 @@ fn pr_bot_final_merge_runs_version_gate_before_push_and_merge() {
         for section in sections {
             assert_order(&section, VERSION_GATE_COMMAND, PRE_MERGE_PUSH, path);
             assert_order(&section, VERSION_GATE_COMMAND, MERGE_COMMAND, path);
+        }
+    }
+}
+
+#[test]
+fn pr_bot_final_merge_publishes_verify_ref_before_merge_command() {
+    for path in [
+        "patterns/pr-bot/workflow.toml",
+        "patterns/pr-bot/PATTERN.md",
+    ] {
+        let text = artifact_text(path);
+        let sections = if path.ends_with("workflow.toml") {
+            vec![workflow_step(&text, 22), workflow_step(&text, 23)]
+        } else {
+            vec![
+                pattern_section(&text, "## Step 12: Final Merge"),
+                pattern_section(&text, "## Step 12b: Final Merge (Direct or Post-Rebase)"),
+            ]
+        };
+        for section in sections {
+            assert_order(&section, MERGE_REF_MARKER, MERGE_COMMAND, path);
         }
     }
 }

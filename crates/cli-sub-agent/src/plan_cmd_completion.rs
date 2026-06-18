@@ -7,6 +7,12 @@ use anyhow::{Context, Result};
 use super::StepResult;
 use super::plan_cmd_failure::{PlanFailureError, PlanFailureReport};
 
+#[path = "plan_cmd_pr_bot_completion.rs"]
+mod pr_bot_completion;
+pub(crate) use pr_bot_completion::{
+    PrBotFailureSideEffectInput, verify_pr_bot_failure_side_effects,
+};
+
 const DEV2MERGE_WORKFLOW_NAME: &str = "dev2merge";
 const DEV2MERGE_VERIFY_STEP_ID: usize = 18;
 const DEV2MERGE_PUBLISH_STEPS: [usize; 5] = [13, 14, 15, 16, 17];
@@ -113,6 +119,9 @@ pub(crate) fn persist_success_report_for_session(
 pub(crate) fn verify_plan_completion(
     input: PlanCompletionInput<'_>,
 ) -> std::result::Result<Option<String>, Box<PlanFailureError>> {
+    if pr_bot_completion::is_pr_bot_workflow(input.workflow_name) {
+        return pr_bot_completion::verify_pr_bot_completion(input);
+    }
     if input.workflow_name != DEV2MERGE_WORKFLOW_NAME {
         return Ok(None);
     }
