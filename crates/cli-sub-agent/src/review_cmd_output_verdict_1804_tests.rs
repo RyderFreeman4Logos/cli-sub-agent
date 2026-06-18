@@ -167,7 +167,7 @@ No blocking issues.
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let findings = read_findings_toml(&session_dir);
-    assert!(findings.findings.is_empty());
+    assert!(!findings.findings.is_empty());
     let verdict = read_verdict(&session_dir);
     assert_ne!(verdict.decision, ReviewDecision::Pass);
     assert_eq!(verdict.decision, ReviewDecision::Fail);
@@ -248,7 +248,7 @@ No blocking issues.
         persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
         let findings = read_findings_toml(&session_dir);
-        assert!(findings.findings.is_empty(), "{heading}");
+        assert!(!findings.findings.is_empty());
         let verdict = read_verdict(&session_dir);
         assert_ne!(verdict.decision, ReviewDecision::Pass, "{heading}");
         assert_eq!(verdict.decision, ReviewDecision::Fail, "{heading}");
@@ -296,7 +296,7 @@ No blocking issues.
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let findings = read_findings_toml(&session_dir);
-    assert!(findings.findings.is_empty());
+    assert!(!findings.findings.is_empty());
     let verdict = read_verdict(&session_dir);
     assert_eq!(verdict.decision, ReviewDecision::Fail);
     assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");

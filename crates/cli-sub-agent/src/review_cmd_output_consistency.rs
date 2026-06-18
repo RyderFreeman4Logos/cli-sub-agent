@@ -3,7 +3,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use csa_core::types::ReviewDecision;
-use csa_session::{FindingsFile, ReviewVerdictArtifact, Severity, write_findings_toml};
+use csa_session::{
+    Finding, FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity,
+    write_findings_toml,
+};
 
 use super::artifacts::severity_counts_are_zero;
 use super::artifacts::{
@@ -14,6 +17,7 @@ use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
 const SEVERITY_FINDINGS_MISMATCH_REASON: &str = "severity_counts_findings_mismatch";
+const EMPTY_FAIL_FINDINGS_ARTIFACT_REASON: &str = "fail_verdict_empty_findings_artifact";
 
 pub(super) fn enforce_final_verdict_consistency(
     session_dir: &Path,
@@ -31,7 +35,14 @@ pub(super) fn enforce_final_verdict_consistency(
             .join("output")
             .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER)
             .exists();
-    let skip_prose_override = extraction_confirmed_empty || synthetic_empty;
+    let has_prose_failure_evidence = !prose_signals.findings.is_empty()
+        || prose_signals.blocking_summary
+        || prose_signals.parsed_findings_sections
+        || prose_signals.unparseable_findings_sections
+        || prose_signals.cross_dimension_blockers
+        || prose_signals.checklist_violation_findings;
+    let skip_prose_override =
+        (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let findings_file = if findings_file.findings.is_empty()
         && !prose_signals.findings.is_empty()
         && !skip_prose_override
@@ -63,8 +74,12 @@ pub(super) fn enforce_final_verdict_consistency(
     let prose_grade = highest_prose_severity_grade(session_dir);
 
     let resume_to_fix = has_resume_to_fix_suggestion(session_dir)?;
-    let has_review_artifact_findings = load_review_artifact_from_output(session_dir)?
-        .is_some_and(|artifact| !artifact.findings.is_empty());
+    let review_artifact = load_review_artifact_from_output(session_dir)?;
+    let review_artifact_findings: &[Finding] = review_artifact
+        .as_ref()
+        .map(|artifact| artifact.findings.as_slice())
+        .unwrap_or(&[]);
+    let has_review_artifact_findings = !review_artifact_findings.is_empty();
     let has_structured_findings =
         !findings_file.findings.is_empty() || has_review_artifact_findings;
     let structured_mismatch =
@@ -119,9 +134,121 @@ pub(super) fn enforce_final_verdict_consistency(
     // higher count.
     if artifact.decision == ReviewDecision::Fail {
         ensure_fail_closed_grade(&mut artifact.severity_counts, prose_grade);
+        ensure_failed_verdict_findings_artifact(
+            session_dir,
+            artifact,
+            &findings_file,
+            &prose_signals.findings,
+            review_artifact_findings,
+        )?;
     }
 
     Ok(())
+}
+
+fn ensure_failed_verdict_findings_artifact(
+    session_dir: &Path,
+    artifact: &mut ReviewVerdictArtifact,
+    findings_file: &FindingsFile,
+    prose_findings: &[ReviewFinding],
+    review_artifact_findings: &[Finding],
+) -> Result<(), anyhow::Error> {
+    if !findings_file.findings.is_empty() {
+        return Ok(());
+    }
+
+    let backfilled_findings = if !prose_findings.is_empty() {
+        prose_findings.to_vec()
+    } else if !review_artifact_findings.is_empty() {
+        review_artifact_findings
+            .iter()
+            .enumerate()
+            .map(|(index, finding)| review_artifact_finding_to_findings_toml(finding, index + 1))
+            .collect()
+    } else {
+        artifact
+            .failure_reason
+            .get_or_insert_with(|| EMPTY_FAIL_FINDINGS_ARTIFACT_REASON.to_string());
+        vec![artifact_generation_failure_finding(artifact)]
+    };
+
+    write_findings_toml(
+        session_dir,
+        &FindingsFile {
+            findings: backfilled_findings,
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("write fail-closed findings.toml: {error}"))?;
+    clear_empty_findings_markers(session_dir);
+    Ok(())
+}
+
+fn review_artifact_finding_to_findings_toml(finding: &Finding, index: usize) -> ReviewFinding {
+    let file_ranges = finding
+        .line
+        .filter(|_| !finding.file.trim().is_empty())
+        .map(|start| ReviewFindingFileRange {
+            path: finding.file.clone(),
+            start,
+            end: None,
+        })
+        .into_iter()
+        .collect();
+
+    ReviewFinding {
+        id: non_empty_or_else(&finding.fid, || format!("review-findings-{index:03}")),
+        severity: finding.severity.clone(),
+        file_ranges,
+        is_regression_of_commit: None,
+        suggested_test_scenario: None,
+        description: non_empty_or_else(&finding.summary, || {
+            "Review finding imported from review-findings.json".to_string()
+        }),
+    }
+}
+
+fn artifact_generation_failure_finding(artifact: &ReviewVerdictArtifact) -> ReviewFinding {
+    let reason = artifact
+        .failure_reason
+        .as_deref()
+        .unwrap_or(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON);
+    ReviewFinding {
+        id: "artifact-generation-001".to_string(),
+        severity: highest_counted_severity(&artifact.severity_counts).unwrap_or(Severity::Medium),
+        file_ranges: Vec::new(),
+        is_regression_of_commit: None,
+        suggested_test_scenario: None,
+        description: format!(
+            "Artifact generation failed: review verdict is FAIL but CSA could not extract a structured finding. Reason: {reason}. Inspect output/details.md and output/review-verdict.json."
+        ),
+    }
+}
+
+fn highest_counted_severity(
+    severity_counts: &std::collections::BTreeMap<Severity, u32>,
+) -> Option<Severity> {
+    severity_counts
+        .iter()
+        .filter_map(|(severity, count)| (*count > 0).then_some(severity.clone()))
+        .max()
+}
+
+fn non_empty_or_else(value: &str, fallback: impl FnOnce() -> String) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn clear_empty_findings_markers(session_dir: &Path) {
+    for marker in [
+        super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER,
+        super::super::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER,
+    ] {
+        let _ = fs::remove_file(session_dir.join("output").join(marker));
+    }
 }
 
 /// Ensure a fail-closed verdict's severity counts reflect the reviewer's prose
