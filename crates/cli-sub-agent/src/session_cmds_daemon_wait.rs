@@ -2,6 +2,7 @@ use super::*;
 use chrono::Utc;
 use csa_config::GlobalConfig;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 #[path = "session_cmds_daemon_wait_completion.rs"]
@@ -255,6 +256,20 @@ fn append_mcp_wait_line(text: &mut String, line: impl AsRef<str>) {
     }
 }
 
+fn resolve_session_wait_worktree_lock_root(project_root: &Path) -> Option<PathBuf> {
+    match crate::worktree_lock_root::resolve_worktree_lock_root(project_root) {
+        Ok(root) => Some(root),
+        Err(error) => {
+            tracing::debug!(
+                project_root = %project_root.display(),
+                error = %error,
+                "failed to resolve worktree lock root for session wait"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn handle_session_wait_with_hooks<R, E>(
     session: String,
@@ -416,6 +431,7 @@ fn check_session_stale_before_wait(
     session_id: &str,
     session_dir: &Path,
     wait_behavior: WaitBehavior,
+    worktree_lock_root: Option<&Path>,
     worktree_lock_session_ids: &[&str],
 ) -> anyhow::Result<()> {
     // Load the session to check its phase and last_accessed time.
@@ -446,7 +462,10 @@ fn check_session_stale_before_wait(
                 let now = Utc::now();
                 let elapsed = now.signed_duration_since(session.last_accessed);
 
-                if any_session_holds_worktree_write_lock(project_root, worktree_lock_session_ids) {
+                if any_session_holds_worktree_write_lock(
+                    worktree_lock_root,
+                    worktree_lock_session_ids,
+                ) {
                     return Ok(());
                 }
                 if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
@@ -469,24 +488,31 @@ fn check_session_stale_before_wait(
     Ok(())
 }
 
-fn any_session_holds_worktree_write_lock(project_root: &Path, session_ids: &[&str]) -> bool {
+fn any_session_holds_worktree_write_lock(
+    worktree_lock_root: Option<&Path>,
+    session_ids: &[&str],
+) -> bool {
     session_ids
         .iter()
         .copied()
         .enumerate()
         .any(|(index, session_id)| {
             !session_ids[..index].contains(&session_id)
-                && session_holds_worktree_write_lock(project_root, session_id)
+                && session_holds_worktree_write_lock(worktree_lock_root, session_id)
         })
 }
 
-fn session_holds_worktree_write_lock(project_root: &Path, session_id: &str) -> bool {
-    match csa_lock::worktree_write_lock_is_held_by_session(project_root, session_id) {
+fn session_holds_worktree_write_lock(worktree_lock_root: Option<&Path>, session_id: &str) -> bool {
+    let Some(worktree_lock_root) = worktree_lock_root else {
+        return false;
+    };
+
+    match csa_lock::worktree_write_lock_is_held_by_session(worktree_lock_root, session_id) {
         Ok(held) => held,
         Err(error) => {
             tracing::debug!(
                 session_id,
-                project_root = %project_root.display(),
+                worktree_lock_root = %worktree_lock_root.display(),
                 error = %error,
                 "failed to probe live worktree write lock during stale precheck"
             );

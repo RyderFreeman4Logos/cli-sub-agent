@@ -7,6 +7,8 @@ use crate::test_env_lock::TEST_ENV_LOCK;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::process::Command;
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -125,6 +127,19 @@ fn exited_child_pid() -> u32 {
     pid
 }
 
+fn init_git_repo(path: &Path) {
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(path)
+        .output()
+        .expect("git init should run");
+    assert!(
+        output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn handle_session_wait_rejects_duplicate_wait_before_entering_loop() {
     let td = tempdir().expect("tempdir");
@@ -223,6 +238,68 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
     assert_eq!(
         emitted_completion, None,
         "live lock should produce a healthy wait cap, not a stale failure"
+    );
+}
+
+#[test]
+fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let repo_root = td.path().join("repo");
+    let project = repo_root.join("nested");
+    std::fs::create_dir_all(&project).expect("create nested project dir");
+    init_git_repo(&repo_root);
+
+    let mut session = create_session(
+        &project,
+        Some("wait-subdir-live-lock-not-stale"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.last_accessed = chrono::Utc::now() - chrono::Duration::hours(24);
+    let session_id = session.meta_session_id.clone();
+    save_session(&session).expect("save stale active session");
+    let _worktree_lock =
+        csa_lock::acquire_worktree_write_lock(&repo_root, &session_id, &[], |_| false)
+            .expect("writer lock should be held at git toplevel");
+    assert!(
+        csa_lock::worktree_write_lock_is_held_by_session(&repo_root, &session_id)
+            .expect("probe repo-root worktree lock"),
+        "test setup requires a live git-toplevel worktree lock"
+    );
+    assert!(
+        !csa_lock::worktree_write_lock_is_held_by_session(&project, &session_id)
+            .expect("probe nested worktree lock"),
+        "direct nested-root probe must miss the git-toplevel lock to prove the root mismatch"
+    );
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("live git-toplevel worktree lock should keep session nonterminal")
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should see the git-toplevel worktree lock from a subdirectory");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        emitted_completion, None,
+        "subdirectory wait must return the healthy wait-cap path, not stale failure or completion"
     );
 }
 
