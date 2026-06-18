@@ -652,6 +652,10 @@ mod tests_dev2merge_2031;
 mod tests_pr_bot;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_pr_bot_degraded.rs"]
+mod tests_pr_bot_degraded;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_pr_bot_2014.rs"]
 mod tests_pr_bot_2014;
 
