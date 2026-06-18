@@ -12,6 +12,7 @@ pub mod landlock;
 pub mod landlock;
 pub mod memory_balloon;
 pub mod memory_monitor;
+pub mod memory_policy;
 pub mod rlimit;
 pub mod sandbox;
 

@@ -134,19 +134,15 @@ pub fn start(mut config: MemoryMonitorConfig) -> Option<MemoryMonitorHandle> {
     // limit must not inherit a previous run's soft-limit kill evidence.
     clear_soft_limit_diagnostic_path(config.diagnostic_path.as_deref());
 
-    if config.memory_max_bytes == 0
-        || config.soft_limit_percent == 0
-        || config.soft_limit_percent > 100
-    {
-        return None;
-    }
+    let threshold_bytes = crate::memory_policy::soft_limit_threshold_bytes(
+        config.memory_max_bytes,
+        config.soft_limit_percent,
+    )?;
 
     // Defense in depth: clamp zero interval to 1 second to prevent busy-polling.
     if config.interval.is_zero() {
         config.interval = Duration::from_secs(1);
     }
-
-    let threshold_bytes = config.memory_max_bytes * u64::from(config.soft_limit_percent) / 100;
 
     info!(
         scope = %config.scope_name,

@@ -25,6 +25,7 @@ const AUTH_PROMPT_DIAGNOSTIC: &str =
     "gemini-cli auth failure: OAuth browser prompt detected; no review verdict produced";
 const REVIEW_UNAVAILABLE_PREFIX: &str = "Review unavailable: ";
 const REVIEW_UNAVAILABLE_FAILURE_PATTERNS: &[&str] = &[
+    "memory_soft_limit_admission",
     "retrydelayms",
     "rate limit",
     "rate_limit",
@@ -417,3 +418,7 @@ pub(super) fn build_unavailable_reviewer_outcome(
 #[cfg(test)]
 #[path = "review_cmd_result_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "review_cmd_result_memory_soft_limit_tests.rs"]
+mod memory_soft_limit_tests;

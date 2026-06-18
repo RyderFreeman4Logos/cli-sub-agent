@@ -64,6 +64,7 @@ mod push_cmd;
 mod recall_cmd;
 mod require_commit_recovery_display;
 mod resource_admission;
+mod resource_admission_soft_limit;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
