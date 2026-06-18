@@ -208,9 +208,6 @@ async fn prepare_session_runtime_inner(
     let capture_snapshot = session_exec_audit::capture_git_workspace_snapshot_if_needed;
     let pre_run_workspace =
         capture_snapshot(is_git, input.project_root, require_commit_on_mutation);
-    let tool_state =
-        ensure_tool_state_initialized(session, input.executor, input.resolved_provider_session_id)
-            .await?;
     let result_file_cleared = clear_expected_result_artifacts_for_prompt(
         input.prompt,
         input.session_dir,
@@ -345,7 +342,7 @@ async fn prepare_session_runtime_inner(
             return Err(anyhow::anyhow!(msg));
         }
     };
-    crate::resource_admission_soft_limit::ensure_review_soft_limit_admission(
+    crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
         input.task_type,
         input.executor.tool_name(),
         execute_options
@@ -353,6 +350,9 @@ async fn prepare_session_runtime_inner(
             .as_ref()
             .map(|sandbox| &sandbox.isolation_plan),
     )?;
+    let tool_state =
+        ensure_tool_state_initialized(session, input.executor, input.resolved_provider_session_id)
+            .await?;
     crate::pipeline::ensure_tool_runtime_prerequisites(
         input.executor.tool_name(),
         crate::pipeline::resolved_filesystem_capability(&execute_options),
