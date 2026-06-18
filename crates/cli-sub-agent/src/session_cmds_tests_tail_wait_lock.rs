@@ -176,3 +176,127 @@ fn handle_session_wait_rejects_duplicate_wait_before_entering_loop() {
         "duplicate wait should not emit a completion signal"
     );
 }
+
+#[test]
+fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_precheck() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let mut session = create_session(
+        project,
+        Some("wait-live-lock-not-stale"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.last_accessed = chrono::Utc::now() - chrono::Duration::hours(24);
+    let session_id = session.meta_session_id.clone();
+    save_session(&session).expect("save stale active session");
+    let _worktree_lock =
+        csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false)
+            .expect("worktree write lock should be held by session");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("live worktree lock should keep stale precheck from reconciling")
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should not classify a live worktree lock as stale");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        emitted_completion, None,
+        "live lock should produce a healthy wait cap, not a stale failure"
+    );
+}
+
+#[test]
+fn handle_session_wait_defers_terminal_result_while_worktree_lock_is_live() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-defers-result-while-worktree-lock-live"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let terminal_result = SessionResult {
+        summary: "provider usage limit".to_string(),
+        ..make_result("failure", 1)
+    };
+    save_result(project, &session_id, &terminal_result).expect("save terminal result");
+    let worktree_lock = csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false)
+        .expect("worktree write lock should be held by session");
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("live worktree lock should keep session nonterminal")
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should defer terminal result while lock is live");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        emitted_completion, None,
+        "wait must not emit terminal failure while the session still holds the worktree lock"
+    );
+
+    drop(worktree_lock);
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("terminal result after lock release should not need reconciliation")
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should trust terminal result after lock release");
+
+    assert_eq!(exit_code, 1);
+    assert_eq!(
+        emitted_completion,
+        Some((session_id, "failure".to_string(), 1, false))
+    );
+}

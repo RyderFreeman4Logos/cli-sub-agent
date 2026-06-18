@@ -241,6 +241,66 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
 }
 
 #[test]
+fn worktree_write_lock_probe_detects_live_matching_holder() {
+    let _env_lock = env_test_lock();
+    let state_home = tempdir().expect("state-home tempdir");
+    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+    let worktree_root = tempdir().expect("worktree tempdir");
+    let _holder = acquire_test_worktree_write_lock(worktree_root.path(), "01LIVE", &[], &[])
+        .expect("holder lock should succeed");
+
+    assert!(
+        worktree_write_lock_is_held_by_session(worktree_root.path(), "01LIVE")
+            .expect("probe live holder"),
+        "live flock plus matching diagnostic should report held"
+    );
+}
+
+#[test]
+fn worktree_write_lock_probe_ignores_stale_matching_diagnostic_without_flock() {
+    let _env_lock = env_test_lock();
+    let state_home = tempdir().expect("state-home tempdir");
+    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+    let worktree_root = tempdir().expect("worktree tempdir");
+    let holder = acquire_test_worktree_write_lock(worktree_root.path(), "01STALE", &[], &[])
+        .expect("holder lock should succeed");
+    let lock_path = holder.lock_path().to_path_buf();
+    overwrite_worktree_lock_diagnostic(
+        &lock_path,
+        std::process::id(),
+        crate::process_start_time_ticks(std::process::id()),
+        "01STALE",
+        worktree_root.path(),
+    );
+    drop(holder);
+
+    assert!(
+        !worktree_write_lock_is_held_by_session(worktree_root.path(), "01STALE")
+            .expect("probe stale holder"),
+        "stale diagnostic without live flock must not report held"
+    );
+}
+
+#[test]
+fn worktree_write_lock_probe_ignores_live_different_holder() {
+    let _env_lock = env_test_lock();
+    let state_home = tempdir().expect("state-home tempdir");
+    let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
+
+    let worktree_root = tempdir().expect("worktree tempdir");
+    let _holder = acquire_test_worktree_write_lock(worktree_root.path(), "01OTHER", &[], &[])
+        .expect("holder lock should succeed");
+
+    assert!(
+        !worktree_write_lock_is_held_by_session(worktree_root.path(), "01WAIT")
+            .expect("probe different holder"),
+        "live flock for another session must not report held for the waited session"
+    );
+}
+
+#[test]
 fn worktree_write_lock_blocks_post_exec_window_with_live_flock() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
