@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use chrono::Utc;
-use csa_session::{SessionResult, save_result};
+use csa_session::{SessionArtifact, SessionResult, save_result};
 use tracing::warn;
 
 use crate::cli::PlanCommands;
@@ -371,8 +371,29 @@ pub(crate) async fn handle_plan_run_daemon_child(
             "Failed to write plan failure structured output",
         );
     }
+    if let Ok(outcome) = &result {
+        let success_report = plan_cmd::plan_cmd_completion::PlanSuccessReport::new(
+            &workflow_label,
+            outcome.completion_summary.clone(),
+        );
+        if let Err(err) = plan_cmd::plan_cmd_completion::persist_success_report_for_session(
+            &project_root,
+            session_id,
+            &success_report,
+        ) {
+            warn!(
+                session_id = %session_id,
+                error = %err,
+                "Failed to write plan success structured output",
+            );
+        }
+    }
     let summary = match &result {
-        Ok(()) => format!("plan complete: {workflow_label}"),
+        Ok(outcome) => outcome
+            .completion_summary
+            .as_ref()
+            .map(|summary| format!("plan complete: {workflow_label}; {summary}"))
+            .unwrap_or_else(|| format!("plan complete: {workflow_label}")),
         Err(err) => {
             let mut text = failure_report
                 .as_ref()
@@ -400,10 +421,17 @@ pub(crate) async fn handle_plan_run_daemon_child(
         started_at,
         completed_at,
         events_count: 0,
-        artifacts: plan_cmd::plan_cmd_failure::session_artifacts(
-            &workflow_label,
-            failure_report.as_ref(),
-        ),
+        artifacts: {
+            let mut artifacts = plan_cmd::plan_cmd_failure::session_artifacts(
+                &workflow_label,
+                failure_report.as_ref(),
+            );
+            if result.is_ok() {
+                artifacts.push(SessionArtifact::new("output/summary.md"));
+                artifacts.push(SessionArtifact::new("output/details.md"));
+            }
+            artifacts
+        },
         ..Default::default()
     };
     if let Err(save_err) = save_result(&project_root, session_id, &session_result) {
@@ -423,7 +451,7 @@ pub(crate) async fn handle_plan_run_daemon_child(
     }
 
     match result {
-        Ok(()) => Ok(0),
+        Ok(_) => Ok(0),
         Err(err) => Err(err),
     }
 }
@@ -565,6 +593,9 @@ fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
 mod forwarding;
 pub(crate) use forwarding::{build_forwarded_plan_args, forwarded_args_with_feature_input};
 
+#[cfg(test)]
+#[path = "plan_cmd_daemon_completion_tests.rs"]
+mod completion_tests;
 #[cfg(test)]
 #[path = "plan_cmd_daemon_tests.rs"]
 mod tests;
