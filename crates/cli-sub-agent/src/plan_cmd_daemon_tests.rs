@@ -14,6 +14,7 @@ fn make_args() -> PlanRunArgs {
         dry_run: false,
         chunked: false,
         resume: None,
+        complete_manual_step: None,
         cd: None,
         no_fs_sandbox: false,
         current_depth: 0,

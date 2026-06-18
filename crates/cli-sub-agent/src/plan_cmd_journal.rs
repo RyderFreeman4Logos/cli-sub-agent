@@ -237,6 +237,87 @@ pub(crate) fn persist_plan_journal(path: &Path, journal: &PlanRunJournal) -> Res
     Ok(())
 }
 
+pub(crate) fn complete_pending_manual_step(
+    plan: &ExecutionPlan,
+    workflow_path: &Path,
+    journal_path: &Path,
+    step_id: usize,
+) -> Result<()> {
+    let _completion_lock = match try_acquire_plan_journal_file_lock(journal_path, false)? {
+        Some(lock) => lock,
+        None => {
+            warn!(
+                path = %journal_path.display(),
+                ACTIVE_PLAN_JOURNAL_WARNING
+            );
+            bail!(ACTIVE_PLAN_JOURNAL_WARNING);
+        }
+    };
+    let bytes = std::fs::read(journal_path)
+        .with_context(|| format!("Failed to read plan journal: {}", journal_path.display()))?;
+    let mut journal: PlanRunJournal = serde_json::from_slice(&bytes)
+        .with_context(|| format!("Failed to parse plan journal: {}", journal_path.display()))?;
+
+    if journal.schema_version != PLAN_JOURNAL_SCHEMA_VERSION {
+        bail!(
+            "Plan journal has unsupported schema version {} (expected {})",
+            journal.schema_version,
+            PLAN_JOURNAL_SCHEMA_VERSION
+        );
+    }
+    let same_workflow = journal.workflow_name == plan.name
+        && journal.workflow_path == normalize_path(workflow_path);
+    if !same_workflow {
+        bail!(
+            "Plan journal {} does not match workflow '{}'",
+            journal_path.display(),
+            plan.name
+        );
+    }
+    if journal.status != "manual-handoff" {
+        bail!(
+            "Cannot complete manual step {step_id}: journal status is '{}' (expected manual-handoff)",
+            journal.status
+        );
+    }
+
+    let completed_steps: HashSet<usize> = journal.completed_steps.iter().copied().collect();
+    let pending_step = plan
+        .steps
+        .iter()
+        .find(|step| !completed_steps.contains(&step.id))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot complete manual step {step_id}: journal has no pending workflow step"
+            )
+        })?;
+    if pending_step.id != step_id {
+        bail!(
+            "Cannot complete manual step {step_id}: pending step is {} ('{}')",
+            pending_step.id,
+            pending_step.title
+        );
+    }
+    let is_manual = pending_step
+        .tool
+        .as_deref()
+        .is_some_and(|tool| tool.trim().eq_ignore_ascii_case("manual"));
+    if !is_manual {
+        bail!(
+            "Cannot complete step {step_id}: pending step '{}' uses tool {:?}, not manual",
+            pending_step.title,
+            pending_step.tool
+        );
+    }
+
+    journal.completed_steps.push(step_id);
+    journal.completed_steps.sort_unstable();
+    journal.completed_steps.dedup();
+    journal.status = "manual-completed".to_string();
+    journal.last_error = None;
+    persist_plan_journal(journal_path, &journal)
+}
+
 pub(crate) fn detect_repo_fingerprint(project_root: &Path) -> RepoFingerprint {
     let head = std::process::Command::new("git")
         .arg("-C")

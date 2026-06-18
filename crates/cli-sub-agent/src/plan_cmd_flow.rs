@@ -17,11 +17,38 @@ pub(super) fn format_plan_resume_command(
     workflow_path: &Path,
     journal_path: Option<&Path>,
 ) -> String {
+    format_plan_resume_command_with_manual_step(project_root, workflow_path, journal_path, None)
+}
+
+pub(super) fn format_manual_step_resume_command(
+    project_root: &Path,
+    workflow_path: &Path,
+    journal_path: Option<&Path>,
+    step_id: usize,
+) -> String {
+    format_plan_resume_command_with_manual_step(
+        project_root,
+        workflow_path,
+        journal_path,
+        Some(step_id),
+    )
+}
+
+fn format_plan_resume_command_with_manual_step(
+    project_root: &Path,
+    workflow_path: &Path,
+    journal_path: Option<&Path>,
+    complete_manual_step: Option<usize>,
+) -> String {
     if let Some(jp) = journal_path {
+        let manual_step_arg = complete_manual_step
+            .map(|step_id| format!(" --complete-manual-step {step_id}"))
+            .unwrap_or_default();
         let display = jp.to_string_lossy();
         format!(
-            "csa plan run --sa-mode true --resume {}",
-            shell_escape_for_command(&display)
+            "csa plan run --sa-mode true --resume {}{}",
+            shell_escape_for_command(&display),
+            manual_step_arg
         )
     } else {
         let display_path = workflow_path
@@ -118,6 +145,18 @@ mod tests {
         assert_eq!(
             format_plan_resume_command(project_root, workflow_path, Some(journal_path)),
             "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/weird name'\\''s.journal.json'"
+        );
+    }
+
+    #[test]
+    fn format_manual_step_resume_command_marks_exact_step_complete() {
+        let project_root = Path::new("/tmp/workspace");
+        let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
+        let journal_path = Path::new("/tmp/workspace/.csa/state/plan/dev2merge.journal.json");
+
+        assert_eq!(
+            format_manual_step_resume_command(project_root, workflow_path, Some(journal_path), 11),
+            "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/dev2merge.journal.json' --complete-manual-step 11"
         );
     }
 }

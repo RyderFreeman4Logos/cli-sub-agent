@@ -73,7 +73,8 @@ pub(crate) use plan_cmd_steps_test_helpers::{execute_plan, execute_step};
 // and the in-module step/test submodules (`super::*`) keep their original paths.
 pub(crate) use crate::plan_cmd_journal::{
     PLAN_JOURNAL_SCHEMA_VERSION, PlanRunJournal, PlanRunPipelineSource, apply_repo_fingerprint,
-    detect_repo_fingerprint, load_plan_resume_context, persist_plan_journal, plan_journal_path,
+    complete_pending_manual_step, detect_repo_fingerprint, load_plan_resume_context,
+    persist_plan_journal, plan_journal_path,
 };
 // Referenced only from the `#[cfg(test)]` submodules; gated to avoid an
 // unused-import error in non-test builds.
@@ -181,6 +182,7 @@ pub(crate) struct PlanRunArgs {
     pub dry_run: bool,
     pub chunked: bool,
     pub resume: Option<String>,
+    pub complete_manual_step: Option<usize>,
     pub cd: Option<String>,
     pub no_fs_sandbox: bool,
     pub current_depth: u32,
@@ -210,6 +212,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         dry_run,
         chunked,
         resume,
+        complete_manual_step,
         cd,
         no_fs_sandbox,
         current_depth,
@@ -312,6 +315,17 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         return Ok(PlanRunOutcome::default());
     }
 
+    if let Some(step_id) = complete_manual_step {
+        if !explicit_resume {
+            bail!("--complete-manual-step requires --resume");
+        }
+        complete_pending_manual_step(&plan, &workflow_path, &journal_path, step_id)?;
+        eprintln!(
+            "csa plan: marked manual step {step_id} complete in journal {}",
+            journal_path.display()
+        );
+    }
+
     let completion_snapshot =
         plan_cmd_completion::PlanCompletionSnapshot::capture(&plan.name, &project_root);
     let current_repo_fingerprint = detect_repo_fingerprint(&project_root);
@@ -405,10 +419,30 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
     if journal.status == "manual-handoff" {
         apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
         persist_plan_journal(&journal_path, &journal)?;
+        let completed_steps: std::collections::HashSet<usize> =
+            journal.completed_steps.iter().copied().collect();
+        let resume_cmd = plan
+            .steps
+            .iter()
+            .find(|step| !completed_steps.contains(&step.id))
+            .map(|step| {
+                plan_cmd_flow::format_manual_step_resume_command(
+                    &project_root,
+                    &workflow_path,
+                    Some(&journal_path),
+                    step.id,
+                )
+            })
+            .unwrap_or_else(|| {
+                plan_cmd_flow::format_plan_resume_command(
+                    &project_root,
+                    &workflow_path,
+                    Some(&journal_path),
+                )
+            });
         eprintln!(
-            "Workflow '{}' paused for manual handoff. Complete the requested main-agent action, then resume with `csa plan run --sa-mode true --resume {}`.",
-            plan.name,
-            journal_path.display()
+            "Workflow '{}' paused for manual handoff. Complete the requested main-agent action, then resume with `{}`.",
+            plan.name, resume_cmd
         );
         return Ok(PlanRunOutcome::default());
     }

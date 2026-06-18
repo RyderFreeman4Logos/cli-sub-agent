@@ -17,8 +17,8 @@ use super::plan_cmd_assignment::{
 };
 use super::plan_cmd_exec::{StepExecutionOutcome, execute_bash_step, run_with_heartbeat};
 use super::plan_cmd_flow::{
-    OrchestratorHandoff, find_next_step, format_orchestrator_message, format_plan_resume_command,
-    orchestrator_handoff_mode,
+    OrchestratorHandoff, find_next_step, format_manual_step_resume_command,
+    format_orchestrator_message, format_plan_resume_command, orchestrator_handoff_mode,
 };
 use super::plan_cmd_tier_failover::{TierFailoverParams, execute_csa_step_with_tier_failover};
 use super::{
@@ -202,10 +202,11 @@ pub(super) async fn execute_plan_with_journal(
             if matches!(handoff_mode, OrchestratorHandoff::ManualResume)
                 && let Some(next_step) = find_next_step(step, &plan.steps)
             {
-                let cmd = format_plan_resume_command(
+                let cmd = format_manual_step_resume_command(
                     run_ctx.project_root,
                     run_ctx.workflow_path,
                     run_ctx.journal_path,
+                    step.id,
                 );
                 let required = matches!(next_step.on_fail, FailAction::Abort);
                 println!("MANUAL_STEP_RESUME: {cmd}");
