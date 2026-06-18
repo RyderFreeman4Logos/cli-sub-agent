@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::HashMap;
-use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
+use std::path::Path;
+use std::sync::{Arc, Barrier};
+use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
 fn manual_handoff_plan() -> ExecutionPlan {
     ExecutionPlan {
@@ -35,6 +37,99 @@ fn manual_handoff_plan() -> ExecutionPlan {
                 workspace_access: None,
             },
         ],
+    }
+}
+
+fn write_manual_handoff_workflow(project_root: &Path) -> std::path::PathBuf {
+    write_manual_handoff_workflow_with_manual_step_id(project_root, 1)
+}
+
+fn write_manual_handoff_append_workflow(project_root: &Path) -> std::path::PathBuf {
+    let workflow_path = project_root.join("workflow.toml");
+    std::fs::write(
+        &workflow_path,
+        r#"[workflow]
+name = "manual-handoff"
+
+[[workflow.steps]]
+id = 1
+title = "manual-step"
+tool = "manual"
+prompt = """
+Use mktsk in the main agent, then resume.
+"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
+title = "append-after-manual"
+tool = "bash"
+prompt = '''
+```bash
+sleep 0.1
+printf 'continued\n' >> continued.txt
+```
+'''
+on_fail = "abort"
+"#,
+    )
+    .unwrap();
+    workflow_path
+}
+
+fn write_manual_handoff_workflow_with_manual_step_id(
+    project_root: &Path,
+    manual_step_id: usize,
+) -> std::path::PathBuf {
+    let workflow_path = project_root.join("workflow.toml");
+    std::fs::write(
+        &workflow_path,
+        format!(
+            r#"[workflow]
+name = "manual-handoff"
+
+[[workflow.steps]]
+id = {manual_step_id}
+title = "manual-step"
+tool = "manual"
+prompt = """
+Use mktsk in the main agent, then resume.
+"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
+title = "continue-after-manual"
+tool = "bash"
+prompt = '''
+```bash
+printf 'continued\n' > continued.txt
+```
+'''
+on_fail = "abort"
+"#,
+        ),
+    )
+    .unwrap();
+    workflow_path
+}
+
+fn plan_run_args(project_root: &Path, workflow_path: &Path) -> PlanRunArgs {
+    PlanRunArgs {
+        file: Some(workflow_path.display().to_string()),
+        pattern: None,
+        vars: vec![],
+        tool_override: None,
+        model_spec_override: None,
+        dry_run: false,
+        chunked: false,
+        resume: None,
+        complete_manual_step: None,
+        cd: Some(project_root.display().to_string()),
+        no_fs_sandbox: false,
+        current_depth: 0,
+        pipeline_source: PlanRunPipelineSource::DirectPlanRun,
+        startup_env: crate::startup_env::StartupSubtreeEnv::default(),
     }
 }
 
@@ -73,6 +168,170 @@ async fn execute_plan_stops_after_manual_handoff() {
         "manual handoff should not mark the step completed"
     );
     assert!(!tmp.path().join("should-not-run").exists());
+}
+
+#[tokio::test]
+async fn handle_plan_run_complete_manual_step_continues_after_pending_handoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = write_manual_handoff_workflow(tmp.path());
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let paused_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(paused_journal.status, "manual-handoff");
+    assert!(
+        !paused_journal.completed_steps.contains(&1),
+        "manual step must remain pending until the caller explicitly completes it"
+    );
+    assert!(
+        !tmp.path().join("continued.txt").exists(),
+        "workflow must not advance past manual handoff on the first run"
+    );
+
+    let mut resume_args = plan_run_args(tmp.path(), &workflow_path);
+    resume_args.file = None;
+    resume_args.resume = Some(journal_path.display().to_string());
+    resume_args.complete_manual_step = Some(1);
+
+    handle_plan_run(resume_args)
+        .await
+        .expect("explicit manual completion should continue the workflow");
+
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("continued.txt")).unwrap(),
+        "continued\n"
+    );
+    let completed_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(completed_journal.status, "completed");
+    assert!(completed_journal.completed_steps.contains(&1));
+    assert!(completed_journal.completed_steps.contains(&2));
+}
+
+#[tokio::test]
+async fn handle_plan_run_concurrent_complete_manual_step_runs_post_manual_steps_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = write_manual_handoff_append_workflow(tmp.path());
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let first_args = {
+        let mut args = plan_run_args(tmp.path(), &workflow_path);
+        args.file = None;
+        args.resume = Some(journal_path.display().to_string());
+        args.complete_manual_step = Some(1);
+        args
+    };
+    let barrier = Arc::new(Barrier::new(3));
+    let first_barrier = Arc::clone(&barrier);
+    let first = std::thread::spawn(move || {
+        first_barrier.wait();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_plan_run(first_args))
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second_args = {
+        let mut args = plan_run_args(tmp.path(), &workflow_path);
+        args.file = None;
+        args.resume = Some(journal_path.display().to_string());
+        args.complete_manual_step = Some(1);
+        args
+    };
+    let second = std::thread::spawn(move || {
+        second_barrier.wait();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_plan_run(second_args))
+    });
+
+    barrier.wait();
+    let first_result = first.join().expect("first resume thread should not panic");
+    let second_result = second
+        .join()
+        .expect("second resume thread should not panic");
+    let success_count = usize::from(first_result.is_ok()) + usize::from(second_result.is_ok());
+    assert_eq!(
+        success_count, 1,
+        "exactly one concurrent manual completion should own the journal transition; first={first_result:?}, second={second_result:?}"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("continued.txt")).unwrap(),
+        "continued\n",
+        "post-manual workflow steps must not rerun after a stale completion attempt"
+    );
+    let completed_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(completed_journal.status, "completed");
+    assert!(completed_journal.completed_steps.contains(&1));
+    assert!(completed_journal.completed_steps.contains(&2));
+}
+
+#[tokio::test]
+async fn handle_plan_run_complete_manual_step_accepts_zero_step_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = write_manual_handoff_workflow_with_manual_step_id(tmp.path(), 0);
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at step-zero manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let mut resume_args = plan_run_args(tmp.path(), &workflow_path);
+    resume_args.file = None;
+    resume_args.resume = Some(journal_path.display().to_string());
+    resume_args.complete_manual_step = Some(0);
+
+    handle_plan_run(resume_args)
+        .await
+        .expect("step zero is a valid workflow step id and should complete explicitly");
+
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("continued.txt")).unwrap(),
+        "continued\n"
+    );
+    let completed_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(completed_journal.status, "completed");
+    assert!(completed_journal.completed_steps.contains(&0));
+    assert!(completed_journal.completed_steps.contains(&2));
+}
+
+#[tokio::test]
+async fn complete_manual_step_rejects_non_pending_step_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = write_manual_handoff_workflow(tmp.path());
+    let plan = plan_from_toml(&std::fs::read_to_string(&workflow_path).unwrap()).unwrap();
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let err = complete_pending_manual_step(&plan, &workflow_path, &journal_path, 2)
+        .expect_err("wrong step id must not complete the manual handoff");
+
+    assert!(
+        err.to_string().contains("pending step is 1"),
+        "unexpected error: {err:#}"
+    );
+    let journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(journal.status, "manual-handoff");
+    assert!(!journal.completed_steps.contains(&1));
+    assert!(!journal.completed_steps.contains(&2));
 }
 
 #[tokio::test]

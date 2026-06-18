@@ -54,6 +54,7 @@ fn plan_daemon_args(project_root: &Path) -> PlanRunArgs {
         dry_run: false,
         chunked: false,
         resume: None,
+        complete_manual_step: None,
         cd: Some(project_root.display().to_string()),
         no_fs_sandbox: false,
         current_depth: 0,

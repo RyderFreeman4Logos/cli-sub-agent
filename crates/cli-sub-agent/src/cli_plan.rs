@@ -49,6 +49,15 @@ pub enum PlanCommands {
         #[arg(long, conflicts_with = "file", conflicts_with = "pattern")]
         resume: Option<String>,
 
+        /// Mark the pending manual step complete before resuming
+        #[arg(
+            long,
+            value_name = "STEP_ID",
+            requires = "resume",
+            conflicts_with = "dry_run"
+        )]
+        complete_manual_step: Option<usize>,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
