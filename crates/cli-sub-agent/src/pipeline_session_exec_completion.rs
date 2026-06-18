@@ -48,6 +48,7 @@ pub(super) async fn complete_session_execution(
         inside_git_worktree,
         pre_run_workspace,
         pre_exec_snapshot,
+        timeout_diagnostics,
         sa_mode,
     } = input.plan;
     let merged_env_ref = (!merged_env.is_empty()).then_some(&merged_env);
@@ -166,6 +167,7 @@ pub(super) async fn complete_session_execution(
         transcript_artifacts,
         changed_paths: changed_paths.clone(),
         pre_exec_snapshot,
+        timeout_diagnostics,
         has_tool_calls,
         turn_count,
         output_tokens,
@@ -293,6 +295,7 @@ mod tests {
             inside_git_worktree: true,
             pre_run_workspace: Some(before),
             pre_exec_snapshot: None,
+            timeout_diagnostics: None,
             sa_mode: false,
         };
 

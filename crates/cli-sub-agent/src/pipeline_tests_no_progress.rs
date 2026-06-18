@@ -31,6 +31,7 @@ fn build_test_ctx<'a>(
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: None,
+        timeout_diagnostics: None,
         has_tool_calls: true,
         turn_count: 0,
         output_tokens: None,

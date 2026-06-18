@@ -44,6 +44,7 @@ pub(super) struct SessionRuntimeInput<'a> {
     pub(super) stream_mode: csa_process::StreamMode,
     pub(super) idle_timeout_seconds: u64,
     pub(super) initial_response_timeout_seconds: Option<u64>,
+    pub(super) wall_timeout: Option<std::time::Duration>,
     pub(super) memory_injection: Option<&'a MemoryInjectionOptions>,
     pub(super) global_config: Option<&'a GlobalConfig>,
     pub(super) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
@@ -82,6 +83,7 @@ pub(super) struct SessionCompletionPlan {
     pub(super) inside_git_worktree: bool,
     pub(super) pre_run_workspace: Option<crate::run_cmd::GitWorkspaceSnapshot>,
     pub(super) pre_exec_snapshot: Option<crate::pipeline_post_exec::PreExecutionSnapshot>,
+    pub(super) timeout_diagnostics: Option<crate::session_kill_diagnostics::TimeoutDiagnostics>,
     pub(super) sa_mode: bool,
 }
 
@@ -435,6 +437,13 @@ async fn prepare_session_runtime_inner(
             inside_git_worktree,
             pre_run_workspace,
             pre_exec_snapshot,
+            timeout_diagnostics: Some(
+                crate::session_kill_diagnostics::TimeoutDiagnostics::from_execution_options(
+                    input.wall_timeout.map(|timeout| timeout.as_secs().max(1)),
+                    input.idle_timeout_seconds,
+                    input.initial_response_timeout_seconds,
+                ),
+            ),
             sa_mode,
         },
     })

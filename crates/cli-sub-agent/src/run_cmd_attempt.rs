@@ -117,6 +117,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             request.cli_initial_response_timeout,
             request.cli_idle_timeout,
             request.no_idle_timeout,
+            request.run_timeout_seconds,
             tool_name_str,
         );
         let max_concurrent = request.global_config.max_concurrent(tool_name_str);

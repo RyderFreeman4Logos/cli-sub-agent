@@ -354,6 +354,7 @@ fn record_session_termination(
         &mut updated_result,
         Some(termination_reason),
         None,
+        None,
     ) {
         Ok(line) => line,
         Err(e) => {

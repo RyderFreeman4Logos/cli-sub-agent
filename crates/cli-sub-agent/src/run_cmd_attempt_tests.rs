@@ -720,10 +720,17 @@ fn resolve_attempt_initial_response_timeout_uses_fallback_tool_defaults() {
         None,
         None,
         false,
+        None,
         "gemini-cli",
     );
-    let codex_timeout =
-        resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
+    let codex_timeout = resolve_attempt_initial_response_timeout_seconds(
+        Some(&config),
+        None,
+        None,
+        false,
+        None,
+        "codex",
+    );
 
     assert_eq!(
         gemini_timeout,
@@ -741,11 +748,38 @@ fn resolve_attempt_initial_response_timeout_disables_codex_watchdog_for_ephemera
     let mut config = make_failover_config(&["codex/openai/o4-mini/high"]);
     config.resources.initial_response_timeout_seconds = Some(0);
 
-    let codex_timeout =
-        resolve_attempt_initial_response_timeout_seconds(Some(&config), None, None, false, "codex");
+    let codex_timeout = resolve_attempt_initial_response_timeout_seconds(
+        Some(&config),
+        None,
+        None,
+        false,
+        None,
+        "codex",
+    );
 
     assert_eq!(
         codex_timeout, None,
         "ephemeral codex runs must translate the disabled sentinel before execute_in"
+    );
+}
+
+#[test]
+fn resolve_attempt_initial_response_timeout_promotes_gemini_to_run_wall_timeout() {
+    let mut config = make_failover_config(&["gemini-cli/google/gemini-2.5-pro/high"]);
+    config.resources.initial_response_timeout_seconds = Some(45);
+
+    let gemini_timeout = resolve_attempt_initial_response_timeout_seconds(
+        Some(&config),
+        None,
+        None,
+        false,
+        Some(10_800),
+        "gemini-cli",
+    );
+
+    assert_eq!(
+        gemini_timeout,
+        Some(10_800),
+        "run --timeout must raise Gemini's initial-response watchdog so a long requested timeout is not silently cut short (#2039)"
     );
 }

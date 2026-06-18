@@ -240,6 +240,40 @@ fn compact_summary_includes_unknown_signal_evidence() {
 }
 
 #[test]
+fn compact_summary_includes_csa_timeout_effective_timeout_details() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let now = Utc::now();
+    let diagnostic = "CSA diagnostic: signal kill hint: csa_timeout (termination_reason=initial_response_timeout, CSA supervisor timeout metadata matched signal exit, requested_timeout_seconds=10800, effective_timeout_kind=initial_response_timeout, effective_timeout_seconds=45, effective_timeout_source=initial_response_timeout, idle_timeout_seconds=10800, initial_response_timeout_seconds=45). The recorded timeout is the concrete kill reason.";
+    let result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: "signal".to_string(),
+        exit_code: 137,
+        summary: diagnostic.to_string(),
+        tool: "gemini-cli".to_string(),
+        original_tool: None,
+        fallback_tool: None,
+        fallback_reason: None,
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(47),
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+        kill_hint: Some("csa_timeout".to_string()),
+        last_item: None,
+        fallback_chain: None,
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTWAITTIMEOUT", &result);
+
+    assert!(summary.contains("Kill hint: csa_timeout"));
+    assert!(summary.contains("termination_reason=initial_response_timeout"));
+    assert!(summary.contains("requested_timeout_seconds=10800"));
+    assert!(summary.contains("effective_timeout_seconds=45"));
+    assert!(summary.contains("effective_timeout_source=initial_response_timeout"));
+}
+
+#[test]
 fn compact_summary_labels_fix_loop_noop_from_review_meta() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let output_dir = temp.path().join("output");

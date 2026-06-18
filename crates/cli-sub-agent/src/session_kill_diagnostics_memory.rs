@@ -81,6 +81,7 @@ mod tests {
             Some("sigterm"),
             memory_soft_limit,
             None,
+            None,
             KillSignalObservations::default,
         )
         .expect("signal exit should produce diagnostic");
@@ -102,6 +103,7 @@ mod tests {
             143,
             Some("signal"),
             memory_soft_limit,
+            None,
             None,
             KillSignalObservations::default,
         )
