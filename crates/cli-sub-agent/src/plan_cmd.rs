@@ -484,20 +484,33 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         let recovery = recovery_snapshot
             .as_ref()
             .map(|snapshot| snapshot.recover_after_failure(&project_root));
-        let failure_report = plan_cmd_failure::PlanFailureReport::from_results(
-            &plan.name,
-            &workflow_path,
-            failure_summary.clone(),
-            &results,
-            recovery,
+        let verified_failure = plan_cmd_completion::verify_pr_bot_failure_side_effects(
+            plan_cmd_completion::PrBotFailureSideEffectInput {
+                workflow_name: &plan.name,
+                workflow_path: &workflow_path,
+                project_root: &project_root,
+                results: &results,
+                completed_steps: &journal.completed_steps,
+                vars: &journal.vars,
+                failure_summary: &failure_summary,
+            },
         );
+        let failure_error = verified_failure.unwrap_or_else(|| {
+            let failure_report = plan_cmd_failure::PlanFailureReport::from_results(
+                &plan.name,
+                &workflow_path,
+                failure_summary.clone(),
+                &results,
+                recovery,
+            );
+            plan_cmd_failure::PlanFailureError::new(failure_summary.clone(), failure_report)
+        });
+        let failure_summary = failure_error.to_string();
         journal.status = "failed".to_string();
         journal.last_error = Some(failure_summary.clone());
         apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
         persist_plan_journal(&journal_path, &journal)?;
-        return Err(
-            plan_cmd_failure::PlanFailureError::new(failure_summary, failure_report).into(),
-        );
+        return Err(failure_error.into());
     }
 
     let completion_summary = match plan_cmd_completion::verify_plan_completion(
