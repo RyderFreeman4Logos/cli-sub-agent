@@ -225,6 +225,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             stream_mode,
             idle_timeout_seconds,
             initial_response_timeout_seconds,
+            wall_timeout,
             memory_injection,
             global_config,
             pre_session_hook,

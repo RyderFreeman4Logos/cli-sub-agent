@@ -33,6 +33,7 @@ fn build_commit_no_op_ctx<'a>(
         transcript_artifacts: vec![],
         changed_paths: vec![],
         pre_exec_snapshot: None,
+        timeout_diagnostics: None,
         has_tool_calls: false,
         turn_count: 0,
         output_tokens: None,

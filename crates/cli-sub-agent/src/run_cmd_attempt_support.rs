@@ -90,15 +90,17 @@ pub(crate) fn resolve_attempt_initial_response_timeout_seconds(
     cli_initial_response_timeout: Option<u64>,
     cli_idle_timeout: Option<u64>,
     no_idle_timeout: bool,
+    wall_timeout: Option<u64>,
     tool_name: &str,
 ) -> Option<u64> {
     if no_idle_timeout {
         None
     } else {
-        pipeline::resolve_initial_response_timeout_for_tool(
+        pipeline::resolve_effective_initial_response_timeout_for_tool(
             config,
             cli_initial_response_timeout,
             cli_idle_timeout,
+            wall_timeout,
             tool_name,
         )
     }

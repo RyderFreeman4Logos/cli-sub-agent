@@ -594,6 +594,7 @@ fn forged_child_writable_memory_soft_limit_artifact_stays_unknown() {
         Some("signal"),
         memory_soft_limit,
         None,
+        None,
         KillSignalObservations::default,
     )
     .expect("signal exit should produce diagnostic");

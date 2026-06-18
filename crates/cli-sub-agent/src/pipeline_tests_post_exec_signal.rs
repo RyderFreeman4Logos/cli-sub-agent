@@ -57,6 +57,7 @@ async fn process_execution_result_persists_signal_kill_hint() {
         transcript_artifacts: Vec::new(),
         changed_paths: Vec::new(),
         pre_exec_snapshot: None,
+        timeout_diagnostics: None,
         has_tool_calls: true,
         turn_count: 1,
         output_tokens: None,

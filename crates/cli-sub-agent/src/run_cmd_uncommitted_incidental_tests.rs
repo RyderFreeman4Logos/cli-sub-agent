@@ -39,6 +39,7 @@ async fn require_commit_recovery_uses_raw_exit_after_incidental_downgrade() {
         transcript_artifacts: Vec::new(),
         changed_paths: changed_paths.clone(),
         pre_exec_snapshot: None,
+        timeout_diagnostics: None,
         has_tool_calls: true,
         turn_count: 1,
         output_tokens: None,

@@ -4,16 +4,16 @@
 //! structured output parsing, hooks, and memory capture after tool execution.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tracing::{info, warn};
 
-use csa_config::{GlobalConfig, MemoryBackend, ProjectConfig};
-use csa_executor::{CODEX_EXEC_INITIAL_STALL_REASON, Executor};
+use csa_config::MemoryBackend;
+use csa_executor::CODEX_EXEC_INITIAL_STALL_REASON;
 use csa_hooks::{HookEvent, run_hooks_for_event};
-use csa_session::{
-    MetaSessionState, PhaseEvent, SessionArtifact, SessionPhase, SessionResult, save_session,
-};
+#[cfg(test)]
+use csa_session::SessionArtifact;
+use csa_session::{MetaSessionState, PhaseEvent, SessionPhase, SessionResult, save_session};
 #[cfg(test)]
 use csa_session::{load_result, save_result};
 
@@ -24,6 +24,9 @@ use crate::session_outcome::{
     EffectiveOutcome, classify_effective_session_outcome, incidental_downgrade_note,
     task_kind_from_task_type,
 };
+#[path = "pipeline_post_exec_context.rs"]
+mod context;
+pub(crate) use context::{PostExecContext, PreExecutionSnapshot};
 #[path = "pipeline_post_exec_audit.rs"]
 mod audit;
 
@@ -55,46 +58,6 @@ use helpers::{
     update_tool_state,
 };
 use signal::record_signal_session_metadata;
-/// All inputs needed for post-execution processing.
-pub(crate) struct PostExecContext<'a> {
-    pub executor: &'a Executor,
-    pub prompt: &'a str,
-    pub effective_prompt: &'a str,
-    pub task_type: Option<&'a str>,
-    pub readonly_project_root: bool,
-    pub project_root: &'a Path,
-    pub config: Option<&'a ProjectConfig>,
-    pub global_config: Option<&'a GlobalConfig>,
-    pub session_dir: PathBuf,
-    pub sessions_root: String,
-    pub execution_start_time: chrono::DateTime<chrono::Utc>,
-    pub hooks_config: &'a csa_hooks::HooksConfig,
-    pub memory_project_key: Option<String>,
-    pub provider_session_id: Option<String>,
-    pub events_count: u64,
-    pub transcript_artifacts: Vec<SessionArtifact>,
-    /// File paths changed during tool execution (empty for PreRun or when
-    /// git workspace snapshots are unavailable).
-    pub changed_paths: Vec<String>,
-    /// Fresh repo baseline captured immediately before the current execution.
-    pub pre_exec_snapshot: Option<PreExecutionSnapshot>,
-    /// Whether the transport observed any tool calls during execution.
-    pub has_tool_calls: bool,
-    /// Number of agent conversation turns observed in this run (one per
-    /// `AgentMessage` event). `0` means the transport did not parse streaming
-    /// events; `process_execution_result` falls back to `+= 1` to preserve the
-    /// legacy "one increment per csa run" semantics.
-    pub turn_count: u32,
-    pub output_tokens: Option<u64>,
-    /// Whether this session is running in SA (sub-agent / autonomous) mode.
-    pub sa_mode: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreExecutionSnapshot {
-    pub head: String,
-    pub porcelain: Option<String>,
-}
 
 /// Process the results of tool execution: update session, persist artifacts, fire hooks.
 ///
@@ -420,6 +383,7 @@ pub(crate) async fn process_execution_result(
         ctx.executor.tool_name(),
         &mut session_result,
         result.terminal_reason.as_deref(),
+        ctx.timeout_diagnostics.as_ref(),
         Some(&mut result.stderr_output),
     ) {
         warn!("Failed to save session result: {}", e);

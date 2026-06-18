@@ -12,6 +12,8 @@ use csa_session::{
 
 #[path = "session_kill_diagnostics_memory.rs"]
 mod memory;
+#[path = "session_kill_diagnostics_timeout.rs"]
+mod timeout;
 
 #[cfg(target_os = "linux")]
 #[path = "session_kill_diagnostics_cgroup.rs"]
@@ -25,6 +27,7 @@ use child_timeout::{
     truncate_one_line,
 };
 use memory::read_memory_soft_limit_diagnostic;
+pub(crate) use timeout::TimeoutDiagnostics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MemInfo {
@@ -107,6 +110,7 @@ pub(crate) struct KillDiagnostic {
     pub(crate) terminal_reason: Option<String>,
     pub(crate) child_timeout: Option<ChildTimeoutProvenance>,
     pub(crate) memory_soft_limit: Option<MemorySoftLimitKillDiagnostic>,
+    pub(crate) timeout: Option<TimeoutDiagnostics>,
 }
 
 impl KillDiagnostic {
@@ -120,6 +124,9 @@ impl KillDiagnostic {
         });
         if self.hint == KillHint::CsaTimeout {
             details.push("CSA supervisor timeout metadata matched signal exit".to_string());
+            if let Some(timeout) = &self.timeout {
+                details.extend(timeout.detail_parts(self.terminal_reason.as_deref()));
+            }
             return details;
         }
         if let Some(event) = &self.memory_soft_limit {
@@ -264,6 +271,7 @@ pub(crate) fn diagnose_signal_kill(
         session_id,
         session_dir,
         None,
+        None,
     )
 }
 
@@ -274,6 +282,7 @@ fn diagnose_signal_kill_with_artifact_window(
     session_id: &str,
     session_dir: Option<&Path>,
     artifact_not_before: Option<&chrono::DateTime<chrono::Utc>>,
+    timeout: Option<&TimeoutDiagnostics>,
 ) -> Option<KillDiagnostic> {
     let child_timeout = session_dir.and_then(|dir| detect_child_timeout_provenance(dir, exit_code));
     let memory_soft_limit =
@@ -283,6 +292,7 @@ fn diagnose_signal_kill_with_artifact_window(
         terminal_reason,
         memory_soft_limit,
         child_timeout,
+        timeout.cloned(),
         || collect_signal_observations(tool_name, session_id),
     )
 }
@@ -312,7 +322,14 @@ fn diagnose_signal_kill_with_child_timeout(
     child_timeout: Option<ChildTimeoutProvenance>,
     collect: impl FnOnce() -> KillSignalObservations,
 ) -> Option<KillDiagnostic> {
-    diagnose_signal_kill_with_events(exit_code, terminal_reason, None, child_timeout, collect)
+    diagnose_signal_kill_with_events(
+        exit_code,
+        terminal_reason,
+        None,
+        child_timeout,
+        None,
+        collect,
+    )
 }
 
 fn diagnose_signal_kill_with_events(
@@ -320,6 +337,7 @@ fn diagnose_signal_kill_with_events(
     terminal_reason: Option<&str>,
     memory_soft_limit: Option<MemorySoftLimitKillDiagnostic>,
     child_timeout: Option<ChildTimeoutProvenance>,
+    timeout: Option<TimeoutDiagnostics>,
     collect: impl FnOnce() -> KillSignalObservations,
 ) -> Option<KillDiagnostic> {
     if !matches!(exit_code, 137 | 143) {
@@ -332,6 +350,7 @@ fn diagnose_signal_kill_with_events(
             terminal_reason: normalize_terminal_reason(terminal_reason),
             child_timeout: None,
             memory_soft_limit: None,
+            timeout,
         });
     }
     if let Some(memory_soft_limit) = memory_soft_limit {
@@ -341,6 +360,7 @@ fn diagnose_signal_kill_with_events(
             terminal_reason: normalize_terminal_reason(terminal_reason),
             child_timeout: None,
             memory_soft_limit: Some(memory_soft_limit),
+            timeout: None,
         });
     }
     Some(classify_signal_kill(
@@ -372,6 +392,7 @@ pub(crate) fn save_result_with_signal_diagnostic(
     tool_name: &str,
     result: &mut SessionResult,
     terminal_reason: Option<&str>,
+    timeout: Option<&TimeoutDiagnostics>,
     stderr_output: Option<&mut String>,
 ) -> Result<Option<String>> {
     let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).ok();
@@ -382,6 +403,7 @@ pub(crate) fn save_result_with_signal_diagnostic(
         &session.meta_session_id,
         session_dir.as_deref(),
         Some(&result.started_at),
+        timeout,
     );
     let diagnostic_line = diagnostic.as_ref().and_then(KillDiagnostic::stderr_line);
     if let Some(line) = &diagnostic_line {
@@ -446,6 +468,7 @@ pub(crate) fn signal_toml(
         session_id,
         Some(session_dir),
         Some(&result.started_at),
+        None,
     );
     let diagnostic_last_item = diagnostic.as_ref().and_then(KillDiagnostic::last_item);
     let last_item = diagnostic_last_item
@@ -512,6 +535,7 @@ fn classify_signal_kill(
             terminal_reason,
             child_timeout: Some(child_timeout),
             memory_soft_limit: None,
+            timeout: None,
         };
     } else {
         KillHint::UnknownSignal
@@ -523,6 +547,7 @@ fn classify_signal_kill(
         terminal_reason,
         child_timeout: None,
         memory_soft_limit: None,
+        timeout: None,
     }
 }
 
@@ -614,3 +639,7 @@ fn kb_to_mb(kb: u64) -> u64 {
 #[cfg(test)]
 #[path = "session_kill_diagnostics_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_kill_diagnostics_timeout_tests.rs"]
+mod timeout_tests;
