@@ -728,9 +728,10 @@ mkdir -p "${SAVE_DIR}" || { echo "create mktd save output dir failed" >&2; exit 
 TODO_ARTIFACT="${SAVE_DIR}/TODO.md"
 SPEC_ARTIFACT="${SAVE_DIR}/spec.toml"
 EPIC_ARTIFACT="${SAVE_DIR}/epic-plan.toml"
+FENCE=$(printf '\140\140\140')
 printf '%s\n' "${FINAL_TODO}" > "${TODO_ARTIFACT}" || { echo "write TODO artifact failed" >&2; exit 1; }
-# Extract epic-plan.toml if present in FINAL_TODO; csa todo persist writes it to todo state.
-EPIC_PLAN=$(printf '%s\n' "${FINAL_TODO}" | sed -n '/^```epic-plan.toml$/,/^```$/p' | sed '1d;$d')
+# Extract epic-plan.toml; persist writes it to todo state.
+EPIC_PLAN=$(printf '%s\n' "${FINAL_TODO}" | awk -v s="${FENCE}epic-plan.toml" -v e="${FENCE}" '$0 == s { p=1; next } p && $0 == e { p=0; next } p { print }')
 EPIC_ARGS=()
 if [[ -n "${EPIC_PLAN:-}" ]]; then
   printf '%s\n' "${EPIC_PLAN}" > "${EPIC_ARTIFACT}" || { echo "write epic-plan.toml artifact failed" >&2; exit 1; }
@@ -748,7 +749,7 @@ case "${LOWER_SPEC_LINE}" in
   '<!-- csa:section:'*) SPEC_MARKER_KIND="CSA section marker" ;;
   '<!--'*) SPEC_MARKER_KIND="HTML marker" ;;
   '<!doctype html'*|'<html'*) SPEC_MARKER_KIND="HTML document marker" ;;
-  '```'*) SPEC_MARKER_KIND="Markdown code fence" ;;
+  "${FENCE}"*) SPEC_MARKER_KIND="Markdown code fence" ;;
 esac
 if [[ -n "${SPEC_MARKER_KIND}" ]]; then
   printf 'spec artifact-shape error: expected TOML spec.toml; first marker kind: %s\nSpec artifact path: %s\n' "${SPEC_MARKER_KIND}" "${SPEC_ARTIFACT}" >&2
