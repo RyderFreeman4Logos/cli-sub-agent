@@ -122,6 +122,12 @@ pub(crate) fn render_wait_result_summary(
         lines.push(format!("Review verdict: {verdict}"));
     }
 
+    if let Some(reason) =
+        crate::session_unavailable_reason::review_unavailable_reason_label(session_dir)
+    {
+        lines.push(format!("Unavailable reason: {reason}"));
+    }
+
     if let Some(failover) = format_failover_chain_label(session_dir, result) {
         lines.push(format!("Failover: {failover}"));
     }
@@ -228,6 +234,7 @@ fn render_wait_result_json(
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
         "review_verdict": read_review_verdict_label(session_dir, result),
+        "unavailable_reason": crate::session_unavailable_reason::review_unavailable_reason_label(session_dir),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
         "kill_diagnostics": result.kill_diagnostics.as_ref(),

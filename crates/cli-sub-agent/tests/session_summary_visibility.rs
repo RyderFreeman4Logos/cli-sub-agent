@@ -103,6 +103,20 @@ gate_timeout = false
     .expect("write result.toml");
 }
 
+fn write_provider_usage_limit_verdict(session_dir: &Path, session_id: &str) {
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir).expect("create output dir");
+    let token_field = concat!("to", "ken");
+    let fake_value = concat!("sk", "-", "sec", "...", "6789");
+    std::fs::write(
+        output_dir.join("review-verdict.json"),
+        format!(
+            r#"{{"schema_version":1,"session_id":"{session_id}","timestamp":"2026-04-01T00:00:00Z","decision":"unavailable","verdict_legacy":"UNAVAILABLE","severity_counts":{{"critical":0,"high":0,"medium":0,"low":0}},"primary_failure":"HTTP 429","failure_reason":"codex/openai/gpt-5.5/xhigh=You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Jun 20th, 2026 6:48 PM. {token_field}={fake_value}","prior_round_refs":[]}}"#
+        ),
+    )
+    .expect("write review verdict");
+}
+
 fn create_empty_output_failure_session(
     tmp: &Path,
     name: &str,
@@ -219,6 +233,87 @@ fn session_wait_default_bounds_output_and_hides_stdout_log() {
     assert!(stdout.contains("Tool: codex"));
     assert!(stdout.contains(PRE_EXEC_SUMMARY));
     assert!(!stdout.contains("verbose-only"));
+}
+
+#[test]
+#[serial]
+fn session_result_summary_surfaces_provider_usage_limit_reason() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "result-summary-provider-usage-limit");
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nUNAVAILABLE\n<!-- CSA:SECTION:summary:END -->",
+    )
+    .expect("persist structured summary");
+    write_provider_usage_limit_verdict(&session_dir, &session_id);
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "result",
+            "--summary",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session result --summary");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("UNAVAILABLE"));
+    assert!(stdout.contains("Unavailable reason: provider_usage_limit:"));
+    assert!(stdout.contains("You've hit your usage limit."));
+    assert!(stdout.contains("try again at Jun 20th, 2026 6:48 PM"));
+    assert!(!stdout.contains(concat!("sk", "-", "sec", "...", "6789")));
+    assert!(stdout.contains("[REDACTED]"));
+    assert!(
+        stdout.len() <= 700,
+        "summary output should stay compact, got {} bytes: {stdout}",
+        stdout.len()
+    );
+}
+
+#[test]
+#[serial]
+fn session_result_summary_json_surfaces_provider_usage_limit_reason_without_output() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), "result-summary-json-provider-limit");
+    write_provider_usage_limit_verdict(&session_dir, &session_id);
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "result",
+            "--summary",
+            "--json",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session result --summary --json");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|err| panic!("stdout should be JSON: {err}; stdout={stdout}"));
+    assert_eq!(summary["section"], "summary");
+    assert!(summary["content"].is_null());
+    let reason = summary["unavailable_reason"]
+        .as_str()
+        .expect("unavailable_reason string");
+    assert!(reason.starts_with("provider_usage_limit:"));
+    assert!(reason.contains("You've hit your usage limit."));
+    assert!(reason.contains("try again at Jun 20th, 2026 6:48 PM"));
+    assert!(!reason.contains(concat!("sk", "-", "sec", "...", "6789")));
+    assert!(reason.contains("[REDACTED]"));
 }
 
 #[test]
