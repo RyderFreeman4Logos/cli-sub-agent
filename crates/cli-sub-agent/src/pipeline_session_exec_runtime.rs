@@ -102,13 +102,18 @@ pub(super) async fn prepare_session_runtime(
     prepare_session_runtime_inner(input, session)
         .await
         .map_err(|err| {
+            let termination_reason = err
+                .downcast_ref::<crate::resource_admission_soft_limit::MemorySoftLimitAdmissionError>()
+                .map(|_| {
+                    crate::resource_admission_soft_limit::MemorySoftLimitAdmissionError::TERMINATION_REASON
+                });
             persist_pipeline_pre_exec_failure(
                 project_root,
                 session,
                 &tool_name,
                 err,
                 cleanup_guard,
-                None,
+                termination_reason,
             )
         })
 }
@@ -340,6 +345,14 @@ async fn prepare_session_runtime_inner(
             return Err(anyhow::anyhow!(msg));
         }
     };
+    crate::resource_admission_soft_limit::ensure_review_soft_limit_admission(
+        input.task_type,
+        input.executor.tool_name(),
+        execute_options
+            .sandbox
+            .as_ref()
+            .map(|sandbox| &sandbox.isolation_plan),
+    )?;
     crate::pipeline::ensure_tool_runtime_prerequisites(
         input.executor.tool_name(),
         crate::pipeline::resolved_filesystem_capability(&execute_options),
