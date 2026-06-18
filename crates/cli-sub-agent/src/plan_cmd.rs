@@ -41,6 +41,9 @@ mod plan_cmd_flow;
 #[path = "plan_cmd_failure.rs"]
 pub(crate) mod plan_cmd_failure;
 
+#[path = "plan_cmd_completion.rs"]
+pub(crate) mod plan_cmd_completion;
+
 #[path = "plan_cmd_assignment.rs"]
 mod plan_cmd_assignment;
 
@@ -185,6 +188,11 @@ pub(crate) struct PlanRunArgs {
     pub startup_env: StartupSubtreeEnv,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PlanRunOutcome {
+    pub(crate) completion_summary: Option<String>,
+}
+
 /// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
 ///
 /// Foreground entry point: runs the workflow synchronously in the calling
@@ -192,7 +200,7 @@ pub(crate) struct PlanRunArgs {
 /// `--resume`, the daemon-child path (after env priming), and any nested
 /// invocation detected by [`plan_cmd_daemon::dispatch`] (depth>0 / parent
 /// session env), which depend on the synchronous exit-code contract.
-pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
+pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome> {
     let PlanRunArgs {
         file,
         pattern,
@@ -301,9 +309,11 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
     // 6. Dry-run: print plan and exit
     if dry_run {
         print_plan(&plan, &cli_variables, config.as_ref());
-        return Ok(());
+        return Ok(PlanRunOutcome::default());
     }
 
+    let completion_snapshot =
+        plan_cmd_completion::PlanCompletionSnapshot::capture(&plan.name, &project_root);
     let current_repo_fingerprint = detect_repo_fingerprint(&project_root);
     let resume_context = load_plan_resume_context(
         &plan,
@@ -386,7 +396,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
                 r.exit_code
             );
         }
-        return Ok(());
+        return Ok(PlanRunOutcome::default());
     }
 
     // 8. Print summary
@@ -400,7 +410,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
             plan.name,
             journal_path.display()
         );
-        return Ok(());
+        return Ok(PlanRunOutcome::default());
     }
 
     if journal.status == "awaiting-user" {
@@ -410,7 +420,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
             "Workflow '{}' is awaiting user action. Re-run the workflow from the beginning after the requested remediation is complete.",
             plan.name
         );
-        return Ok(());
+        return Ok(PlanRunOutcome::default());
     }
 
     // 9. Warn about unsupported skips (loop_var)
@@ -456,12 +466,34 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
         );
     }
 
+    let completion_summary = match plan_cmd_completion::verify_plan_completion(
+        plan_cmd_completion::PlanCompletionInput {
+            workflow_name: &plan.name,
+            workflow_path: &workflow_path,
+            project_root: &project_root,
+            results: &results,
+            completed_steps: &journal.completed_steps,
+            vars: &journal.vars,
+            snapshot: &completion_snapshot,
+        },
+    ) {
+        Ok(summary) => summary,
+        Err(err) => {
+            let failure_summary = err.to_string();
+            journal.status = "failed".to_string();
+            journal.last_error = Some(failure_summary.clone());
+            apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
+            persist_plan_journal(&journal_path, &journal)?;
+            return Err(err.into());
+        }
+    };
+
     journal.status = "completed".to_string();
     journal.last_error = None;
     apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
     persist_plan_journal(&journal_path, &journal)?;
 
-    Ok(())
+    Ok(PlanRunOutcome { completion_summary })
 }
 
 fn enforce_plan_run_tier_bypass_gate(
