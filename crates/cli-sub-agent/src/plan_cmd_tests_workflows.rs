@@ -297,10 +297,13 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save""#,
             r#"TODO_ARTIFACT="${SAVE_DIR}/TODO.md""#,
             r#"SPEC_ARTIFACT="${SAVE_DIR}/spec.toml""#,
+            r#"FENCE=$(printf '\140\140\140')"#,
+            r#"awk -v s="${FENCE}epic-plan.toml" -v e="${FENCE}" '$0 == s"#,
             r#"FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}")"#,
             r#"LOWER_SPEC_LINE="${FIRST_SPEC_LINE,,}""#,
             r#"SPEC_MARKER_KIND="""#,
             r#"SPEC_MARKER_KIND="CSA section marker""#,
+            r#""${FENCE}"*) SPEC_MARKER_KIND="Markdown code fence" ;;"#,
             r#"spec artifact-shape error: expected TOML spec.toml"#,
             r#"first marker kind: %s"#,
             r#"Spec artifact path: %s"#,
@@ -321,6 +324,8 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             "csa todo save -t",
             r#"Artifact preview:"#,
             r#"sed -n '1,8p' "${SPEC_ARTIFACT}""#,
+            r#"sed -n '/^```epic-plan.toml$/,/^```$/p'"#,
+            r#"'```'*) SPEC_MARKER_KIND="Markdown code fence" ;;"#,
         ] {
             assert!(
                 !content.contains(forbidden),
