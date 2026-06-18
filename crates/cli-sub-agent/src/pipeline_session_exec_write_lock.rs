@@ -4,8 +4,7 @@ use anyhow::{Context, Result};
 use csa_lock::WorktreeWriteLock;
 use csa_session::{MetaSessionState, SessionPhase};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 pub(super) fn acquire_or_persist_failure(
     project_root: &Path,
@@ -35,7 +34,7 @@ pub(super) fn acquire_if_needed(
         return Ok(None);
     }
 
-    let worktree_root = resolve_worktree_lock_root(project_root)?;
+    let worktree_root = crate::worktree_lock_root::resolve_worktree_lock_root(project_root)?;
     let ancestor_session_ids = collect_lineage_session_ids(project_root, session)?;
     csa_lock::acquire_worktree_write_lock(
         &worktree_root,
@@ -61,48 +60,6 @@ pub(super) fn acquire_if_needed(
 /// acquires no lock and never contends.
 fn session_mutates_worktree(readonly_project_root: bool) -> bool {
     !readonly_project_root
-}
-
-fn resolve_worktree_lock_root(project_root: &Path) -> Result<PathBuf> {
-    if let Some(toplevel) = git_rev_parse_path(project_root, "--show-toplevel") {
-        return canonicalize_lock_root(&toplevel, "git worktree toplevel");
-    }
-
-    if let Some(common_dir) = git_rev_parse_path(project_root, "--git-common-dir") {
-        return canonicalize_lock_root(&common_dir, "git common dir");
-    }
-
-    canonicalize_lock_root(project_root, "project root")
-}
-
-fn canonicalize_lock_root(path: &Path, label: &str) -> Result<PathBuf> {
-    path.canonicalize()
-        .with_context(|| format!("failed to canonicalize {label} '{}'", path.display()))
-}
-
-fn git_rev_parse_path(project_root: &Path, arg: &str) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .arg("rev-parse")
-        .arg(arg)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(project_root.join(path))
-    }
 }
 
 fn collect_lineage_session_ids(

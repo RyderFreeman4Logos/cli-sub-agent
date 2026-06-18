@@ -42,24 +42,28 @@ type TerminalOutputEmitter<'a> = Box<
 type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
 
 fn session_has_live_execution(
-    project_root: &Path,
+    worktree_lock_root: Option<&Path>,
     session_dir: &Path,
     resolved_session_id: &str,
     result_session_id: &str,
 ) -> bool {
     session_has_terminal_process(session_dir)
-        || session_holds_worktree_write_lock(project_root, result_session_id)
+        || session_holds_worktree_write_lock(worktree_lock_root, result_session_id)
         || (resolved_session_id != result_session_id
-            && session_holds_worktree_write_lock(project_root, resolved_session_id))
+            && session_holds_worktree_write_lock(worktree_lock_root, resolved_session_id))
 }
 
-fn session_holds_worktree_write_lock(project_root: &Path, session_id: &str) -> bool {
-    match csa_lock::worktree_write_lock_is_held_by_session(project_root, session_id) {
+fn session_holds_worktree_write_lock(worktree_lock_root: Option<&Path>, session_id: &str) -> bool {
+    let Some(worktree_lock_root) = worktree_lock_root else {
+        return false;
+    };
+
+    match csa_lock::worktree_write_lock_is_held_by_session(worktree_lock_root, session_id) {
         Ok(held) => held,
         Err(error) => {
             tracing::debug!(
                 session_id,
-                project_root = %project_root.display(),
+                worktree_lock_root = %worktree_lock_root.display(),
                 error = %error,
                 "failed to probe live worktree write lock for session wait"
             );
@@ -128,6 +132,7 @@ pub(crate) fn handle_session_wait_with_emitters(
         .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
     let resume_target = csa_session::resolve_resume_target_from_dir(effective_root, &session_dir)?;
+    let worktree_lock_root = super::resolve_session_wait_worktree_lock_root(effective_root);
     let result_session_id = resume_target
         .as_ref()
         .map(|target| target.session_id.as_str())
@@ -174,6 +179,7 @@ pub(crate) fn handle_session_wait_with_emitters(
         result_session_id,
         observed_session_dir,
         wait_options.behavior,
+        worktree_lock_root.as_deref(),
         &[resolved.session_id.as_str(), result_session_id],
     ) {
         eprintln!("Session {} appears stale: {}", result_session_id, stale_err);
@@ -186,7 +192,7 @@ pub(crate) fn handle_session_wait_with_emitters(
 
     loop {
         let session_live = session_has_live_execution(
-            effective_root,
+            worktree_lock_root.as_deref(),
             observed_session_dir,
             &resolved.session_id,
             result_session_id,
@@ -461,7 +467,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
                 .unwrap_or_default();
             let session_alive = session_has_live_execution(
-                effective_root,
+                worktree_lock_root.as_deref(),
                 observed_session_dir,
                 &resolved.session_id,
                 result_session_id,
