@@ -19,6 +19,18 @@ new_tmp_dir() {
     printf '%s\n' "$dir"
 }
 
+run_without_local_git_env() {
+    local -a unset_args=()
+    local var
+
+    while IFS= read -r var; do
+        [ -n "$var" ] || continue
+        unset_args+=("-u" "$var")
+    done < <(git rev-parse --local-env-vars)
+
+    env "${unset_args[@]}" "$@"
+}
+
 write_fake_csa() {
     local bin_dir="$1"
     mkdir -p "$bin_dir"
@@ -51,9 +63,9 @@ SH
 setup_repo() {
     local repo="$1"
     mkdir -p "$repo"
-    git -C "$repo" init -q
-    git -C "$repo" config user.email "test@example.invalid"
-    git -C "$repo" config user.name "Monolith Test"
+    run_without_local_git_env git -C "$repo" init -q
+    run_without_local_git_env git -C "$repo" config user.email "test@example.invalid"
+    run_without_local_git_env git -C "$repo" config user.name "Monolith Test"
 }
 
 run_checker() {
@@ -65,7 +77,7 @@ run_checker() {
         MONOLITH_TOKEN_THRESHOLD=10 \
             MONOLITH_LINE_THRESHOLD=3 \
             TOKUIN_MODEL=gpt-4o \
-            "$CHECKER" "$@" --baseline "$baseline" --report-all
+            run_without_local_git_env "$CHECKER" "$@" --baseline "$baseline" --report-all
     )
 }
 
@@ -90,8 +102,8 @@ test_new_over_budget_file_hard_fails() {
     printf 'fn main() {}\n' >"$repo/src/new_over.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/new_over.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/new_over.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     PATH="$bin_dir:$PATH" assert_failure "new over-budget file hard-fails" \
         run_checker "$repo" "$baseline" --scope all
@@ -108,8 +120,8 @@ test_new_over_budget_markdown_file_hard_fails_across_scopes() {
     printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add docs/large.md
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add docs/large.md
+    run_without_local_git_env git -C "$repo" commit -q -m init
     PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in all scope" \
         run_checker "$repo" "$baseline" --scope all
 
@@ -120,11 +132,11 @@ test_new_over_budget_markdown_file_hard_fails_across_scopes() {
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
     printf 'baseline\n' >"$repo/README.md"
-    git -C "$repo" add README.md
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add README.md
+    run_without_local_git_env git -C "$repo" commit -q -m init
     mkdir -p "$repo/docs"
     printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
-    git -C "$repo" add docs/large.md
+    run_without_local_git_env git -C "$repo" add docs/large.md
     PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in staged scope" \
         run_checker "$repo" "$baseline" --scope staged
 
@@ -135,12 +147,12 @@ test_new_over_budget_markdown_file_hard_fails_across_scopes() {
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
     printf 'baseline\n' >"$repo/README.md"
-    git -C "$repo" add README.md
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add README.md
+    run_without_local_git_env git -C "$repo" commit -q -m init
     mkdir -p "$repo/docs"
     printf 'one\ntwo\nthree\nfour\n' >"$repo/docs/large.md"
-    git -C "$repo" add docs/large.md
-    git -C "$repo" commit -q -m add-doc
+    run_without_local_git_env git -C "$repo" add docs/large.md
+    run_without_local_git_env git -C "$repo" commit -q -m add-doc
     PATH="$bin_dir:$PATH" assert_failure "new over-budget markdown file hard-fails in range scope" \
         run_checker "$repo" "$baseline" --scope range --range HEAD~1..HEAD
 }
@@ -163,8 +175,8 @@ baseline_lines = 1
 issue = "1880"
 rationale = "test"
 EOF
-    git -C "$repo" add src/base.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/base.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     output="$(PATH="$bin_dir:$PATH" run_checker "$repo" "$baseline" --scope all)"
     grep -q 'WARNING baseline debt: src/base.rs' <<<"$output"
@@ -188,8 +200,8 @@ baseline_lines = 1
 issue = "1880"
 rationale = "test"
 EOF
-    git -C "$repo" add src/grown.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/grown.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     PATH="$bin_dir:$PATH" assert_failure "baselined growth hard-fails" \
         run_checker "$repo" "$baseline" --scope all
@@ -213,8 +225,8 @@ baseline_lines = 1
 issue = ""
 rationale = "test"
 EOF
-    git -C "$repo" add src/base.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/base.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     PATH="$bin_dir:$PATH" assert_failure "empty baseline issue hard-fails" \
         run_checker "$repo" "$baseline" --scope all
@@ -231,8 +243,8 @@ test_report_all_lists_multiple_offenders() {
     printf 'fn second() {}\n' >"$repo/src/second.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/first.rs src/second.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/first.rs src/second.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     set +e
     output="$(PATH="$bin_dir:$PATH" run_checker "$repo" "$baseline" --scope all 2>&1)"
@@ -253,8 +265,8 @@ test_tokenizer_unavailable_fails_closed() {
     printf 'fn main() {}\n' >"$repo/src/new_over.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/new_over.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/new_over.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     CSA_FAKE_FAIL=1 PATH="$bin_dir:$PATH" assert_failure "tokenizer unavailable fails closed" \
         run_checker "$repo" "$baseline" --scope all
@@ -270,8 +282,8 @@ test_tokenizer_unparsable_fails_closed() {
     printf 'fn main() {}\n' >"$repo/src/new_over.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/new_over.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/new_over.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     CSA_FAKE_BAD_JSON=1 PATH="$bin_dir:$PATH" assert_failure "tokenizer unparsable output fails closed" \
         run_checker "$repo" "$baseline" --scope all
@@ -287,8 +299,8 @@ test_small_unbaselined_file_skips_tokenizer() {
     printf 'x\n' >"$repo/src/small.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/small.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/small.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     CSA_FAKE_FAIL=1 PATH="$bin_dir:$PATH" run_checker "$repo" "$baseline" --scope all >/dev/null
 }
@@ -303,11 +315,31 @@ test_new_over_budget_test_file_hard_fails() {
     printf '#[test]\nfn it_works() {}\n' >"$repo/src/new_tests.rs"
     baseline="$repo/baseline.toml"
     printf '' >"$baseline"
-    git -C "$repo" add src/new_tests.rs
-    git -C "$repo" commit -q -m init
+    run_without_local_git_env git -C "$repo" add src/new_tests.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
 
     PATH="$bin_dir:$PATH" assert_failure "new over-budget test file hard-fails" \
         run_checker "$repo" "$baseline" --scope all
+}
+
+test_parent_git_environment_is_ignored() {
+    local repo bin_dir baseline
+    repo="$(new_tmp_dir)"
+    bin_dir="$(new_tmp_dir)"
+    setup_repo "$repo"
+    write_fake_csa "$bin_dir"
+    mkdir -p "$repo/src"
+    printf 'x\n' >"$repo/src/small.rs"
+    baseline="$repo/baseline.toml"
+    printf '' >"$baseline"
+    run_without_local_git_env git -C "$repo" add src/small.rs
+    run_without_local_git_env git -C "$repo" commit -q -m init
+
+    GIT_DIR="$ROOT/.git" \
+        GIT_WORK_TREE="$ROOT" \
+        GIT_INDEX_FILE="$ROOT/.git/index" \
+        PATH="$bin_dir:$PATH" \
+        run_checker "$repo" "$baseline" --scope all >/dev/null
 }
 
 test_new_over_budget_file_hard_fails
@@ -320,5 +352,6 @@ test_tokenizer_unparsable_fails_closed
 test_small_unbaselined_file_skips_tokenizer
 test_new_over_budget_test_file_hard_fails
 test_new_over_budget_markdown_file_hard_fails_across_scopes
+test_parent_git_environment_is_ignored
 
 echo "monolith-check-tests: PASS"

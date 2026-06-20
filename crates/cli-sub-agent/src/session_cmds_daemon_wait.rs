@@ -9,6 +9,8 @@ use std::time::{Duration, Instant, SystemTime};
 mod completion;
 #[path = "session_cmds_daemon_wait_core.rs"]
 mod core;
+#[path = "session_cmds_daemon_wait_liveness.rs"]
+mod liveness;
 #[path = "session_cmds_daemon_wait_lock.rs"]
 mod lock;
 #[path = "session_cmds_daemon_wait_next_step.rs"]
@@ -17,6 +19,8 @@ mod next_step;
 mod result_loader;
 #[path = "session_cmds_daemon_wait_summary.rs"]
 mod summary;
+#[path = "session_cmds_daemon_wait_target.rs"]
+mod target;
 #[path = "session_cmds_daemon_wait_types.rs"]
 mod types;
 // Re-export the memory warning exit code constant for other modules

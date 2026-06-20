@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{ReviewDecision, ToolName};
+use csa_session::{TaskContext, ToolState};
 use serde::Deserialize;
 
 use crate::cli::ReviewArgs;
@@ -16,6 +17,8 @@ use super::post_review::CONFIRM_THEN_FIX_FINDING_ACTION;
 #[path = "review_cmd_fix_finding_prompt.rs"]
 mod prompt;
 use prompt::{build_fix_finding_prompt, resolve_fix_finding_prompt};
+
+const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FixFindingRoute {
@@ -85,6 +88,7 @@ pub(crate) async fn handle_fix_finding(
 
     let caller_prompt = resolve_fix_finding_prompt(&args)?;
     let prompt = build_fix_finding_prompt(&caller_prompt);
+    let fix_session_id = create_fix_finding_session(project_root, &route)?;
     let stream_mode =
         super::resolve::resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
     let idle_timeout_seconds = crate::pipeline::resolve_effective_idle_timeout_seconds(
@@ -106,7 +110,7 @@ pub(crate) async fn handle_fix_finding(
     let fix_future = super::execute::execute_review_with_tier_filter(
         route.tool,
         prompt,
-        Some(route.session_id.clone()),
+        Some(fix_session_id),
         route.model.clone(),
         route.model_spec.clone(),
         None,
@@ -159,6 +163,44 @@ pub(crate) async fn handle_fix_finding(
          reason=\"fix-finding resumed reviewer session; the next review round must be independent\" -->"
     );
     Ok(result.execution.execution.exit_code)
+}
+
+fn create_fix_finding_session(project_root: &Path, route: &FixFindingRoute) -> Result<String> {
+    let description = format!("fix finding from review {}", route.session_id);
+    let mut session = csa_session::create_session_fresh(
+        project_root,
+        Some(&description),
+        Some(&route.session_id),
+        Some(route.tool.as_str()),
+    )
+    .with_context(|| {
+        format!(
+            "failed to create fix-finding session for review {}",
+            route.session_id
+        )
+    })?;
+    session.task_context = TaskContext {
+        task_type: Some(FIX_FINDING_TASK_TYPE.to_string()),
+        tier_name: None,
+    };
+    session.tools.insert(
+        route.tool.as_str().to_string(),
+        ToolState {
+            provider_session_id: Some(route.provider_session_id.clone()),
+            last_action_summary: description,
+            last_exit_code: 0,
+            updated_at: chrono::Utc::now(),
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    csa_session::save_session(&session).with_context(|| {
+        format!(
+            "failed to persist fix-finding session {} for review {}",
+            session.meta_session_id, route.session_id
+        )
+    })?;
+    Ok(session.meta_session_id)
 }
 
 pub(super) fn load_fix_finding_route(
@@ -379,236 +421,5 @@ fn route_recorded_thinking(route: &FixFindingRoute) -> Result<Option<String>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::path::Path;
-
-    use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig, ToolRestrictions};
-    use csa_core::types::ReviewDecision;
-    use csa_session::{ReviewSessionMeta, ToolState, write_review_meta};
-
-    use super::*;
-    use crate::test_session_sandbox::ScopedSessionSandbox;
-
-    fn project_config_with_codex() -> ProjectConfig {
-        let mut tools = HashMap::new();
-        for tool in csa_config::global::all_known_tools() {
-            tools.insert(
-                tool.as_str().to_string(),
-                ToolConfig {
-                    enabled: tool.as_str() == "codex",
-                    restrictions: None,
-                    suppress_notify: true,
-                    ..Default::default()
-                },
-            );
-        }
-        ProjectConfig {
-            schema_version: 1,
-            project: ProjectMeta::default(),
-            resources: ResourcesConfig {
-                min_free_memory_mb: 1,
-                ..Default::default()
-            },
-            acp: Default::default(),
-            session: Default::default(),
-            memory: Default::default(),
-            tools,
-            review: None,
-            debate: None,
-            tiers: HashMap::new(),
-            tier_mapping: HashMap::new(),
-            aliases: HashMap::new(),
-            tool_aliases: HashMap::new(),
-            preferences: None,
-            github: None,
-            hooks: Default::default(),
-            run: Default::default(),
-            execution: Default::default(),
-            session_wait: None,
-            preflight: Default::default(),
-            vcs: Default::default(),
-            filesystem_sandbox: Default::default(),
-        }
-    }
-
-    fn failed_review_meta(session_id: &str) -> ReviewSessionMeta {
-        ReviewSessionMeta {
-            session_id: session_id.to_string(),
-            head_sha: "HEAD".to_string(),
-            decision: ReviewDecision::Fail.as_str().to_string(),
-            verdict: "HAS_ISSUES".to_string(),
-            review_mode: Some("standard".to_string()),
-            status_reason: None,
-            routed_to: Some("codex/openai/gpt-5.5/xhigh".to_string()),
-            primary_failure: None,
-            failure_reason: None,
-            tool: "codex".to_string(),
-            scope: "range:main...HEAD".to_string(),
-            exit_code: 1,
-            fix_attempted: false,
-            fix_rounds: 0,
-            review_iterations: 1,
-            timestamp: chrono::Utc::now(),
-            diff_fingerprint: None,
-            fix_convergence: None,
-        }
-    }
-
-    fn write_suggestion(project_root: &Path, session_id: &str, extra: &str) -> std::path::PathBuf {
-        let session_dir = csa_session::get_session_dir(project_root, session_id).unwrap();
-        let path = session_dir.join("output").join("suggestion.toml");
-        std::fs::write(
-            &path,
-            format!(
-                "[suggestion]\n\
-                 action = \"confirm_then_fix_finding\"\n\
-                 session_id = \"{session_id}\"\n\
-                 tool = \"codex\"\n\
-                 model_spec = \"codex/openai/gpt-5.5/xhigh\"\n\
-                 {extra}"
-            ),
-        )
-        .unwrap();
-        path
-    }
-
-    fn create_failed_review_session(project_root: &Path, provider: Option<&str>) -> String {
-        let mut session =
-            csa_session::create_session(project_root, Some("failed review"), None, Some("codex"))
-                .unwrap();
-        if let Some(provider) = provider {
-            session.tools.insert(
-                "codex".to_string(),
-                ToolState {
-                    provider_session_id: Some(provider.to_string()),
-                    last_action_summary: "failed review".to_string(),
-                    last_exit_code: 1,
-                    updated_at: chrono::Utc::now(),
-                    tool_version: None,
-                    token_usage: None,
-                },
-            );
-            csa_session::save_session(&session).unwrap();
-        }
-        let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id)
-            .expect("session dir");
-        write_review_meta(&session_dir, &failed_review_meta(&session.meta_session_id)).unwrap();
-        session.meta_session_id
-    }
-
-    #[test]
-    fn fix_finding_route_uses_actual_fallback_model_spec() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
-        let session_id = create_failed_review_session(project_dir.path(), Some("provider-123"));
-        write_suggestion(
-            project_dir.path(),
-            &session_id,
-            "provider_session_id = \"provider-123\"\n",
-        );
-
-        let route = load_fix_finding_route(project_dir.path(), &session_id)
-            .expect("exact route should load");
-
-        assert_eq!(route.tool, ToolName::Codex);
-        assert_eq!(
-            route.model_spec.as_deref(),
-            Some("codex/openai/gpt-5.5/xhigh")
-        );
-        assert_eq!(route.provider_session_id, "provider-123");
-    }
-
-    #[test]
-    fn fix_finding_rejects_missing_provider_session_id() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
-        let session_id = create_failed_review_session(project_dir.path(), None);
-        write_suggestion(project_dir.path(), &session_id, "");
-
-        let err = load_fix_finding_route(project_dir.path(), &session_id)
-            .expect_err("missing provider session must fail closed");
-        let msg = format!("{err:#}");
-
-        assert!(msg.contains("provider_session_id"), "{msg}");
-        assert!(msg.contains("Refusing to cold-start"), "{msg}");
-    }
-
-    #[test]
-    fn fix_finding_rejects_legacy_resume_to_fix_suggestion() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
-        let session_id = create_failed_review_session(project_dir.path(), Some("provider-123"));
-        let session_dir = csa_session::get_session_dir(project_dir.path(), &session_id).unwrap();
-        std::fs::write(
-            session_dir.join("output").join("suggestion.toml"),
-            format!("[suggestion]\naction = \"resume_to_fix\"\nsession_id = \"{session_id}\"\n"),
-        )
-        .unwrap();
-
-        let err = load_fix_finding_route(project_dir.path(), &session_id)
-            .expect_err("legacy suggestion lacks exact route");
-        let msg = format!("{err:#}");
-
-        assert!(msg.contains("expected 'confirm_then_fix_finding'"), "{msg}");
-    }
-
-    #[test]
-    fn fix_finding_rejects_thinking_lock_drift() {
-        let route = FixFindingRoute {
-            session_id: "01TESTFIXFINDINGROUTE000".to_string(),
-            tool: ToolName::Codex,
-            model_spec: Some("codex/openai/gpt-5.5/xhigh".to_string()),
-            model: None,
-            thinking: None,
-            provider_session_id: "provider-123".to_string(),
-        };
-        let mut config = project_config_with_codex();
-        config
-            .tools
-            .get_mut("codex")
-            .expect("codex tool")
-            .thinking_lock = Some("high".to_string());
-
-        let err = validate_route_against_config(&route, Some(&config), &GlobalConfig::default())
-            .expect_err("thinking lock drift must fail closed");
-        let msg = format!("{err:#}");
-
-        assert!(msg.contains("thinking_lock"), "{msg}");
-        assert!(msg.contains("xhigh"), "{msg}");
-    }
-
-    #[test]
-    fn fix_finding_rejects_readonly_tool_route() {
-        let project_dir = tempfile::tempdir().unwrap();
-        let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
-        let session_id = create_failed_review_session(project_dir.path(), Some("provider-123"));
-        let route = FixFindingRoute {
-            session_id,
-            tool: ToolName::Codex,
-            model_spec: Some("codex/openai/gpt-5.5/xhigh".to_string()),
-            model: None,
-            thinking: None,
-            provider_session_id: "provider-123".to_string(),
-        };
-        let mut config = project_config_with_codex();
-        let codex = config.tools.get_mut("codex").expect("codex tool");
-        codex.restrictions = Some(ToolRestrictions {
-            allow_edit_existing_files: false,
-            allow_write_new_files: true,
-        });
-
-        let err = validate_fix_finding_route(
-            project_dir.path(),
-            &route,
-            Some(&config),
-            &GlobalConfig::default(),
-        )
-        .expect_err("readonly tool route must fail before reviewer resume");
-        let msg = format!("{err:#}");
-
-        assert!(msg.contains("--fix-finding"), "{msg}");
-        assert!(msg.contains("codex"), "{msg}");
-        assert!(msg.contains("allow_edit_existing_files=false"), "{msg}");
-    }
-}
+#[path = "review_cmd_fix_finding_tests.rs"]
+mod tests;
