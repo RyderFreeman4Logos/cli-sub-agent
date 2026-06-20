@@ -9,10 +9,12 @@ use super::{
 mod kill_diagnostics;
 #[path = "session_cmds_daemon_wait_summary_recovery_tests.rs"]
 mod recovery;
+#[path = "session_cmds_daemon_wait_summary_unavailable_tests.rs"]
+mod unavailable_reason;
 
 #[test]
 fn read_wait_output_log_tails_large_stdout_without_loading_prefix() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let stdout_log = temp.path().join("stdout.log");
     let prefix = vec![b'a'; WAIT_OUTPUT_MAX_BYTES as usize];
     let suffix = b"\nfinal visible line\n";
@@ -45,7 +47,7 @@ fn render_truncated_codex_json_tail_filters_agent_messages() {
 
 #[test]
 fn compact_summary_includes_usage_and_review_verdict() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -99,7 +101,7 @@ fn compact_summary_includes_usage_and_review_verdict() {
 
 #[test]
 fn compact_json_includes_token_cache_derived_fields() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let result = csa_session::SessionResult {
         post_exec_gate: None,
@@ -129,7 +131,7 @@ fn compact_json_includes_token_cache_derived_fields() {
 
 #[test]
 fn compact_summary_includes_nested_input_cache_details() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let result = csa_session::SessionResult {
         post_exec_gate: None,
@@ -156,7 +158,7 @@ fn compact_summary_includes_nested_input_cache_details() {
 
 #[test]
 fn compact_summary_prefers_post_exec_gate_failure_over_success_markdown() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -208,7 +210,7 @@ fn compact_summary_prefers_post_exec_gate_failure_over_success_markdown() {
 
 #[test]
 fn compact_summary_includes_unknown_signal_evidence() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let diagnostic = "CSA diagnostic: signal kill hint: unknown_signal (termination_reason=sigterm, MemAvailable: 12000 MB / MemTotal: 16000 MB, earlyoom not running, cgroup memory.events oom=0 oom_kill=0). No timeout or cgroup OOM evidence was found, and memory checks did not identify a concrete kill source; reason remains unknown.";
     let result = csa_session::SessionResult {
@@ -241,7 +243,7 @@ fn compact_summary_includes_unknown_signal_evidence() {
 
 #[test]
 fn compact_summary_includes_csa_timeout_effective_timeout_details() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let diagnostic = "CSA diagnostic: signal kill hint: csa_timeout (termination_reason=initial_response_timeout, CSA supervisor timeout metadata matched signal exit, requested_timeout_seconds=10800, effective_timeout_kind=initial_response_timeout, effective_timeout_seconds=45, effective_timeout_source=initial_response_timeout, idle_timeout_seconds=10800, initial_response_timeout_seconds=45). The recorded timeout is the concrete kill reason.";
     let result = csa_session::SessionResult {
@@ -275,7 +277,7 @@ fn compact_summary_includes_csa_timeout_effective_timeout_details() {
 
 #[test]
 fn compact_summary_labels_fix_loop_noop_from_review_meta() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -344,7 +346,7 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
 
 #[test]
 fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -400,7 +402,7 @@ fn compact_summary_uses_primary_failure_and_opaque_total_exhaustion_failover() {
 
 #[test]
 fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -432,7 +434,7 @@ fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
 
 #[test]
 fn compact_summary_includes_writer_uncommitted_warning() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let result = csa_session::SessionResult {
         post_exec_gate: None,
@@ -481,7 +483,7 @@ fn compact_summary_includes_writer_uncommitted_warning() {
 
 #[test]
 fn compact_summary_includes_large_diff_warning_block() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let now = Utc::now();
     let warning = csa_session::LargeDiffWarningReport {
         changed_files: 9,
@@ -512,7 +514,7 @@ fn compact_summary_includes_large_diff_warning_block() {
 
 #[test]
 fn compact_summary_does_not_print_pass_when_result_failed() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
@@ -546,7 +548,7 @@ fn compact_summary_does_not_print_pass_when_result_failed() {
 
 #[test]
 fn compact_summary_does_not_print_pass_for_failed_fix_convergence() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
     let output_dir = temp.path().join("output");
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(

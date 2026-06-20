@@ -42,6 +42,11 @@ pub(super) fn display_result_text(
     if let Some(summary) = result_display_summary(session_dir, envelope) {
         println!("Summary: {summary}");
     }
+    if let Some(reason) =
+        crate::session_unavailable_reason::review_unavailable_reason_label(session_dir)
+    {
+        println!("Unavailable reason: {reason}");
+    }
     if let Some(kill_hint) = envelope.kill_hint.as_deref() {
         println!("Kill hint: {kill_hint}");
     }
@@ -309,6 +314,8 @@ pub(super) fn display_summary_section(
     session_id: &str,
     json: bool,
 ) -> Result<()> {
+    let unavailable_reason =
+        crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
     let (section_id, content) = match csa_session::read_section(session_dir, "summary")? {
         Some(content) => ("summary", content),
         None => match csa_session::read_section(session_dir, "full")? {
@@ -322,17 +329,22 @@ pub(super) fn display_summary_section(
             "section": section_id,
             "content": content,
             "tokens": csa_session::estimate_tokens(&content),
+            "unavailable_reason": unavailable_reason,
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else if section_id == "full" {
         print_truncated_content(&content, FALLBACK_LINES);
+        print_unavailable_reason(unavailable_reason.as_deref());
     } else {
         println!("{content}");
+        print_unavailable_reason(unavailable_reason.as_deref());
     }
     Ok(())
 }
 
 fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
+    let unavailable_reason =
+        crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
     let output_log = session_dir.join("output.log");
     if output_log.is_file() {
         let content = fs::read_to_string(&output_log)?;
@@ -343,16 +355,37 @@ fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) ->
                     "source": "output.log",
                     "content": content.lines().take(FALLBACK_LINES).collect::<Vec<_>>().join("\n"),
                     "truncated": content.lines().count() > FALLBACK_LINES,
+                    "unavailable_reason": unavailable_reason,
                 });
                 println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
                 print_truncated_content(&content, FALLBACK_LINES);
+                print_unavailable_reason(unavailable_reason.as_deref());
             }
             return Ok(());
         }
     }
+    if let Some(reason) = unavailable_reason {
+        if json {
+            let payload = serde_json::json!({
+                "section": "summary",
+                "content": serde_json::Value::Null,
+                "unavailable_reason": reason,
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        } else {
+            print_unavailable_reason(Some(&reason));
+        }
+        return Ok(());
+    }
     eprintln!("No output found for session '{session_id}'");
     Ok(())
+}
+
+fn print_unavailable_reason(reason: Option<&str>) {
+    if let Some(reason) = reason {
+        println!("Unavailable reason: {reason}");
+    }
 }
 
 fn print_truncated_content(content: &str, max_lines: usize) {
