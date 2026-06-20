@@ -7,6 +7,17 @@ use std::path::Path;
 use super::{StructuredOutputOpts, TranscriptSummary};
 use crate::token_usage_display::{display_total_tokens, token_usage_json_value};
 
+#[path = "session_cmds_result_post_exec_gate.rs"]
+mod post_exec_gate;
+pub(super) use post_exec_gate::{
+    build_all_sections_json_payload, build_gate_aware_summary_content,
+    build_summary_section_json_payload, gate_summary_employee_section,
+    load_structured_post_exec_gate_report, structured_sections_with_gate_first,
+};
+use post_exec_gate::{
+    gate_failure_rendered_section, print_rendered_sections, rendered_fallback_sections,
+};
+
 pub(super) fn display_result_json(
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
@@ -177,8 +188,12 @@ pub(super) fn build_result_json_payload(
 ) -> Result<serde_json::Value> {
     let mut payload = serde_json::to_value(&result.envelope)?;
     if let Some(report) = result.envelope.post_exec_gate.as_ref() {
-        payload["summary"] =
-            serde_json::Value::String(csa_session::post_exec_gate_failure_summary(report));
+        let authoritative_summary = csa_session::post_exec_gate_failure_summary(report);
+        if result.envelope.summary.trim() != authoritative_summary.as_str() {
+            payload["superseded_employee_summary"] =
+                serde_json::Value::String(result.envelope.summary.clone());
+        }
+        payload["summary"] = serde_json::Value::String(authoritative_summary);
     }
     if let Some(sidecar) = result
         .manager_sidecar
@@ -316,13 +331,28 @@ pub(super) fn display_summary_section(
 ) -> Result<()> {
     let unavailable_reason =
         crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
+    let post_exec_gate = load_structured_post_exec_gate_report(session_dir);
     let (section_id, content) = match csa_session::read_section(session_dir, "summary")? {
         Some(content) => ("summary", content),
         None => match csa_session::read_section(session_dir, "full")? {
             Some(content) => ("full", content),
-            None => return display_summary_fallback(session_dir, session_id, json),
+            None => {
+                if let Some(report) = post_exec_gate.as_ref() {
+                    return display_gate_summary_override(report, None, unavailable_reason, json);
+                }
+                return display_summary_fallback(session_dir, session_id, json);
+            }
         },
     };
+
+    if let Some(report) = post_exec_gate.as_ref() {
+        return display_gate_summary_override(
+            report,
+            gate_summary_employee_section(section_id, content.as_str()),
+            unavailable_reason,
+            json,
+        );
+    }
 
     if json {
         let payload = serde_json::json!({
@@ -337,6 +367,26 @@ pub(super) fn display_summary_section(
         print_unavailable_reason(unavailable_reason.as_deref());
     } else {
         println!("{content}");
+        print_unavailable_reason(unavailable_reason.as_deref());
+    }
+    Ok(())
+}
+
+fn display_gate_summary_override(
+    report: &csa_session::PostExecGateReport,
+    employee_section: Option<(&str, &str)>,
+    unavailable_reason: Option<String>,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let payload =
+            build_summary_section_json_payload(employee_section, unavailable_reason, Some(report))?;
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!(
+            "{}",
+            build_gate_aware_summary_content(report, employee_section)
+        );
         print_unavailable_reason(unavailable_reason.as_deref());
     }
     Ok(())
@@ -442,52 +492,58 @@ pub(super) fn display_single_section(
 /// Show all sections in index order.
 pub(super) fn display_all_sections(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
     let sections = csa_session::read_all_sections(session_dir)?;
+    let post_exec_gate = load_structured_post_exec_gate_report(session_dir);
     if sections.is_empty() {
         let output_log = session_dir.join("output.log");
         if output_log.is_file() {
             let content = fs::read_to_string(&output_log)?;
             if !content.is_empty() {
                 if json {
-                    let payload = serde_json::json!({
-                        "sections": [{
-                            "section": "full",
-                            "content": content,
-                            "tokens": csa_session::estimate_tokens(&content),
-                        }]
-                    });
+                    let payload = if post_exec_gate.is_some() {
+                        build_all_sections_json_payload(&rendered_fallback_sections(
+                            content.as_str(),
+                            post_exec_gate.as_ref(),
+                        ))?
+                    } else {
+                        serde_json::json!({
+                            "sections": [{
+                                "section": "full",
+                                "content": content,
+                                "tokens": csa_session::estimate_tokens(&content),
+                            }]
+                        })
+                    };
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 } else {
+                    if let Some(report) = post_exec_gate.as_ref() {
+                        print_rendered_sections(&[gate_failure_rendered_section(report)]);
+                        println!();
+                    }
                     print!("{content}");
                 }
                 return Ok(());
             }
         }
+        if let Some(report) = post_exec_gate.as_ref() {
+            let gate_section = gate_failure_rendered_section(report);
+            if json {
+                let payload = build_all_sections_json_payload(&[gate_section])?;
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                print_rendered_sections(&[gate_section]);
+            }
+            return Ok(());
+        }
         eprintln!("No output found for session '{session_id}'");
         return Ok(());
     }
 
+    let rendered_sections = structured_sections_with_gate_first(&sections, post_exec_gate.as_ref());
     if json {
-        let json_sections: Vec<serde_json::Value> = sections
-            .iter()
-            .map(|(section, content)| {
-                serde_json::json!({
-                    "section": section.id,
-                    "title": section.title,
-                    "content": content,
-                    "tokens": section.token_estimate,
-                })
-            })
-            .collect();
-        let payload = serde_json::json!({ "sections": json_sections });
+        let payload = build_all_sections_json_payload(&rendered_sections)?;
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
-        for (i, (section, content)) in sections.iter().enumerate() {
-            if i > 0 {
-                println!();
-            }
-            println!("=== {} ({}) ===", section.title, section.id);
-            println!("{content}");
-        }
+        print_rendered_sections(&rendered_sections);
     }
     Ok(())
 }
