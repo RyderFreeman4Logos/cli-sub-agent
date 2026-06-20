@@ -95,8 +95,10 @@ pub(crate) fn handle_session_result(
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
-    let mut resolved_id = resolved.session_id;
-    let mut session_dir = resolved.sessions_dir.join(&resolved_id);
+    let wrapper_id = resolved.session_id.clone();
+    let wrapper_session_dir = resolved.sessions_dir.join(&wrapper_id);
+    let mut resolved_id = wrapper_id.clone();
+    let mut session_dir = wrapper_session_dir.clone();
 
     // Use the foreign project root for cross-project sessions, local otherwise.
     let effective_root = resolved
@@ -106,6 +108,7 @@ pub(crate) fn handle_session_result(
     let is_cross_project = resolved.foreign_project_root.is_some();
 
     let resume_target = csa_session::resolve_resume_target_from_dir(effective_root, &session_dir)?;
+    let follows_resume_target = resume_target.is_some();
     if let Some(target) = resume_target {
         resolved_id = target.session_id;
         session_dir = target.session_dir;
@@ -124,15 +127,28 @@ pub(crate) fn handle_session_result(
             }
         };
 
-    if let Err(err) = ensure_terminal_result_for_dead_active_session(
-        effective_root,
-        &resolved_id,
-        "session result",
-    ) {
+    let handoff_blocks_target_reconcile = follows_resume_target
+        && crate::session_resume_handoff::resume_handoff_blocks_target_reconcile(
+            &wrapper_session_dir,
+            &session_dir,
+        );
+    if !handoff_blocks_target_reconcile
+        && let Err(err) = ensure_terminal_result_for_dead_active_session(
+            effective_root,
+            &resolved_id,
+            "session result",
+        )
+    {
         tracing::warn!(
             session_id = %resolved_id,
             error = %err,
             "Failed to reconcile dead Active session in session result"
+        );
+    } else if handoff_blocks_target_reconcile {
+        tracing::debug!(
+            wrapper_session_id = %wrapper_id,
+            target_session_id = %resolved_id,
+            "resume wrapper still owns target handoff; skipping target reconciliation in session result"
         );
     }
 

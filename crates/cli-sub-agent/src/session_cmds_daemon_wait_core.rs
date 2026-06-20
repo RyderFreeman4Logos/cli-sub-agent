@@ -14,6 +14,7 @@ use super::completion::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, SESSION_WAIT_TIMEOUT_EXIT_CODE,
     resolve_wait_completion_status_and_exit,
 };
+use super::liveness::{resume_handoff_blocks_target_reconcile, session_has_live_execution};
 use super::target::resolve_wait_target;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
@@ -23,7 +24,7 @@ use super::{
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::session_cmds_daemon::{
     emit_failure_summary_for_empty_output, finalize_daemon_completion_if_present,
-    load_daemon_completion_packet, session_has_terminal_process,
+    load_daemon_completion_packet,
 };
 
 type ReconcileEmitter<'a> =
@@ -41,37 +42,6 @@ type TerminalOutputEmitter<'a> = Box<
         + 'a,
 >;
 type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
-
-fn session_has_live_execution(
-    worktree_lock_root: Option<&Path>,
-    session_dir: &Path,
-    resolved_session_id: &str,
-    result_session_id: &str,
-) -> bool {
-    session_has_terminal_process(session_dir)
-        || session_holds_worktree_write_lock(worktree_lock_root, result_session_id)
-        || (resolved_session_id != result_session_id
-            && session_holds_worktree_write_lock(worktree_lock_root, resolved_session_id))
-}
-
-fn session_holds_worktree_write_lock(worktree_lock_root: Option<&Path>, session_id: &str) -> bool {
-    let Some(worktree_lock_root) = worktree_lock_root else {
-        return false;
-    };
-
-    match csa_lock::worktree_write_lock_is_held_by_session(worktree_lock_root, session_id) {
-        Ok(held) => held,
-        Err(error) => {
-            tracing::debug!(
-                session_id,
-                worktree_lock_root = %worktree_lock_root.display(),
-                error = %error,
-                "failed to probe live worktree write lock for session wait"
-            );
-            false
-        }
-    }
-}
 
 pub(crate) struct WaitEmitters<'a> {
     pub(crate) reconcile_dead_active_session: ReconcileEmitter<'a>,
@@ -205,6 +175,11 @@ pub(crate) fn handle_session_wait_with_emitters(
             &resolved.session_id,
             result_session_id,
         );
+        let handoff_blocks_target_reconcile = resume_handoff_blocks_target_reconcile(
+            wait_target.follows_resume_target,
+            &session_dir,
+            result_session_dir,
+        );
         let completion_packet = load_daemon_completion_packet(&session_dir)?;
         if let Some(completion) = completion_packet
             .filter(|completion| completion.is_legacy_complete_marker() || !session_live)
@@ -254,7 +229,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                             result,
                         )
                     });
-                if loaded_result.is_none() {
+                if loaded_result.is_none() && !handoff_blocks_target_reconcile {
                     let reconciled = (emitters.reconcile_dead_active_session)(
                         effective_root,
                         result_session_id,
@@ -292,7 +267,10 @@ pub(crate) fn handle_session_wait_with_emitters(
                 return Ok(exit_code);
             }
 
-            if session_live || csa_process::ToolLiveness::is_alive(result_session_dir) {
+            if session_live
+                || csa_process::ToolLiveness::is_alive(result_session_dir)
+                || handoff_blocks_target_reconcile
+            {
                 tracing::debug!(
                     session_id = %result_session_id,
                     completion_status = %completion.status,
@@ -343,7 +321,7 @@ pub(crate) fn handle_session_wait_with_emitters(
             return Ok(exit_code);
         }
 
-        if !session_live {
+        if !session_live && !handoff_blocks_target_reconcile {
             // Synthesize terminal result for dead Active sessions.
             let reconciled = (emitters.reconcile_dead_active_session)(
                 effective_root,
@@ -418,6 +396,12 @@ pub(crate) fn handle_session_wait_with_emitters(
                 // PID detection missed but filesystem liveness signals say alive;
                 // continue polling so the timeout (exit 124) fires instead of exit 1.
                 tracing::debug!(session_id = %result_session_id, "alive; no terminal PID");
+            } else if handoff_blocks_target_reconcile {
+                tracing::debug!(
+                    wrapper_session_id = %resolved.session_id,
+                    target_session_id = %result_session_id,
+                    "resume wrapper still owns target handoff; continuing wait without target reconciliation"
+                );
             } else {
                 eprintln!(
                     "Session {} has no live daemon process and no terminal result packet.",
@@ -479,7 +463,8 @@ pub(crate) fn handle_session_wait_with_emitters(
                 result_session_dir,
                 &resolved.session_id,
                 result_session_id,
-            ) || csa_process::ToolLiveness::is_alive(result_session_dir);
+            ) || csa_process::ToolLiveness::is_alive(result_session_dir)
+                || handoff_blocks_target_reconcile;
             if session_alive {
                 let wait_cmd = format!(
                     "csa session wait --session {}{}",
