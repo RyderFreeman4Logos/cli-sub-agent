@@ -1,0 +1,129 @@
+use super::*;
+
+fn wait_until_wait_lock_is_held(session_dir: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match try_acquire_session_wait_lock(session_dir).expect("probe wait lock") {
+            Some(lock) => {
+                drop(lock);
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "session wait did not rebind to target wait lock at {}",
+                    session_dir.display()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            None => return,
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn handle_session_wait_on_fix_finding_wrapper_rebinds_when_alias_appears_after_wait_starts() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+    init_git_repo(project);
+
+    let original_review = csa_session::create_session_fresh(
+        project,
+        Some("original failed review"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let original_review_id = original_review.meta_session_id;
+    save_result(project, &original_review_id, &make_result("failure", 1)).unwrap();
+
+    let wrapper =
+        csa_session::create_session_fresh(project, Some("fix-finding wrapper"), None, None)
+            .unwrap();
+    let wrapper_id = wrapper.meta_session_id;
+    let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
+    std::fs::write(
+        wrapper_dir.join("stderr.log"),
+        "wrapper bootstrap is still preparing the fix session\n",
+    )
+    .unwrap();
+    assert!(
+        csa_process::ToolLiveness::is_alive(&wrapper_dir),
+        "test setup requires the pre-alias wrapper to look alive"
+    );
+
+    let wait_project_arg = project.to_string_lossy().into_owned();
+    let wait_wrapper_id = wrapper_id.clone();
+    let wait_handle = std::thread::spawn(move || {
+        handle_session_wait(wait_wrapper_id, Some(wait_project_arg), 5)
+            .expect("wait should complete after alias and completion appear")
+    });
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let mut fix_session = csa_session::create_session_fresh(
+        project,
+        Some("fix finding from review"),
+        Some(&original_review_id),
+        Some("codex"),
+    )
+    .unwrap();
+    fix_session.phase = SessionPhase::Active;
+    fix_session.task_context = TaskContext {
+        task_type: Some(FIX_FINDING_TASK_TYPE.to_string()),
+        tier_name: None,
+    };
+    save_session(&fix_session).unwrap();
+    let fix_session_id = fix_session.meta_session_id;
+    let fix_dir = get_session_dir(project, &fix_session_id).unwrap();
+    assert_ne!(fix_session_id, original_review_id);
+    assert_ne!(wrapper_id, original_review_id);
+    assert_ne!(wrapper_id, fix_session_id);
+
+    std::fs::write(project.join("tracked.txt"), "fixed but not recorded\n").unwrap();
+    csa_session::write_resume_target(project, &wrapper_id, &fix_session_id).unwrap();
+    assert_eq!(
+        csa_session::read_resume_target_from_dir(&wrapper_dir).unwrap(),
+        Some(fix_session_id.clone())
+    );
+    wait_until_wait_lock_is_held(&fix_dir);
+    std::fs::write(
+        wrapper_dir.join("daemon-completion.toml"),
+        "exit_code = 1\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+
+    let exit_code = wait_handle.join().expect("wait thread should not panic");
+
+    assert_eq!(exit_code, 1);
+    assert!(
+        load_result(project, &wrapper_id).unwrap().is_none(),
+        "late alias must keep wrapper as an alias and must not get the fix result"
+    );
+    let fix_result = load_result(project, &fix_session_id)
+        .unwrap()
+        .expect("late alias should route diagnostics to the real fix session");
+    let summary = render_wait_result_summary(&fix_dir, &fix_session_id, &fix_result);
+
+    assert!(
+        summary.contains(&format!("Session: {fix_session_id}")),
+        "{summary}"
+    );
+    assert!(summary.contains("fix-finding"), "{summary}");
+    assert!(
+        summary.contains("original failed review verdict is not a fix-session result"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("repo_side_effects=dirty_or_committed_tracked_changes"),
+        "{summary}"
+    );
+    assert!(summary.contains("modified=[tracked.txt]"), "{summary}");
+    assert!(
+        !summary.contains(&format!("Session: {original_review_id}")),
+        "{summary}"
+    );
+    assert!(!summary.contains("Review verdict: FAIL"), "{summary}");
+}

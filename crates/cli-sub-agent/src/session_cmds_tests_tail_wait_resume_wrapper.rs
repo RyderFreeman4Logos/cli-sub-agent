@@ -8,6 +8,9 @@ use std::process::Command;
 
 const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
 
+#[path = "session_cmds_tests_tail_wait_resume_wrapper_alias_race.rs"]
+mod alias_race;
+
 fn create_session(
     project_path: &std::path::Path,
     description: Option<&str>,

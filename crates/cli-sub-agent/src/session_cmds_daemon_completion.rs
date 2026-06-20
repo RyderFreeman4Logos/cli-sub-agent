@@ -13,6 +13,11 @@ const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const LEGACY_COMPLETE_FILE: &str = ".complete";
 const MISSING_RESULT_TERMINATION_REASON: &str = "daemon_completion_missing_result";
+const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
+#[cfg(test)]
+#[path = "session_cmds_daemon_completion_resume_alias_tests.rs"]
+mod resume_alias_tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DaemonCompletionPacket {
@@ -128,6 +133,19 @@ pub(crate) fn finalize_daemon_completion_if_present(
     }
     let session = load_session_state_from_dir(session_dir)?;
     let project_root = PathBuf::from(&session.project_path);
+    if let Some(target) = resolve_fix_finding_resume_target(&project_root, session_dir)? {
+        crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+            &project_root,
+            &target.session_id,
+            "daemon completion",
+        )?;
+        crate::session_cmds::retire_if_dead_with_result(
+            &project_root,
+            &target.session_id,
+            "daemon completion",
+        )?;
+        return load_result_from_dir(&target.session_dir);
+    }
     crate::session_cmds::ensure_terminal_result_for_dead_active_session(
         &project_root,
         &session.meta_session_id,
@@ -139,6 +157,22 @@ pub(crate) fn finalize_daemon_completion_if_present(
         "daemon completion",
     )?;
     load_result_from_dir(session_dir)
+}
+
+fn resolve_fix_finding_resume_target(
+    project_root: &Path,
+    wrapper_session_dir: &Path,
+) -> Result<Option<csa_session::ResumeTargetResolution>> {
+    let Some(target) =
+        csa_session::resolve_resume_target_from_dir(project_root, wrapper_session_dir)?
+    else {
+        return Ok(None);
+    };
+    let target_session = load_session_state_from_dir(&target.session_dir)?;
+    if target_session.task_context.task_type.as_deref() == Some(REVIEW_FIX_FINDING_TASK_TYPE) {
+        return Ok(Some(target));
+    }
+    Ok(None)
 }
 
 fn persist_daemon_completion(session_dir: &Path, packet: &DaemonCompletionPacket) -> Result<()> {

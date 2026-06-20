@@ -14,6 +14,7 @@ use super::completion::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, SESSION_WAIT_TIMEOUT_EXIT_CODE,
     resolve_wait_completion_status_and_exit,
 };
+use super::target::resolve_wait_target;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
     emit_wait_terminal_output, load_completed_daemon_result_with_fallback, refresh_result_for_wait,
@@ -131,33 +132,14 @@ pub(crate) fn handle_session_wait_with_emitters(
         .as_deref()
         .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
-    let resume_target = csa_session::resolve_resume_target_from_dir(effective_root, &session_dir)?;
+    let mut wait_target = resolve_wait_target(effective_root, &resolved.session_id, &session_dir)?;
     let worktree_lock_root = super::resolve_session_wait_worktree_lock_root(effective_root);
-    let result_session_id = resume_target
-        .as_ref()
-        .map(|target| target.session_id.as_str())
-        .unwrap_or(&resolved.session_id);
-    let result_session_dir = resume_target
-        .as_ref()
-        .map(|target| target.session_dir.clone())
-        .unwrap_or_else(|| session_dir.clone());
-    let follows_resume_target = resume_target.is_some();
-    let observed_session_dir = if follows_resume_target {
-        &result_session_dir
-    } else {
-        &session_dir
-    };
-    let lock_session_dir = if follows_resume_target {
-        &result_session_dir
-    } else {
-        &session_dir
-    };
-    let _wait_lock = match try_acquire_session_wait_lock(lock_session_dir)? {
+    let mut wait_lock = match try_acquire_session_wait_lock(&wait_target.session_dir)? {
         Some(lock) => lock,
         None => {
             eprintln!(
                 "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
-                result_session_id
+                wait_target.session_id
             );
             return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
         }
@@ -176,24 +158,50 @@ pub(crate) fn handle_session_wait_with_emitters(
     // and no progress for an extended period.
     if let Err(stale_err) = super::check_session_stale_before_wait(
         effective_root,
-        result_session_id,
-        observed_session_dir,
+        &wait_target.session_id,
+        &wait_target.session_dir,
         wait_options.behavior,
         worktree_lock_root.as_deref(),
-        &[resolved.session_id.as_str(), result_session_id],
+        &[resolved.session_id.as_str(), &wait_target.session_id],
     ) {
-        eprintln!("Session {} appears stale: {}", result_session_id, stale_err);
+        eprintln!(
+            "Session {} appears stale: {}",
+            wait_target.session_id, stale_err
+        );
         eprintln!(
             "Run `csa session result --session {}` for diagnostics.",
-            result_session_id
+            wait_target.session_id
         );
         return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
     }
 
     loop {
+        if !wait_target.follows_resume_target {
+            let updated_target =
+                resolve_wait_target(effective_root, &resolved.session_id, &session_dir)?;
+            if updated_target.follows_resume_target {
+                let updated_lock = match try_acquire_session_wait_lock(&updated_target.session_dir)?
+                {
+                    Some(lock) => lock,
+                    None => {
+                        eprintln!(
+                            "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
+                            updated_target.session_id
+                        );
+                        return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+                    }
+                };
+                drop(wait_lock);
+                wait_lock = updated_lock;
+                wait_target = updated_target;
+            }
+        }
+
+        let result_session_id = wait_target.session_id.as_str();
+        let result_session_dir = &wait_target.session_dir;
         let session_live = session_has_live_execution(
             worktree_lock_root.as_deref(),
-            observed_session_dir,
+            result_session_dir,
             &resolved.session_id,
             result_session_id,
         );
@@ -204,7 +212,7 @@ pub(crate) fn handle_session_wait_with_emitters(
             let refreshed_result = refresh_result_for_wait(
                 effective_root,
                 result_session_id,
-                &result_session_dir,
+                result_session_dir,
                 is_cross_project,
             );
             if let Err(err) = &refreshed_result {
@@ -233,16 +241,16 @@ pub(crate) fn handle_session_wait_with_emitters(
                 loaded_result = load_completed_daemon_result_with_fallback(
                     effective_root,
                     result_session_id,
-                    &result_session_dir,
+                    result_session_dir,
                     is_cross_project,
                 )?;
             }
             if loaded_result.is_none() {
-                loaded_result = finalize_daemon_completion_if_present(&result_session_dir)?
+                loaded_result = finalize_daemon_completion_if_present(result_session_dir)?
                     .and_then(|result| {
                         suppress_pending_tier_failover_result(
                             result_session_id,
-                            &result_session_dir,
+                            result_session_dir,
                             result,
                         )
                     });
@@ -257,7 +265,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                         loaded_result = load_completed_daemon_result_with_fallback(
                             effective_root,
                             result_session_id,
-                            &result_session_dir,
+                            result_session_dir,
                             is_cross_project,
                         )?;
                     }
@@ -265,12 +273,12 @@ pub(crate) fn handle_session_wait_with_emitters(
             }
             if let Some(result) = loaded_result {
                 let streamed_output = (emitters.emit_terminal_output)(
-                    &result_session_dir,
+                    result_session_dir,
                     result_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
-                (emitters.emit_next_step)(&result_session_dir)?;
+                (emitters.emit_next_step)(result_session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(completion.status.as_str(), completion.exit_code, synthetic, Some(&result));
                 emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
@@ -284,7 +292,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 return Ok(exit_code);
             }
 
-            if session_live || csa_process::ToolLiveness::is_alive(observed_session_dir) {
+            if session_live || csa_process::ToolLiveness::is_alive(result_session_dir) {
                 tracing::debug!(
                     session_id = %result_session_id,
                     completion_status = %completion.status,
@@ -310,18 +318,18 @@ pub(crate) fn handle_session_wait_with_emitters(
             load_completed_daemon_result_with_fallback(
                 effective_root,
                 result_session_id,
-                &result_session_dir,
+                result_session_dir,
                 is_cross_project,
             )?
         };
         if let Some(result) = completed_result {
             let streamed_output = (emitters.emit_terminal_output)(
-                &result_session_dir,
+                result_session_dir,
                 result_session_id,
                 Some(&result),
                 wait_options.output_mode,
             )?;
-            (emitters.emit_next_step)(&result_session_dir)?;
+            (emitters.emit_next_step)(result_session_dir)?;
             #[rustfmt::skip]
             let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
             emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
@@ -346,7 +354,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 load_completed_daemon_result_with_fallback(
                     effective_root,
                     result_session_id,
-                    &result_session_dir,
+                    result_session_dir,
                     is_cross_project,
                 )?
             } else {
@@ -354,12 +362,12 @@ pub(crate) fn handle_session_wait_with_emitters(
             };
             if let Some(result) = reconciled_result {
                 let streamed_output = (emitters.emit_terminal_output)(
-                    &result_session_dir,
+                    result_session_dir,
                     result_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
-                (emitters.emit_next_step)(&result_session_dir)?;
+                (emitters.emit_next_step)(result_session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, reconciled.synthetic, Some(&result));
                 emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
@@ -384,16 +392,16 @@ pub(crate) fn handle_session_wait_with_emitters(
             if let Some(result) = load_completed_daemon_result_with_fallback(
                 effective_root,
                 result_session_id,
-                &result_session_dir,
+                result_session_dir,
                 is_cross_project,
             )? {
                 let streamed_output = (emitters.emit_terminal_output)(
-                    &result_session_dir,
+                    result_session_dir,
                     result_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
-                (emitters.emit_next_step)(&result_session_dir)?;
+                (emitters.emit_next_step)(result_session_dir)?;
                 #[rustfmt::skip]
                 let (completion_status, exit_code) = resolve_wait_completion_status_and_exit(result.status.as_str(), result.exit_code, false, Some(&result));
                 emit_failure_summary_for_empty_output(&session_dir, streamed_output, false);
@@ -406,7 +414,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 );
                 return Ok(exit_code);
             }
-            if csa_process::ToolLiveness::is_alive(observed_session_dir) {
+            if csa_process::ToolLiveness::is_alive(result_session_dir) {
                 // PID detection missed but filesystem liveness signals say alive;
                 // continue polling so the timeout (exit 124) fires instead of exit 1.
                 tracing::debug!(session_id = %result_session_id, "alive; no terminal PID");
@@ -468,10 +476,10 @@ pub(crate) fn handle_session_wait_with_emitters(
                 .unwrap_or_default();
             let session_alive = session_has_live_execution(
                 worktree_lock_root.as_deref(),
-                observed_session_dir,
+                result_session_dir,
                 &resolved.session_id,
                 result_session_id,
-            ) || csa_process::ToolLiveness::is_alive(observed_session_dir);
+            ) || csa_process::ToolLiveness::is_alive(result_session_dir);
             if session_alive {
                 let wait_cmd = format!(
                     "csa session wait --session {}{}",
