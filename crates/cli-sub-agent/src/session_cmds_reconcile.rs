@@ -20,11 +20,12 @@ use crate::session_result_publish::{
 mod reconcile_cleanup;
 #[path = "session_cmds_reconcile_diagnostics.rs"]
 mod reconcile_diagnostics;
+#[path = "session_cmds_reconcile_fix_finding.rs"]
+mod reconcile_fix_finding;
 #[path = "session_cmds_reconcile_git.rs"]
 mod reconcile_git;
 #[path = "session_cmds_reconcile_liveness.rs"]
 mod reconcile_liveness;
-use reconcile_diagnostics::synthetic_failure_diagnostics;
 use reconcile_git::{git_output, git_success, resolve_fallback_base_branch};
 use reconcile_liveness::reconcile_liveness_decision;
 
@@ -401,12 +402,8 @@ where
     #[rustfmt::skip]
     let artifacts = crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
     let output_log_mtime = format_optional_file_mtime(&session_dir.join("output.log"));
-    let diagnostics = synthetic_failure_diagnostics(session_dir, &session, liveness.reason);
-    let summary_prefix = format!(
-        "synthetic failure by {trigger}: process dead, result.toml missing (reconciliation_reason=true_missing_result, output_log_mtime={}){}",
-        output_log_mtime.as_deref().unwrap_or("missing"),
-        diagnostics
-    );
+    #[rustfmt::skip]
+    let summary_prefix = reconcile_fix_finding::missing_result_summary_prefix(project_root, &session, session_dir, trigger, output_log_mtime.as_deref().unwrap_or("missing"), liveness.reason);
     let fallback = SessionResult {
         post_exec_gate: None,
         status: "failure".to_string(),

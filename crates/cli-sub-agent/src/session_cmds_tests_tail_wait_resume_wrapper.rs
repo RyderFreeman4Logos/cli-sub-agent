@@ -2,8 +2,49 @@ use super::*;
 use crate::session_cmds_daemon::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait_with_hooks, handle_session_wait_with_hooks_and_sampler,
-    try_acquire_session_wait_lock,
+    render_wait_result_summary, try_acquire_session_wait_lock,
 };
+use std::process::Command;
+
+const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
+fn create_session(
+    project_path: &std::path::Path,
+    description: Option<&str>,
+    parent_id: Option<&str>,
+    tool: Option<&str>,
+) -> anyhow::Result<csa_session::MetaSessionState> {
+    csa_session::create_session_fresh(project_path, description, parent_id, tool)
+}
+
+fn run_git(project_root: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_git_repo(project_root: &std::path::Path) {
+    run_git(project_root, &["init", "-q"]);
+    run_git(
+        project_root,
+        &["config", "user.email", "csa-test@example.com"],
+    );
+    run_git(project_root, &["config", "user.name", "CSA Test"]);
+    run_git(project_root, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(project_root.join("tracked.txt"), "initial\n").unwrap();
+    run_git(project_root, &["add", "tracked.txt"]);
+    run_git(project_root, &["commit", "-q", "-m", "initial"]);
+}
 
 fn move_session_to_legacy_root(project: &std::path::Path, session_id: &str) -> std::path::PathBuf {
     let primary_root = csa_session::get_session_root(project).unwrap();
@@ -371,6 +412,108 @@ fn handle_session_wait_on_resume_wrapper_reconciles_worker_after_wrapper_complet
         load_result(project, &worker_id).unwrap().is_some(),
         "worker result should become authoritative"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn handle_session_wait_on_fix_finding_wrapper_reports_fix_session_missing_result() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+    init_git_repo(project);
+
+    let original_review = csa_session::create_session_fresh(
+        project,
+        Some("original failed review"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let original_review_id = original_review.meta_session_id;
+    save_result(project, &original_review_id, &make_result("failure", 1)).unwrap();
+
+    let mut fix_session = csa_session::create_session_fresh(
+        project,
+        Some("fix finding from review"),
+        Some(&original_review_id),
+        Some("codex"),
+    )
+    .unwrap();
+    fix_session.phase = SessionPhase::Active;
+    fix_session.task_context = TaskContext {
+        task_type: Some(FIX_FINDING_TASK_TYPE.to_string()),
+        tier_name: None,
+    };
+    save_session(&fix_session).unwrap();
+    let fix_session_id = fix_session.meta_session_id;
+    assert_ne!(fix_session_id, original_review_id);
+
+    std::fs::write(project.join("tracked.txt"), "fixed but not recorded\n").unwrap();
+
+    let wrapper =
+        csa_session::create_session_fresh(project, Some("fix-finding wrapper"), None, None)
+            .unwrap();
+    let wrapper_id = wrapper.meta_session_id;
+    assert_ne!(wrapper_id, original_review_id);
+    assert_ne!(wrapper_id, fix_session_id);
+    let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
+    csa_session::write_resume_target(project, &wrapper_id, &fix_session_id).unwrap();
+    assert_eq!(
+        csa_session::read_resume_target_from_dir(&wrapper_dir).unwrap(),
+        Some(fix_session_id.clone())
+    );
+    std::fs::write(
+        wrapper_dir.join("daemon-completion.toml"),
+        "exit_code = 1\nstatus = \"failure\"\n",
+    )
+    .unwrap();
+
+    let exit_code = handle_session_wait(
+        wrapper_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        1,
+    )
+    .unwrap();
+
+    assert_eq!(exit_code, 1);
+    assert!(
+        load_result(project, &wrapper_id).unwrap().is_none(),
+        "wrapper must stay an alias and must not get the fix result"
+    );
+    let original_result = load_result(project, &original_review_id)
+        .unwrap()
+        .expect("original review result remains present");
+    assert_eq!(original_result.status, "failure");
+
+    let fix_result = load_result(project, &fix_session_id)
+        .unwrap()
+        .expect("fix session should get synthetic diagnostic result");
+    let fix_dir = get_session_dir(project, &fix_session_id).unwrap();
+    let summary = render_wait_result_summary(&fix_dir, &fix_session_id, &fix_result);
+
+    assert!(
+        summary.contains(&format!("Session: {fix_session_id}")),
+        "{summary}"
+    );
+    assert!(summary.contains("fix-finding"), "{summary}");
+    assert!(
+        summary.contains("original failed review verdict is not a fix-session result"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("repo_side_effects=dirty_or_committed_tracked_changes"),
+        "{summary}"
+    );
+    assert!(summary.contains("modified=[tracked.txt]"), "{summary}");
+    assert!(
+        !summary.contains(&format!("Session: {original_review_id}")),
+        "{summary}"
+    );
+    assert!(!summary.contains("Review verdict: FAIL"), "{summary}");
 }
 
 #[cfg(unix)]
