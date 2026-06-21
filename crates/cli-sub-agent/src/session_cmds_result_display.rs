@@ -319,6 +319,13 @@ fn print_rendered_sidecar(rendered: &str, indent: usize) {
 
 const FALLBACK_LINES: usize = 20;
 
+/// Display a bounded pre-exec result artifact without falling back to raw logs.
+pub(super) fn display_pre_exec_summary_if_present(session_dir: &Path, json: bool) -> Result<bool> {
+    let unavailable_reason =
+        crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
+    pre_exec_summary::display_if_present(session_dir, unavailable_reason.as_deref(), json)
+}
+
 /// Display structured output sections based on the requested mode.
 pub(super) fn display_structured_output(
     session_dir: &Path,

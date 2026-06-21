@@ -10,8 +10,13 @@ use tracing::debug;
 mod gate;
 #[path = "session_observability_legacy_review_pass.rs"]
 mod legacy_review_pass;
+#[path = "session_observability_registry.rs"]
+mod registry;
 #[path = "session_observability_review_verdict.rs"]
 mod review_verdict;
+pub(crate) use registry::{
+    build_session_registry_lookup_miss_diagnostic, emit_session_registry_state_loss_diagnostic,
+};
 
 const SUMMARY_MAX_CHARS: usize = 200;
 const REVIEW_SUMMARY_FAIL_TOKENS: &[&str] = &["FAIL", "HAS_ISSUES", "REJECT"];

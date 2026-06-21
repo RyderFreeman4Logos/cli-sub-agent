@@ -134,14 +134,20 @@ pub(crate) fn handle_session_wait_with_emitters(
         worktree_lock_root.as_deref(),
         &[resolved.session_id.as_str(), &wait_target.session_id],
     ) {
-        eprintln!(
-            "Session {} appears stale: {}",
-            wait_target.session_id, stale_err
-        );
-        eprintln!(
-            "Run `csa session result --session {}` for diagnostics.",
-            wait_target.session_id
-        );
+        if !crate::session_observability::emit_session_registry_state_loss_diagnostic(
+            effective_root,
+            &wait_target.session_id,
+            &wait_target.session_dir,
+        ) {
+            eprintln!(
+                "Session {} appears stale: {}",
+                wait_target.session_id, stale_err
+            );
+            eprintln!(
+                "Run `csa session result --session {}` for diagnostics.",
+                wait_target.session_id
+            );
+        }
         return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
     }
 
