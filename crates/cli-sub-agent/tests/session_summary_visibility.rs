@@ -85,6 +85,10 @@ fn scrub_inherited_csa_env(cmd: &mut Command) {
 }
 
 fn write_pre_exec_failure_result(session_dir: &Path) {
+    write_failure_result(session_dir, PRE_EXEC_SUMMARY);
+}
+
+fn write_failure_result(session_dir: &Path, summary: &str) {
     std::fs::create_dir_all(session_dir.join("output")).expect("create empty output dir");
     std::fs::write(session_dir.join("stdout.log"), "").expect("write empty stdout log");
     std::fs::write(
@@ -92,7 +96,7 @@ fn write_pre_exec_failure_result(session_dir: &Path) {
         format!(
             r#"status = "failure"
 exit_code = 1
-summary = "{PRE_EXEC_SUMMARY}"
+summary = {summary:?}
 tool = "codex"
 started_at = "2026-04-27T00:00:00Z"
 completed_at = "2026-04-27T00:00:01Z"
@@ -136,6 +140,32 @@ fn create_empty_output_failure_session(
     write_pre_exec_failure_result(&session_dir);
 
     (project, session_id, session_dir)
+}
+
+fn create_codex_usage_limit_failure_session(
+    tmp: &Path,
+    name: &str,
+) -> (std::path::PathBuf, String, std::path::PathBuf, String) {
+    let (project, session_id, session_dir) = create_empty_output_failure_session(tmp, name);
+    write_failure_result(
+        &session_dir,
+        r#"{"type":"turn.failed","error":"provider_error"}"#,
+    );
+    let api_field = concat!("api", "_", "key");
+    let fake_value = concat!("sk", "-", "sec", "...", "6789").to_string();
+    std::fs::write(
+        session_dir.join("output.log"),
+        format!(
+            "provider prelude that must stay hidden\n\
+             You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage \
+             to purchase more credits or try again at Jun 24th, 2026 3:39 PM. \
+             {api_field}={fake_value}\n\
+             provider epilogue that must stay hidden\n"
+        ),
+    )
+    .expect("write output log");
+
+    (project, session_id, session_dir, fake_value)
 }
 
 fn assert_subcommand_surfaces_summary_for_session(
@@ -314,6 +344,44 @@ fn session_result_summary_json_surfaces_provider_usage_limit_reason_without_outp
     assert!(reason.contains("try again at Jun 20th, 2026 6:48 PM"));
     assert!(!reason.contains(concat!("sk", "-", "sec", "...", "6789")));
     assert!(reason.contains("[REDACTED]"));
+}
+
+#[test]
+#[serial]
+fn session_result_summary_surfaces_codex_usage_limit_from_bounded_output() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, _, fake_value) = create_codex_usage_limit_failure_session(
+        tmp.path(),
+        "result-summary-codex-usage-limit-output",
+    );
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "result",
+            "--summary",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session result --summary");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("provider quota exhausted: Codex usage limit hit"));
+    assert!(stdout.contains("retry_after=try again at Jun 24th, 2026 3:39 PM"));
+    assert!(stdout.contains("Hint: do not retry CSA-Codex sessions until cooldown expires"));
+    assert!(!stdout.contains(&fake_value));
+    assert!(!stdout.contains("provider prelude"));
+    assert!(!stdout.contains("provider epilogue"));
+    assert!(
+        stdout.len() <= 700,
+        "summary output should stay compact, got {} bytes: {stdout}",
+        stdout.len()
+    );
 }
 
 #[test]
