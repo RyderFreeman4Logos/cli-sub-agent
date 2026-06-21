@@ -82,6 +82,15 @@ pub(super) fn display_result_text(
             println!("{line}");
         }
     }
+    if let Some(recovery) = envelope.memory_soft_limit_recovery.as_ref() {
+        for line in
+            crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines(
+                recovery,
+            )
+        {
+            println!("{line}");
+        }
+    }
     if !envelope.artifacts.is_empty() {
         println!("Artifacts:");
         for a in &envelope.artifacts {

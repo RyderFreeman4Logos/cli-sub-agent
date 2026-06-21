@@ -1,21 +1,30 @@
 //! Writer-session dirty-worktree signal for `csa run`.
 
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use csa_config::{RunLargeDiffWarningConfig, RunLargeDiffWarningMode};
 use tracing::warn;
 
 const MAX_UNCOMMITTED_FILES: usize = 20;
-const DIFF_BYTES_PER_TOKEN: usize = 4;
-const DIFF_TOKEN_READ_BUF_BYTES: usize = 16 * 1024;
 const REQUIRE_COMMIT_REASON: &str =
     "writer session ended without required commit (--require-commit set)";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
 const REDACTED_PATH: &str = "[redacted-path]";
 const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
+
+#[path = "run_cmd_uncommitted_diff_tokens.rs"]
+mod diff_tokens;
+#[path = "run_cmd_uncommitted_memory_soft_limit.rs"]
+mod memory_soft_limit_recovery;
+
+#[cfg(test)]
+use diff_tokens::{
+    DIFF_BYTES_PER_TOKEN, default_tracked_diff_token_threshold, estimate_diff_stream_tokens,
+    tracked_diff_byte_limit,
+};
+use diff_tokens::{estimate_changed_surface_tokens, tracked_diff_token_threshold};
 
 pub(crate) fn is_writer_session(sa_mode: bool, task_type: Option<&str>) -> bool {
     !sa_mode && matches!(task_type, Some("run"))
@@ -169,7 +178,8 @@ fn record_writer_uncommitted_changes_with_config(
     let require_commit_contract_failure =
         record.require_commit && !record.commit_created.unwrap_or(false);
 
-    if changes.is_none() && !require_commit_contract_failure {
+    let maybe_signal_exit = matches!(result.exit_code, 137 | 143);
+    if changes.is_none() && !require_commit_contract_failure && !maybe_signal_exit {
         return warning;
     }
 
@@ -182,12 +192,20 @@ fn record_writer_uncommitted_changes_with_config(
 
     match csa_session::load_result(project_root, session_id) {
         Ok(Some(mut session_result)) => {
+            let memory_soft_limit_recovery = memory_soft_limit_recovery::build_recovery_diagnostic(
+                project_root,
+                &session_result,
+                changes.as_ref(),
+                record.changed_paths,
+                record.commit_created,
+            );
             let recovery = require_commit_contract_failure.then(|| {
                 build_require_commit_recovery_diagnostic_for_state(
                     &session_result,
                     changes.as_ref(),
                 )
             });
+            let mut should_save = false;
             if let Some(changes) = changes.clone() {
                 apply_uncommitted_changes_to_result(
                     &mut session_result,
@@ -196,8 +214,17 @@ fn record_writer_uncommitted_changes_with_config(
                     require_commit_contract_failure,
                     recovery,
                 );
+                should_save = true;
             } else if let Some(recovery) = recovery {
                 apply_require_commit_contract_failure_to_result(&mut session_result, recovery);
+                should_save = true;
+            }
+            if let Some(recovery) = memory_soft_limit_recovery {
+                session_result.memory_soft_limit_recovery = Some(recovery);
+                should_save = true;
+            }
+            if !should_save {
+                return warning;
             }
             if let Err(err) = csa_session::save_result(project_root, session_id, &session_result) {
                 warn!(
@@ -500,119 +527,6 @@ fn collect_uncommitted_changes_with_filter_and_untracked_size(
     Some((changes, untracked))
 }
 
-fn estimate_changed_surface_tokens(
-    project_root: &Path,
-    path_filter: Option<&BTreeSet<String>>,
-    untracked: &crate::untracked_size::UntrackedDiffSize,
-    tracked_token_threshold: Option<usize>,
-) -> usize {
-    let untracked_bytes = usize::try_from(untracked.bytes).unwrap_or(usize::MAX);
-    let untracked_tokens = untracked_bytes / DIFF_BYTES_PER_TOKEN;
-    let Some(token_threshold) = tracked_token_threshold else {
-        return untracked_tokens;
-    };
-    if untracked_tokens > token_threshold {
-        return untracked_tokens;
-    }
-
-    let remaining_threshold = token_threshold.saturating_sub(untracked_tokens);
-    let tracked_tokens =
-        estimate_tracked_diff_tokens(project_root, path_filter, remaining_threshold)
-            .unwrap_or_default();
-    untracked_tokens.saturating_add(tracked_tokens)
-}
-
-fn tracked_diff_token_threshold(config: &RunLargeDiffWarningConfig) -> usize {
-    if config.approx_diff_tokens > 0 {
-        config.approx_diff_tokens
-    } else {
-        default_tracked_diff_token_threshold()
-    }
-}
-
-fn default_tracked_diff_token_threshold() -> usize {
-    RunLargeDiffWarningConfig::default().approx_diff_tokens
-}
-
-struct TrackedDiffTokenEstimate {
-    tokens: usize,
-    cap_reached: bool,
-}
-
-fn estimate_tracked_diff_tokens(
-    project_root: &Path,
-    path_filter: Option<&BTreeSet<String>>,
-    token_threshold: usize,
-) -> Option<usize> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(project_root)
-        .args(["diff", "--no-ext-diff", "--no-color", "HEAD"])
-        .arg("--")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    if let Some(filter) = path_filter {
-        command.env("GIT_LITERAL_PATHSPECS", "1");
-        command.args(filter);
-    }
-
-    let mut child = command.spawn().ok()?;
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    };
-
-    let estimate = estimate_diff_stream_tokens(stdout, token_threshold)?;
-    if estimate.cap_reached {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Some(token_threshold.saturating_add(1));
-    }
-
-    let status = child.wait().ok()?;
-    status.success().then_some(estimate.tokens)
-}
-
-fn estimate_diff_stream_tokens<R: Read>(
-    mut reader: R,
-    token_threshold: usize,
-) -> Option<TrackedDiffTokenEstimate> {
-    let byte_limit = tracked_diff_byte_limit(token_threshold);
-    let mut bytes_read = 0usize;
-    let mut buffer = [0u8; DIFF_TOKEN_READ_BUF_BYTES];
-
-    while bytes_read < byte_limit {
-        let remaining = byte_limit.saturating_sub(bytes_read);
-        let read_len = remaining.min(buffer.len());
-        let n = reader.read(&mut buffer[..read_len]).ok()?;
-        if n == 0 {
-            return Some(TrackedDiffTokenEstimate {
-                tokens: diff_bytes_to_approx_tokens(bytes_read),
-                cap_reached: false,
-            });
-        }
-        bytes_read = bytes_read.saturating_add(n);
-    }
-
-    Some(TrackedDiffTokenEstimate {
-        tokens: token_threshold.saturating_add(1),
-        cap_reached: true,
-    })
-}
-
-fn tracked_diff_byte_limit(token_threshold: usize) -> usize {
-    token_threshold
-        .saturating_mul(DIFF_BYTES_PER_TOKEN)
-        .saturating_add(1)
-}
-
-fn diff_bytes_to_approx_tokens(bytes: usize) -> usize {
-    bytes.saturating_add(DIFF_BYTES_PER_TOKEN - 1) / DIFF_BYTES_PER_TOKEN
-}
-
 fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
@@ -698,6 +612,10 @@ fn parse_numstat_totals(numstat: &str) -> (u64, u64) {
 #[cfg(test)]
 #[path = "run_cmd_uncommitted_incidental_tests.rs"]
 mod incidental_tests;
+
+#[cfg(test)]
+#[path = "run_cmd_uncommitted_memory_soft_limit_tests.rs"]
+mod memory_soft_limit_tests;
 
 #[cfg(test)]
 #[path = "run_cmd_uncommitted_tests.rs"]

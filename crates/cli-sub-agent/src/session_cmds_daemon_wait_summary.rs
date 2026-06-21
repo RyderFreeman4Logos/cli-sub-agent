@@ -143,6 +143,13 @@ pub(crate) fn render_wait_result_summary(
             crate::require_commit_recovery_display::format_require_commit_recovery_lines(recovery),
         );
     }
+    if let Some(recovery) = result.memory_soft_limit_recovery.as_ref() {
+        lines.extend(
+            crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines(
+                recovery,
+            ),
+        );
+    }
 
     if let Some(changes) = result.uncommitted_changes.as_ref() {
         lines.push(crate::run_cmd::format_uncommitted_warning(changes));
@@ -250,6 +257,7 @@ fn render_wait_result_json(
         "kill_hint": result.kill_hint.as_deref(),
         "kill_diagnostics": result.kill_diagnostics.as_ref(),
         "require_commit_recovery": result.require_commit_recovery.as_ref(),
+        "memory_soft_limit_recovery": result.memory_soft_limit_recovery.as_ref(),
         "post_exec_gate": result.post_exec_gate.as_ref(),
         "large_diff_warning": result.large_diff_warning.as_ref(),
         "warnings": result.warnings,

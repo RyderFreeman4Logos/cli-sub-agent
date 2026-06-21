@@ -344,6 +344,7 @@ mod tests {
             uncommitted_changes: None,
             large_diff_warning: None,
             require_commit_recovery: None,
+            memory_soft_limit_recovery: None,
             manager_fields: crate::result::SessionManagerFields {
                 report: Some(
                     toml::toml! {

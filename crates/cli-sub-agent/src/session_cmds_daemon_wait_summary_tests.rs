@@ -336,6 +336,7 @@ fn compact_summary_labels_fix_loop_noop_from_review_meta() {
         uncommitted_changes: None,
         large_diff_warning: None,
         require_commit_recovery: None,
+        memory_soft_limit_recovery: None,
         manager_fields: Default::default(),
     };
 
@@ -469,6 +470,7 @@ fn compact_summary_includes_writer_uncommitted_warning() {
         }),
         large_diff_warning: None,
         require_commit_recovery: None,
+        memory_soft_limit_recovery: None,
         manager_fields: Default::default(),
     };
 

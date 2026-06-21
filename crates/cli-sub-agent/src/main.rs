@@ -41,6 +41,7 @@ mod mcp_server;
 mod memory_capture;
 mod memory_cmd;
 mod memory_migrate;
+mod memory_soft_limit_recovery_display;
 mod merge_cmd;
 mod mktsk_cmd;
 mod pattern_resolver;
