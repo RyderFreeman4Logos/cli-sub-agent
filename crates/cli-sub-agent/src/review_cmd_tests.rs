@@ -44,12 +44,14 @@ pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         );
     }
 
+    let includes_codex = tools.iter().any(|tool| *tool == "codex");
     ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),
         resources: ResourcesConfig {
-            memory_max_mb: Some(1024),
+            memory_max_mb: Some(if includes_codex { 8192 } else { 1024 }),
             min_free_memory_mb: 1,
+            soft_limit_percent: includes_codex.then_some(100),
             ..Default::default()
         },
         acp: Default::default(),
