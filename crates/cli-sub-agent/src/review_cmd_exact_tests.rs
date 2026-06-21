@@ -71,8 +71,9 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
         schema_version: 1,
         project: csa_config::ProjectMeta::default(),
         resources: csa_config::ResourcesConfig {
-            memory_max_mb: Some(1024),
+            memory_max_mb: Some(if tools.contains(&"codex") { 8192 } else { 1024 }),
             min_free_memory_mb: 1,
+            soft_limit_percent: tools.contains(&"codex").then_some(100),
             ..Default::default()
         },
         acp: Default::default(),

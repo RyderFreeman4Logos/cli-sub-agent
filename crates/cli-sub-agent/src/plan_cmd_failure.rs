@@ -231,9 +231,13 @@ pub(crate) fn persist_plan_failure_output(
 }
 
 pub(crate) fn report_from_error(error: Option<&anyhow::Error>) -> Option<PlanFailureReport> {
-    error
-        .and_then(|err| err.downcast_ref::<PlanFailureError>())
+    let err = error?;
+    err.downcast_ref::<PlanFailureError>()
         .map(|err| err.report().clone())
+        .or_else(|| {
+            err.downcast_ref::<Box<PlanFailureError>>()
+                .map(|err| err.report().clone())
+        })
 }
 
 pub(crate) fn persist_report_for_session(

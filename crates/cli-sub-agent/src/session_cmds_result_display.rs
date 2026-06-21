@@ -9,6 +9,8 @@ use crate::token_usage_display::{display_total_tokens, token_usage_json_value};
 
 #[path = "session_cmds_result_post_exec_gate.rs"]
 mod post_exec_gate;
+#[path = "session_cmds_result_pre_exec_summary.rs"]
+mod pre_exec_summary;
 pub(super) use post_exec_gate::{
     build_all_sections_json_payload, build_gate_aware_summary_content,
     build_summary_section_json_payload, gate_summary_employee_section,
@@ -473,7 +475,7 @@ fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) ->
             return Ok(());
         }
     }
-    if let Some(reason) = unavailable_reason {
+    if let Some(reason) = unavailable_reason.as_deref() {
         if json {
             let payload = serde_json::json!({
                 "section": "summary",
@@ -482,8 +484,11 @@ fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) ->
             });
             println!("{}", serde_json::to_string_pretty(&payload)?);
         } else {
-            print_unavailable_reason(Some(&reason));
+            print_unavailable_reason(Some(reason));
         }
+        return Ok(());
+    }
+    if pre_exec_summary::display_if_present(session_dir, unavailable_reason.as_deref(), json)? {
         return Ok(());
     }
     eprintln!("No output found for session '{session_id}'");

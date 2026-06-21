@@ -4,6 +4,20 @@ use std::process::Command;
 use serial_test::serial;
 
 const PRE_EXEC_SUMMARY: &str = "pre-exec: Direct --tool is blocked when tiers are configured.";
+const HOST_ADMISSION_SUMMARY: &str = "pre-exec: CSA: host memory admission denied \u{2014} \
+available=9929MB < required=15512MB (reserve=512MB + projected_spawn=15000MB). \
+active_sessions=0 sampled_sessions=0 active_session_rss_mb=0 active_session_projected_mb=0 \
+swap_available_mb=7204 combined_available_mb=17133. Free host memory, wait for active CSA \
+sessions to finish, or lower tool memory limits before spawning more work. For one csa run, \
+pass --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> to lower the \
+reserve. Persistent config keys: resources.memory_max_mb, tools.<tool>.memory_max_mb, \
+resources.min_free_memory_mb.";
+const SOFT_LIMIT_ADMISSION_SUMMARY: &str = "pre-exec: CSA: memory_soft_limit_admission denied \
+-- codex writer soft memory threshold is 6300MB, below required=9000MB \
+(memory_max_mb=9000MB, soft_limit_percent=70). This writer session is likely to be terminated \
+by CSA's memory monitor after editing the worktree. Raise --memory-max-mb, \
+resources.memory_max_mb, or tools.codex.memory_max_mb to at least 12858MB, or raise \
+resources.soft_limit_percent only when host RAM makes that safe.";
 
 struct EnvVarGuard {
     key: &'static str,
@@ -203,6 +217,51 @@ fn assert_subcommand_surfaces_summary(subcommand: &str, session_name: &str) {
     assert_subcommand_surfaces_summary_for_session(tmp.path(), &project, subcommand, &session_id);
 }
 
+fn assert_session_result_summary_surfaces_pre_exec_result(
+    session_name: &str,
+    summary: &str,
+    expected_fragments: &[&str],
+) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (project, session_id, session_dir) =
+        create_empty_output_failure_session(tmp.path(), session_name);
+    write_failure_result(&session_dir, summary);
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "result",
+            "--summary",
+            "--session",
+            &session_id,
+            "--cd",
+            project.to_str().expect("project path utf8"),
+        ])
+        .current_dir(&project)
+        .output()
+        .expect("run csa session result --summary");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    for expected in expected_fragments {
+        assert!(
+            combined.contains(expected),
+            "session result summary should contain {expected:?}, got stdout={stdout} stderr={stderr}"
+        );
+    }
+    assert!(
+        !combined.contains("No output found"),
+        "session result summary should use result.toml instead of missing-output fallback, got stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        combined.len() <= 700,
+        "session result summary should stay bounded, got {} bytes: stdout={stdout} stderr={stderr}",
+        combined.len()
+    );
+}
+
 #[test]
 #[serial]
 fn session_wait_surfaces_result_summary_when_failure_output_is_empty() {
@@ -304,6 +363,36 @@ fn session_result_summary_surfaces_provider_usage_limit_reason() {
         stdout.len() <= 700,
         "summary output should stay compact, got {} bytes: {stdout}",
         stdout.len()
+    );
+}
+
+#[test]
+#[serial]
+fn session_result_summary_surfaces_pre_exec_host_admission_result() {
+    assert_session_result_summary_surfaces_pre_exec_result(
+        "result-summary-host-admission",
+        HOST_ADMISSION_SUMMARY,
+        &[
+            "pre-exec: CSA: host memory admission denied",
+            "Free host memory",
+            "--memory-max-mb <MB> to lower projected_spawn",
+            "--min-free-memory-mb <MB> to lower the reserve",
+        ],
+    );
+}
+
+#[test]
+#[serial]
+fn session_result_summary_surfaces_pre_exec_soft_limit_admission_result() {
+    assert_session_result_summary_surfaces_pre_exec_result(
+        "result-summary-soft-limit-admission",
+        SOFT_LIMIT_ADMISSION_SUMMARY,
+        &[
+            "pre-exec: CSA: memory_soft_limit_admission denied",
+            "codex writer soft memory threshold is 6300MB",
+            "tools.codex.memory_max_mb to at least 12858MB",
+            "resources.soft_limit_percent only when host RAM makes that safe",
+        ],
     );
 }
 

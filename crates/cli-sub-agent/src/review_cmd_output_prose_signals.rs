@@ -101,7 +101,22 @@ fn current_round_review_prose_contents(
 }
 
 fn content_has_blocking_review_outcome(content: &str) -> bool {
+    if has_clean_verdict_prefix(content) && !detect_prose_fail_conclusion(content) {
+        return false;
+    }
     contains_blocking_issue_signal(content) || detect_prose_fail_conclusion(content)
+}
+
+fn has_clean_verdict_prefix(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim_start();
+        ["PASS", "CLEAN"].iter().any(|token| {
+            trimmed
+                .strip_prefix(token)
+                .and_then(|rest| rest.chars().next())
+                .is_some_and(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
+        })
+    })
 }
 
 fn push_review_content(contents: &mut Vec<(String, String)>, section_id: &str, content: String) {
