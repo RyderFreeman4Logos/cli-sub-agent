@@ -77,6 +77,10 @@ fn test_session_result_empty_optional_fields_omitted() {
         "Clean sessions should omit require_commit_recovery"
     );
     assert!(
+        !toml_str.contains("memory_soft_limit_recovery"),
+        "Clean sessions should omit memory_soft_limit_recovery"
+    );
+    assert!(
         !toml_str.contains("kill_hint"),
         "Missing kill hint should be omitted from serialization"
     );
@@ -94,6 +98,7 @@ fn test_session_result_empty_optional_fields_omitted() {
     assert_eq!(loaded.events_count, 0);
     assert!(loaded.uncommitted_changes.is_none());
     assert!(loaded.require_commit_recovery.is_none());
+    assert!(loaded.memory_soft_limit_recovery.is_none());
 }
 
 #[test]
@@ -146,6 +151,51 @@ fn test_session_result_require_commit_recovery_roundtrip() {
 }
 
 #[test]
+fn test_session_result_memory_soft_limit_recovery_roundtrip() {
+    let now = Utc::now();
+    let result = SessionResult {
+        status: "signal".to_string(),
+        exit_code: 143,
+        summary: "CSA diagnostic: signal kill hint: memory soft limit".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        kill_hint: Some("memory_soft_limit".to_string()),
+        memory_soft_limit_recovery: Some(MemorySoftLimitRecoveryDiagnostic {
+            outcome: "clean_committed_work".to_string(),
+            commit_created: true,
+            dirty_worktree: false,
+            changed_paths: vec!["src/lib.rs".to_string()],
+            changed_paths_truncated: 1,
+            head_oid: Some("1234567890abcdef".to_string()),
+            head_summary: Some("fix session recovery".to_string()),
+            suggested_recovery_action: "inspect_head_commit_then_continue".to_string(),
+        }),
+        ..Default::default()
+    };
+
+    let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
+    assert!(toml_str.contains("[memory_soft_limit_recovery]"));
+    assert!(toml_str.contains("outcome = \"clean_committed_work\""));
+    assert!(toml_str.contains("head_oid = \"1234567890abcdef\""));
+    assert!(!toml_str.contains("transcript"));
+
+    let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
+    let recovery = loaded
+        .memory_soft_limit_recovery
+        .expect("memory recovery diagnostic should roundtrip");
+    assert_eq!(recovery.outcome, "clean_committed_work");
+    assert!(recovery.commit_created);
+    assert!(!recovery.dirty_worktree);
+    assert_eq!(recovery.changed_paths, vec!["src/lib.rs".to_string()]);
+    assert_eq!(recovery.changed_paths_truncated, 1);
+    assert_eq!(
+        recovery.head_summary.as_deref(),
+        Some("fix session recovery")
+    );
+}
+
+#[test]
 fn test_session_result_uncommitted_changes_roundtrip() {
     let now = Utc::now();
     let result = SessionResult {
@@ -183,6 +233,7 @@ fn test_session_result_uncommitted_changes_roundtrip() {
             approx_diff_tokens: 1_024,
         }),
         require_commit_recovery: None,
+        memory_soft_limit_recovery: None,
         manager_fields: Default::default(),
     };
 

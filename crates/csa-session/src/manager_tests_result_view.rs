@@ -443,6 +443,7 @@ fn test_save_result_with_empty_manager_fields_preserves_existing_sidecar() {
         uncommitted_changes: None,
         large_diff_warning: None,
         require_commit_recovery: None,
+        memory_soft_limit_recovery: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {
@@ -529,6 +530,7 @@ fn test_clear_manager_sidecar_removes_existing_sidecar() {
         uncommitted_changes: None,
         large_diff_warning: None,
         require_commit_recovery: None,
+        memory_soft_limit_recovery: None,
         manager_fields: crate::result::SessionManagerFields {
             report: Some(
                 toml::toml! {

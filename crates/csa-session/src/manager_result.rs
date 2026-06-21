@@ -12,7 +12,7 @@ pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
 pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
 pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
 const LEGACY_KILL_REASON_KEY: &str = "kill_reason";
-const RUNTIME_RESULT_KEYS: [&str; 24] = [
+const RUNTIME_RESULT_KEYS: [&str; 25] = [
     "status",
     "exit_code",
     "summary",
@@ -33,6 +33,7 @@ const RUNTIME_RESULT_KEYS: [&str; 24] = [
     "uncommitted_changes",
     "large_diff_warning",
     "require_commit_recovery",
+    "memory_soft_limit_recovery",
     "kill_hint",
     "kill_diagnostics",
     LEGACY_KILL_REASON_KEY,
@@ -446,6 +447,7 @@ fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
         | "uncommitted_changes"
         | "large_diff_warning"
         | "require_commit_recovery"
+        | "memory_soft_limit_recovery"
         | "kill_diagnostics" => value.is_table(),
         _ => false,
     }

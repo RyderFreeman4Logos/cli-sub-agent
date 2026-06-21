@@ -230,6 +230,31 @@ pub struct RequireCommitRecoveryDiagnostic {
     pub suggested_recovery_action: String,
 }
 
+/// Machine-readable recovery detail for a writer run that was terminated by
+/// CSA's memory soft-limit monitor after repository state may have changed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemorySoftLimitRecoveryDiagnostic {
+    /// Stable outcome code for the bounded side-effect classifier.
+    pub outcome: String,
+    /// Whether CSA observed a commit created during the run.
+    pub commit_created: bool,
+    /// Whether dirty or staged workspace changes remained after the run.
+    pub dirty_worktree: bool,
+    /// Sanitized relative paths still dirty after the run, capped by the caller.
+    pub changed_paths: Vec<String>,
+    /// Number of additional dirty paths omitted from `changed_paths`.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub changed_paths_truncated: usize,
+    /// Current HEAD commit, when a clean committed outcome can be evidenced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_oid: Option<String>,
+    /// Bounded current HEAD subject, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_summary: Option<String>,
+    /// Stable recovery action code for callers.
+    pub suggested_recovery_action: String,
+}
+
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -311,6 +336,11 @@ pub struct SessionResult {
     /// successful commits, and legacy result files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_commit_recovery: Option<RequireCommitRecoveryDiagnostic>,
+    /// Structured recovery detail for memory-soft-limit writer terminations.
+    /// Omitted for non-memory terminations and sessions without bounded
+    /// repository side-effect evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_soft_limit_recovery: Option<MemorySoftLimitRecoveryDiagnostic>,
     /// Structured detail of a failed post-exec verification gate (#1726).
     /// Present ONLY when the gate (e.g. `just pre-commit`) failed, so an SA
     /// orchestrator can diagnose the failing step/test from `result.toml`

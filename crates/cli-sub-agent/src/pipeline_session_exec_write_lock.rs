@@ -306,6 +306,7 @@ mod tests {
                 uncommitted_changes: None,
                 large_diff_warning: None,
                 require_commit_recovery: None,
+                memory_soft_limit_recovery: None,
                 post_exec_gate: None,
                 manager_fields: Default::default(),
             },

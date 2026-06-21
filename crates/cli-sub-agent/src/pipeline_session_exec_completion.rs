@@ -123,11 +123,14 @@ pub(super) async fn complete_session_execution(
     let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
     let mut commit_created = None;
     if commit_guard_enabled {
+        commit_created = pre_run_workspace
+            .as_ref()
+            .zip(post_run_workspace.as_ref())
+            .map(|(before, after)| before.head != after.head);
         let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
             pre_run_workspace.as_ref(),
             post_run_workspace.as_ref(),
         );
-        commit_created = commit_guard.as_ref().map(|guard| guard.head_changed);
         let policy_evaluation_failed = require_commit_on_mutation
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
@@ -331,5 +334,94 @@ mod tests {
             .expect("result should be saved");
         assert_eq!(persisted.status, "failure");
         assert_eq!(persisted.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn completion_reports_commit_created_when_head_advances_cleanly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+        let project_root = tmp.path();
+        init_git_repo(project_root);
+        let before =
+            crate::run_cmd::capture_git_workspace_snapshot(project_root, false).expect("snapshot");
+
+        std::fs::write(project_root.join("tracked.txt"), "committed\n").expect("write change");
+        run_git(project_root, &["add", "tracked.txt"]);
+        run_git(project_root, &["commit", "-q", "-m", "clean commit"]);
+
+        let mut session = create_session(project_root, Some("clean commit"), None, Some("codex"))
+            .expect("create session");
+        let session_dir =
+            get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: CodexRuntimeMetadata::current(),
+        };
+        let transport_result = TransportResult {
+            execution: csa_process::ExecutionResult {
+                output: "committed".to_string(),
+                stderr_output: String::new(),
+                summary: "committed".to_string(),
+                exit_code: 0,
+                model_completed: Some(true),
+                ..Default::default()
+            },
+            provider_session_id: None,
+            events: Vec::new(),
+            metadata: StreamingMetadata {
+                has_tool_calls: true,
+                has_execute_tool_calls: true,
+                turn_count: 1,
+                ..Default::default()
+            },
+        };
+        let plan = SessionCompletionPlan {
+            merged_env: Default::default(),
+            hooks_config: Default::default(),
+            sessions_root: session_dir
+                .parent()
+                .expect("sessions root")
+                .display()
+                .to_string(),
+            edit_guard: None,
+            new_file_guard: None,
+            result_file_cleared: false,
+            execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+            commit_guard_enabled: true,
+            require_commit_on_mutation: false,
+            hook_bypass_scan_enabled: true,
+            is_git: true,
+            inside_git_worktree: true,
+            pre_run_workspace: Some(before),
+            pre_exec_snapshot: None,
+            timeout_diagnostics: None,
+            sa_mode: false,
+        };
+
+        let completed = complete_session_execution(
+            CompletionInput {
+                executor: &executor,
+                tool: &csa_core::types::ToolName::Codex,
+                prompt: "Commit the work",
+                output_format: &OutputFormat::Json,
+                task_type: Some("run"),
+                readonly_project_root: false,
+                project_root,
+                config: None,
+                global_config: None,
+                session_dir: &session_dir,
+                memory_project_key: None,
+                effective_prompt: "Commit the work".to_string(),
+                plan,
+                transport_result,
+            },
+            &mut session,
+        )
+        .await
+        .expect("complete session");
+
+        assert_eq!(completed.commit_created, Some(true));
+        assert_eq!(completed.execution.exit_code, 0);
     }
 }
