@@ -102,6 +102,7 @@ mod session_guard;
 mod session_kill_diagnostics;
 mod session_observability;
 mod session_outcome;
+mod session_provider_quota;
 mod session_result_publish;
 mod session_resume_handoff;
 mod session_summary_text;

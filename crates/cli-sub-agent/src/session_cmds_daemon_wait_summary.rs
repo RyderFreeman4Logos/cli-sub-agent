@@ -106,6 +106,8 @@ pub(crate) fn render_wait_result_summary(
     session_id: &str,
     result: &csa_session::SessionResult,
 ) -> String {
+    let provider_quota =
+        crate::session_provider_quota::provider_quota_display_for_result(session_dir, result);
     let mut lines = vec![
         format!("Session: {session_id}"),
         format!("Status: {}", result.status),
@@ -160,8 +162,15 @@ pub(crate) fn render_wait_result_summary(
         ));
     }
 
-    if let Some(summary) = wait_display_summary(session_dir, result) {
+    let display_summary = wait_display_summary(session_dir, result, provider_quota.as_ref());
+    let used_provider_quota = provider_quota
+        .as_ref()
+        .is_some_and(|quota| display_summary.as_deref() == Some(quota.summary.as_str()));
+    if let Some(summary) = display_summary {
         lines.push(format!("Summary: {summary}"));
+    }
+    if let (true, Some(provider_quota)) = (used_provider_quota, provider_quota.as_ref()) {
+        lines.push(format!("Hint: {}", provider_quota.hint));
     }
 
     lines.join("\n")
@@ -215,6 +224,8 @@ fn render_wait_result_json(
     session_id: &str,
     result: &csa_session::SessionResult,
 ) -> Result<String> {
+    let provider_quota =
+        crate::session_provider_quota::provider_quota_display_for_result(session_dir, result);
     let tokens = extract_wait_token_summary(result).map(|usage| {
         serde_json::json!({
             "input_tokens": usage.input_tokens,
@@ -242,17 +253,27 @@ fn render_wait_result_json(
         "post_exec_gate": result.post_exec_gate.as_ref(),
         "large_diff_warning": result.large_diff_warning.as_ref(),
         "warnings": result.warnings,
-        "summary": wait_display_summary(session_dir, result),
+        "summary": wait_display_summary(session_dir, result, provider_quota.as_ref()),
+        "provider_quota_hint": provider_quota.as_ref().map(|quota| quota.hint.as_str()),
     });
     serde_json::to_string_pretty(&value).map_err(Into::into)
 }
 
-fn wait_display_summary(session_dir: &Path, result: &csa_session::SessionResult) -> Option<String> {
+fn wait_display_summary(
+    session_dir: &Path,
+    result: &csa_session::SessionResult,
+    provider_quota: Option<&crate::session_provider_quota::ProviderQuotaDisplay>,
+) -> Option<String> {
     if let Some(report) = result.post_exec_gate.as_ref() {
         return compact_wait_summary_text(&csa_session::post_exec_gate_failure_summary(report));
     }
-    crate::session_summary_text::human_session_summary(session_dir, &result.summary)
-        .and_then(|text| compact_wait_summary_text(&text))
+    if let Some(text) =
+        crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+            .and_then(|text| compact_wait_summary_text(&text))
+    {
+        return Some(text);
+    }
+    provider_quota.and_then(|quota| compact_wait_summary_text(&quota.summary))
 }
 
 fn wait_result_tool_label(result: &csa_session::SessionResult) -> String {

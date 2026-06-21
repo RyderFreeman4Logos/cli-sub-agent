@@ -7,6 +7,8 @@ use super::{
 
 #[path = "session_cmds_daemon_wait_summary_kill_tests.rs"]
 mod kill_diagnostics;
+#[path = "session_cmds_daemon_wait_summary_provider_quota_tests.rs"]
+mod provider_quota;
 #[path = "session_cmds_daemon_wait_summary_recovery_tests.rs"]
 mod recovery;
 #[path = "session_cmds_daemon_wait_summary_unavailable_tests.rs"]

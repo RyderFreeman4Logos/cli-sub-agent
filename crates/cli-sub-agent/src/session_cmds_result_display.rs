@@ -38,6 +38,8 @@ pub(super) fn display_result_text(
     token_usage: Option<&TokenUsage>,
 ) {
     let envelope = &result.envelope;
+    let provider_quota =
+        crate::session_provider_quota::provider_quota_display_for_result(session_dir, envelope);
     println!("Session: {session_id}");
     println!("Status:  {}", envelope.status);
     println!("Exit:    {}", envelope.exit_code);
@@ -50,8 +52,15 @@ pub(super) fn display_result_text(
             csa_session::post_exec_gate_failure_label(report)
         );
     }
-    if let Some(summary) = result_display_summary(session_dir, envelope) {
+    let display_summary = result_display_summary(session_dir, envelope, provider_quota.as_ref());
+    let used_provider_quota = provider_quota
+        .as_ref()
+        .is_some_and(|quota| display_summary.as_deref() == Some(quota.summary.as_str()));
+    if let Some(summary) = display_summary {
         println!("Summary: {summary}");
+    }
+    if let (true, Some(provider_quota)) = (used_provider_quota, provider_quota.as_ref()) {
+        println!("Hint: {}", provider_quota.hint);
     }
     if let Some(reason) =
         crate::session_unavailable_reason::review_unavailable_reason_label(session_dir)
@@ -230,12 +239,19 @@ pub(super) fn build_result_json_payload(
 fn result_display_summary(
     session_dir: &Path,
     envelope: &csa_session::SessionResult,
+    provider_quota: Option<&crate::session_provider_quota::ProviderQuotaDisplay>,
 ) -> Option<String> {
     if let Some(report) = envelope.post_exec_gate.as_ref() {
         return Some(csa_session::post_exec_gate_failure_summary(report));
     }
-    crate::session_summary_text::human_session_summary(session_dir, &envelope.summary)
-        .map(|summary| crate::session_summary_text::enrich_review_summary(session_dir, &summary))
+    if let Some(summary) =
+        crate::session_summary_text::human_session_summary(session_dir, &envelope.summary).map(
+            |summary| crate::session_summary_text::enrich_review_summary(session_dir, &summary),
+        )
+    {
+        return Some(summary);
+    }
+    provider_quota.map(|quota| quota.summary.clone())
 }
 
 fn format_kill_diagnostics(diagnostics: &csa_session::KillDiagnosticReport) -> String {
@@ -332,6 +348,8 @@ pub(super) fn display_summary_section(
     let unavailable_reason =
         crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
     let post_exec_gate = load_structured_post_exec_gate_report(session_dir);
+    let provider_quota =
+        crate::session_provider_quota::provider_quota_display_for_session_dir(session_dir);
     let (section_id, content) = match csa_session::read_section(session_dir, "summary")? {
         Some(content) => ("summary", content),
         None => match csa_session::read_section(session_dir, "full")? {
@@ -339,6 +357,13 @@ pub(super) fn display_summary_section(
             None => {
                 if let Some(report) = post_exec_gate.as_ref() {
                     return display_gate_summary_override(report, None, unavailable_reason, json);
+                }
+                if let Some(provider_quota) = provider_quota.as_ref() {
+                    return display_provider_quota_summary(
+                        provider_quota,
+                        unavailable_reason,
+                        json,
+                    );
                 }
                 return display_summary_fallback(session_dir, session_id, json);
             }
@@ -355,6 +380,9 @@ pub(super) fn display_summary_section(
     }
 
     if json {
+        if let (true, Some(provider_quota)) = (section_id == "full", provider_quota.as_ref()) {
+            return display_provider_quota_summary(provider_quota, unavailable_reason, json);
+        }
         let payload = serde_json::json!({
             "section": section_id,
             "content": content,
@@ -363,6 +391,9 @@ pub(super) fn display_summary_section(
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else if section_id == "full" {
+        if let Some(provider_quota) = provider_quota.as_ref() {
+            return display_provider_quota_summary(provider_quota, unavailable_reason, json);
+        }
         print_truncated_content(&content, FALLBACK_LINES);
         print_unavailable_reason(unavailable_reason.as_deref());
     } else {
@@ -392,9 +423,36 @@ fn display_gate_summary_override(
     Ok(())
 }
 
+fn display_provider_quota_summary(
+    provider_quota: &crate::session_provider_quota::ProviderQuotaDisplay,
+    unavailable_reason: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let content = format!("{}\nHint: {}", provider_quota.summary, provider_quota.hint);
+    if json {
+        let payload = serde_json::json!({
+            "section": "summary",
+            "source": "provider_quota",
+            "content": content,
+            "tokens": csa_session::estimate_tokens(&provider_quota.summary),
+            "unavailable_reason": unavailable_reason,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!("{content}");
+        print_unavailable_reason(unavailable_reason.as_deref());
+    }
+    Ok(())
+}
+
 fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
     let unavailable_reason =
         crate::session_unavailable_reason::review_unavailable_reason_label(session_dir);
+    if let Some(provider_quota) =
+        crate::session_provider_quota::provider_quota_display_for_session_dir(session_dir)
+    {
+        return display_provider_quota_summary(&provider_quota, unavailable_reason, json);
+    }
     let output_log = session_dir.join("output.log");
     if output_log.is_file() {
         let content = fs::read_to_string(&output_log)?;
