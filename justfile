@@ -14,6 +14,7 @@ set dotenv-load := true
 # --- Environment Setup ---
 # Calculate repo root (compatible with submodules)
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
+_cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
@@ -164,19 +165,19 @@ fmt:
     if (( ${#staged_rs[@]} == 0 )); then
         exit 0
     fi
-    cargo fmt --all
+    {{_cargo}} fmt --all
     printf '%s\0' "${staged_rs[@]}" | xargs -0 git add --
 
 # Run clippy for the entire workspace (strict mode).
 clippy:
     just check-cargo-target-writable
-    cargo clippy --workspace --all-features -- -D warnings
+    {{_cargo}} clippy --workspace --all-features -- -D warnings
 
 # Run clippy for a specific package.
 # Usage: just clippy-p my-crate
 clippy-p package:
     just check-cargo-target-writable
-    cargo clippy -p {{package}} --all-features -- -D warnings
+    {{_cargo}} clippy -p {{package}} --all-features -- -D warnings
 
 # Security audit (requires cargo-deny)
 deny:
@@ -187,7 +188,7 @@ deny:
     if [ "${CARGO_DENY_DISABLE_FETCH:-}" = "1" ] || [ "${CARGO_DENY_OFFLINE:-}" = "1" ]; then \
         deny_args="$deny_args --disable-fetch"; \
     fi; \
-    cargo deny check $deny_args
+    {{_cargo}} deny check $deny_args
 
 # ==============================================================================
 # 🧪 Testing
@@ -198,16 +199,16 @@ deny:
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    cargo nextest run --workspace
+    {{_cargo}} nextest run --workspace
     just check-nextest-state-writable
-    cargo nextest run --workspace --all-features
+    {{_cargo}} nextest run --workspace --all-features
 
 # Run e2e tests only.
 # Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
 test-e2e:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    cargo nextest run --package cli-sub-agent --test e2e --all-features
+    {{_cargo}} nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
 # Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
@@ -215,7 +216,7 @@ test-e2e:
 test-p package:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    cargo nextest run -p {{package}} --all-features
+    {{_cargo}} nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
 # Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
@@ -223,7 +224,7 @@ test-p package:
 test-f pattern:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    cargo nextest run --workspace --all-features -E 'test({{pattern}})'
+    {{_cargo}} nextest run --workspace --all-features -E 'test({{pattern}})'
 
 # ==============================================================================
 # 🛠 Git Helpers
@@ -275,7 +276,7 @@ git-push-all:
 release-dry-run:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cargo metadata --no-deps --format-version 1 \
+    version=$({{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
     echo "Release dry run only (no changes made)."
@@ -289,7 +290,7 @@ release-dry-run:
 release-tag-local:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cargo metadata --no-deps --format-version 1 \
+    version=$({{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
 
@@ -307,7 +308,7 @@ release-tag-local:
 release-tag:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cargo metadata --no-deps --format-version 1 \
+    version=$({{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
 
@@ -342,7 +343,7 @@ install:
     set -euo pipefail
     target_dir="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
-    cargo build --release --all-features -p cli-sub-agent -p weave
+    {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
     install -m 755 "${target_dir}/release/csa" /usr/local/bin/csa
     install -m 755 "${target_dir}/release/weave" /usr/local/bin/weave
     echo "Verifying installation..."
@@ -353,11 +354,11 @@ install:
 # All crates inherit version.workspace, so a single workspace bump suffices.
 # Requires: cargo-edit (cargo install cargo-edit)
 bump-patch:
-    cargo set-version --bump patch -p cli-sub-agent
-    @cargo run --quiet -p cli-sub-agent -- migrate
+    {{_cargo}} set-version --bump patch -p cli-sub-agent
+    @{{_cargo}} run --quiet -p cli-sub-agent -- migrate
     git add Cargo.toml Cargo.lock weave.lock
     @echo "Bumped workspace version:"
-    @cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
+    @{{_cargo}} metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
 
 # Generate CHANGELOG.md from Conventional Commits (requires git-cliff).
 changelog:

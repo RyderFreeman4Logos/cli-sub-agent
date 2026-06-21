@@ -256,6 +256,7 @@ async fn prepare_session_runtime_inner(
             extra_env: input.extra_env,
             config: input.config,
             global_config: input.global_config,
+            project_root: Some(input.project_root),
             tool_name: input.executor.tool_name(),
             current_depth: input.startup_env.current_depth(),
             pattern_internal: input.startup_env.pattern_internal(),

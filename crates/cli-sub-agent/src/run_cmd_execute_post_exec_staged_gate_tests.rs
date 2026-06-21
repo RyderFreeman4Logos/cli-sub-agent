@@ -1,6 +1,7 @@
 use super::{
     PostExecGateCommandOutcome, PostExecGateOutcome, maybe_run_post_exec_gate_with_runner,
 };
+use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{PostExecGateConfig, ProjectConfig, ProjectMeta, ResourcesConfig, RunConfig};
 use std::collections::HashMap;
@@ -129,6 +130,192 @@ async fn post_exec_gate_stages_changed_paths_in_temporary_index() {
         "",
         "post-exec gate must not stage paths in the real index"
     );
+}
+
+#[tokio::test]
+async fn post_exec_gate_normalizes_readonly_usr_local_rust_env() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let _target = ScopedEnvVarRestore::unset(csa_core::env::CARGO_TARGET_DIR_ENV_KEY);
+    init_clean_git_repo(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
+    let home = project_dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let expected_target = project_dir.path().join("target");
+    let expected_install_root = expected_target.join("cargo-install-root");
+    let extra_env = HashMap::from([
+        ("CARGO_BUILD_JOBS".to_string(), "1".to_string()),
+        ("HOME".to_string(), home.to_string_lossy().into_owned()),
+        (
+            csa_core::env::CARGO_HOME_ENV_KEY.to_string(),
+            "/usr/local".to_string(),
+        ),
+        (
+            csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY.to_string(),
+            "/usr/local".to_string(),
+        ),
+    ]);
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some("01TESTPOSTEXECGATERUSTENV0"),
+        Some(&config),
+        Some(&changed_paths),
+        Some(extra_env),
+        move |_command, _cwd, _timeout_seconds, extra_env| {
+            Box::pin(async move {
+                let extra_env = extra_env.expect("gate should receive normalized env");
+                assert!(extra_env.contains_key("GIT_INDEX_FILE"));
+                assert_eq!(extra_env.get("CARGO_BUILD_JOBS"), Some(&"1".to_string()));
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_target.to_str().unwrap())
+                );
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_install_root.to_str().unwrap())
+                );
+                let cargo_home = extra_env
+                    .get(csa_core::env::CARGO_HOME_ENV_KEY)
+                    .expect("CARGO_HOME should be normalized");
+                assert_ne!(cargo_home, "/usr/local");
+                assert!(
+                    !csa_core::env::rust_state_path_needs_session_override(Path::new(cargo_home)),
+                    "post-exec gate CARGO_HOME must not target read-only /usr/local: {cargo_home}"
+                );
+                Ok(PostExecGateCommandOutcome::exited(Some(0)))
+            })
+        },
+    )
+    .await
+    .expect("gate should pass");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+}
+
+#[tokio::test]
+async fn post_exec_gate_preserves_safe_ambient_cargo_paths() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
+    let ambient_target = project_dir.path().join("ambient-target");
+    let ambient_install_root = project_dir.path().join("ambient-cargo-install-root");
+    let _target =
+        ScopedEnvVarRestore::set(csa_core::env::CARGO_TARGET_DIR_ENV_KEY, &ambient_target);
+    let _install_root = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        &ambient_install_root,
+    );
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some("01TESTPOSTEXECGATEAMBSAFE0"),
+        Some(&config),
+        Some(&changed_paths),
+        Some(HashMap::from([(
+            "CARGO_BUILD_JOBS".to_string(),
+            "1".to_string(),
+        )])),
+        move |_command, _cwd, _timeout_seconds, extra_env| {
+            let ambient_target = ambient_target.clone();
+            let ambient_install_root = ambient_install_root.clone();
+            Box::pin(async move {
+                let extra_env = extra_env.expect("gate should receive temp index env");
+                assert!(extra_env.contains_key("GIT_INDEX_FILE"));
+                assert_eq!(extra_env.get("CARGO_BUILD_JOBS"), Some(&"1".to_string()));
+                assert!(
+                    !extra_env.contains_key(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+                    "safe ambient CARGO_TARGET_DIR must not be overridden"
+                );
+                assert!(
+                    !extra_env.contains_key(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY),
+                    "safe ambient CARGO_INSTALL_ROOT must not be overridden"
+                );
+                let output = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("printf '%s\\n%s\\n' \"$CARGO_TARGET_DIR\" \"$CARGO_INSTALL_ROOT\"")
+                    .envs(&extra_env)
+                    .output()
+                    .expect("capture post-exec gate cargo env");
+                assert!(
+                    output.status.success(),
+                    "env capture should succeed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let captured = String::from_utf8_lossy(&output.stdout);
+                let lines = captured.lines().collect::<Vec<_>>();
+                assert_eq!(lines.len(), 2);
+                assert_eq!(lines[0], ambient_target.to_str().unwrap());
+                assert_eq!(lines[1], ambient_install_root.to_str().unwrap());
+                Ok(PostExecGateCommandOutcome::exited(Some(0)))
+            })
+        },
+    )
+    .await
+    .expect("gate should pass");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
+}
+
+#[tokio::test]
+async fn post_exec_gate_normalizes_ambient_usr_local_cargo_paths() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
+    let _target = ScopedEnvVarRestore::set(csa_core::env::CARGO_TARGET_DIR_ENV_KEY, "/usr/local");
+    let _install_root =
+        ScopedEnvVarRestore::set(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/usr/local");
+
+    let config = project_config_with_gate(PostExecGateConfig::default());
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let expected_target = project_dir.path().join("target");
+    let expected_install_root = expected_target.join("cargo-install-root");
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some("01TESTPOSTEXECGATEAMBLOCAL"),
+        Some(&config),
+        Some(&changed_paths),
+        Some(HashMap::from([(
+            "CARGO_BUILD_JOBS".to_string(),
+            "1".to_string(),
+        )])),
+        move |_command, _cwd, _timeout_seconds, extra_env| {
+            Box::pin(async move {
+                let extra_env = extra_env.expect("gate should receive normalized env");
+                assert!(extra_env.contains_key("GIT_INDEX_FILE"));
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_target.to_str().unwrap())
+                );
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_install_root.to_str().unwrap())
+                );
+                Ok(PostExecGateCommandOutcome::exited(Some(0)))
+            })
+        },
+    )
+    .await
+    .expect("gate should pass");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
 }
 
 #[tokio::test]

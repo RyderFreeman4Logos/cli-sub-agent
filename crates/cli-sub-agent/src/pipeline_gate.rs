@@ -342,8 +342,10 @@ async fn execute_gate_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd.kill_on_drop(true);
-    if let Some(extra_env) = extra_env {
-        cmd.envs(extra_env);
+    let mut gate_env = extra_env.cloned().unwrap_or_default();
+    crate::pipeline_env::apply_rust_gate_env_contract(&mut gate_env, project_root);
+    if !gate_env.is_empty() {
+        cmd.envs(&gate_env);
     }
 
     // Create a new process group so the timeout branch can terminate the
@@ -593,3 +595,7 @@ async fn terminate_gate_child_process_group(
 #[cfg(test)]
 #[path = "pipeline_gate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_gate_rust_env_tests.rs"]
+mod rust_env_tests;
