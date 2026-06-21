@@ -15,7 +15,18 @@ pub(super) fn recover_legacy_plain_pass_review_sidecars_from_dir(
     if review_sidecar_exists(session_dir) {
         return Ok(false);
     }
-    let Some(session) = read_session_state(session_dir)? else {
+    let session = match read_session_state(session_dir) {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!(
+                path = %session_dir.display(),
+                error = %error,
+                "skipping legacy review sidecar recovery because session state is unreadable"
+            );
+            None
+        }
+    };
+    let Some(session) = session else {
         return Ok(false);
     };
     let project_root = PathBuf::from(&session.project_path);

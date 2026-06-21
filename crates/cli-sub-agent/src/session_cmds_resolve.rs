@@ -138,7 +138,16 @@ pub(crate) fn resolve_session_prefix_with_global_fallback(
                     foreign_project_root,
                 });
             }
-            Err(project_err)
+            if !should_fallback_to_legacy(&project_err) {
+                return Err(project_err);
+            }
+            Err(anyhow::anyhow!(
+                "{}",
+                crate::session_observability::build_session_registry_lookup_miss_diagnostic(
+                    prefix,
+                    project_root,
+                )
+            ))
         }
     }
 }

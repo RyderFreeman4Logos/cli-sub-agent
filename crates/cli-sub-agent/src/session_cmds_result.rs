@@ -18,7 +18,8 @@ mod display;
 mod tool_output;
 
 use display::{
-    display_result_json, display_result_text, display_structured_output, load_total_token_usage,
+    display_pre_exec_summary_if_present, display_result_json, display_result_text,
+    display_structured_output, load_total_token_usage,
 };
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,26 @@ pub(crate) fn handle_session_result(
         .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
 
+    let registry_state_loss = wrapper_session_dir.is_dir()
+        && csa_session::load_session(effective_root, &wrapper_id).is_err();
+    if registry_state_loss
+        && structured.summary
+        && display_pre_exec_summary_if_present(&wrapper_session_dir, json)?
+    {
+        return Ok(());
+    }
+
+    if registry_state_loss
+        && !registry_loss_display_artifact_exists(&wrapper_session_dir, &structured)?
+        && crate::session_observability::emit_session_registry_state_loss_diagnostic(
+            effective_root,
+            &wrapper_id,
+            &wrapper_session_dir,
+        )
+    {
+        return Ok(());
+    }
+
     let resume_target = csa_session::resolve_resume_target_from_dir(effective_root, &session_dir)?;
     let follows_resume_target = resume_target.is_some();
     if let Some(target) = resume_target {
@@ -152,7 +173,7 @@ pub(crate) fn handle_session_result(
         );
     }
 
-    let repaired_result = if is_cross_project {
+    let repaired_result = if is_cross_project || registry_state_loss {
         match crate::session_observability::refresh_and_repair_result_from_dir(&session_dir) {
             Ok(result) => result,
             Err(err) => {
@@ -280,6 +301,68 @@ pub(crate) fn handle_session_result(
         }
     }
     Ok(())
+}
+
+fn registry_loss_display_artifact_exists(
+    session_dir: &Path,
+    structured: &StructuredOutputOpts,
+) -> Result<bool> {
+    if session_dir
+        .join(csa_session::result::RESULT_FILE_NAME)
+        .is_file()
+    {
+        return Ok(true);
+    }
+
+    requested_structured_output_exists(session_dir, structured)
+}
+
+fn requested_structured_output_exists(
+    session_dir: &Path,
+    structured: &StructuredOutputOpts,
+) -> Result<bool> {
+    if !structured.is_active() {
+        return Ok(false);
+    }
+
+    let output_log = session_dir.join("output.log");
+    let output_log_non_empty = output_log
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > 0);
+
+    if structured.summary {
+        return Ok(output_index_has_section(session_dir, "summary")?
+            || output_index_has_section(session_dir, "full")?
+            || output_log_non_empty);
+    }
+
+    if let Some(section_id) = structured.section.as_deref() {
+        return output_index_has_section(session_dir, section_id);
+    }
+
+    if structured.full {
+        return Ok(output_index_has_any_section(session_dir)? || output_log_non_empty);
+    }
+
+    Ok(false)
+}
+
+fn output_index_has_section(session_dir: &Path, section_id: &str) -> Result<bool> {
+    Ok(
+        csa_session::load_output_index(session_dir)?.is_some_and(|index| {
+            index
+                .sections
+                .iter()
+                .any(|section| section.id == section_id)
+        }),
+    )
+}
+
+fn output_index_has_any_section(session_dir: &Path) -> Result<bool> {
+    Ok(
+        csa_session::load_output_index(session_dir)?
+            .is_some_and(|index| !index.sections.is_empty()),
+    )
 }
 
 fn load_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
