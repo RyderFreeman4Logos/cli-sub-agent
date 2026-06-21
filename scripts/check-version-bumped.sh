@@ -3,6 +3,7 @@
 # This script backs `just check-version-bumped` and is also invoked directly by
 # Rust tests so workspace tests do not depend on the host having `just` installed.
 set -euo pipefail
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 repo_root="${1:-}"
 if [ -z "$repo_root" ]; then
@@ -23,7 +24,7 @@ if [ -z "$cargo_install_root" ] || [ "$cargo_install_root" = "/usr/local" ]; the
     cargo_install_root="$repo_root/target/cargo-install-root"
 fi
 mkdir -p "$cargo_install_root"
-current=$(CARGO_INSTALL_ROOT="$cargo_install_root" cargo metadata --no-deps --format-version 1 \
+current=$(CARGO_INSTALL_ROOT="$cargo_install_root" "$script_dir/cargo-env-normalize.sh" cargo metadata --no-deps --format-version 1 \
     | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
 main_version=$(git show main:Cargo.toml 2>/dev/null \
     | grep -A1 '^\[workspace\.package\]' \

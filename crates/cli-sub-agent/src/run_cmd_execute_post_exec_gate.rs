@@ -429,6 +429,9 @@ where
     let branch = super::run_context::current_branch_name(project_root);
     let (extra_env, _temp_index) =
         post_exec_gate_env_with_temp_index(project_root, changed_paths, extra_env)?;
+    let mut extra_env = extra_env.unwrap_or_default();
+    crate::pipeline_env::apply_rust_gate_env_contract(&mut extra_env, project_root);
+    let extra_env = (!extra_env.is_empty()).then_some(extra_env);
     let outcome = runner(
         &gate_config.command,
         project_root,

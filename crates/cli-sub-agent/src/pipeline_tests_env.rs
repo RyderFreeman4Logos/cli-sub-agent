@@ -5,6 +5,7 @@ fn build_merged_env_injects_node_options_when_heap_limit_configured() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "claude-code",
         current_depth: 0,
         pattern_internal: false,
@@ -29,6 +30,7 @@ fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "opencode",
         current_depth: 0,
         pattern_internal: false,
@@ -52,6 +54,7 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "opencode",
         current_depth: 0,
         pattern_internal: false,
@@ -71,12 +74,24 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
     let home = temp.path().join("home");
     let mise_data = temp.path().join("mise-data");
     let mise_rust = mise_data.join("installs/rust/stable");
+    let toolchain_bin = mise_rust
+        .join("toolchains")
+        .join("1.96.0-x86_64-unknown-linux-gnu")
+        .join("bin");
     std::fs::create_dir_all(home.join(".cargo")).expect("create cargo home");
     std::fs::create_dir_all(home.join(".config/mise")).expect("create mise config");
     std::fs::create_dir_all(mise_rust.join("toolchains")).expect("create rust toolchains");
+    std::fs::create_dir_all(&toolchain_bin).expect("create toolchain bin");
+    std::fs::write(toolchain_bin.join("cargo"), "").expect("write cargo binary marker");
     std::fs::write(mise_rust.join("settings.toml"), "version = \"12\"\n")
         .expect("write rustup settings");
+    std::fs::write(
+        temp.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.96.0\"\n",
+    )
+    .expect("write rust toolchain");
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
+    let _path = ScopedEnvVarRestore::set("PATH", "/usr/local/bin:/bin");
     let _cargo_home = ScopedEnvVarRestore::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local");
     let _rustup_home = ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
     let _cargo_install_root =
@@ -93,23 +108,37 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: Some(temp.path()),
         tool_name: "codex",
         current_depth: 0,
         pattern_internal: false,
         allow_git_push: false,
     });
 
-    assert_eq!(
-        merged
-            .get(csa_core::env::CARGO_HOME_ENV_KEY)
-            .map(String::as_str),
-        Some(home.join(".cargo").to_str().expect("cargo home utf8"))
+    let normalized_cargo_home = merged
+        .get(csa_core::env::CARGO_HOME_ENV_KEY)
+        .map(std::path::PathBuf::from)
+        .expect("CARGO_HOME should be normalized");
+    assert!(
+        normalized_cargo_home == std::path::Path::new("/usr/local/share/cargo")
+            || normalized_cargo_home == temp.path().join(".cargo-local"),
+        "CARGO_HOME should use shared cache when available or project-local fallback, got {}",
+        normalized_cargo_home.display()
+    );
+    assert!(
+        !csa_core::env::rust_state_path_needs_session_override(&normalized_cargo_home),
+        "normalized CARGO_HOME must not point at read-only /usr/local"
     );
     assert_eq!(
         merged
             .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
             .map(String::as_str),
-        Some(home.join(".cargo").to_str().expect("cargo home utf8"))
+        Some(
+            temp.path()
+                .join("target/cargo-install-root")
+                .to_str()
+                .expect("cargo install root utf8")
+        )
     );
     assert_eq!(
         merged
@@ -122,6 +151,17 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
             .get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY)
             .map(String::as_str),
         Some(home.join(".config/mise").to_str().expect("mise config utf8"))
+    );
+    let first_path_entry = std::env::split_paths(
+        merged
+            .get("PATH")
+            .expect("PATH should be present after env merge"),
+    )
+    .next();
+    assert_eq!(
+        first_path_entry.as_deref(),
+        Some(toolchain_bin.as_path()),
+        "real rust toolchain bin should precede rustup shims for bare cargo"
     );
 }
 
@@ -166,6 +206,7 @@ fn build_merged_env_preserves_explicit_writable_rust_state() {
         extra_env: Some(&extra_env),
         config: Some(&cfg),
         global_config: None,
+        project_root: Some(temp.path()),
         tool_name: "codex",
         current_depth: 0,
         pattern_internal: false,
@@ -198,6 +239,7 @@ fn build_merged_env_disables_gemini_direct_launch_in_tests() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "gemini-cli",
         current_depth: 0,
         pattern_internal: false,
@@ -227,6 +269,7 @@ fn build_merged_env_injects_openai_compat_http_config_without_model_env() {
         extra_env: None,
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "openai-compat",
         current_depth: 0,
         pattern_internal: false,
@@ -257,6 +300,7 @@ fn build_merged_env_appends_node_options_when_existing_value_present() {
         extra_env: Some(&extra_env),
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "claude-code",
         current_depth: 0,
         pattern_internal: false,
@@ -304,6 +348,7 @@ fn build_merged_env_scrubs_stale_contract_then_sets_fresh_invocation_env() {
         extra_env: Some(&extra_env),
         config: Some(&cfg),
         global_config: None,
+        project_root: None,
         tool_name: "opencode",
         current_depth: 4,
         pattern_internal: false,

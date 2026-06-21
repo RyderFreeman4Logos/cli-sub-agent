@@ -10,6 +10,9 @@ pub const RUSTUP_HOME_ENV_KEY: &str = "RUSTUP_HOME";
 /// Cargo install root used by `cargo install`.
 pub const CARGO_INSTALL_ROOT_ENV_KEY: &str = "CARGO_INSTALL_ROOT";
 
+/// Cargo build artifact directory.
+pub const CARGO_TARGET_DIR_ENV_KEY: &str = "CARGO_TARGET_DIR";
+
 /// mise configuration directory.
 pub const MISE_CONFIG_DIR_ENV_KEY: &str = "MISE_CONFIG_DIR";
 

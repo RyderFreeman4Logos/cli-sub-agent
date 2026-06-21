@@ -7,6 +7,7 @@ use tracing::info;
 pub(crate) const CSA_GIT_PUSH_ALLOWED_ENV: &str = csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY;
 pub(crate) const CSA_RUN_GIT_PUSH_AUTHORIZED_ENV: &str =
     csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY;
+const SHARED_CARGO_HOME: &str = "/usr/local/share/cargo";
 
 /// Resolve effective cooldown seconds from config or default.
 pub(crate) fn resolve_cooldown_seconds(config: Option<&ProjectConfig>) -> u64 {
@@ -19,6 +20,7 @@ pub(crate) struct MergedEnvRequest<'a> {
     pub(crate) extra_env: Option<&'a HashMap<String, String>>,
     pub(crate) config: Option<&'a ProjectConfig>,
     pub(crate) global_config: Option<&'a csa_config::GlobalConfig>,
+    pub(crate) project_root: Option<&'a Path>,
     pub(crate) tool_name: &'a str,
     pub(crate) current_depth: u32,
     pub(crate) pattern_internal: bool,
@@ -30,6 +32,7 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
         extra_env,
         config,
         global_config,
+        project_root,
         tool_name,
         current_depth,
         pattern_internal,
@@ -47,7 +50,7 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
     {
         merged_env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
     }
-    apply_rust_session_env_contract(&mut merged_env);
+    apply_rust_session_env_contract(&mut merged_env, project_root);
     if suppress {
         merged_env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
     }
@@ -129,6 +132,20 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
     merged_env
 }
 
+pub(crate) fn apply_rust_gate_env_contract(env: &mut HashMap<String, String>, project_root: &Path) {
+    apply_rust_session_env_contract(env, Some(project_root));
+    ensure_project_env_path(
+        env,
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        &project_root.join("target"),
+    );
+    ensure_project_env_path(
+        env,
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        &project_root.join("target/cargo-install-root"),
+    );
+}
+
 pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for key in [
@@ -148,23 +165,30 @@ pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<
     paths
 }
 
-fn apply_rust_session_env_contract(env: &mut HashMap<String, String>) {
+fn apply_rust_session_env_contract(env: &mut HashMap<String, String>, project_root: Option<&Path>) {
     let Some(home) = env_path(env, "HOME") else {
         return;
     };
-    let cargo_home = home.join(".cargo");
+    let cargo_home = preferred_cargo_home(&home, project_root);
     normalize_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
 
     let effective_cargo_home =
         env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
+    let cargo_install_root =
+        preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
     normalize_rust_env_path(
         env,
         csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
-        &effective_cargo_home,
+        &cargo_install_root,
     );
 
     let rustup_home = preferred_rustup_home(env, &home);
     normalize_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
+    let effective_rustup_home =
+        env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY).unwrap_or(rustup_home);
+    if let Some(project_root) = project_root {
+        maybe_prepend_real_rust_toolchain(env, project_root, &effective_rustup_home);
+    }
 
     let mise_config_dir = home.join(".config/mise");
     normalize_rust_env_path(
@@ -174,6 +198,26 @@ fn apply_rust_session_env_contract(env: &mut HashMap<String, String>) {
     );
 }
 
+fn preferred_cargo_home(home: &Path, project_root: Option<&Path>) -> PathBuf {
+    let shared = Path::new(SHARED_CARGO_HOME);
+    if shared.is_dir() && !csa_core::env::rust_state_path_needs_session_override(shared) {
+        return shared.to_path_buf();
+    }
+
+    project_root
+        .map(|root| root.join(".cargo-local"))
+        .unwrap_or_else(|| home.join(".cargo"))
+}
+
+fn preferred_cargo_install_root(
+    project_root: Option<&Path>,
+    effective_cargo_home: &Path,
+) -> PathBuf {
+    project_root
+        .map(|root| root.join("target/cargo-install-root"))
+        .unwrap_or_else(|| effective_cargo_home.to_path_buf())
+}
+
 fn normalize_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
     let Some(current) = env_path(env, key) else {
         return;
@@ -181,6 +225,25 @@ fn normalize_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallbac
     if csa_core::env::rust_state_path_needs_session_override(&current) {
         env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
     }
+}
+
+fn ensure_project_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
+    if let Some(value) = env.get(key).filter(|value| !value.trim().is_empty()) {
+        if csa_core::env::rust_state_path_needs_session_override(Path::new(value.as_str())) {
+            env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
+        }
+        return;
+    }
+
+    if let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(value);
+        if csa_core::env::rust_state_path_needs_session_override(&path) {
+            env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
+        }
+        return;
+    }
+
+    env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
 }
 
 fn preferred_rustup_home(env: &HashMap<String, String>, home: &Path) -> PathBuf {
@@ -207,6 +270,56 @@ fn mise_rust_home_candidates(env: &HashMap<String, String>) -> Vec<PathBuf> {
         }
     }
     candidates
+}
+
+fn maybe_prepend_real_rust_toolchain(
+    env: &mut HashMap<String, String>,
+    project_root: &Path,
+    rustup_home: &Path,
+) {
+    let Some(toolchain_bin) = real_rust_toolchain_bin(project_root, rustup_home) else {
+        return;
+    };
+    let current_path = env
+        .get("PATH")
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let mut paths = std::env::split_paths(&current_path).collect::<Vec<_>>();
+    if paths.iter().any(|path| path == &toolchain_bin) {
+        return;
+    }
+    paths.insert(0, toolchain_bin);
+    let Ok(joined) = std::env::join_paths(paths) else {
+        return;
+    };
+    env.insert("PATH".to_string(), joined.to_string_lossy().into_owned());
+}
+
+fn real_rust_toolchain_bin(project_root: &Path, rustup_home: &Path) -> Option<PathBuf> {
+    let channel = rust_toolchain_channel(project_root)?;
+    let prefix = format!("{channel}-");
+    let toolchains = rustup_home.join("toolchains");
+    for entry in std::fs::read_dir(toolchains).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == channel || name.starts_with(&prefix) {
+            let bin = entry.path().join("bin");
+            if bin.join("cargo").is_file() {
+                return Some(bin);
+            }
+        }
+    }
+    None
+}
+
+fn rust_toolchain_channel(project_root: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(project_root.join("rust-toolchain.toml")).ok()?;
+    let document = content.parse::<toml_edit::DocumentMut>().ok()?;
+    document["toolchain"]["channel"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn env_path(env: &HashMap<String, String>, key: &str) -> Option<PathBuf> {
