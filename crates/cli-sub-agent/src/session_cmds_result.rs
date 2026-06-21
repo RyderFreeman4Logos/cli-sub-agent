@@ -299,11 +299,16 @@ pub(crate) use crate::session_cmds_result_measure::{compute_token_measurement, f
 pub(crate) use artifacts::handle_session_artifacts;
 #[cfg(test)]
 use display::{
-    build_result_json_payload, display_all_sections, display_single_section,
-    display_summary_section, render_result_sidecar_for_text, render_token_usage_lines,
+    build_all_sections_json_payload, build_gate_aware_summary_content, build_result_json_payload,
+    build_summary_section_json_payload, display_all_sections, display_single_section,
+    display_summary_section, gate_summary_employee_section, load_structured_post_exec_gate_report,
+    render_result_sidecar_for_text, render_token_usage_lines, structured_sections_with_gate_first,
 };
 pub(crate) use tool_output::handle_session_tool_output;
 
+#[cfg(test)]
+#[path = "session_cmds_result_post_exec_gate_tests.rs"]
+mod post_exec_gate_tests;
 #[cfg(test)]
 #[path = "session_cmds_result_tests.rs"]
 mod tests;
