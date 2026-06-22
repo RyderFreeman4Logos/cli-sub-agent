@@ -133,7 +133,7 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
 }
 
 pub(crate) fn apply_rust_gate_env_contract(env: &mut HashMap<String, String>, project_root: &Path) {
-    apply_rust_session_env_contract(env, Some(project_root));
+    apply_rust_session_env_contract_inner(env, Some(project_root), false);
     ensure_project_env_path(
         env,
         csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
@@ -166,21 +166,31 @@ pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<
 }
 
 fn apply_rust_session_env_contract(env: &mut HashMap<String, String>, project_root: Option<&Path>) {
+    apply_rust_session_env_contract_inner(env, project_root, true);
+}
+
+fn apply_rust_session_env_contract_inner(
+    env: &mut HashMap<String, String>,
+    project_root: Option<&Path>,
+    materialize_cargo_install_root: bool,
+) {
     let Some(home) = env_path(env, "HOME") else {
         return;
     };
     let cargo_home = preferred_cargo_home(&home, project_root);
     ensure_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
 
-    let effective_cargo_home =
-        env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
-    let cargo_install_root =
-        preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
-    ensure_rust_env_path(
-        env,
-        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
-        &cargo_install_root,
-    );
+    if materialize_cargo_install_root {
+        let effective_cargo_home =
+            env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
+        let cargo_install_root =
+            preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
+        ensure_rust_env_path(
+            env,
+            csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+            &cargo_install_root,
+        );
+    }
 
     let rustup_home = preferred_rustup_home(env, &home);
     ensure_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
