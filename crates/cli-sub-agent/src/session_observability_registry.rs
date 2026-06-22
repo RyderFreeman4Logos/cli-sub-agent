@@ -74,9 +74,10 @@ fn build_session_registry_state_loss_diagnostic(
     format!(
         "session registry lookup failed for session '{session_id}': the session directory exists but {}. \
          This is CSA infrastructure session-registry loss, not a product-code failure. \
-         Dirty or staged work may still be in the project worktree; inspect with `git status --short` and `git diff`. \
-         Captured output may still be discoverable via `csa session logs --session {session_id}{cd_arg}` \
-         or `csa session logs --session {session_id} --events{cd_arg}`.",
+         Dirty or staged work may still be in the project worktree; inspect git metadata with \
+         `git status --short`, `git diff`, and `git diff --staged` from the project root. \
+         Do not manually read session directories or transcripts; retry `csa session result --session {session_id}{cd_arg}` \
+         after preserving any worktree changes.",
         issue.description(),
     )
 }
@@ -89,7 +90,48 @@ pub(crate) fn build_session_registry_lookup_miss_diagnostic(
     format!(
         "session registry lookup failed for session '{session_id}': no session registration was found in the current project, legacy state, or global exact lookup. \
          If this id came from CSA:SESSION_STARTED, this is CSA infrastructure session-registry loss, not a product-code failure. \
-         Dirty or staged work may still be in the project worktree; inspect with `git status --short` and `git diff`. \
-         If captured output exists, try `csa session logs --session {session_id}{cd_arg}`."
+         Dirty or staged work may still be in the project worktree; inspect git metadata with \
+         `git status --short`, `git diff`, and `git diff --staged` from the project root. \
+         Do not manually read session directories or transcripts; retry `csa session result --session {session_id}{cd_arg}` \
+         after preserving any worktree changes."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SESSION_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    #[test]
+    fn registry_lookup_miss_diagnostic_is_bounded_and_git_recovery_focused() {
+        let diagnostic =
+            build_session_registry_lookup_miss_diagnostic(SESSION_ID, Path::new("/repo"));
+
+        assert!(diagnostic.len() < 700, "{diagnostic}");
+        assert!(diagnostic.contains("CSA infrastructure session-registry loss"));
+        assert!(diagnostic.contains("git status --short"));
+        assert!(diagnostic.contains("git diff --staged"));
+        assert!(diagnostic.contains("Do not manually read session directories or transcripts"));
+        assert!(!diagnostic.contains("session logs"));
+        assert!(!diagnostic.contains("acp-events"));
+    }
+
+    #[test]
+    fn registry_state_loss_diagnostic_is_bounded_and_git_recovery_focused() {
+        let diagnostic = build_session_registry_state_loss_diagnostic(
+            SESSION_ID,
+            &SessionRegistryStateIssue::Missing,
+            Path::new("/repo"),
+        );
+
+        assert!(diagnostic.len() < 750, "{diagnostic}");
+        assert!(diagnostic.contains("state.toml is missing"));
+        assert!(diagnostic.contains("CSA infrastructure session-registry loss"));
+        assert!(diagnostic.contains("git status --short"));
+        assert!(diagnostic.contains("git diff --staged"));
+        assert!(diagnostic.contains("Do not manually read session directories or transcripts"));
+        assert!(!diagnostic.contains("session logs"));
+        assert!(!diagnostic.contains("acp-events"));
+    }
 }

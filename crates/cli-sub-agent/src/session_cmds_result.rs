@@ -396,6 +396,9 @@ mod post_exec_gate_tests;
 #[path = "session_cmds_result_tests.rs"]
 mod tests;
 #[cfg(test)]
+#[path = "session_cmds_result_tests_2351.rs"]
+mod tests_2351;
+#[cfg(test)]
 #[path = "session_cmds_result_tier_failover_tests.rs"]
 mod tier_failover_tests;
 #[cfg(test)]

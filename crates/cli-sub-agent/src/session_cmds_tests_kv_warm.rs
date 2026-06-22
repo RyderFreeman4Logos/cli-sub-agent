@@ -123,6 +123,71 @@ fn handle_session_wait_kv_warm_exit_when_daemon_alive_at_cap() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn handle_session_wait_kv_warm_after_registry_state_loss_with_metadata_fallback() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let caller_project = td.path().join("caller");
+    let owner_project = td.path().join("owner");
+    std::fs::create_dir_all(&caller_project).expect("create caller project");
+    std::fs::create_dir_all(&owner_project).expect("create owner project");
+
+    let session = create_session(
+        &owner_project,
+        Some("wait-metadata-only"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&owner_project, &session_id).expect("session dir");
+    std::fs::remove_file(session_dir.join("state.toml")).expect("remove registry state");
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let exit_code = handle_session_wait_with_hooks(
+        session_id,
+        Some(caller_project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("registry-loss live session must not be reconciled")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("alive-at-cap path must not emit a completion signal");
+        },
+    )
+    .expect("wait should reach KV-warm exit through metadata fallback");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(
+        exit_code, 0,
+        "metadata-only exact fallback must keep CSA:SESSION_STARTED ids waitable after KV warm"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn stale_precheck_does_not_fail_live_daemon_session() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

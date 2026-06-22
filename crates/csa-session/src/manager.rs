@@ -40,7 +40,9 @@ pub use manager_legacy::decode_session_created_at;
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
 pub use manager_paths::{get_session_dir, get_session_root};
-pub use manager_paths::{get_session_dir_global, list_all_project_session_roots};
+pub use manager_paths::{
+    get_session_dir_global, get_session_dir_global_durable, list_all_project_session_roots,
+};
 use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_base_dir};
 use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{

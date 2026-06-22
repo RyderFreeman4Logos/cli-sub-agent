@@ -119,15 +119,18 @@ pub(crate) fn resolve_session_prefix_with_global_fallback(
             {
                 return Ok(resolution);
             }
-            // Try global exact lookup
-            if let Some(session_dir) = csa_session::get_session_dir_global(prefix)? {
+            // Try global exact lookup backed by durable CSA-owned session metadata.
+            if let Some(session_dir) = csa_session::get_session_dir_global_durable(prefix)? {
                 let sessions_dir = session_dir
                     .parent()
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| session_dir.clone());
                 // Extract the foreign project_path from state.toml for callers
-                // that need to call project-scoped session APIs.
-                let foreign_project_root = extract_foreign_project_root(&session_dir);
+                // that need to call project-scoped session APIs. If state.toml
+                // is gone, derive the path from CSA's project-keyed state root
+                // so result/wait can still use direct session-dir recovery paths.
+                let foreign_project_root = extract_foreign_project_root(&session_dir)
+                    .or_else(|| infer_foreign_project_root_from_session_dir(&session_dir));
                 eprintln!(
                     "Warning: session {} not found in current project, using cross-project fallback",
                     prefix,
@@ -198,4 +201,29 @@ fn extract_foreign_project_root(session_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn infer_foreign_project_root_from_session_dir(session_dir: &Path) -> Option<PathBuf> {
+    let base_dir = session_dir.parent()?.parent()?;
+    for state_dir in candidate_state_dirs() {
+        let Ok(relative) = base_dir.strip_prefix(&state_dir) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        return Some(PathBuf::from(std::path::MAIN_SEPARATOR_STR).join(relative));
+    }
+    None
+}
+
+fn candidate_state_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = paths::state_dir_write() {
+        dirs.push(dir);
+    }
+    if let Some(dir) = paths::legacy_state_dir() {
+        dirs.push(dir);
+    }
+    dirs
 }

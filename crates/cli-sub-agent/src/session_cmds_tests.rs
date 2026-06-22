@@ -839,6 +839,8 @@ mod print_tail_tests;
 mod result_cli_tests;
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;
+#[path = "session_cmds_tests_tail_2351.rs"]
+mod tail_tests_2351;
 #[path = "session_cmds_tests_tail_recovery.rs"]
 mod tail_tests_recovery;
 #[path = "session_cmds_tests_tail_wait.rs"]
