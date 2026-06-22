@@ -55,6 +55,7 @@ fn read_capture(path: &Path) -> HashMap<String, String> {
 #[cfg(unix)]
 fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
     let repo = TempDir::new().expect("create temp repo");
+    let repo_root = repo.path().canonicalize().expect("canonical temp repo");
     let capture = repo.path().join("capture.env");
     let mise_data = repo.path().join("mise-data");
     let mise_rust = mise_data.join("installs/rust/stable");
@@ -100,7 +101,7 @@ fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
     assert_eq!(
         captured.get("CARGO_INSTALL_ROOT").map(String::as_str),
         Some(
-            repo.path()
+            repo_root
                 .join("target/cargo-install-root")
                 .to_str()
                 .unwrap()
@@ -108,7 +109,7 @@ fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
     );
     assert_eq!(
         captured.get("CARGO_TARGET_DIR").map(String::as_str),
-        Some(repo.path().join("target").to_str().unwrap())
+        Some(repo_root.join("target").to_str().unwrap())
     );
     assert_eq!(
         captured.get("RUSTUP_HOME").map(String::as_str),

@@ -743,7 +743,7 @@ printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artif
 [[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
 [[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
 FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}") || { echo "read spec artifact failed" >&2; exit 1; }
-LOWER_SPEC_LINE="${FIRST_SPEC_LINE,,}"
+LOWER_SPEC_LINE=$(printf '%s' "${FIRST_SPEC_LINE}" | tr '[:upper:]' '[:lower:]')
 SPEC_MARKER_KIND=""
 case "${LOWER_SPEC_LINE}" in
   '<!-- csa:section:'*) SPEC_MARKER_KIND="CSA section marker" ;;
@@ -775,25 +775,25 @@ grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" || { echo "spec artifact missi
 grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" || { echo "spec artifact plan_ulid unresolved or mismatched" >&2; exit 1; }
 grep -q '^summary = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing summary" >&2; exit 1; }
 grep -q '^\[\[criteria\]\]$' "${SPEC_ARTIFACT}" || { echo "spec artifact has no criteria entries" >&2; exit 1; }
-rg -q '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" || { echo "spec artifact has invalid criterion kinds" >&2; exit 1; }
+grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" || { echo "bad criterion kind" >&2; exit 1; }
 grep -q '^id = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion id" >&2; exit 1; }
 grep -q '^description = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion description" >&2; exit 1; }
 SUMMARY_LINE=$(sed -n 's/^summary = "\(.*\)"$/\1/p' "${SPEC_ARTIFACT}" | head -n1)
-printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "spec artifact summary must be one Chinese line" >&2; exit 1; }
+printf '%s\n' "${SUMMARY_LINE}" | perl -CSDA -ne '$found ||= /\p{Han}/; END { exit($found ? 0 : 1) }' || { echo "summary lacks Han" >&2; exit 1; }
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
   TASK_COUNT=$(grep -cE '^- \[ \] .+' "${TODO_ARTIFACT}")
   MIN_HAN="${TASK_COUNT}"
   if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
   if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
-  HAN_COUNT=$(rg -o '[\p{Han}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO artifact language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
+  HAN_COUNT=$(perl -CSDA -ne '$count += () = /\p{Han}/g; END { print $count + 0, "\n" }' "${TODO_ARTIFACT}")
+  [[ "${HAN_COUNT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO Han chars < ${MIN_HAN}" >&2; exit 1; }
 elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
   TASK_COUNT=$(grep -cE '^- \[ \] .+' "${TODO_ARTIFACT}")
   MIN_CJK="${TASK_COUNT}"
   if [ "${MIN_CJK}" -lt 2 ]; then MIN_CJK=2; fi
   if [ "${MIN_CJK}" -gt 30 ]; then MIN_CJK=30; fi
-  CJK_COUNT=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')
-  [[ "${CJK_COUNT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO artifact language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
+  CJK_COUNT=$(perl -CSDA -ne '$count += () = /[\p{Han}\p{Hiragana}\p{Katakana}]/g; END { print $count + 0, "\n" }' "${TODO_ARTIFACT}")
+  [[ "${CJK_COUNT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO CJK chars < ${MIN_CJK}" >&2; exit 1; }
 fi
 e="${SAVE_DIR}/persist.stderr"
 TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}" 2>"$e") || {

@@ -15,7 +15,7 @@ fn config_with_review_tier(enabled_tools: &[&str], models: &[&str]) -> csa_confi
         c.memory_max_mb = (n != "codex").then_some(256);
     }
     if enabled_tools.contains(&"codex") {
-        config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+        crate::review_cmd::tests::configure_codex_cli_review_test_tool(&mut config);
     }
     config.tiers.insert(
         "quality".to_string(),

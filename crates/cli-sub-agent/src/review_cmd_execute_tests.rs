@@ -1,6 +1,7 @@
 use super::*;
 use crate::review_cmd::tests::{
-    ScopedEnvVarRestore, project_config_with_enabled_tools, setup_git_repo,
+    ScopedEnvVarRestore, configure_codex_cli_review_test_tool, project_config_with_enabled_tools,
+    setup_git_repo,
 };
 use crate::session_cmds_result::{StructuredOutputOpts, handle_session_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -119,7 +120,6 @@ printf 'tool mutation\\n' >> \"{}\"\n",
 #[tokio::test]
 async fn execute_review_preserves_codex_default_target_when_project_target_exists() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-
     let project_dir = setup_git_repo();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let target_mount = project_dir.path().join("ssd-target");
@@ -138,7 +138,7 @@ printf '%s\\n' \
 '<!-- CSA:SECTION:summary:END -->' \
 '' \
 '<!-- CSA:SECTION:details -->' \
-'Review used default cargo target behavior.' \
+'PASS.' \
 '<!-- CSA:SECTION:details:END -->'\n",
         cargo_target_log.display()
     );
@@ -154,9 +154,8 @@ printf '%s\\n' \
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
     let _bwrap_preflight_guard = ScopedEnvVarRestore::set("CSA_SKIP_BWRAP_PREFLIGHT", "1");
-
     let mut config = project_config_with_enabled_tools(&["codex"]);
-    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    configure_codex_cli_review_test_tool(&mut config);
     let global = GlobalConfig::default();
     let result = execute_review(
         ToolName::Codex,
@@ -186,10 +185,10 @@ printf '%s\\n' \
         false,
         &[],
         &[],
-        Some(false), // error_marker_scan_override: force scan OFF for marker-bearing fixtures (#1745)
+        Some(false),
     )
     .await
-    .expect("codex review should honor project target");
+    .expect("codex target review");
 
     assert_eq!(result.execution.execution.exit_code, 0);
     let session_dir =
@@ -199,11 +198,11 @@ printf '%s\\n' \
     assert_ne!(
         observed_target_dir,
         session_dir.join("target").display().to_string(),
-        "review dispatch must not override CARGO_TARGET_DIR to the session-local target dir"
+        "review must not override CARGO_TARGET_DIR to session target"
     );
     assert!(
         !session_dir.join("target").exists(),
-        "review session should not create a session-local target dir"
+        "review session should not create session target"
     );
 }
 
