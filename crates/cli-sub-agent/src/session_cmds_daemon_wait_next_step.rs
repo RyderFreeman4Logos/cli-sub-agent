@@ -13,6 +13,9 @@ pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<St
     {
         return Ok(None);
     }
+    if crate::session_fix_finding_recovery::suppresses_required_push_next_step(session_dir) {
+        return Ok(None);
+    }
 
     let unpushed_commits_path = session_dir.join("output").join("unpushed_commits.json");
     if unpushed_commits_path.is_file() {

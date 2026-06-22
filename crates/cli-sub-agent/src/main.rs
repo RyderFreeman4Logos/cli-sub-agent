@@ -99,6 +99,7 @@ mod session_cmds_reconcile_liveness;
 mod session_cmds_result;
 mod session_cmds_result_measure;
 mod session_dispatch;
+mod session_fix_finding_recovery;
 mod session_guard;
 mod session_kill_diagnostics;
 mod session_observability;

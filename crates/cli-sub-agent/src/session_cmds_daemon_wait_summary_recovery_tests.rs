@@ -66,6 +66,84 @@ fn compact_summary_and_json_include_require_commit_recovery() {
 }
 
 #[test]
+fn compact_summary_and_json_include_fix_finding_recovery_sidecar() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let output_dir = temp.path().join("output");
+    std::fs::create_dir_all(&output_dir).expect("output dir should be created");
+    std::fs::write(
+        output_dir.join("fix_finding_recovery.json"),
+        r#"{
+  "schema_version": 1,
+  "kind": "fix_finding_failed_closed_recovery",
+  "session_id": "01TESTFIXRECOVERY",
+  "outcome": "failed_closed_missing_result",
+  "side_effects": {
+    "status": "dirty_or_committed_tracked_changes",
+    "added": {"paths": [], "truncated": 0},
+    "modified": {"paths": ["src/lib.rs"], "truncated": 0},
+    "deleted": {"paths": [], "truncated": 0},
+    "renamed": {"paths": [], "truncated": 0}
+  },
+  "allow_required_push_next_step": false,
+  "requires_fresh_exact_head_review": true,
+  "recovery_actions": [
+    "inspect_git_metadata",
+    "preserve_finish_or_discard_dirty_side_effects",
+    "create_hook_enabled_commit_if_appropriate",
+    "run_fresh_exact_head_review_before_push_or_pr"
+  ],
+  "git_inspection_commands": [
+    "git status --short",
+    "git diff",
+    "git diff --staged",
+    "git log --oneline -5"
+  ],
+  "guidance": "Inspect git metadata, preserve and finish or discard dirty/staged side effects, create a hook-enabled commit if appropriate, and run a fresh exact-head review before push/PR."
+}"#,
+    )
+    .expect("fix-finding recovery sidecar should be written");
+    let now = Utc::now();
+    let result = csa_session::SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "fix-finding failed closed".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(65),
+        ..Default::default()
+    };
+
+    let summary = render_wait_result_summary(temp.path(), "01TESTFIXRECOVERY", &result);
+
+    assert!(summary.contains("Fix-finding recovery: failed_closed_missing_result"));
+    assert!(summary.contains("required push next-step suppressed"));
+    assert!(summary.contains(
+        "Side effects: repo_side_effects=dirty_or_committed_tracked_changes modified=[src/lib.rs]"
+    ));
+    assert!(summary.contains("hook-enabled commit"));
+    assert!(summary.contains("fresh exact-head review before push/PR"));
+
+    let json: serde_json::Value = serde_json::from_str(
+        &render_wait_result_json(temp.path(), "01TESTFIXRECOVERY", &result)
+            .expect("wait JSON should render"),
+    )
+    .expect("wait JSON should parse");
+    let recovery = &json["fix_finding_recovery"];
+    assert_eq!(
+        recovery["allow_required_push_next_step"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        recovery["requires_fresh_exact_head_review"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        recovery["recovery_actions"][3],
+        serde_json::json!("run_fresh_exact_head_review_before_push_or_pr")
+    );
+}
+
+#[test]
 fn compact_summary_omits_require_commit_recovery_when_absent() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let now = Utc::now();

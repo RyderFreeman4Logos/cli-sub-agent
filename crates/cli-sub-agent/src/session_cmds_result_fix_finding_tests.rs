@@ -106,4 +106,37 @@ fn handle_session_result_on_fix_finding_reports_fix_session_missing_result() {
         "{}",
         result.summary
     );
+    let recovery_path =
+        crate::session_fix_finding_recovery::recovery_sidecar_path(&fix_session_dir);
+    let recovery: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&recovery_path).unwrap()).unwrap();
+    assert_eq!(
+        recovery["kind"],
+        serde_json::json!("fix_finding_failed_closed_recovery")
+    );
+    assert_eq!(
+        recovery["allow_required_push_next_step"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        recovery["requires_fresh_exact_head_review"],
+        serde_json::json!(true)
+    );
+    assert!(
+        result
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/fix_finding_recovery.json"),
+        "synthetic result should advertise the fix-finding recovery sidecar"
+    );
+
+    let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
+        &fix_session_dir,
+        &fix_session_id,
+        &result,
+    );
+    assert!(wait_summary.contains("Fix-finding recovery"));
+    assert!(wait_summary.contains("git status/diff/staged"));
+    assert!(wait_summary.contains("hook-enabled commit"));
+    assert!(wait_summary.contains("fresh exact-head review before push/PR"));
 }

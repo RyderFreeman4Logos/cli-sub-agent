@@ -10,6 +10,9 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use tempfile::tempdir;
 
+#[path = "session_cmds_reconcile_fix_finding_tests.rs"]
+mod fix_finding_tests;
+
 struct SessionTestEnv {
     _sandbox: ScopedSessionSandbox,
 }
