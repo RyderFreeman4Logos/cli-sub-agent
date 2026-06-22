@@ -170,20 +170,20 @@ fn apply_rust_session_env_contract(env: &mut HashMap<String, String>, project_ro
         return;
     };
     let cargo_home = preferred_cargo_home(&home, project_root);
-    normalize_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
+    ensure_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
 
     let effective_cargo_home =
         env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
     let cargo_install_root =
         preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
-    normalize_rust_env_path(
+    ensure_rust_env_path(
         env,
         csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
         &cargo_install_root,
     );
 
     let rustup_home = preferred_rustup_home(env, &home);
-    normalize_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
+    ensure_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
     let effective_rustup_home =
         env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY).unwrap_or(rustup_home);
     if let Some(project_root) = project_root {
@@ -191,7 +191,7 @@ fn apply_rust_session_env_contract(env: &mut HashMap<String, String>, project_ro
     }
 
     let mise_config_dir = home.join(".config/mise");
-    normalize_rust_env_path(
+    ensure_rust_env_path(
         env,
         csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
         &mise_config_dir,
@@ -218,13 +218,11 @@ fn preferred_cargo_install_root(
         .unwrap_or_else(|| effective_cargo_home.to_path_buf())
 }
 
-fn normalize_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
-    let Some(current) = env_path(env, key) else {
-        return;
-    };
-    if csa_core::env::rust_state_path_needs_session_override(&current) {
-        env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
-    }
+fn ensure_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
+    let effective = env_path(env, key)
+        .filter(|current| !csa_core::env::rust_state_path_needs_session_override(current))
+        .unwrap_or_else(|| fallback.to_path_buf());
+    env.insert(key.to_string(), effective.to_string_lossy().into_owned());
 }
 
 fn ensure_project_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {
