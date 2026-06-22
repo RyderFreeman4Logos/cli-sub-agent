@@ -747,10 +747,13 @@ elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
   CJK_COUNT=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')
   [[ "${CJK_COUNT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO artifact language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
 fi
-# Artifacts validated → safe to persist. `csa todo persist` writes + commits
-# atomically under one TODO write lock and re-validates the core invariants
-# (checkbox task, DONE WHEN, spec criteria, epic DAG) before committing.
-TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}") || { echo "csa todo persist failed" >&2; exit 1; }
+e="${SAVE_DIR}/persist.stderr"
+TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}" 2>"$e") || {
+  rc=$?
+  printf 'csa todo persist failed (exit %s)\nSpec artifact path: %s\nPersist stderr artifact: %s\n' "$rc" "$SPEC_ARTIFACT" "$e" >&2
+  [[ ! -s "$e" ]] || tail -80 "$e" >&2
+  exit "$rc"
+}
 [[ -n "${TODO_PATH:-}" ]] || { echo "csa todo persist did not return a TODO path" >&2; exit 1; }
 csa todo show -t "${TODO_TS}" --path
 ```

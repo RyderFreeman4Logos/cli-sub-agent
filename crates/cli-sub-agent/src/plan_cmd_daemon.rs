@@ -25,6 +25,7 @@ use crate::{error_hints, error_report, exit_current_process};
 
 const PLAN_TASK_TYPE: &str = "plan";
 const PLAN_PIPELINE_SOURCE_ENV: &str = "CSA_PLAN_PIPELINE_SOURCE";
+const PLAN_RESULT_SUMMARY_MAX_CHARS: usize = 500;
 
 #[path = "plan_cmd_daemon_session.rs"]
 mod daemon_session;
@@ -397,17 +398,11 @@ pub(crate) async fn handle_plan_run_daemon_child(
             .map(|summary| format!("plan complete: {workflow_label}; {summary}"))
             .unwrap_or_else(|| format!("plan complete: {workflow_label}")),
         Err(err) => {
-            let mut text = failure_report
+            let text = failure_report
                 .as_ref()
                 .map(|report| report.summary_line(&workflow_label))
                 .unwrap_or_else(|| format!("plan failed: {workflow_label}: {err}"));
-            text.truncate(
-                text.char_indices()
-                    .nth(200)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len()),
-            );
-            text
+            truncate_plan_result_summary(text)
         }
     };
 
@@ -456,6 +451,16 @@ pub(crate) async fn handle_plan_run_daemon_child(
         Ok(_) => Ok(0),
         Err(err) => Err(err),
     }
+}
+
+fn truncate_plan_result_summary(mut text: String) -> String {
+    let truncate_at = text
+        .char_indices()
+        .nth(PLAN_RESULT_SUMMARY_MAX_CHARS)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    text.truncate(truncate_at);
+    text
 }
 
 fn inject_plan_daemon_session_into_startup_env(
@@ -598,6 +603,9 @@ pub(crate) use forwarding::{build_forwarded_plan_args, forwarded_args_with_featu
 #[cfg(test)]
 #[path = "plan_cmd_daemon_completion_tests.rs"]
 mod completion_tests;
+#[cfg(test)]
+#[path = "plan_cmd_daemon_mktd_tests.rs"]
+mod mktd_tests;
 #[cfg(test)]
 #[path = "plan_cmd_daemon_tests.rs"]
 mod tests;
