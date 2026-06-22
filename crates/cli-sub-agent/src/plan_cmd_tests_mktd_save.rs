@@ -88,6 +88,78 @@ fn mktd_save_step_persists_issue_quoted_content_without_shell_parse_break() -> a
 }
 
 #[cfg(unix)]
+#[test]
+fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<()> {
+    let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path)?;
+    let plan = plan_from_toml(&workflow)?;
+    let save_step = plan
+        .steps
+        .iter()
+        .find(|step| step.id == 13)
+        .expect("missing mktd save step");
+    let save_script =
+        extract_bash_code_block(&save_step.prompt).expect("mktd save step must have bash block");
+
+    let project_dir = tempfile::tempdir()?;
+    let session_dir = tempfile::tempdir()?;
+    let bin_dir = tempfile::tempdir()?;
+    let csa_stub = bin_dir.path().join("csa");
+    std::fs::write(&csa_stub, csa_failing_persist_stub_script())?;
+    make_executable(&csa_stub)?;
+
+    run_git(project_dir.path(), &["init"])?;
+    run_git(
+        project_dir.path(),
+        &["checkout", "-b", "fix/persist-detail-test"],
+    )?;
+
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(save_script)
+        .current_dir(project_dir.path())
+        .env(
+            "PATH",
+            format!("{}:{existing_path}", bin_dir.path().display()),
+        )
+        .env("CSA_SESSION_DIR", session_dir.path())
+        .env("STEP_12_OUTPUT", tricky_todo())
+        .env("STEP_8_OUTPUT", spec_toml())
+        .env("STEP_2_OUTPUT", "English")
+        .env("FEATURE", "persist failure detail")
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "Save TODO should fail when csa todo persist rejects the artifacts"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("csa todo persist failed (exit 1)"),
+        "Save TODO stderr should preserve the persist wrapper: {stderr}"
+    );
+    assert!(
+        stderr.contains("Spec artifact path:"),
+        "Save TODO stderr should include bounded artifact context: {stderr}"
+    );
+    assert!(
+        stderr.contains("Persist stderr artifact:"),
+        "Save TODO stderr should point at the persisted stderr excerpt: {stderr}"
+    );
+    assert!(
+        stderr.contains("failed to parse spec file"),
+        "Save TODO stderr should replay concrete persist stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("TOML parse error at line 6, column 1"),
+        "Save TODO stderr should replay TOML line/column detail: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
 fn simple_first_fence_body(prompt: &str) -> Option<&str> {
     let fence_start = prompt.find("```bash")?;
     let code_start = prompt[fence_start..].find('\n')? + fence_start + 1;
@@ -152,6 +224,40 @@ case "${1:-}" in
     ;;
   show)
     printf '%s/.todos/%s/TODO.md\n' "$PWD" "$plan_id"
+    ;;
+  *)
+    echo "unexpected csa todo command: $*" >&2
+    exit 64
+    ;;
+esac
+"#
+}
+
+#[cfg(unix)]
+fn csa_failing_persist_stub_script() -> &'static str {
+    r#"#!/bin/sh
+set -eu
+plan_id='01J2041SHELLQUOTE0000000000'
+if [ "${1:-}" != "todo" ]; then
+  echo "unexpected csa command: $*" >&2
+  exit 64
+fi
+shift
+case "${1:-}" in
+  create)
+    printf '%s\n' "$plan_id"
+    ;;
+  persist)
+    spec_file=''
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --spec-file) shift; spec_file="${1:-}" ;;
+      esac
+      shift || true
+    done
+    echo "Error: failed to parse spec file '${spec_file}': TOML parse error at line 6, column 1" >&2
+    echo "invalid table header" >&2
+    exit 1
     ;;
   *)
     echo "unexpected csa todo command: $*" >&2

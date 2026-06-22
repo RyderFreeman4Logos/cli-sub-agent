@@ -224,6 +224,76 @@ fn failure_summary_surfaces_mktd_stdout_for_post_2082_issue_body_shape() {
 }
 
 #[test]
+fn failure_summary_surfaces_todo_persist_validation_detail() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some(
+            [
+                "Exit code 1",
+                "stderr (last 20 lines):",
+                "csa todo persist failed (exit 1)",
+                "TODO artifact path: /tmp/mktd-save/TODO.md",
+                "Spec artifact path: /tmp/mktd-save/spec.toml",
+                "Persist stderr artifact: /tmp/mktd-save/persist.stderr",
+                "csa todo persist stderr (last 80 lines):",
+                "Error: failed to parse spec file '/tmp/mktd-save/spec.toml': TOML parse error at line 6, column 1",
+                "Error: 1 step(s) failed (1 execution, 0 unsupported-skip)",
+            ]
+            .join("\n"),
+        ),
+        output: None,
+        session_id: None,
+        command: Some("timeout -k 30 1800 csa plan run --sa-mode true --pattern mktd".to_string()),
+        stderr: Some(
+            [
+                "csa todo persist failed (exit 1)",
+                "TODO artifact path: /tmp/mktd-save/TODO.md",
+                "Spec artifact path: /tmp/mktd-save/spec.toml",
+                "Persist stderr artifact: /tmp/mktd-save/persist.stderr",
+                "csa todo persist stderr (last 80 lines):",
+                "Error: failed to parse spec file '/tmp/mktd-save/spec.toml': TOML parse error at line 6, column 1",
+            ]
+            .join("\n"),
+        ),
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    for rendered in [&summary_line, &summary_section] {
+        assert!(
+            rendered.contains("failed to parse spec file"),
+            "parent-visible failure should include concrete persist validation detail: {rendered}"
+        );
+        assert!(
+            rendered.contains("TOML parse error at line 6, column 1"),
+            "parent-visible failure should include TOML line/column detail: {rendered}"
+        );
+        assert!(
+            rendered.contains("Spec artifact path: /tmp/mktd-save/spec.toml"),
+            "parent-visible failure should include bounded spec artifact context: {rendered}"
+        );
+        assert!(
+            rendered.contains("csa todo persist failed"),
+            "parent-visible failure should preserve the persist wrapper context: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn recovery_ignores_untracked_plan_journal_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");
