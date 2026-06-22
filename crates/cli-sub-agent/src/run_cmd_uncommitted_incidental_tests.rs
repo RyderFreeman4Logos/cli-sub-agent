@@ -12,7 +12,10 @@ async fn require_commit_recovery_uses_raw_exit_after_incidental_downgrade() {
     let session_dir = csa_session::get_session_dir(root, &session.meta_session_id)
         .expect("session dir should exist");
     let changed_paths = vec!["src.rs".to_string()];
-    std::fs::write(root.join("src.rs"), "dirty\n").expect("dirty file");
+    std::fs::write(root.join("src.rs"), "clean\n").expect("tracked file");
+    run_git(root, &["add", "src.rs"]);
+    run_git(root, &["commit", "-q", "-m", "track src"]);
+    std::fs::write(root.join("src.rs"), "dirty\n").expect("dirty tracked file");
 
     let executor = csa_executor::Executor::Codex {
         model_override: None,

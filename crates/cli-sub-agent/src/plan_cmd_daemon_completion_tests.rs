@@ -1,6 +1,7 @@
 use super::*;
 use crate::plan_cmd::{PlanRunArgs, PlanRunPipelineSource};
 use crate::startup_env::StartupSubtreeEnv;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -75,6 +76,7 @@ fn prepare_plan_session(project_root: &Path, description: &str) -> (String, Path
 #[tokio::test]
 async fn daemon_child_successful_plan_writes_structured_success_output() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);
@@ -136,6 +138,7 @@ on_fail = "abort"
 #[tokio::test]
 async fn daemon_child_dev2merge_partial_publish_fails_structured_completion_verification() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);

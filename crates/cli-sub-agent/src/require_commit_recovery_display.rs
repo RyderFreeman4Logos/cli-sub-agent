@@ -1,23 +1,34 @@
 pub(crate) fn format_require_commit_recovery_lines(
     diagnostic: &csa_session::RequireCommitRecoveryDiagnostic,
 ) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!(
-            "Require-commit recovery: CONTRACT FAILURE; dirty_worktree={} commit_created={} changed_paths={}{}",
+            "Require-commit recovery: CONTRACT FAILURE; dirty_tracked_worktree={} commit_created={} changed_paths={}{}",
             diagnostic.dirty_worktree,
             diagnostic.commit_created,
             diagnostic.changed_paths.len(),
             format_termination_suffix(diagnostic)
         ),
         format!(
-            "Changed paths: {}",
+            "Dirty tracked paths: {}",
             format_changed_paths(
                 &diagnostic.changed_paths,
                 diagnostic.changed_paths_truncated
             )
         ),
-        format!("Recovery action: {}", diagnostic.suggested_recovery_action),
-    ]
+    ];
+    if let Some(blocker_summary) = diagnostic
+        .blocker_summary
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("Blocker: {blocker_summary}"));
+    }
+    lines.push(format!(
+        "Recovery action: {}",
+        diagnostic.suggested_recovery_action
+    ));
+    lines
 }
 
 fn format_termination_suffix(diagnostic: &csa_session::RequireCommitRecoveryDiagnostic) -> String {
@@ -66,17 +77,19 @@ mod tests {
                 exit_code: 143,
                 termination_signal: Some(15),
                 kill_hint: Some("memory_pressure".to_string()),
+                blocker_summary: Some("gate=commit-policy-uncommitted".to_string()),
                 suggested_recovery_action: "inspect_changed_paths_then_commit_or_revert"
                     .to_string(),
             });
 
         let rendered = lines.join("\n");
         assert!(rendered.contains("CONTRACT FAILURE"));
-        assert!(rendered.contains("dirty_worktree=true"));
+        assert!(rendered.contains("dirty_tracked_worktree=true"));
         assert!(rendered.contains("commit_created=false"));
         assert!(rendered.contains("status=signal"));
         assert!(rendered.contains("signal=15"));
-        assert!(rendered.contains("src/lib.rs, README.md (+1 more)"));
+        assert!(rendered.contains("Dirty tracked paths: src/lib.rs, README.md (+1 more)"));
+        assert!(rendered.contains("Blocker: gate=commit-policy-uncommitted"));
         assert!(!rendered.contains("file contents"));
     }
 }

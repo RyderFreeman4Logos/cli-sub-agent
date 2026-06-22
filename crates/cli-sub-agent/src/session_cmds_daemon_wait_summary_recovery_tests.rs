@@ -8,7 +8,9 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     let result = csa_session::SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: "writer session ended without required commit (--require-commit set)".to_string(),
+        summary:
+            "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+                .to_string(),
         tool: "codex".to_string(),
         started_at: now,
         completed_at: now + chrono::TimeDelta::seconds(65),
@@ -22,6 +24,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
             exit_code: 143,
             termination_signal: Some(15),
             kill_hint: Some("memory_pressure".to_string()),
+            blocker_summary: Some("gate=commit-policy-uncommitted".to_string()),
             suggested_recovery_action: "inspect_changed_paths_then_commit_or_revert".to_string(),
         }),
         ..Default::default()
@@ -31,11 +34,12 @@ fn compact_summary_and_json_include_require_commit_recovery() {
 
     assert!(summary.contains("Status: failure"));
     assert!(summary.contains("Require-commit recovery: CONTRACT FAILURE"));
-    assert!(summary.contains("dirty_worktree=true"));
+    assert!(summary.contains("dirty_tracked_worktree=true"));
     assert!(summary.contains("commit_created=false"));
     assert!(summary.contains("status=signal"));
     assert!(summary.contains("signal=15"));
-    assert!(summary.contains("Changed paths: src/lib.rs, README.md"));
+    assert!(summary.contains("Dirty tracked paths: src/lib.rs, README.md"));
+    assert!(summary.contains("Blocker: gate=commit-policy-uncommitted"));
     assert!(summary.contains("Recovery action: inspect_changed_paths_then_commit_or_revert"));
     assert!(!summary.contains("Review verdict: PASS"));
 
@@ -55,6 +59,10 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     assert_eq!(recovery["termination_status"], serde_json::json!("signal"));
     assert_eq!(recovery["exit_code"], serde_json::json!(143));
     assert_eq!(recovery["termination_signal"], serde_json::json!(15));
+    assert_eq!(
+        recovery["blocker_summary"],
+        serde_json::json!("gate=commit-policy-uncommitted")
+    );
 }
 
 #[test]

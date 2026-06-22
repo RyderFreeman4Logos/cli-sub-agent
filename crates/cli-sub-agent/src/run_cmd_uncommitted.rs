@@ -9,8 +9,9 @@ use tracing::warn;
 
 const MAX_UNCOMMITTED_FILES: usize = 20;
 const REQUIRE_COMMIT_REASON: &str =
-    "writer session ended without required commit (--require-commit set)";
+    "require-commit contract failed: no qualifying commit or tracked dirty work remains";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
+const REQUIRE_COMMIT_BLOCKER_SUMMARY_MAX_CHARS: usize = 240;
 const REDACTED_PATH: &str = "[redacted-path]";
 const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
 
@@ -18,6 +19,8 @@ const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed sur
 mod diff_tokens;
 #[path = "run_cmd_uncommitted_memory_soft_limit.rs"]
 mod memory_soft_limit_recovery;
+#[path = "run_cmd_uncommitted_require_commit.rs"]
+mod require_commit;
 
 #[cfg(test)]
 use diff_tokens::{
@@ -162,6 +165,15 @@ fn record_writer_uncommitted_changes_with_config(
     let token_threshold = tracked_diff_token_threshold(record.large_diff_config);
     let full_changes =
         collect_uncommitted_changes_with_token_threshold(project_root, token_threshold);
+    let dirty_tracked_probe = record
+        .require_commit
+        .then(|| require_commit::inspect_dirty_tracked_changes(project_root));
+    let dirty_tracked_changes = dirty_tracked_probe
+        .as_ref()
+        .and_then(|probe| probe.changes());
+    let clean_tree_verification_failure = dirty_tracked_probe
+        .as_ref()
+        .and_then(|probe| probe.blocker_summary());
     let changes = record
         .changed_paths
         .map(|paths| {
@@ -175,8 +187,13 @@ fn record_writer_uncommitted_changes_with_config(
     let warning = changes
         .as_ref()
         .and_then(|changes| large_diff_warning_report(changes, record.large_diff_config));
-    let require_commit_contract_failure =
-        record.require_commit && !record.commit_created.unwrap_or(false);
+    let commit_created = record.commit_created.unwrap_or(false);
+    let require_commit_contract_failure = record.require_commit
+        && (!commit_created
+            || dirty_tracked_probe
+                .as_ref()
+                .is_some_and(|probe| !probe.is_clean()));
+    let contract_changes = dirty_tracked_changes;
 
     let maybe_signal_exit = matches!(result.exit_code, 137 | 143);
     if changes.is_none() && !require_commit_contract_failure && !maybe_signal_exit {
@@ -202,11 +219,19 @@ fn record_writer_uncommitted_changes_with_config(
             let recovery = require_commit_contract_failure.then(|| {
                 build_require_commit_recovery_diagnostic_for_state(
                     &session_result,
-                    changes.as_ref(),
+                    contract_changes,
+                    commit_created,
+                    result.csa_gate_failure.as_deref(),
+                    clean_tree_verification_failure,
                 )
             });
             let mut should_save = false;
-            if let Some(changes) = changes.clone() {
+            let result_changes = if require_commit_contract_failure {
+                dirty_tracked_changes.cloned().or_else(|| changes.clone())
+            } else {
+                changes.clone()
+            };
+            if let Some(changes) = result_changes {
                 apply_uncommitted_changes_to_result(
                     &mut session_result,
                     changes,
@@ -270,6 +295,9 @@ pub(crate) fn apply_uncommitted_changes_to_result(
             build_require_commit_recovery_diagnostic_for_state(
                 result,
                 result.uncommitted_changes.as_ref(),
+                false,
+                None,
+                None,
             )
         });
         apply_require_commit_contract_failure_to_result(result, recovery);
@@ -292,12 +320,15 @@ fn build_require_commit_recovery_diagnostic(
     result: &csa_session::SessionResult,
     changes: &csa_session::UncommittedChanges,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
-    build_require_commit_recovery_diagnostic_for_state(result, Some(changes))
+    build_require_commit_recovery_diagnostic_for_state(result, Some(changes), false, None, None)
 }
 
 fn build_require_commit_recovery_diagnostic_for_state(
     result: &csa_session::SessionResult,
     changes: Option<&csa_session::UncommittedChanges>,
+    commit_created: bool,
+    gate_failure: Option<&str>,
+    clean_tree_verification_failure: Option<&str>,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
     let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
     let termination_status = result
@@ -306,7 +337,7 @@ fn build_require_commit_recovery_diagnostic_for_state(
         .unwrap_or_else(|| result.status.clone());
     csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
-        commit_created: false,
+        commit_created,
         dirty_worktree: changes.is_some(),
         changed_paths: changes
             .map(|changes| {
@@ -326,6 +357,11 @@ fn build_require_commit_recovery_diagnostic_for_state(
             .and_then(|diagnostics| diagnostics.signal)
             .or_else(|| infer_signal_from_exit_code(termination_exit_code)),
         kill_hint: result.kill_hint.clone(),
+        blocker_summary: require_commit::build_blocker_summary(
+            result,
+            gate_failure,
+            clean_tree_verification_failure,
+        ),
         suggested_recovery_action: REQUIRE_COMMIT_RECOVERY_ACTION.to_string(),
     }
 }
@@ -616,6 +652,10 @@ mod incidental_tests;
 #[cfg(test)]
 #[path = "run_cmd_uncommitted_memory_soft_limit_tests.rs"]
 mod memory_soft_limit_tests;
+
+#[cfg(test)]
+#[path = "run_cmd_uncommitted_require_commit_tests.rs"]
+mod require_commit_tests;
 
 #[cfg(test)]
 #[path = "run_cmd_uncommitted_tests.rs"]
