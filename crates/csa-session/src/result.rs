@@ -201,16 +201,17 @@ impl UncommittedChanges {
 }
 
 /// Machine-readable recovery detail for a writer run that was required to
-/// create a commit but ended without one.
+/// create a commit but ended without a verified commit effect and clean tracked
+/// worktree.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequireCommitRecoveryDiagnostic {
     /// The run was governed by the require-commit contract.
     pub require_commit: bool,
     /// Whether CSA observed a commit satisfying the contract.
     pub commit_created: bool,
-    /// Whether dirty worktree changes remained after the run.
+    /// Whether dirty tracked worktree changes remained after the run.
     pub dirty_worktree: bool,
-    /// Sanitized relative paths still dirty after the run, capped by the caller.
+    /// Sanitized relative tracked paths still dirty after the run, capped by the caller.
     pub changed_paths: Vec<String>,
     /// Number of additional dirty paths omitted from `changed_paths`.
     #[serde(default, skip_serializing_if = "is_zero_usize")]
@@ -226,6 +227,10 @@ pub struct RequireCommitRecoveryDiagnostic {
     /// CSA's best-effort kill hint, if one was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill_hint: Option<String>,
+    /// Bounded, secret-redacted summary of the gate/tool/env condition that
+    /// prevented the require-commit contract from being satisfied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker_summary: Option<String>,
     /// Stable recovery action code for callers.
     pub suggested_recovery_action: String,
 }

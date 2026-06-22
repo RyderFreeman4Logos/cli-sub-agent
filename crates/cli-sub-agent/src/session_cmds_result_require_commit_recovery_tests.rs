@@ -7,8 +7,9 @@ fn build_result_json_payload_includes_require_commit_recovery() {
         envelope: SessionResult {
             status: "failure".to_string(),
             exit_code: 1,
-            summary: "writer session ended without required commit (--require-commit set)"
-                .to_string(),
+            summary:
+                "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+                    .to_string(),
             tool: "codex".to_string(),
             started_at: now,
             completed_at: now,
@@ -22,6 +23,7 @@ fn build_result_json_payload_includes_require_commit_recovery() {
                 exit_code: 2,
                 termination_signal: None,
                 kill_hint: None,
+                blocker_summary: Some("summary=rustup toolchain setup failed".to_string()),
                 suggested_recovery_action: "inspect_changed_paths_then_commit_or_revert"
                     .to_string(),
             }),
@@ -44,5 +46,9 @@ fn build_result_json_payload_includes_require_commit_recovery() {
     assert_eq!(
         recovery["suggested_recovery_action"],
         serde_json::json!("inspect_changed_paths_then_commit_or_revert")
+    );
+    assert_eq!(
+        recovery["blocker_summary"],
+        serde_json::json!("summary=rustup toolchain setup failed")
     );
 }

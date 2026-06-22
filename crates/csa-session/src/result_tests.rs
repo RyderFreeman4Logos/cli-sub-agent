@@ -107,7 +107,9 @@ fn test_session_result_require_commit_recovery_roundtrip() {
     let result = SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: "writer session ended without required commit (--require-commit set)".to_string(),
+        summary:
+            "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+                .to_string(),
         tool: "codex".to_string(),
         started_at: now,
         completed_at: now,
@@ -121,6 +123,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
             exit_code: 143,
             termination_signal: Some(15),
             kill_hint: Some("memory_pressure".to_string()),
+            blocker_summary: Some("gate=commit-policy-uncommitted".to_string()),
             suggested_recovery_action: "inspect_changed_paths_then_commit_or_revert".to_string(),
         }),
         ..Default::default()
@@ -130,6 +133,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
     assert!(toml_str.contains("[require_commit_recovery]"));
     assert!(toml_str.contains("require_commit = true"));
     assert!(toml_str.contains("commit_created = false"));
+    assert!(toml_str.contains("blocker_summary = \"gate=commit-policy-uncommitted\""));
     assert!(!toml_str.contains("file contents"));
 
     let loaded: SessionResult = toml::from_str(&toml_str).expect("Deserialize should succeed");
@@ -148,6 +152,10 @@ fn test_session_result_require_commit_recovery_roundtrip() {
     assert_eq!(recovery.exit_code, 143);
     assert_eq!(recovery.termination_signal, Some(15));
     assert_eq!(recovery.kill_hint.as_deref(), Some("memory_pressure"));
+    assert_eq!(
+        recovery.blocker_summary.as_deref(),
+        Some("gate=commit-policy-uncommitted")
+    );
 }
 
 #[test]
