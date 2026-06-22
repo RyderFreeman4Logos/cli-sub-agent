@@ -279,23 +279,21 @@ echo "CSA_VAR:FAST_PATH_COMMITTED=true"
 ## Step 5: FAST_PATH Version Bump
 Tool: bash
 OnFail: abort
-Version bump is Rust-only (`just bump-patch` + `cargo metadata`). Repos without
-a `Cargo.toml` (e.g. Python/Node) skip this step with a warning instead of
-aborting the pipeline (#1658).
+Optional bump; missing recipes skip (#1658/#2305).
 
 ```bash
 set -euo pipefail
-if [ ! -f Cargo.toml ]; then
-  echo "Version bump skipped: no Cargo.toml found"
-  exit 0
-fi
-if ! just check-version-bumped 2>/dev/null; then
-  just bump-patch
-  cargo run -p weave -- lock 2>/dev/null || true
-  git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
-  VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
-  git commit -m "chore(release): bump workspace version to ${VERSION}"
-fi
+h(){ just --summary 2>/dev/null|tr ' ' '\n'|grep -qx "$1"; }
+s(){ echo "Version bump skipped: $1"; exit 0; }
+[ -f Cargo.toml ] || s no-Cargo.toml
+h check-version-bumped || s no-check-version-bumped
+just check-version-bumped&&exit 0||true
+h bump-patch || s no-bump-patch
+just bump-patch
+cargo run -p weave -- lock 2>/dev/null || true
+git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
+VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
+git commit -m "chore(release): bump workspace version to ${VERSION}"
 ```
 
 ## Step 6: FAST_PATH Pre-PR Review
@@ -318,10 +316,7 @@ echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 13)" required=true -->'
 Tool: bash
 OnFail: abort
 Condition: !(${RESUME_MODE})
-Skipped in resume mode (work already implemented). Generate a TODO via mktd
-with a hard timeout (default `1800`s). Intensity is
-`light` when the brief names at least two `path/file:LINE` refs or the diff is
-small; otherwise it is `full`.
+mktd TODO; --pattern mktd default, MKTD_WORKFLOW_PATH override, auto light/full.
 
 ```bash
 set -euo pipefail
@@ -331,11 +326,8 @@ USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}"
 MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}"
 MKTD_PLAN_TIER="${PLAN_TIER:-${TIER:-tier-3-complex}}"
-if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
-  MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
-else
-  MKTD_TOOL_ARGS=()
-fi
+MKTD=(--pattern mktd); [ -n "${MKTD_WORKFLOW_PATH:-}" ] && MKTD=("$MKTD_WORKFLOW_PATH")
+MKTD_TOOL_ARGS=(); [ -z "${MKTD_TOOL_EFFECTIVE}" ] || MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
 LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
 PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
@@ -354,7 +346,7 @@ else
 fi
 echo "mktd hard-timeout: ${MKTD_TIMEOUT_SECONDS}s"
 set +e
-MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode true patterns/mktd/workflow.toml \
+MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode true "${MKTD[@]}" \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
@@ -477,23 +469,21 @@ git commit -m "${COMMIT_MSG}"
 ## Step 10: Ensure Version Bumped
 Tool: bash
 OnFail: abort
-Version bump is Rust-only (`just bump-patch` + `cargo metadata`). Repos without
-a `Cargo.toml` (e.g. Python/Node) skip this step with a warning instead of
-aborting the pipeline (#1658).
+Optional bump; missing recipes skip (#1658/#2305).
 
 ```bash
 set -euo pipefail
-if [ ! -f Cargo.toml ]; then
-  echo "Version bump skipped: no Cargo.toml found"
-  exit 0
-fi
-if ! just check-version-bumped 2>/dev/null; then
-  just bump-patch
-  cargo run -p weave -- lock 2>/dev/null || true
-  git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
-  VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
-  git commit -m "chore(release): bump workspace version to ${VERSION}"
-fi
+h(){ just --summary 2>/dev/null|tr ' ' '\n'|grep -qx "$1"; }
+s(){ echo "Version bump skipped: $1"; exit 0; }
+[ -f Cargo.toml ] || s no-Cargo.toml
+h check-version-bumped || s no-check-version-bumped
+just check-version-bumped&&exit 0||true
+h bump-patch || s no-bump-patch
+just bump-patch
+cargo run -p weave -- lock 2>/dev/null || true
+git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
+VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
+git commit -m "chore(release): bump workspace version to ${VERSION}"
 ```
 
 ## Step 11: Self-Review Gate
