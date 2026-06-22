@@ -235,22 +235,12 @@ fn session_result_classifies_missing_state_as_registry_loss() {
     assert!(stderr.contains("CSA infrastructure"), "{stderr}");
     assert!(stderr.contains("not a product-code failure"), "{stderr}");
     assert!(stderr.contains("git status --short"), "{stderr}");
-    assert!(stderr.contains("csa session logs --session"), "{stderr}");
-
-    let logs = csa_cmd(tmp.path())
-        .args([
-            "session",
-            "logs",
-            "--session",
-            &session_id,
-            "--cd",
-            project.to_str().expect("utf-8 project path"),
-        ])
-        .output()
-        .expect("run csa session logs");
-    assert!(logs.status.success(), "{}", output_text(&logs));
-    let logs_text = output_text(&logs);
-    assert!(logs_text.contains("captured progress"), "{logs_text}");
+    assert!(stderr.contains("git diff --staged"), "{stderr}");
+    assert!(
+        stderr.contains("Do not manually read session directories or transcripts"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("csa session logs --session"), "{stderr}");
 }
 
 #[cfg(unix)]

@@ -75,10 +75,38 @@ fn session_state_exists(base_dir: &Path, session_id: &str) -> bool {
         .exists()
 }
 
+fn session_metadata_is_valid(base_dir: &Path, session_id: &str) -> bool {
+    let metadata_path =
+        get_session_dir_in(base_dir, session_id).join(crate::metadata::METADATA_FILE_NAME);
+    let Ok(contents) = fs::read_to_string(metadata_path) else {
+        return false;
+    };
+    toml::from_str::<crate::metadata::SessionMetadata>(&contents).is_ok()
+}
+
+fn session_durable_lookup_exists(base_dir: &Path, session_id: &str) -> bool {
+    session_state_exists(base_dir, session_id) || session_metadata_is_valid(base_dir, session_id)
+}
+
 fn find_session_base_dir_under(state_dir: &Path, session_id: &str) -> Result<Option<PathBuf>> {
+    find_session_base_dir_under_matching(state_dir, session_id, session_state_exists)
+}
+
+fn find_durable_session_base_dir_under(
+    state_dir: &Path,
+    session_id: &str,
+) -> Result<Option<PathBuf>> {
+    find_session_base_dir_under_matching(state_dir, session_id, session_durable_lookup_exists)
+}
+
+fn find_session_base_dir_under_matching(
+    state_dir: &Path,
+    session_id: &str,
+    matches_session: fn(&Path, &str) -> bool,
+) -> Result<Option<PathBuf>> {
     let mut stack = vec![state_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if session_state_exists(&dir, session_id) {
+        if matches_session(&dir, session_id) {
             return Ok(Some(dir));
         }
 
@@ -115,6 +143,22 @@ fn find_session_base_dir_anywhere(session_id: &str) -> Result<Option<PathBuf>> {
 
     if let Some(legacy_state_dir) = paths::legacy_state_dir()
         && let Some(base_dir) = find_session_base_dir_under(&legacy_state_dir, session_id)?
+    {
+        return Ok(Some(base_dir));
+    }
+
+    Ok(None)
+}
+
+fn find_durable_session_base_dir_anywhere(session_id: &str) -> Result<Option<PathBuf>> {
+    let primary_state_dir =
+        paths::state_dir_write().context("Failed to determine project directories")?;
+    if let Some(base_dir) = find_durable_session_base_dir_under(&primary_state_dir, session_id)? {
+        return Ok(Some(base_dir));
+    }
+
+    if let Some(legacy_state_dir) = paths::legacy_state_dir()
+        && let Some(base_dir) = find_durable_session_base_dir_under(&legacy_state_dir, session_id)?
     {
         return Ok(Some(base_dir));
     }
@@ -267,6 +311,23 @@ pub fn get_session_dir_global(session_id: &str) -> Result<Option<PathBuf>> {
     if let Some((base_dir, _)) = resolve_read_base_dir_global_exact(session_id)? {
         let candidate = base_dir.join("sessions").join(session_id);
         if candidate.exists() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+/// Get the session directory for a global exact ULID lookup using durable CSA-owned
+/// registration evidence.
+///
+/// This is read-only and exact-id only. It accepts a normal `state.toml` registration
+/// or a parseable `metadata.toml` left in `sessions/<id>/` when the state registry
+/// was lost after `CSA:SESSION_STARTED` was emitted.
+pub fn get_session_dir_global_durable(session_id: &str) -> Result<Option<PathBuf>> {
+    crate::validate::validate_session_id(session_id)?;
+    if let Some(base_dir) = find_durable_session_base_dir_anywhere(session_id)? {
+        let candidate = base_dir.join("sessions").join(session_id);
+        if candidate.is_dir() {
             return Ok(Some(candidate));
         }
     }

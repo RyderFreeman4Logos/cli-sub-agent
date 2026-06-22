@@ -10,11 +10,13 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::completion::{
-    SESSION_WAIT_FAILURE_EXIT_CODE, SESSION_WAIT_KV_WARM_EXIT_CODE,
-    SESSION_WAIT_MEMORY_WARN_EXIT_CODE, SESSION_WAIT_TIMEOUT_EXIT_CODE,
+    SESSION_WAIT_FAILURE_EXIT_CODE, SESSION_WAIT_MEMORY_WARN_EXIT_CODE, emit_wait_cap_outcome,
     resolve_wait_completion_status_and_exit,
 };
 use super::liveness::{resume_handoff_blocks_target_reconcile, session_has_live_execution};
+use super::registry_loss::{
+    emit_registry_state_loss_or_missing_result, session_registry_state_loss,
+};
 use super::target::resolve_wait_target;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
@@ -186,6 +188,9 @@ pub(crate) fn handle_session_wait_with_emitters(
             &session_dir,
             result_session_dir,
         );
+        let result_registry_state_loss =
+            session_registry_state_loss(effective_root, result_session_id, result_session_dir);
+        let result_uses_direct_session_dir = is_cross_project || result_registry_state_loss;
         let completion_packet = load_daemon_completion_packet(&session_dir)?;
         if let Some(completion) = completion_packet
             .filter(|completion| completion.is_legacy_complete_marker() || !session_live)
@@ -194,7 +199,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 effective_root,
                 result_session_id,
                 result_session_dir,
-                is_cross_project,
+                result_uses_direct_session_dir,
             );
             if let Err(err) = &refreshed_result {
                 tracing::debug!(
@@ -213,17 +218,24 @@ pub(crate) fn handle_session_wait_with_emitters(
             // filtering caused #1442 false failures. See #1442.
             let mut loaded_result = refreshed_result;
             if refreshed_result_available {
-                crate::session_cmds::retire_if_dead_with_result(
-                    effective_root,
-                    result_session_id,
-                    "session wait",
-                )?;
+                if result_registry_state_loss {
+                    tracing::debug!(
+                        session_id = %result_session_id,
+                        "Skipping session retirement because registry state is unavailable"
+                    );
+                } else {
+                    crate::session_cmds::retire_if_dead_with_result(
+                        effective_root,
+                        result_session_id,
+                        "session wait",
+                    )?;
+                }
             } else {
                 loaded_result = load_completed_daemon_result_with_fallback(
                     effective_root,
                     result_session_id,
                     result_session_dir,
-                    is_cross_project,
+                    result_uses_direct_session_dir,
                 )?;
             }
             if loaded_result.is_none() {
@@ -235,6 +247,17 @@ pub(crate) fn handle_session_wait_with_emitters(
                             result,
                         )
                     });
+                if loaded_result.is_none()
+                    && !handoff_blocks_target_reconcile
+                    && result_registry_state_loss
+                {
+                    emit_registry_state_loss_or_missing_result(
+                        effective_root,
+                        result_session_id,
+                        result_session_dir,
+                    );
+                    return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+                }
                 if loaded_result.is_none() && !handoff_blocks_target_reconcile {
                     let reconciled = (emitters.reconcile_dead_active_session)(
                         effective_root,
@@ -247,7 +270,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                             effective_root,
                             result_session_id,
                             result_session_dir,
-                            is_cross_project,
+                            result_uses_direct_session_dir,
                         )?;
                     }
                 }
@@ -303,7 +326,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 effective_root,
                 result_session_id,
                 result_session_dir,
-                is_cross_project,
+                result_uses_direct_session_dir,
             )?
         };
         if let Some(result) = completed_result {
@@ -328,6 +351,14 @@ pub(crate) fn handle_session_wait_with_emitters(
         }
 
         if !session_live && !handoff_blocks_target_reconcile {
+            if result_registry_state_loss {
+                emit_registry_state_loss_or_missing_result(
+                    effective_root,
+                    result_session_id,
+                    result_session_dir,
+                );
+                return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+            }
             // Synthesize terminal result for dead Active sessions.
             let reconciled = (emitters.reconcile_dead_active_session)(
                 effective_root,
@@ -339,7 +370,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                     effective_root,
                     result_session_id,
                     result_session_dir,
-                    is_cross_project,
+                    result_uses_direct_session_dir,
                 )?
             } else {
                 None
@@ -377,7 +408,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 effective_root,
                 result_session_id,
                 result_session_dir,
-                is_cross_project,
+                result_uses_direct_session_dir,
             )? {
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
@@ -460,10 +491,6 @@ pub(crate) fn handle_session_wait_with_emitters(
 
         let elapsed = start.elapsed().as_secs();
         if elapsed >= wait_options.behavior.wait_timeout_secs {
-            let cd_arg = cd
-                .as_ref()
-                .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
-                .unwrap_or_default();
             let session_alive = session_has_live_execution(
                 worktree_lock_root.as_deref(),
                 result_session_dir,
@@ -471,56 +498,13 @@ pub(crate) fn handle_session_wait_with_emitters(
                 result_session_id,
             ) || csa_process::ToolLiveness::is_alive(result_session_dir)
                 || handoff_blocks_target_reconcile;
-            if session_alive {
-                let wait_cmd = format!(
-                    "csa session wait --session {}{}",
-                    resolved.session_id, cd_arg
-                );
-                let wait_cmd_attr =
-                    crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
-                // KV-warm exit: session still alive at the wait cap. See #1439.
-                eprintln!(
-                    "Session {} still running after {}s wait cap; returning so caller can warm its KV cache before re-waiting.",
-                    resolved.session_id, wait_options.behavior.wait_timeout_secs,
-                );
-                eprintln!(
-                    "<!-- CSA:SESSION_WAIT_KV_WARM session={} status=alive elapsed={}s action=re-wait cmd=\"{}\" -->",
-                    resolved.session_id, elapsed, wait_cmd_attr,
-                );
-                eprintln!(
-                    "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
-                     rule=\"Session is alive; this exit is healthy. Process this output NOW and generate tokens to warm your KV cache, \
-                     then call {wait_cmd} again in a NEW Bash call. \
-                     NEVER batch multiple session waits in one Bash call. \
-                     If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
-                     FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-                     any manual polling wastes caller tokens with zero benefit. \
-                     FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
-                     suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
-                    wait_cmd = wait_cmd_attr,
-                );
-                let codex_hint = crate::process_tree::codex_yield_hint();
-                if !codex_hint.is_empty() {
-                    eprint!("{codex_hint}");
-                }
-                return Ok(SESSION_WAIT_KV_WARM_EXIT_CODE);
-            }
-            // Defensive: daemon gone with no result.toml (rare; earlier loop branches usually exit-1 first).
-            eprintln!(
-                "Timeout: session {} did not complete within {}s and no live daemon process remains.",
-                resolved.session_id, wait_options.behavior.wait_timeout_secs,
-            );
-            let result_cmd = format!(
-                "csa session result --session {}{}",
-                resolved.session_id, cd_arg
-            );
-            let result_cmd_attr =
-                crate::daemon_caller_hints::escape_structured_comment_attr(&result_cmd);
-            eprintln!(
-                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s status=dead cmd=\"{}\" -->",
-                resolved.session_id, elapsed, result_cmd_attr,
-            );
-            return Ok(SESSION_WAIT_TIMEOUT_EXIT_CODE);
+            return Ok(emit_wait_cap_outcome(
+                &resolved.session_id,
+                cd.as_deref(),
+                wait_options.behavior.wait_timeout_secs,
+                elapsed,
+                session_alive,
+            ));
         }
 
         std::thread::sleep(wait_options.behavior.timing.poll_interval);

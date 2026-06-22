@@ -15,6 +15,8 @@ mod liveness;
 mod lock;
 #[path = "session_cmds_daemon_wait_next_step.rs"]
 mod next_step;
+#[path = "session_cmds_daemon_wait_registry_loss.rs"]
+mod registry_loss;
 #[path = "session_cmds_daemon_wait_result.rs"]
 mod result_loader;
 #[path = "session_cmds_daemon_wait_summary.rs"]
@@ -485,11 +487,28 @@ fn check_session_stale_before_wait(
             }
         }
         Err(load_err) => {
+            if state_loss_has_waitable_evidence(session_dir) {
+                tracing::debug!(
+                    session_id,
+                    error = %load_err,
+                    "Continuing session wait despite registry-state load failure because durable wait evidence exists"
+                );
+                return Ok(());
+            }
             return Err(anyhow::anyhow!("failed to load session: {}", load_err));
         }
     }
 
     Ok(())
+}
+
+fn state_loss_has_waitable_evidence(session_dir: &Path) -> bool {
+    session_dir
+        .join(csa_session::result::RESULT_FILE_NAME)
+        .is_file()
+        || super::daemon_completion_exists(session_dir)
+        || session_has_terminal_process(session_dir)
+        || csa_process::ToolLiveness::is_alive(session_dir)
 }
 
 fn any_session_holds_worktree_write_lock(
