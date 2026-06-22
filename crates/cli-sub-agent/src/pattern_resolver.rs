@@ -10,7 +10,7 @@
 //! 3. Superproject root (submodule only): `.csa/patterns/<name>/`
 //! 4. Superproject root (submodule only): `patterns/<name>/`
 //! 5. `<global_store>/<pkg>/<commit>/patterns/<name>/` from lockfiles under current/superproject
-//! 6. Binary-bundled fallback for first-party review/debate patterns
+//! 6. Binary-bundled fallback for first-party review/debate/planning patterns
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -131,11 +131,45 @@ static BUNDLED_DEBATE_FILES: &[BundledPatternFile] = &[
     },
 ];
 
+static BUNDLED_MKTD_FILES: &[BundledPatternFile] = &[
+    BundledPatternFile {
+        path: ".skill.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/mktd/.skill.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "PATTERN.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/mktd/PATTERN.md"
+        )),
+    },
+    BundledPatternFile {
+        path: "workflow.toml",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/mktd/workflow.toml"
+        )),
+    },
+    BundledPatternFile {
+        path: "skills/mktd/SKILL.md",
+        contents: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../patterns/mktd/skills/mktd/SKILL.md"
+        )),
+    },
+];
+
 static BUNDLED_CSA_REVIEW_PATTERN: BundledPattern = BundledPattern {
     files: BUNDLED_CSA_REVIEW_FILES,
 };
 static BUNDLED_DEBATE_PATTERN: BundledPattern = BundledPattern {
     files: BUNDLED_DEBATE_FILES,
+};
+static BUNDLED_MKTD_PATTERN: BundledPattern = BundledPattern {
+    files: BUNDLED_MKTD_FILES,
 };
 
 // ---------------------------------------------------------------------------
@@ -301,6 +335,7 @@ fn bundled_pattern(name: &str) -> Option<&'static BundledPattern> {
     match name {
         "csa-review" => Some(&BUNDLED_CSA_REVIEW_PATTERN),
         "debate" => Some(&BUNDLED_DEBATE_PATTERN),
+        "mktd" => Some(&BUNDLED_MKTD_PATTERN),
         _ => None,
     }
 }
@@ -613,3 +648,7 @@ fn load_skill_config_with_user_dir(
 #[cfg(test)]
 #[path = "pattern_resolver_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pattern_resolver_tests_2305.rs"]
+mod tests_2305;

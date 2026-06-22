@@ -186,13 +186,13 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 3 | L1/L2 Quality Gates | language-aware lint/test gate | bash |
 | **IF FAST_PATH** | | | |
 | 4 | Simplified Commit | `just test && git commit` | bash |
-| 5 | Version Bump | Rust-only `just bump-patch` if needed; non-Rust skips | bash |
+| 5 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
 | 6 | Pre-PR Review | `csa review --range` then `csa review --check-verdict --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
-| 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` (skipped in resume mode) | bash |
+| 7 | Plan with mktd | `csa plan run --pattern mktd` by default, `MKTD_WORKFLOW_PATH` override allowed (skipped in resume mode) | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
 | 9 | Resume Commit | resume mode only: L2 tests + commit uncommitted remainder | bash |
-| 10 | Version Bump | Rust-only `just bump-patch` if needed; non-Rust skips | bash |
+| 10 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
 | 11 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
 | 12 | Pre-PR Cumulative Review Gate | `csa review --range ${DEFAULT_BRANCH}...HEAD` then `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` | bash |
 | **ENDIF** | | | |
@@ -246,7 +246,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 3. Language-aware L1/L2 gates exit 0.
 4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
-6. Rust repos have version bumped if needed; non-Rust repos skip version bump without aborting.
+6. Rust repos with local version recipes bump if needed; non-Rust repos or repos missing those optional recipes skip without aborting.
 7. Pre-PR cumulative review passed the PASS/CLEAN verdict check before setting `REVIEW_COMPLETED=true`.
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
 9. Pre-PR review verdict check passed (`csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD`).

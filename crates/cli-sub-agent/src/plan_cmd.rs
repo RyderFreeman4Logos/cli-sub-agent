@@ -652,6 +652,10 @@ mod tests_mktd_save;
 mod tests_dev2merge_2031;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_dev2merge_2305.rs"]
+mod tests_dev2merge_2305;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_pr_bot.rs"]
 mod tests_pr_bot;
 
