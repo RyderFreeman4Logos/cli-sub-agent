@@ -19,7 +19,8 @@ const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
 const SESSION_CMDS_DAEMON_WAIT_SRC: &str = concat!(
     include_str!("session_cmds_daemon_wait.rs"),
-    include_str!("session_cmds_daemon_wait_core.rs")
+    include_str!("session_cmds_daemon_wait_core.rs"),
+    include_str!("session_cmds_daemon_wait_completion.rs")
 );
 
 /// Extract the body of every `<!-- CSA:CALLER_HINT action=... -->` block in a
@@ -205,10 +206,16 @@ fn session_cmds_daemon_wait_retry_wait_hint_warns_no_stack_wakeup() {
         "session_cmds_daemon_wait emits both retry_wait and next_session hints; got {} blocks",
         blocks.len()
     );
-    let retry = blocks
+    let retry_blocks = blocks
         .iter()
-        .find(|b| b.contains("action=\\\"retry_wait\\\""))
-        .expect("retry_wait CALLER_HINT block present");
+        .filter(|b| b.contains("action=\\\"retry_wait\\\""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retry_blocks.len(),
+        1,
+        "session_cmds_daemon_wait emits exactly one retry_wait CALLER_HINT"
+    );
+    let retry = retry_blocks[0];
     assert!(
         retry.contains(NO_STACK_WAKEUP_WARNING),
         "retry_wait CALLER_HINT must warn against ScheduleWakeup/loop stacking"
@@ -226,10 +233,16 @@ fn session_cmds_daemon_wait_retry_wait_hint_warns_no_stack_wakeup() {
 #[test]
 fn session_cmds_daemon_wait_next_session_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(SESSION_CMDS_DAEMON_WAIT_SRC);
-    let next = blocks
+    let next_blocks = blocks
         .iter()
-        .find(|b| b.contains("action=\\\"next_session\\\""))
-        .expect("next_session CALLER_HINT block present");
+        .filter(|b| b.contains("action=\\\"next_session\\\""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        next_blocks.len(),
+        1,
+        "session_cmds_daemon_wait emits exactly one next_session CALLER_HINT"
+    );
+    let next = next_blocks[0];
     assert!(
         next.contains(NO_STACK_WAKEUP_WARNING),
         "next_session CALLER_HINT must warn against ScheduleWakeup/loop stacking"
