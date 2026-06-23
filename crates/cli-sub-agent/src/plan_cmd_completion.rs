@@ -15,6 +15,7 @@ pub(crate) use pr_bot_completion::{
 
 const DEV2MERGE_WORKFLOW_NAME: &str = "dev2merge";
 const DEV2MERGE_VERIFY_STEP_ID: usize = 18;
+const DEV2MERGE_ALREADY_RESOLVED_STEP_ID: usize = 0;
 const DEV2MERGE_PUBLISH_STEPS: [usize; 5] = [13, 14, 15, 16, 17];
 
 pub(crate) struct PlanCompletionInput<'a> {
@@ -127,7 +128,16 @@ pub(crate) fn verify_plan_completion(
     }
     let facts = Dev2MergeCompletionFacts::from_input(&input);
     if !facts.publish_started {
-        return Ok(None);
+        if facts.already_resolved_skip {
+            return Ok(Some(
+                "dev2merge: already-resolved check declared an explicit no-op".to_string(),
+            ));
+        }
+        return Err(Box::new(dev2merge_lifecycle_not_started_failure_report(
+            input.workflow_name,
+            input.workflow_path,
+            &facts,
+        )));
     }
 
     let observed = observe_dev2merge_state(input.project_root, &facts);
@@ -155,6 +165,8 @@ pub(crate) fn verify_plan_completion(
 
 #[derive(Debug, Clone, Default)]
 struct Dev2MergeCompletionFacts {
+    dev2merge_skip: bool,
+    already_resolved_skip: bool,
     publish_started: bool,
     push_gate_completed: bool,
     review_verdict_completed: bool,
@@ -169,6 +181,8 @@ struct Dev2MergeCompletionFacts {
 impl Dev2MergeCompletionFacts {
     fn from_input(input: &PlanCompletionInput<'_>) -> Self {
         let dev2merge_skip = truthy(input.vars.get("DEV2MERGE_SKIP"));
+        let already_resolved_skip =
+            dev2merge_skip && already_resolved_step_declared_skip(input.results);
         let step_completed = |step_id| {
             step_completed_successfully(
                 input.results,
@@ -189,6 +203,8 @@ impl Dev2MergeCompletionFacts {
         let pr_bot_done_marker = non_empty_var(input.vars, "PR_BOT_DONE_MARKER").map(PathBuf::from);
 
         Self {
+            dev2merge_skip,
+            already_resolved_skip,
             publish_started,
             push_gate_completed: step_completed(13),
             review_verdict_completed: step_completed(14),
@@ -306,6 +322,58 @@ fn evaluate_dev2merge_completion(
     failures
 }
 
+fn dev2merge_lifecycle_not_started_failure_report(
+    workflow_name: &str,
+    workflow_path: &Path,
+    facts: &Dev2MergeCompletionFacts,
+) -> PlanFailureError {
+    let summary = "dev2merge lifecycle side-effect verification failed: publish gate never started"
+        .to_string();
+    let mut error = vec![
+        "ERROR: dev2merge lifecycle side-effect verification failed after workflow steps reported success."
+            .to_string(),
+        "ERROR: Publish Gate (Step 13) did not run; branch publication, PR creation, pr-bot merge, and post-merge sync were not attempted."
+            .to_string(),
+    ];
+    if facts.dev2merge_skip {
+        error.push(
+            "ERROR: DEV2MERGE_SKIP was true, but the Already-Resolved Check (Step 0) did not declare the skip in this run.".to_string(),
+        );
+    } else {
+        error.push(
+            "ERROR: DEV2MERGE_SKIP was not set by the Already-Resolved Check; terminal success would be transport-only.".to_string(),
+        );
+    }
+    error.push(
+        "Retry dev2merge from the current branch, or resume the journal if a manual handoff was expected; callers should treat this structured result as a missing lifecycle gate."
+            .to_string(),
+    );
+    let error = error.join("\n");
+    let synthetic_result = StepResult {
+        step_id: DEV2MERGE_VERIFY_STEP_ID,
+        title: "Dev2merge Lifecycle Side-Effect Verification".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some(error.clone()),
+        output: None,
+        session_id: None,
+        command: Some(
+            "post-run verifier: require Step 13-17 side effects or Step 0 already-resolved DEV2MERGE_SKIP=true"
+                .to_string(),
+        ),
+        stderr: Some(error),
+    };
+    let report = PlanFailureReport::from_results(
+        workflow_name,
+        workflow_path,
+        summary.clone(),
+        &[synthetic_result],
+        None,
+    );
+    PlanFailureError::new(summary, report)
+}
+
 fn dev2merge_completion_failure_report(
     workflow_name: &str,
     workflow_path: &Path,
@@ -357,6 +425,19 @@ fn step_completed_successfully(
         return !result.skipped && result.exit_code == 0;
     }
     !dev2merge_skip && completed_steps.contains(&step_id)
+}
+
+fn already_resolved_step_declared_skip(results: &[StepResult]) -> bool {
+    results.iter().any(|result| {
+        result.step_id == DEV2MERGE_ALREADY_RESOLVED_STEP_ID
+            && !result.skipped
+            && result.exit_code == 0
+            && result.output.as_deref().is_some_and(|output| {
+                output
+                    .lines()
+                    .any(|line| line.trim() == "CSA_VAR:DEV2MERGE_SKIP=true")
+            })
+    })
 }
 
 fn truthy(value: Option<&String>) -> bool {

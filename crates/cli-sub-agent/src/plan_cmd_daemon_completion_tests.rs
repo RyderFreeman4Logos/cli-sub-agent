@@ -199,3 +199,69 @@ on_fail = "abort"
         persisted.summary
     );
 }
+
+#[tokio::test]
+async fn daemon_child_dev2merge_no_side_effect_success_fails_structured_completion_verification() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
+    let project_root = temp.path().join("repo");
+    std::fs::create_dir_all(&project_root).expect("repo dir should be created");
+    init_plan_test_repo(&project_root);
+    std::fs::write(
+        project_root.join("workflow.toml"),
+        r#"[workflow]
+name = "dev2merge"
+
+[[workflow.steps]]
+id = 1
+title = "Passing Non-Lifecycle Step"
+tool = "bash"
+prompt = '''
+```bash
+printf 'synthetic non-lifecycle step passed\n'
+```
+'''
+on_fail = "abort"
+"#,
+    )
+    .expect("write workflow");
+    commit_all(&project_root, "initial");
+    let (session_id, session_dir) = prepare_plan_session(&project_root, "plan: dev2merge");
+
+    let result = handle_plan_run_daemon_child(plan_daemon_args(&project_root), &session_id).await;
+
+    assert!(
+        result.is_err(),
+        "dev2merge terminal success without lifecycle side effects must fail"
+    );
+    let summary = csa_session::read_section(&session_dir, "summary")
+        .expect("summary should load")
+        .expect("summary section should exist");
+    assert!(
+        summary.contains(
+            "dev2merge lifecycle side-effect verification failed: publish gate never started"
+        ) && summary
+            .contains("Failed step: 18 (Dev2merge Lifecycle Side-Effect Verification) exited 1"),
+        "summary must expose the missing lifecycle gate instead of generic success: {summary}"
+    );
+    let details = csa_session::read_section(&session_dir, "details")
+        .expect("details should load")
+        .expect("details section should exist");
+    assert!(
+        details.contains("Publish Gate (Step 13) did not run")
+            && details.contains("branch publication, PR creation, pr-bot merge")
+            && details.contains("missing lifecycle gate"),
+        "details must include actionable missing lifecycle side effects: {details}"
+    );
+    let persisted = csa_session::load_result(&project_root, &session_id)
+        .expect("result should load")
+        .expect("result.toml should exist");
+    assert_eq!(persisted.exit_code, 1);
+    assert!(
+        persisted
+            .summary
+            .contains("dev2merge lifecycle side-effect verification failed"),
+        "result summary must carry the lifecycle verification failure: {}",
+        persisted.summary
+    );
+}
