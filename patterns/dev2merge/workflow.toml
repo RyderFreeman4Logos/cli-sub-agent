@@ -371,6 +371,7 @@ USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}"
 MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}"
 MKTD_PLAN_TIER="${PLAN_TIER:-${TIER:-tier-3-complex}}"
+CSA_BIN="${CSA_BIN:-csa}"
 MKTD=(--pattern mktd); [ -n "${MKTD_WORKFLOW_PATH:-}" ] && MKTD=("$MKTD_WORKFLOW_PATH")
 MKTD_TOOL_ARGS=(); [ -z "${MKTD_TOOL_EFFECTIVE}" ] || MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
@@ -389,9 +390,9 @@ else
   MKTD_INTENSITY="full"
   echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
 fi
-echo "mktd hard-timeout: ${MKTD_TIMEOUT_SECONDS}s"
+echo "mktd timeout: ${MKTD_TIMEOUT_SECONDS}s"
 set +e
-MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" csa plan run --sa-mode true "${MKTD[@]}" \
+MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" "${CSA_BIN}" plan run --sa-mode true "${MKTD[@]}" \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
@@ -425,15 +426,14 @@ fail_step7_gate() {
 }
 if [ "${MKTD_EXIT}" -eq 124 ] || [ "${MKTD_EXIT}" -eq 137 ]; then
   echo "ERROR: mktd hard-timeout after ${MKTD_TIMEOUT_SECONDS}s (#1118 part A)." >&2
-  echo "Inspect runaway sub-sessions with 'csa session list' and clean up via 'csa session kill'." >&2
   print_mktd_failure_context
   exit 1
 fi
-LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
+LATEST_TS="$("${CSA_BIN}" todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
 if [ -z "${LATEST_TS}" ]; then
   fail_step7_gate "mktd did not produce a TODO for branch ${CURRENT_BRANCH}."
 fi
-TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
+TODO_PATH="$("${CSA_BIN}" todo show -t "${LATEST_TS}" --path)"
 if ! grep -qF -- '- [ ] ' "${TODO_PATH}"; then
   fail_step7_gate "TODO missing checkbox tasks."
 fi

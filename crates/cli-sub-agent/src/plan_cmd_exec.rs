@@ -140,7 +140,11 @@ async fn spawn_bash(
         .envs(env_vars.iter())
         .env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_WORKFLOW_PATH", workflow_path)
-        .env("CSA_WORKFLOW_DIR", workflow_dir);
+        .env("CSA_WORKFLOW_DIR", workflow_dir)
+        .env(
+            "CSA_BIN",
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa")),
+        );
     // This bash step is a CSA-child boundary because it may run nested `csa`
     // commands. Reserve the protected contract keys before re-applying CSA's
     // trusted startup snapshot, so workflow/user env cannot spoof session

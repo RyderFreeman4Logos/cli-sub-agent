@@ -23,7 +23,7 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
         .expect("read mktd pattern");
 
     assert!(
-        extracted_save_script.contains(r#"csa todo persist -t "${TODO_TS}""#),
+        extracted_save_script.contains(r#""${CSA_BIN}" todo persist -t "${TODO_TS}""#),
         "mktd Save TODO bash extraction must not stop at markdown fence literals in sed expressions"
     );
 
@@ -35,19 +35,24 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save""#,
             r#"TODO_ARTIFACT="${SAVE_DIR}/TODO.md""#,
             r#"SPEC_ARTIFACT="${SAVE_DIR}/spec.toml""#,
+            r#"RAW_SPEC_ARTIFACT="${SAVE_DIR}/spec.raw.txt""#,
             r#"FENCE=$(printf '\140\140\140')"#,
             r#"awk -v s="${FENCE}epic-plan.toml" -v e="${FENCE}" '$0 == s"#,
-            r#"FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}")"#,
-            r#"LOWER_SPEC_LINE=$(printf '%s' "${FIRST_SPEC_LINE}" | tr '[:upper:]' '[:lower:]')"#,
-            r#"SPEC_MARKER_KIND="""#,
-            r#"SPEC_MARKER_KIND="CSA section marker""#,
-            r#""${FENCE}"*) SPEC_MARKER_KIND="Markdown code fence" ;;"#,
-            r#"spec artifact-shape error: expected TOML spec.toml"#,
-            r#"first marker kind: %s"#,
+            r#"CSA_BIN="${CSA_BIN:-csa}""#,
+            r#"extract_spec_toml() {"#,
+            r#"perl -0CSDA -we"#,
+            r#"expected raw TOML or fenced TOML"#,
+            r#"Raw spec artifact path: %s"#,
+            r#"read raw spec artifact failed"#,
+            r#"k="non-TOML""#,
+            r#"k="CSA section marker""#,
+            r#""${FENCE}"*) k="Markdown code fence" ;;"#,
+            r#"spec artifact-shape error: expected raw TOML or fenced TOML"#,
+            r#"first content: %s"#,
             r#"Spec artifact path: %s"#,
             r#"grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}""#,
             r#"perl -CSDA -ne '$found ||= /\p{Han}/; END { exit($found ? 0 : 1) }'"#,
-            r#"csa todo persist -t "${TODO_TS}""#,
+            r#""${CSA_BIN}" todo persist -t "${TODO_TS}""#,
             r#"--todo-file "${TODO_ARTIFACT}""#,
             r#"--spec-file "${SPEC_ARTIFACT}""#,
         ] {
@@ -82,15 +87,13 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
         // run BEFORE `csa todo persist` commits, so an invalid plan can never
         // enter the todos git history even if a later step aborts.
         let persist_idx = content
-            .find(r#"csa todo persist -t "${TODO_TS}""#)
+            .find(r#""${CSA_BIN}" todo persist -t "${TODO_TS}""#)
             .unwrap_or_else(|| panic!("{name} missing csa todo persist"));
         let validate_idx = content
             .find(r#"grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}""#)
             .unwrap_or_else(|| panic!("{name} must validate the TODO artifact before persist"));
         let shape_idx = content
-            .find(
-                r#"FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}")"#,
-            )
+            .find(r#"if ! extract_spec_toml "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then"#)
             .unwrap_or_else(|| panic!("{name} must shape-check spec artifact before persist"));
         assert!(
             validate_idx < persist_idx,
