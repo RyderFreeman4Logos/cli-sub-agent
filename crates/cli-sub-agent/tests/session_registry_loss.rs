@@ -33,11 +33,18 @@ fn session_dir_for(tmp: &Path, project: &Path, session_id: &str) -> PathBuf {
         .to_string_lossy()
         .trim_start_matches('/')
         .replace('/', std::path::MAIN_SEPARATOR_STR);
-    tmp.join(".local/state")
-        .join("cli-sub-agent")
+    state_root_for(tmp)
         .join(storage_key)
         .join("sessions")
         .join(session_id)
+}
+
+fn state_root_for(tmp: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        tmp.join("Library/Application Support/cli-sub-agent")
+    } else {
+        tmp.join(".local/state/cli-sub-agent")
+    }
 }
 
 fn synthetic_registered_dir(tmp: &Path, project: &Path, session_id: &str) -> PathBuf {

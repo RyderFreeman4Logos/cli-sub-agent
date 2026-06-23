@@ -71,7 +71,7 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
         schema_version: 1,
         project: csa_config::ProjectMeta::default(),
         resources: csa_config::ResourcesConfig {
-            memory_max_mb: Some(if tools.contains(&"codex") { 8192 } else { 1024 }),
+            memory_max_mb: Some(1024),
             min_free_memory_mb: 1,
             soft_limit_percent: tools.contains(&"codex").then_some(100),
             ..Default::default()
@@ -98,13 +98,15 @@ fn exact_test_project_config_with_enabled_tools(tools: &[&str]) -> csa_config::P
     }
 }
 
+include!("review_cmd_exact_test_support.rs");
+
 fn exact_test_config_with_review_tier(
     enabled_tools: &[&str],
     models: &[&str],
 ) -> csa_config::ProjectConfig {
     let mut config = exact_test_project_config_with_enabled_tools(enabled_tools);
     if enabled_tools.contains(&"codex") {
-        config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+        exact_test_configure_codex_cli_review_test_tool(&mut config);
     }
     config.tiers.insert(
         "quality".to_string(),

@@ -1,8 +1,21 @@
 pub(in crate::review_cmd::tests) use super::*;
 use csa_core::types::ToolName;
 pub(crate) use review_core::{
-    ScopedEnvVarRestore, project_config_with_enabled_tools, setup_git_repo,
+    ScopedEnvVarRestore, configure_codex_cli_review_test_tool, project_config_with_enabled_tools,
+    setup_git_repo,
 };
+
+#[test]
+fn codex_cli_review_test_tool_preserves_low_memory_projection() {
+    let mut config = project_config_with_enabled_tools(&["codex"]);
+    configure_codex_cli_review_test_tool(&mut config);
+
+    assert_eq!(
+        config.tool_enforcement_mode("codex"),
+        csa_config::EnforcementMode::Off
+    );
+    assert_eq!(config.sandbox_memory_max_mb("codex"), Some(1024));
+}
 
 #[path = "review_cmd_tests.rs"]
 mod review_core;

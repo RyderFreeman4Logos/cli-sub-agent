@@ -46,19 +46,16 @@ fn mktd_save_step_persists_issue_quoted_content_without_shell_parse_break() -> a
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(project_dir.path(), &["checkout", "-b", "fix/2041-test"])?;
 
-    let existing_path = std::env::var("PATH").unwrap_or_default();
     let output = std::process::Command::new("bash")
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env(
-            "PATH",
-            format!("{}:{existing_path}", bin_dir.path().display()),
-        )
+        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env("STEP_8_OUTPUT", spec_toml())
@@ -107,6 +104,7 @@ fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_failing_persist_stub_script())?;
     make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(
@@ -114,15 +112,11 @@ fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<
         &["checkout", "-b", "fix/persist-detail-test"],
     )?;
 
-    let existing_path = std::env::var("PATH").unwrap_or_default();
     let output = std::process::Command::new("bash")
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env(
-            "PATH",
-            format!("{}:{existing_path}", bin_dir.path().display()),
-        )
+        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env("STEP_8_OUTPUT", spec_toml())
@@ -176,6 +170,33 @@ fn make_executable(path: &Path) -> anyhow::Result<()> {
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn install_save_script_path_tools(bin_dir: &Path) -> anyhow::Result<()> {
+    for tool in [
+        "awk", "bash", "git", "grep", "head", "mkdir", "sed", "tail", "tr", "wc", "perl",
+    ] {
+        let source = resolve_path_tool(tool)?;
+        std::os::unix::fs::symlink(&source, bin_dir.join(tool))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn resolve_path_tool(tool: &str) -> anyhow::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let candidate = dir.join(tool);
+        let Ok(metadata) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!("required test tool not found on PATH: {tool}")
 }
 
 #[cfg(unix)]

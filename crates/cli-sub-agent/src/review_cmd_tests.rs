@@ -49,7 +49,7 @@ pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         schema_version: 1,
         project: ProjectMeta::default(),
         resources: ResourcesConfig {
-            memory_max_mb: Some(if includes_codex { 8192 } else { 1024 }),
+            memory_max_mb: Some(1024),
             min_free_memory_mb: 1,
             soft_limit_percent: includes_codex.then_some(100),
             ..Default::default()
@@ -74,6 +74,12 @@ pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         vcs: Default::default(),
         filesystem_sandbox: Default::default(),
     }
+}
+
+pub(crate) fn configure_codex_cli_review_test_tool(config: &mut ProjectConfig) {
+    let codex = config.tools.get_mut("codex").expect("codex tool config");
+    codex.transport = Some(csa_config::TransportKind::Cli);
+    codex.enforcement_mode = Some(csa_config::EnforcementMode::Off);
 }
 
 fn parse_review_args(argv: &[&str]) -> ReviewArgs {

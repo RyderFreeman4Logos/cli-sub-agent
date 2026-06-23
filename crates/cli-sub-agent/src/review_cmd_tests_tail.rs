@@ -752,7 +752,7 @@ async fn handle_review_fix_clean_initial_persists_no_fix_attempt() {
     let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
 
     let mut config = project_config_with_enabled_tools(&["codex"]);
-    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    configure_codex_cli_review_test_tool(&mut config);
     write_review_project_config(project_dir.path(), &config);
     install_pattern(project_dir.path(), "csa-review");
 

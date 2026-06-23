@@ -648,6 +648,10 @@ mod tests_workflows;
 mod tests_mktd_save;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_mktd_save_workflow.rs"]
+mod tests_mktd_save_workflow;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_dev2merge_2031.rs"]
 mod tests_dev2merge_2031;
 

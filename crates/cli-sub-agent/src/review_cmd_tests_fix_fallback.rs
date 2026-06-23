@@ -72,7 +72,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         allow_edit_existing_files: false,
         allow_write_new_files: false,
     });
-    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    configure_codex_cli_review_test_tool(&mut config);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {
@@ -264,7 +264,7 @@ printf '%s\n' \
         gate_command: Some("true".to_string()),
         ..Default::default()
     });
-    config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
+    configure_codex_cli_review_test_tool(&mut config);
     write_review_project_config(project_dir.path(), &config);
     install_pattern(project_dir.path(), "csa-review");
 
