@@ -58,6 +58,10 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" | ");
 
+    if is_exact_session_registry_loss_diagnostic(&chain_text) {
+        return None;
+    }
+
     let has_not_installed_or_not_found =
         chain_text.contains("not installed") || chain_text.contains("not found");
 
@@ -116,6 +120,12 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
     }
 
     None
+}
+
+fn is_exact_session_registry_loss_diagnostic(chain_text: &str) -> bool {
+    chain_text.contains("session registry lookup failed")
+        || chain_text.contains("csa infrastructure session-registry loss")
+        || chain_text.contains("csa:session_started")
 }
 
 pub(crate) fn sandbox_fs_denial_hint(
@@ -311,6 +321,14 @@ mod tests {
     fn test_session_not_found_hint() {
         let err = Error::new(AppError::SessionNotFound("01ARZ".into()));
         assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_SESSION_NOT_FOUND));
+    }
+
+    #[test]
+    fn exact_session_registry_loss_does_not_suggest_session_list() {
+        let err = anyhow::anyhow!(
+            "session registry lookup failed for session '01ARZ3NDEKTSV4RRFFQ69G5FAV': no session registration was found. If this id came from CSA:SESSION_STARTED, this is CSA infrastructure session-registry loss, not a product-code failure."
+        );
+        assert_eq!(suggest_fix(&err), None);
     }
 
     #[test]
