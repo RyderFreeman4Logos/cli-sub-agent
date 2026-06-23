@@ -201,3 +201,5 @@ The reviewer flagged a `[correctness]` concern but assigned no severity grade.
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+include!("review_cmd_output_verdict_2393_tests.rs");

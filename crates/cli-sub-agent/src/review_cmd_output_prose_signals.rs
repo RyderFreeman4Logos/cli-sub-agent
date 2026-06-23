@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use csa_session::{ReviewFinding, Severity};
 
+use super::artifacts::has_blocking_severity;
 use super::clean_detection::{
     contains_clean_phrase, detect_prose_clean_conclusion, detect_prose_fail_conclusion,
 };
@@ -23,6 +24,18 @@ pub(super) struct ReviewProseSignals {
     pub(super) cross_dimension_blockers: bool,
     pub(super) checklist_violation_findings: bool,
     pub(super) findings: Vec<ReviewFinding>,
+}
+
+impl ReviewProseSignals {
+    pub(super) fn has_failure_evidence(&self) -> bool {
+        has_blocking_severity(&self.severity_counts)
+            || self.blocking_summary
+            || self.parsed_findings_sections
+            || self.unparseable_findings_sections
+            || self.cross_dimension_blockers
+            || self.checklist_violation_findings
+            || !self.findings.is_empty()
+    }
 }
 
 pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSignals> {

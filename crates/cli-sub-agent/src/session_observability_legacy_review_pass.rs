@@ -8,11 +8,14 @@ use chrono::{DateTime, Utc};
 use csa_core::types::ReviewDecision;
 use csa_session::{ReviewVerdictArtifact, SessionResult};
 
+#[path = "session_observability_legacy_review_pass_clean.rs"]
+mod clean_summary;
+
 pub(super) fn recover_legacy_plain_pass_review_sidecars_from_dir(
     session_dir: &Path,
     result: &mut SessionResult,
 ) -> Result<bool> {
-    if review_sidecar_exists(session_dir) {
+    if review_verdict_artifact_exists(session_dir) {
         return Ok(false);
     }
     let session = match read_session_state(session_dir) {
@@ -44,10 +47,24 @@ pub(super) fn recover_legacy_plain_pass_review_sidecars(
     session_dir: &Path,
     result: &mut SessionResult,
 ) -> Result<bool> {
-    if review_sidecar_exists(session_dir) {
+    if review_verdict_artifact_exists(session_dir) {
         return Ok(false);
     }
-    let session = csa_session::load_session(project_root, session_id)?;
+    let session = match read_session_state(session_dir) {
+        Ok(session) => session,
+        Err(error) => {
+            tracing::debug!(
+                session_id,
+                path = %session_dir.display(),
+                error = %error,
+                "skipping legacy review sidecar recovery because session state is unreadable"
+            );
+            None
+        }
+    };
+    let Some(session) = session else {
+        return Ok(false);
+    };
     recover_legacy_plain_pass_review_sidecars_for_session(
         project_root,
         session_dir,
@@ -62,7 +79,7 @@ fn recover_legacy_plain_pass_review_sidecars_for_session(
     result: &mut SessionResult,
     session: &csa_session::MetaSessionState,
 ) -> Result<bool> {
-    if review_sidecar_exists(session_dir) || !is_review_session(session) {
+    if review_verdict_artifact_exists(session_dir) || !is_review_session(session) {
         return Ok(false);
     }
 
@@ -76,7 +93,12 @@ fn recover_legacy_plain_pass_review_sidecars_for_session(
     else {
         return Ok(false);
     };
-    if decision == ReviewDecision::Pass && result.exit_code != 0 {
+    let existing_meta = read_review_meta(session_dir);
+    if decision == ReviewDecision::Pass
+        && existing_meta
+            .as_ref()
+            .is_some_and(csa_session::ReviewSessionMeta::requires_fail_closed_verdict)
+    {
         return Ok(false);
     }
 
@@ -161,12 +183,11 @@ fn legacy_verdict_for_review_decision(decision: ReviewDecision) -> &'static str 
     }
 }
 
-fn review_sidecar_exists(session_dir: &Path) -> bool {
-    session_dir.join("review_meta.json").is_file()
-        || session_dir
-            .join("output")
-            .join("review-verdict.json")
-            .is_file()
+fn review_verdict_artifact_exists(session_dir: &Path) -> bool {
+    session_dir
+        .join("output")
+        .join("review-verdict.json")
+        .is_file()
 }
 
 fn read_session_state(session_dir: &Path) -> Result<Option<csa_session::MetaSessionState>> {
@@ -176,6 +197,12 @@ fn read_session_state(session_dir: &Path) -> Result<Option<csa_session::MetaSess
     }
     let raw = fs::read_to_string(&path)?;
     Ok(Some(toml::from_str(&raw)?))
+}
+
+fn read_review_meta(session_dir: &Path) -> Option<csa_session::ReviewSessionMeta> {
+    fs::read_to_string(session_dir.join("review_meta.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
 pub(super) fn is_review_session_dir(session_dir: &Path) -> bool {
@@ -429,6 +456,8 @@ fn legacy_plain_review_summary_decision(summary: &str) -> Option<LegacyPlainRevi
                 if has_ambiguous_or_compound_clean_verdict_phrase(line) {
                     return Some(LegacyPlainReviewSummaryDecision::InvalidRecognizedLabel);
                 }
+                pass = true;
+            } else if clean_summary::unlabeled_clean_decision_with_clean_explanation(line) {
                 pass = true;
             }
             continue;

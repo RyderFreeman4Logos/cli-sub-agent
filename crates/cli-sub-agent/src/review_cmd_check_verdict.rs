@@ -540,6 +540,13 @@ fn read_review_meta_after_recovery(
     session_id: &str,
     session_dir: &Path,
 ) -> Result<Option<ReviewSessionMeta>> {
+    if !session_dir
+        .join("output")
+        .join("review-verdict.json")
+        .is_file()
+    {
+        recover_review_sidecars_before_meta(project_root, session_id);
+    }
     if let Some(meta) = read_review_meta(session_dir)? {
         return Ok(Some(meta));
     }

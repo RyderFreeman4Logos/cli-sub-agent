@@ -53,6 +53,14 @@ fn legacy_plain_review_summary_decision_accepts_bounded_clean_verdict_shapes() {
             ReviewDecision::Pass
         ))
     );
+    assert_eq!(
+        legacy_plain_review_summary_decision(
+            "PASS No blocking correctness, security, or AGENTS.md compliance findings found for `range:main...HEAD`.\n"
+        ),
+        Some(LegacyPlainReviewSummaryDecision::Decision(
+            ReviewDecision::Pass
+        ))
+    );
 }
 
 #[test]
