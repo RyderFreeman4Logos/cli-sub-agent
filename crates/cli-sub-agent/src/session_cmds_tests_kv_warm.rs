@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_cmds::{StructuredOutputOpts, handle_session_result};
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
 };
@@ -184,6 +185,109 @@ fn handle_session_wait_kv_warm_after_registry_state_loss_with_metadata_fallback(
         exit_code, 0,
         "metadata-only exact fallback must keep CSA:SESSION_STARTED ids waitable after KV warm"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn exact_id_wait_and_result_survive_repeated_kv_warm_after_registry_state_loss() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let caller_project = td.path().join("caller");
+    let owner_project = td.path().join("owner");
+    std::fs::create_dir_all(&caller_project).expect("create caller project");
+    std::fs::create_dir_all(&owner_project).expect("create owner project");
+
+    let session = create_session(
+        &owner_project,
+        Some("wait-metadata-repeat"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(&owner_project, &session_id).expect("session dir");
+    std::fs::remove_file(session_dir.join("state.toml")).expect("remove registry state");
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    for attempt in 1..=2 {
+        let exit_code = handle_session_wait_with_hooks(
+            session_id.clone(),
+            Some(caller_project.to_string_lossy().into_owned()),
+            WaitBehavior {
+                wait_timeout_secs: 0,
+                memory_warn_mb: None,
+                timing: WaitLoopTiming {
+                    poll_interval: std::time::Duration::from_millis(1),
+                    memory_sample_interval: std::time::Duration::from_secs(15),
+                },
+            },
+            |_project_root, _current_session_id, _trigger| {
+                panic!("registry-loss live session must not be reconciled")
+            },
+            |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+                panic!("alive-at-cap path must not emit a completion signal");
+            },
+        )
+        .unwrap_or_else(|err| panic!("KV-warm wait attempt {attempt} should succeed: {err}"));
+
+        assert_eq!(
+            exit_code, 0,
+            "KV-warm wait attempt {attempt} must keep the exact id waitable"
+        );
+    }
+
+    child.kill().expect("kill child");
+    child.wait().expect("wait child");
+    save_result(&owner_project, &session_id, &make_result("success", 0)).expect("save result");
+
+    let mut completed_signal = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(caller_project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("terminal result artifact must be loaded without reconciliation")
+        },
+        |sid, status, exit_code, synthetic, _mirror_to_stdout| {
+            completed_signal = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("terminal wait should recover through durable exact-id fallback");
+
+    assert_eq!(exit_code, 0);
+    assert_eq!(
+        completed_signal,
+        Some((session_id.clone(), "success".to_string(), 0, false))
+    );
+
+    handle_session_result(
+        session_id,
+        false,
+        Some(caller_project.to_string_lossy().into_owned()),
+        StructuredOutputOpts::default(),
+    )
+    .expect("session result should recover through the same durable exact-id fallback");
 }
 
 #[cfg(target_os = "linux")]

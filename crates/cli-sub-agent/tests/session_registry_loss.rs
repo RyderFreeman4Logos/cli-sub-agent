@@ -248,6 +248,38 @@ fn session_result_classifies_missing_state_as_registry_loss() {
         "{stderr}"
     );
     assert!(!stderr.contains("csa session logs --session"), "{stderr}");
+    assert!(!stderr.contains("csa session list"), "{stderr}");
+}
+
+#[test]
+fn session_result_lookup_miss_uses_exact_id_registry_loss_without_list_hint() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project");
+    let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "result",
+            "--session",
+            session_id,
+            "--cd",
+            project.to_str().expect("utf-8 project path"),
+        ])
+        .output()
+        .expect("run csa session result");
+
+    assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("session registry lookup failed"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(session_id), "{stderr}");
+    assert!(stderr.contains("CSA:SESSION_STARTED"), "{stderr}");
+    assert!(stderr.contains("git status --short"), "{stderr}");
+    assert!(!stderr.contains("csa session list"), "{stderr}");
 }
 
 #[cfg(unix)]
@@ -289,4 +321,5 @@ fn session_wait_classifies_corrupt_state_as_registry_loss() {
     assert!(stderr.contains("corrupt state.toml"), "{stderr}");
     assert!(stderr.contains("CSA infrastructure"), "{stderr}");
     assert!(stderr.contains("not a product-code failure"), "{stderr}");
+    assert!(!stderr.contains("csa session list"), "{stderr}");
 }
