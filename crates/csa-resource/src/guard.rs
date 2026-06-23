@@ -287,7 +287,9 @@ fn evaluate_memory_availability(
             let error = MemoryAdmissionError::new(
                 format!(
                     "{message}. Free host memory, wait for active CSA sessions to finish, or lower \
-                     tool memory limits before spawning more work. For one csa run, pass \
+                     tool memory limits before spawning more work. Host admission uses physical \
+                     MemAvailable only; swap and combined memory are reported for diagnostics but \
+                     do not satisfy this pre-spawn gate. For one csa run, pass \
                      --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
                      to lower the reserve. Persistent config keys: resources.memory_max_mb, \
                      tools.<tool>.memory_max_mb, resources.min_free_memory_mb."
@@ -534,6 +536,8 @@ mod tests {
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("host memory admission denied"));
         assert!(msg.contains("projected_spawn=8192MB"));
+        assert!(msg.contains("Host admission uses physical MemAvailable only"));
+        assert!(msg.contains("swap and combined memory are reported for diagnostics"));
         assert!(msg.contains("--memory-max-mb <MB>"));
         assert!(msg.contains("--min-free-memory-mb <MB>"));
         assert!(msg.contains("tools.<tool>.memory_max_mb"));

@@ -141,20 +141,12 @@ echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 
 ## Step 2: Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)
 
-> **Layer**: 1 (CSA executor) -- Layer 0 dispatches `csa review`, which spawns
-> Layer 2 reviewer model(s) internally. Orchestrator waits for result.
+> Layer 1 dispatches `csa review`.
 
 Tool: bash
 OnFail: abort
 
-Run cumulative local review covering all commits since the default branch.
-This is the FOUNDATION — without it, bot unavailability cannot safely merge.
-
-> Fast-path (SHA-verified): compare `git rev-parse HEAD` with the HEAD SHA
-> stored in the latest `csa review` session metadata. If they match, skip
-> Step 2 review. If they do not match (or metadata is missing), run full
-> `csa review --branch "${DEFAULT_BRANCH}"`. Any HEAD drift (including amend) auto-invalidates
-> the fast-path.
+Review default-branch diff; reuse prior CSA review only on exact HEAD match.
 
 ```bash
 set -euo pipefail
@@ -172,10 +164,11 @@ if [ -n "${REVIEW_SESSION_RECORD}" ]; then
 fi
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
+elif native_bypass_reason="$(bash "${CSA_HELPER_DIR}/native-review-bypass.sh" "${CURRENT_HEAD}" "${DEFAULT_BRANCH}")"; then
+  echo "Fast-path: structured native review bypass artifact covers current HEAD."; echo "Review bypass evidence: ${native_bypass_reason}"; LOCAL_REVIEW_SESSION_ID="native-review-bypass-$(printf '%.12s' "${CURRENT_HEAD}")"
 else
-  SID=$(csa review --branch "${DEFAULT_BRANCH}")
-  LOCAL_REVIEW_SESSION_ID="${SID}"
-  bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
+  [ ! -f ".csa/review-bypass.log" ] || echo "Audit-only review-bypass log found, but no trusted native review artifact matched current HEAD; running CSA review." >&2
+  SID=$(csa review --branch "${DEFAULT_BRANCH}"); LOCAL_REVIEW_SESSION_ID="${SID}"; bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -461,14 +454,9 @@ echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" req
 Tool: bash
 OnFail: abort
 
-Check whether cloud bot review is enabled for this project.
-Before triggering the bot, consult the persisted quota cache at
-`${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/pr_review/cloud_bot_quota.toml`.
-If the configured bot is still inside a recorded quota-exhaustion window and
-`CSA_PR_BOT_FORCE` is not set, skip the bot path and route directly to Step 6a.
-Also inspect the latest configured-bot PR comment; if that newest comment
-already signals quota exhaustion, record the 24h window and take the same
-Step 6a fallback path without entering Step 5.
+Check cloud bot config and quota state. If the bot is disabled or quota-exhausted
+by cache/latest bot comment, mark it unavailable and route through Step 6a after
+local review evidence.
 
 ```bash
 set -euo pipefail
@@ -611,7 +599,10 @@ if [ "${BOT_UNAVAILABLE:-false}" = "true" ]; then
   fi
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
     echo "Merge-without-bot fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
+  elif native_bypass_reason="$(bash "${CSA_HELPER_DIR}/native-review-bypass.sh" "${CURRENT_HEAD}" "${DEFAULT_BRANCH}")"; then
+    echo "Merge-without-bot native review bypass covers HEAD ${CURRENT_HEAD}."; echo "Review bypass evidence: ${native_bypass_reason}"; LOCAL_REVIEW_SESSION_ID="native-review-bypass-$(printf '%.12s' "${CURRENT_HEAD}")"
   else
+    [ ! -f ".csa/review-bypass.log" ] || echo "Audit-only review-bypass log found, but no trusted native review artifact matched current HEAD; running CSA review." >&2
     echo "Merge-without-bot fast-path invalid. Running full local review."
     SID=$(csa review --branch "${DEFAULT_BRANCH}")
     LOCAL_REVIEW_SESSION_ID="${SID}"
@@ -1622,30 +1613,10 @@ Tool: bash
 OnFail: abort
 Condition: (${CLOUD_BOT}) && !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
 
-After fixing bot findings, verify the bot has actually re-reviewed the current
-HEAD and found zero actionable findings before any merge path can execute.
-
-This is a **deterministic hard gate** — it prevents the linear workflow
-from falling through to merge without re-verification. The "Loop back
-to Step 5" above is guidance for LLM orchestrators but is NOT enforced
-by the workflow engine (`csa plan run` executes steps linearly).
-
-**Positive confirmation signal** (#505): The gate checks for a **review event**
-(via `pulls/{pr}/reviews` API) on the current HEAD. If the current HEAD was
-already re-reviewed before this rerun starts, the gate reuses that exact
-current-HEAD review and skips posting a duplicate retrigger comment. Otherwise
-it waits for a new current-window review before proceeding. This distinguishes
-"bot re-reviewed and found nothing" from "bot hasn't re-reviewed yet."
-
-The gate:
-1. Records push timestamp before checking
-2. Checks for an already-posted exact current-HEAD review before retriggering; otherwise polls for a new review event from `${CLOUD_BOT_LOGIN}` on the current HEAD
-3. If review event found AND has P0/P1/HIGH/CRITICAL inline comments → **abort** (user must re-run pr-bot)
-4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
-5. If no review event within timeout → falls back to local `csa review --range ${DEFAULT_BRANCH}...HEAD`
-
-Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
-then up to `cloud_bot_poll_max_seconds` of polling.
+After fixes, require current-HEAD bot re-review with zero actionable findings.
+This hard gate reuses an existing exact-HEAD review when present, otherwise
+re-triggers/polls; blocking comments abort, clean review clears
+`BOT_HAS_ISSUES=false`, and no positive signal falls back to local review.
 
 ```bash
 set -euo pipefail
@@ -1818,6 +1789,11 @@ _run_local_fallback_review() {
   local sid
   local review_result
   local review_rc
+
+  if native_bypass_reason="$(bash "${CSA_HELPER_DIR}/native-review-bypass.sh" "${CURRENT_SHA}" "${DEFAULT_BRANCH}")"; then
+    echo "Local fallback native review bypass covers HEAD ${CURRENT_SHA}."; echo "Review bypass evidence: ${native_bypass_reason}"; LOCAL_REVIEW_SESSION_ID="native-review-bypass-$(printf '%.12s' "${CURRENT_SHA}")"; return 0
+  fi
+  [ ! -f ".csa/review-bypass.log" ] || echo "Audit-only review-bypass log found, but no trusted native review artifact matched current HEAD; running CSA review." >&2
 
   set +e
   launch_output="$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1)"

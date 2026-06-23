@@ -3,6 +3,7 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep, VariableDecl, plan_from_toml};
 
 fn workspace_root() -> PathBuf {
@@ -203,6 +204,368 @@ fn pr_bot_degraded_gate_vars(
     vars.insert("TEST_GH_CAPTURE".into(), capture_path.display().to_string());
     vars.insert("TEST_LOCAL_REVIEW_MODE".into(), local_review.into());
     vars
+}
+
+fn install_pr_bot_local_review_stubs(root: &Path, current_head: &str) -> PathBuf {
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let csa_called_path = root.join("csa-review-called");
+
+    write_executable(
+        &bin_dir.join("git"),
+        &format!(
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${{1:-}}" = "rev-parse" ] && [ "${{2:-}}" = "HEAD" ]; then
+  echo "{current_head}"
+  exit 0
+fi
+if [ "${{1:-}}" = "config" ] && [ "${{2:-}}" = "user.email" ]; then
+  echo "reviewer@example.com"
+  exit 0
+fi
+echo "unexpected git invocation: $*" >&2
+exit 2
+"#
+        ),
+    );
+
+    write_executable(
+        &bin_dir.join("csa"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "get" ]; then
+  key="${3:-}"
+  default=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --default)
+        default="${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+  if [ "${key}" = "pr_review.cloud_bot" ]; then
+    echo "${TEST_CLOUD_BOT:-true}"
+  else
+    echo "${default}"
+  fi
+  exit 0
+fi
+if [ "${1:-}" = "run" ]; then
+  echo "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+  exit 0
+fi
+if [ "${1:-}" = "review" ]; then
+  touch "${TEST_CSA_REVIEW_CALLED:?missing TEST_CSA_REVIEW_CALLED}"
+  echo "CSA review should only run when no bounded native bypass evidence matches" >&2
+  exit 42
+fi
+echo "unexpected csa invocation: $*" >&2
+exit 2
+"#,
+    );
+
+    write_executable(
+        &bin_dir.join("gh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "api" ]; then
+  echo '[[]]'
+  exit 0
+fi
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "comment" ]; then
+  exit 0
+fi
+echo "unexpected gh invocation: $*" >&2
+exit 2
+"#,
+    );
+
+    let helper_dir = root.join("scripts/csa");
+    std::fs::create_dir_all(&helper_dir).unwrap();
+    write_executable(
+        &helper_dir.join("latest-pass-review-head.sh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+"#,
+    );
+    write_executable(
+        &helper_dir.join("session-wait-until-done.sh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${TEST_SESSION_WAIT_TIMEOUT:-false}" = "true" ]; then
+  echo "BOT_REPLY=timeout"
+  exit 0
+fi
+echo "unexpected session wait for $*" >&2
+exit 42
+"#,
+    );
+    std::fs::copy(
+        workspace_root().join("patterns/pr-bot/scripts/csa/native-review-bypass.sh"),
+        helper_dir.join("native-review-bypass.sh"),
+    )
+    .unwrap();
+    let script_dir = root.join("scripts");
+    std::fs::create_dir_all(&script_dir).unwrap();
+    std::fs::copy(
+        workspace_root().join("patterns/pr-bot/scripts/pr-bot-quota-cache.sh"),
+        script_dir.join("pr-bot-quota-cache.sh"),
+    )
+    .unwrap();
+
+    csa_called_path
+}
+
+fn write_native_review_bypass_artifact(root: &Path, head: &str) {
+    let artifact_dir = root.join(".csa/native-review-bypass");
+    std::fs::create_dir_all(&artifact_dir).unwrap();
+    std::fs::write(
+        artifact_dir.join(format!("{head}.toml")),
+        format!(
+            "schema_version=1\nartifact_kind=\"native_review_bypass\"\nsource=\"native\"\nhead_sha=\"{head}\"\nrange=\"main...HEAD\"\nverdict=\"clean\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn write_review_check_skip_audit_log(root: &Path) {
+    let bin_dir = root.join("bin");
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let status = Command::new("bash")
+        .arg(workspace_root().join("scripts/hooks/review-check.sh"))
+        .current_dir(root)
+        .env("PATH", format!("{}:{}", bin_dir.display(), existing_path))
+        .env("CSA_SKIP_REVIEW_CHECK", "1")
+        .env(
+            "CSA_SKIP_REVIEW_CHECK_REASON",
+            "source=native range=main...HEAD verdict=clean",
+        )
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn pr_bot_local_review_vars(root: &Path, csa_called_path: &Path) -> HashMap<String, String> {
+    let mut vars = HashMap::new();
+    let bin_dir = root.join("bin");
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    vars.insert(
+        "PATH".into(),
+        format!("{}:{}", bin_dir.display(), existing_path),
+    );
+    vars.insert("CSA_WORKFLOW_DIR".into(), root.display().to_string());
+    vars.insert("DEFAULT_BRANCH".into(), "main".into());
+    vars.insert(
+        "TEST_CSA_REVIEW_CALLED".into(),
+        csa_called_path.display().to_string(),
+    );
+    vars
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_accepts_same_sha_native_bypass_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_native_review_bypass_artifact(tmp.path(), current_head);
+
+    let vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-native-review-bypass".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("native fallback evidence should satisfy local review");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].exit_code, 0, "Step 2 should pass");
+    let output = results[0].output.as_deref().unwrap_or("");
+    assert!(
+        output.contains("Fast-path: structured native review bypass artifact covers current HEAD"),
+        "expected native bypass fast-path output: {output}"
+    );
+    assert!(
+        output.contains("CSA_VAR:LOCAL_REVIEW_SESSION_ID=native-review-bypass-abcdef123456"),
+        "native fallback should publish a bounded synthetic session id: {output}"
+    );
+    assert!(
+        !csa_called_path.exists(),
+        "current-head native fallback evidence must avoid an unnecessary CSA review launch"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_rejects_stale_native_bypass_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let stale_head = "1234567890abcdef1234567890abcdef12345678";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_native_review_bypass_artifact(tmp.path(), stale_head);
+
+    let vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-stale-native-review-bypass".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("stale evidence should fail through the CSA review path");
+
+    assert_eq!(results.len(), 1);
+    assert_ne!(
+        results[0].exit_code, 0,
+        "stale bypass evidence must not satisfy local review"
+    );
+    assert!(
+        csa_called_path.exists(),
+        "stale fallback evidence should force pr-bot back to CSA review"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_rejects_review_check_skip_audit_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_review_check_skip_audit_log(tmp.path());
+
+    let vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-skip-log-rejected".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("hook skip log should fall through");
+
+    assert_eq!(results.len(), 1);
+    assert_ne!(results[0].exit_code, 0, "hook skip log must fail");
+    assert!(csa_called_path.exists(), "should force CSA review");
+    let stderr = results[0].stderr.as_deref().unwrap_or("");
+    assert!(stderr.contains("audit-only") || stderr.contains("Audit-only"));
+}
+
+#[tokio::test]
+async fn execute_pr_bot_bot_unavailable_gate_accepts_native_bypass_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_native_review_bypass_artifact(tmp.path(), current_head);
+
+    let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    vars.insert("MERGE_COMPLETED".into(), "false".into());
+    vars.insert("TEST_CLOUD_BOT".into(), "false".into());
+    vars.insert("PR_NUM".into(), "1788".into());
+    vars.insert("REPO".into(), "RyderFreeman4Logos/cli-sub-agent".into());
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Step 4a: Check Cloud Bot Configuration"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-bot-unavailable-native-review-bypass".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("bot-unavailable native fallback evidence should satisfy local review");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].exit_code, 0, "Step 4a should pass");
+    let output = results[0].output.as_deref().unwrap_or("");
+    assert!(
+        output.contains("Merge-without-bot native review bypass covers HEAD"),
+        "expected bot-unavailable bypass output: {output}"
+    );
+    assert!(
+        output.contains("CSA_VAR:LOCAL_REVIEW_SESSION_ID=native-review-bypass-abcdef123456"),
+        "native fallback should publish a bounded synthetic session id: {output}"
+    );
+    assert!(
+        !csa_called_path.exists(),
+        "bot-unavailable native fallback evidence must avoid an unnecessary CSA review launch"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_post_fix_fallback_accepts_native_bypass_evidence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_native_review_bypass_artifact(tmp.path(), current_head);
+
+    let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    vars.insert("BOT_HAS_ISSUES".into(), "true".into());
+    vars.insert("BOT_SETTLE_SECS".into(), "0".into());
+    vars.insert("BOT_UNAVAILABLE".into(), "false".into());
+    vars.insert("CLOUD_BOT".into(), "true".into());
+    vars.insert("CLOUD_BOT_LOGIN".into(), "codex".into());
+    vars.insert("CLOUD_BOT_NAME".into(), "codex".into());
+    vars.insert("CLOUD_BOT_POLL_MAX_SECONDS".into(), "1".into());
+    vars.insert("CLOUD_BOT_RETRIGGER_CMD".into(), "@codex review".into());
+    vars.insert("CLOUD_BOT_WAIT_SECONDS".into(), "0".into());
+    vars.insert("FALLBACK_REVIEW_HAS_ISSUES".into(), "false".into());
+    vars.insert("MERGE_COMPLETED".into(), "false".into());
+    vars.insert("POLL_IDLE_TIMEOUT".into(), "1800".into());
+    vars.insert("POLL_MAX_TIMEOUT".into(), "1800".into());
+    vars.insert("PR_NUM".into(), "1788".into());
+    vars.insert("REPO".into(), "RyderFreeman4Logos/cli-sub-agent".into());
+    vars.insert("ROUND_LIMIT_REACHED".into(), "false".into());
+    vars.insert("TEST_SESSION_WAIT_TIMEOUT".into(), "true".into());
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Step 10b: Post-Fix Re-Review Gate (HARD GATE)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-post-fix-native-review-bypass".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("post-fix native fallback evidence should satisfy local review");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].exit_code, 0, "Step 10b should pass");
+    let output = results[0].output.as_deref().unwrap_or("");
+    assert!(
+        output.contains("Local fallback native review bypass covers HEAD"),
+        "expected post-fix fallback bypass output: {output}"
+    );
+    assert!(
+        output.contains("CSA_VAR:BOT_HAS_ISSUES=false"),
+        "post-fix fallback should clear bot issue state after native review evidence: {output}"
+    );
+    assert!(
+        output.contains("CSA_VAR:LOCAL_REVIEW_SESSION_ID=native-review-bypass-abcdef123456"),
+        "native fallback should publish a bounded synthetic session id: {output}"
+    );
+    assert!(
+        !csa_called_path.exists(),
+        "post-fix native fallback evidence must avoid an unnecessary CSA review launch"
+    );
 }
 
 #[tokio::test]

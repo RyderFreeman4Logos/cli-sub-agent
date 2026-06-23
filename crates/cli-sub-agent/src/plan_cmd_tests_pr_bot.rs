@@ -248,6 +248,10 @@ fn pr_bot_archive_includes_helper_scripts() {
         entries.contains(&"patterns/pr-bot/scripts/csa/session-wait-until-done.sh".to_string()),
         "git archive for patterns/pr-bot must include session-wait-until-done.sh"
     );
+    assert!(
+        entries.contains(&"patterns/pr-bot/scripts/csa/native-review-bypass.sh".to_string()),
+        "git archive for patterns/pr-bot must include native-review-bypass.sh"
+    );
 }
 
 #[test]
