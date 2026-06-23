@@ -172,6 +172,10 @@ fn issue_2236_check_verdict_recovers_bounded_clean_verdict_summary_shapes() {
             "labeled emphasized verdict",
             "Verdict: __PASS__ - all tests passed\n",
         ),
+        (
+            "single-line pass clean explanation",
+            "PASS No blocking correctness, security, or AGENTS.md compliance findings found for `range:main...HEAD`.\n",
+        ),
     ];
 
     for (case_name, summary) in cases {
@@ -239,4 +243,124 @@ fn issue_2236_check_verdict_recovers_bounded_clean_verdict_summary_shapes() {
         assert_eq!(artifact.decision, ReviewDecision::Pass, "{case_name}");
         assert_eq!(artifact.verdict_legacy, "CLEAN", "{case_name}");
     }
+}
+
+#[test]
+fn issue_2393_existing_fail_meta_without_artifact_recovers_exact_head_pass_summary() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let state_home = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
+    let (project, branch, head_sha) = setup_feature_repo();
+    let expected_diff_fingerprint = crate::review_cmd::compute_review_diff_fingerprint(
+        project.path(),
+        REQUIRED_FULL_DIFF_SCOPE,
+    )
+    .expect("feature branch should have a main...HEAD diff");
+    let session_created_at =
+        utc_timestamp(latest_reflog_timestamp_secs(project.path(), "main") + 1);
+    let summary = "PASS No blocking correctness, security, or AGENTS.md compliance findings found for `range:main...HEAD`.\n";
+    let session_id = write_legacy_success_result_with_created_at(
+        project.path(),
+        &branch,
+        &head_sha,
+        summary,
+        session_created_at,
+    );
+    let session_dir = csa_session::get_session_dir(project.path(), &session_id).unwrap();
+    csa_session::save_result(
+        project.path(),
+        &session_id,
+        &SessionResult {
+            status: SessionResult::status_from_exit_code(1),
+            exit_code: 1,
+            summary: summary.to_string(),
+            tool: "codex".to_string(),
+            started_at: session_created_at,
+            completed_at: session_created_at,
+            ..Default::default()
+        },
+    )
+    .expect("save failing legacy result");
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: head_sha.clone(),
+            decision: ReviewDecision::Fail.as_str().to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            review_mode: None,
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "codex".to_string(),
+            scope: REQUIRED_FULL_DIFF_SCOPE.to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: session_created_at,
+            diff_fingerprint: None,
+            fix_convergence: None,
+        },
+    )
+    .expect("write stale fail review meta");
+    assert!(
+        !session_dir
+            .join("output")
+            .join("review-verdict.json")
+            .exists(),
+        "test starts with missing review verdict artifact"
+    );
+
+    let args = parse_review_args(&["csa", "review", "--check-verdict"]);
+    let exit = handle_check_verdict(project.path(), &args).unwrap();
+    assert_eq!(
+        exit, 0,
+        "check-verdict should recover the exact-head PASS artifact"
+    );
+
+    let found = check_review_verdict_for_target(
+        project.path(),
+        &branch,
+        &head_sha,
+        REQUIRED_FULL_DIFF_SCOPE,
+        Some(expected_diff_fingerprint.as_str()),
+        None,
+    )
+    .unwrap()
+    .expect("recovered PASS should satisfy check-verdict");
+    assert_eq!(found.session_id, session_id);
+
+    let meta = read_review_meta(&session_dir)
+        .unwrap()
+        .expect("review_meta.json should remain present");
+    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(meta.verdict, "CLEAN");
+    assert_eq!(meta.exit_code, 0);
+    assert_eq!(
+        meta.diff_fingerprint.as_deref(),
+        Some(expected_diff_fingerprint.as_str())
+    );
+
+    let artifact: ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json"))
+            .expect("review-verdict.json should be recovered"),
+    )
+    .expect("recovered review-verdict.json should parse");
+    assert_eq!(artifact.decision, ReviewDecision::Pass);
+    assert_eq!(artifact.verdict_legacy, "CLEAN");
+
+    let repaired = csa_session::load_result(project.path(), &session_id)
+        .unwrap()
+        .expect("result should remain loadable");
+    assert_eq!(repaired.exit_code, 0);
+    assert_eq!(repaired.status, SessionResult::status_from_exit_code(0));
+    let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
+        &session_dir,
+        &session_id,
+        &repaired,
+    );
+    assert!(wait_summary.contains("Review verdict: PASS"));
+    assert!(!wait_summary.contains("Review verdict: FAIL"));
 }

@@ -332,6 +332,17 @@ fn derive_review_verdict_artifact(
         return Ok(verdict_from_meta(meta, decision, severity_counts));
     }
 
+    if findings.is_empty()
+        && review_contains_prose_clean_conclusion(session_dir)?
+        && !prose_signals.has_failure_evidence()
+    {
+        return Ok(verdict_from_meta(
+            meta,
+            ReviewDecision::Pass,
+            zero_severity_counts(),
+        ));
+    }
+
     if let Some(artifact) = infer_review_verdict_from_full_output(session_dir, meta)? {
         return Ok(artifact);
     }

@@ -1,6 +1,5 @@
 use super::*;
 use csa_session::FindingsFile;
-
 fn read_findings_toml(session_dir: &Path) -> FindingsFile {
     let findings_path = session_dir.join("output").join("findings.toml");
     toml::from_str(&fs::read_to_string(findings_path).expect("read findings.toml"))
