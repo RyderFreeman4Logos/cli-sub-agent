@@ -2,6 +2,8 @@ use super::*;
 
 fn completed_facts() -> Dev2MergeCompletionFacts {
     Dev2MergeCompletionFacts {
+        dev2merge_skip: false,
+        already_resolved_skip: false,
         publish_started: true,
         push_gate_completed: true,
         review_verdict_completed: true,
@@ -12,6 +14,90 @@ fn completed_facts() -> Dev2MergeCompletionFacts {
         pr_number: Some("42".to_string()),
         pr_bot_done_marker: Some(PathBuf::from("/tmp/pr-bot.done")),
     }
+}
+
+#[test]
+fn verify_dev2merge_completion_without_publish_steps_returns_structured_failure_report() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname = 'dev2merge'\n")
+        .expect("workflow should be written");
+    let vars = HashMap::from([("DEV2MERGE_SKIP".to_string(), "false".to_string())]);
+    let completed_steps = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    let snapshot = PlanCompletionSnapshot {
+        initial_branch: Some("fix/issue".to_string()),
+    };
+
+    let err = verify_plan_completion(PlanCompletionInput {
+        workflow_name: "dev2merge",
+        workflow_path: &workflow_path,
+        project_root: temp.path(),
+        results: &[],
+        completed_steps: &completed_steps,
+        vars: &vars,
+        snapshot: &snapshot,
+    })
+    .expect_err("dev2merge success without lifecycle side effects must fail closed");
+
+    assert_eq!(
+        err.to_string(),
+        "dev2merge lifecycle side-effect verification failed: publish gate never started"
+    );
+    let summary = err.report().render_summary_section();
+    assert!(
+        summary.contains("Failed step: 18 (Dev2merge Lifecycle Side-Effect Verification) exited 1"),
+        "summary should expose the synthetic lifecycle verification step: {summary}"
+    );
+    let details = err.report().render_details_section();
+    assert!(
+        details.contains("Publish Gate (Step 13) did not run")
+            && details.contains("DEV2MERGE_SKIP was not set by the Already-Resolved Check")
+            && details.contains("missing lifecycle gate"),
+        "details should name the missing lifecycle side-effect class: {details}"
+    );
+}
+
+#[test]
+fn verify_dev2merge_completion_allows_already_resolved_skip_from_step_zero() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname = 'dev2merge'\n")
+        .expect("workflow should be written");
+    let vars = HashMap::from([("DEV2MERGE_SKIP".to_string(), "true".to_string())]);
+    let results = vec![StepResult {
+        step_id: 0,
+        title: "Already-Resolved Check".to_string(),
+        exit_code: 0,
+        duration_secs: 0.0,
+        skipped: false,
+        error: None,
+        output: Some(
+            "dev2merge: issue is already CLOSED\nCSA_VAR:DEV2MERGE_SKIP=true\n".to_string(),
+        ),
+        session_id: None,
+        command: Some("bash step".to_string()),
+        stderr: None,
+    }];
+    let snapshot = PlanCompletionSnapshot {
+        initial_branch: Some("fix/issue".to_string()),
+    };
+
+    let summary = verify_plan_completion(PlanCompletionInput {
+        workflow_name: "dev2merge",
+        workflow_path: &workflow_path,
+        project_root: temp.path(),
+        results: &results,
+        completed_steps: &[0],
+        vars: &vars,
+        snapshot: &snapshot,
+    })
+    .expect("already-resolved dev2merge skip should be accepted")
+    .expect("already-resolved skip should produce completion context");
+
+    assert!(
+        summary.contains("already-resolved check declared an explicit no-op"),
+        "summary should distinguish explicit no-op from transport success: {summary}"
+    );
 }
 
 #[test]
