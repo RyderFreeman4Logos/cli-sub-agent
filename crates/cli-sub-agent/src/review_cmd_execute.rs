@@ -50,10 +50,11 @@ use execute_once::execute_review_once_with_artifact_guard;
 #[cfg(test)]
 use failures::read_review_failure_excerpt;
 use failures::{
-    build_gemini_api_key_retry_env, classify_review_failover_error,
-    classify_review_failover_reason, classify_review_failure_result,
-    extract_meta_session_id_from_error, maybe_synthesize_missing_review_result,
-    repair_completed_review_restriction_result, retire_tier_failover_session,
+    build_gemini_api_key_retry_env, classify_no_provider_launch_error_text,
+    classify_review_failover_error, classify_review_failover_reason,
+    classify_review_failure_result, extract_meta_session_id_from_error,
+    maybe_synthesize_missing_review_result, repair_completed_review_restriction_result,
+    retire_tier_failover_session,
 };
 
 const CSA_READONLY_SESSION_ENV: &str = "CSA_READONLY_SESSION";
@@ -494,6 +495,45 @@ pub(crate) async fn execute_review_with_tier_filter(
                     execution_started_at,
                     &err,
                 );
+                if let Some(no_provider_reason) =
+                    classify_no_provider_launch_error_text(&error_text)
+                {
+                    let meta_session_id = extract_meta_session_id_from_error(&err)
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let fallback_guidance = if !tier_fallback_enabled || no_failover {
+                        "review failover was disabled for this invocation"
+                    } else if candidates.len() <= 1 {
+                        "no alternate configured reviewer candidate was available"
+                    } else {
+                        "no alternate configured reviewer candidate remained"
+                    };
+                    return Ok(ReviewExecutionOutcome {
+                        execution: crate::pipeline::SessionExecutionResult {
+                            execution: csa_process::ExecutionResult {
+                                exit_code: 1,
+                                output: String::new(),
+                                stderr_output: error_text.clone(),
+                                summary: "Review unavailable".to_string(),
+                                peak_memory_mb: None,
+                                ..Default::default()
+                            },
+                            meta_session_id: meta_session_id.clone(),
+                            provider_session_id: None,
+                            changed_paths: None,
+                            commit_created: None,
+                        },
+                        persistable_session_id: (meta_session_id != "unknown")
+                            .then_some(meta_session_id),
+                        executed_tool: *attempt_tool,
+                        status_reason: Some(no_provider_reason.to_string()),
+                        forced_decision: Some(ReviewDecision::Unavailable),
+                        routed_to: None,
+                        primary_failure: Some(no_provider_reason.to_string()),
+                        failure_reason: Some(format!(
+                            "{no_provider_reason}: reviewer provider did not launch; {fallback_guidance}"
+                        )),
+                    });
+                }
                 return Err(err);
             }
         };

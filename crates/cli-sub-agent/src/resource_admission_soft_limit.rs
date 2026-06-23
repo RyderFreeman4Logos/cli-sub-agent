@@ -15,16 +15,45 @@ pub(crate) const MEMORY_SOFT_LIMIT_ADMISSION_REASON: &str = "memory_soft_limit_a
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MemorySoftLimitAdmissionError {
-    message: String,
+    tool_name: String,
+    denial: SoftLimitAdmissionDenial,
 }
 
 impl MemorySoftLimitAdmissionError {
     pub(crate) const TERMINATION_REASON: &'static str = MEMORY_SOFT_LIMIT_ADMISSION_REASON;
+
+    pub(crate) fn role(&self) -> &'static str {
+        self.denial.session_kind.label()
+    }
+
+    pub(crate) fn memory_max_mb(&self) -> u64 {
+        self.denial.memory_max_mb
+    }
+
+    pub(crate) fn soft_limit_percent(&self) -> u8 {
+        self.denial.soft_limit_percent
+    }
+
+    pub(crate) fn threshold_mb(&self) -> u64 {
+        self.denial.threshold_mb
+    }
+
+    pub(crate) fn required_threshold_mb(&self) -> u64 {
+        self.denial.required_threshold_mb
+    }
+
+    pub(crate) fn required_memory_max_mb(&self) -> u64 {
+        self.denial.required_memory_max_mb
+    }
+
+    pub(crate) fn guidance(&self) -> Vec<String> {
+        self.denial.guidance(&self.tool_name)
+    }
 }
 
 impl std::fmt::Display for MemorySoftLimitAdmissionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.denial.message(&self.tool_name))
     }
 }
 
@@ -41,6 +70,26 @@ struct SoftLimitAdmissionDenial {
 }
 
 impl SoftLimitAdmissionDenial {
+    fn guidance(self, tool_name: &str) -> Vec<String> {
+        let required_memory_max_mb = self.required_memory_max_mb;
+        match self.session_kind {
+            CodexSoftLimitAdmissionKind::Reviewer => vec![
+                format!(
+                    "Raise --memory-max-mb, resources.memory_max_mb, or tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB for this soft_limit_percent."
+                ),
+                "Remove a lower memory override so Codex can use its 12288MB default when that satisfies the reviewer floor.".to_string(),
+                "If host admission then fails, wait/free memory, lower only resources.min_free_memory_mb when safe, or use another configured reviewer/native fallback after a bounded retry.".to_string(),
+            ],
+            CodexSoftLimitAdmissionKind::Writer => vec![
+                format!(
+                    "Raise --memory-max-mb, resources.memory_max_mb, or tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB for this soft_limit_percent."
+                ),
+                "A practical Codex writer envelope such as 10000MB with soft_limit_percent=90 satisfies the 9000MB floor when host RAM allows it.".to_string(),
+                "Do not repeatedly retry dirty-work recovery through the same CSA memory envelope; after one same-class retry, switch to documented recovery/manual fallback to avoid partial worktree mutations.".to_string(),
+            ],
+        }
+    }
+
     fn message(self, tool_name: &str) -> String {
         let required_memory_max_mb = self.required_memory_max_mb;
         let recommendation = match self.session_kind {
@@ -83,8 +132,19 @@ pub(crate) fn ensure_memory_soft_limit_admission(
     };
 
     Err(MemorySoftLimitAdmissionError {
-        message: denial.message(tool_name),
+        tool_name: tool_name.to_string(),
+        denial,
     })
+}
+
+pub(crate) fn codex_soft_limit_required_floor_mb(
+    task_type: Option<&str>,
+    tool_name: &str,
+) -> Option<u64> {
+    if tool_name != "codex" {
+        return None;
+    }
+    CodexSoftLimitAdmissionKind::from_task_type(task_type).map(|kind| kind.required_threshold_mb())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,6 +377,17 @@ mod tests {
         assert_eq!(
             memory_soft_limit_admission_denial(Some(WRITER_TASK_TYPE), "codex", Some(&plan)),
             None
+        );
+    }
+
+    #[test]
+    fn codex_writer_soft_limit_admission_allows_10gb_with_soft90() {
+        let plan = isolation_plan(ResourceCapability::CgroupV2, Some(10_000), Some(90));
+
+        assert_eq!(
+            memory_soft_limit_admission_denial(Some(WRITER_TASK_TYPE), "codex", Some(&plan)),
+            None,
+            "10GB with soft90 reaches the 9000MB writer floor without forcing a 13GB cap"
         );
     }
 

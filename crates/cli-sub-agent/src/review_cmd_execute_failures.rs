@@ -37,6 +37,17 @@ pub(super) fn classify_review_failover_reason(
         "{}\n{}",
         execution.execution.summary, execution.execution.output
     );
+    let combined = format!(
+        "{}\n{}",
+        stdout_with_summary, execution.execution.stderr_output
+    );
+    if let Some(reason) = classify_memory_admission_error_text(&combined) {
+        return Some(ReviewFailoverFailure {
+            reason: reason.to_string(),
+            quota_exhausted: Some(false),
+        });
+    }
+
     classify_next_model_failure_with_elapsed(
         tool.as_str(),
         &execution.execution.stderr_output,
@@ -58,6 +69,13 @@ pub(super) fn classify_review_failover_error(
     error_text: &str,
     attempt_elapsed: Option<std::time::Duration>,
 ) -> Option<ReviewFailoverFailure> {
+    if let Some(reason) = classify_memory_admission_error_text(error_text) {
+        return Some(ReviewFailoverFailure {
+            reason: reason.to_string(),
+            quota_exhausted: Some(false),
+        });
+    }
+
     classify_next_model_failure_with_elapsed(
         tool.as_str(),
         error_text,
@@ -71,6 +89,24 @@ pub(super) fn classify_review_failover_error(
         quota_exhausted: Some(detected.quota_exhausted),
     })
     .or_else(|| classify_gemini_cli_runtime_error_text(tool, error_text))
+}
+
+fn classify_memory_admission_error_text(error_text: &str) -> Option<&'static str> {
+    let lower = error_text.to_ascii_lowercase();
+    if lower.contains(crate::resource_admission_soft_limit::MEMORY_SOFT_LIMIT_ADMISSION_REASON) {
+        Some(crate::resource_admission_soft_limit::MEMORY_SOFT_LIMIT_ADMISSION_REASON)
+    } else if lower.contains("host memory admission denied")
+        || lower.contains("active-session memory admission denied")
+        || lower.contains("csa: low memory")
+    {
+        Some(crate::no_provider_launch::HOST_MEMORY_ADMISSION_REASON)
+    } else {
+        None
+    }
+}
+
+pub(super) fn classify_no_provider_launch_error_text(error_text: &str) -> Option<&'static str> {
+    classify_memory_admission_error_text(error_text)
 }
 
 fn classify_gemini_cli_runtime_failure(

@@ -19,6 +19,8 @@ mod diagnostics;
 mod exit_code;
 #[path = "review_cmd_output_fail_closed.rs"]
 mod fail_closed;
+#[path = "review_cmd_output_no_provider.rs"]
+mod no_provider;
 #[path = "review_cmd_output_prose_signals.rs"]
 mod prose_signals;
 #[path = "review_cmd_output_sections.rs"]
@@ -31,6 +33,8 @@ mod terminal_error;
 mod text;
 #[path = "review_cmd_output_tool_failure.rs"]
 mod tool_failure;
+#[path = "review_cmd_output_worktree.rs"]
+mod worktree;
 use artifacts::{
     has_blocking_severity, json_severity_counts_if_present, load_findings_toml_from_output,
     load_review_artifact_from_output, severity_counts_are_zero, severity_counts_for_artifact,
@@ -47,6 +51,7 @@ pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
 pub(super) use fail_closed::fail_closed_review_meta;
 use fail_closed::fail_closed_review_verdict_artifact;
+use no_provider::attach_no_provider_launch_diagnostic;
 use prose_signals::{reconcile_counts_with_prose, review_prose_signals};
 pub(super) use sections::{
     derive_review_result_summary, has_structured_review_content, sanitize_review_output,
@@ -63,6 +68,7 @@ pub(super) use text::{
     extract_review_text, stream_started_without_terminal_event, terminal_tool_error_reason,
 };
 pub(super) use tool_failure::{ToolReviewFailureKind, detect_tool_review_failure};
+pub(super) use worktree::is_worktree_submodule;
 
 const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
@@ -118,6 +124,7 @@ pub(super) fn persist_review_verdict_artifact(
             artifact.primary_failure = meta.primary_failure.clone();
             artifact.failure_reason = meta.failure_reason.clone().or(artifact.failure_reason);
             artifact.review_mode = meta.review_mode.clone();
+            attach_no_provider_launch_diagnostic(&session_dir, meta, &mut artifact);
             if let Err(error) = enforce_final_verdict_consistency(&session_dir, &mut artifact) {
                 warn!(
                     session_id = %meta.session_id,
@@ -548,6 +555,7 @@ fn build_review_verdict_artifact(
         large_diff_warning: false,
         large_diff_warning_threshold: None,
         large_diff_warning_changed_lines: None,
+        no_provider_launch: None,
     }
 }
 
@@ -559,26 +567,6 @@ fn legacy_verdict_for_decision(decision: ReviewDecision, fallback: &str) -> Stri
             fallback.to_string()
         }
     }
-}
-
-/// Detect whether `project_root` resides inside a git worktree submodule.
-///
-/// A worktree submodule's `.git` is a file (not directory) containing a
-/// `gitdir:` reference that traverses both `worktrees/` and `modules/`
-/// path segments — the hallmark of the nested worktree-submodule layout.
-pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
-    let git_marker = project_root.join(".git");
-    if !git_marker.is_file() {
-        return false;
-    }
-    let Ok(marker) = std::fs::read_to_string(&git_marker) else {
-        return false;
-    };
-    let Some(gitdir_raw) = marker.trim().strip_prefix("gitdir:") else {
-        return false;
-    };
-    let gitdir = gitdir_raw.trim();
-    gitdir.contains("/worktrees/") && gitdir.contains("/modules/")
 }
 
 pub(in crate::review_cmd) use clean_detection::is_review_output_empty;

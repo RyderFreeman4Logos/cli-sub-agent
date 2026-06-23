@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use csa_core::types::ReviewDecision;
 use serde::{Deserialize, Serialize};
 
+use crate::result::NoProviderLaunchDiagnostic;
+
 fn default_schema_version() -> String {
     "1.0".to_string()
 }
@@ -136,6 +138,8 @@ pub struct ReviewVerdictArtifact {
     pub large_diff_warning_threshold: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub large_diff_warning_changed_lines: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_provider_launch: Option<NoProviderLaunchDiagnostic>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -179,6 +183,7 @@ impl ReviewVerdictArtifact {
             large_diff_warning: false,
             large_diff_warning_threshold: None,
             large_diff_warning_changed_lines: None,
+            no_provider_launch: None,
         }
     }
 }

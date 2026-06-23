@@ -14,7 +14,9 @@ use tracing::{debug, info, warn};
 use super::super::prompt_cache::PromptAssembly;
 use super::super::result_contract::clear_expected_result_artifacts_for_prompt;
 use super::super::session_exec_failover::apply_transport_failover_overrides;
-use super::session_exec_pre_exec::persist_pipeline_pre_exec_failure;
+use super::session_exec_pre_exec::{
+    PipelinePreExecFailureDetails, persist_pipeline_pre_exec_failure,
+};
 use super::session_exec_tool_state::ensure_tool_state_initialized;
 use super::{
     session_exec_audit, session_exec_memory, session_exec_metadata, session_exec_prompt_guard,
@@ -103,6 +105,11 @@ pub(super) async fn prepare_session_runtime(
 ) -> Result<SessionRuntimePlan> {
     let project_root = input.project_root;
     let tool_name = input.executor.tool_name().to_string();
+    let failure_details = PipelinePreExecFailureDetails {
+        config: input.config,
+        task_type: input.task_type,
+        resource_overrides: input.resource_overrides,
+    };
 
     prepare_session_runtime_inner(input, session)
         .await
@@ -119,6 +126,7 @@ pub(super) async fn prepare_session_runtime(
                 err,
                 cleanup_guard,
                 termination_reason,
+                failure_details,
             )
         })
 }

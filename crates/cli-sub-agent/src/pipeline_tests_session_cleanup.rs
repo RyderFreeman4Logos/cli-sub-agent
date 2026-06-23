@@ -357,6 +357,31 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
     assert_eq!(result.status, "failure");
     assert!(result.summary.starts_with("pre-exec:"));
     assert!(result.summary.contains("CSA: low memory"));
+    assert!(
+        result
+            .artifacts
+            .iter()
+            .any(|artifact| { artifact.path == csa_session::NO_PROVIDER_LAUNCH_ARTIFACT_PATH })
+    );
+
+    let session_dir = csa_session::get_session_dir(project_root, session_id).unwrap();
+    let artifact_path = session_dir.join(csa_session::NO_PROVIDER_LAUNCH_ARTIFACT_PATH);
+    let no_provider: csa_session::NoProviderLaunchDiagnostic = serde_json::from_str(
+        &fs::read_to_string(&artifact_path).expect("no-verdict artifact should exist"),
+    )
+    .expect("no-verdict artifact should parse");
+    assert_eq!(
+        no_provider.denial_class,
+        crate::no_provider_launch::HOST_MEMORY_ADMISSION_REASON
+    );
+    assert_eq!(no_provider.role, "writer");
+    assert!(no_provider.no_provider_launch);
+    assert!(!no_provider.provider_side_effects);
+    assert_eq!(
+        no_provider.memory.reserve_mb,
+        Some(config.resources.min_free_memory_mb)
+    );
+    assert_eq!(no_provider.memory.effective_memory_max_mb, Some(1024));
 }
 
 #[tokio::test]
