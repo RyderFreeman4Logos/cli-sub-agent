@@ -338,6 +338,39 @@ mod tests {
     }
 
     #[test]
+    fn codex_review_soft_limit_admission_guides_issue_2398_retry_floor() {
+        let plan = isolation_plan(ResourceCapability::CgroupV2, Some(9000), Some(90));
+
+        let denial = memory_soft_limit_admission_denial(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            "codex",
+            Some(&plan),
+        )
+        .expect("9000MB at soft90 is below the 8192MB reviewer floor");
+        let err = ensure_memory_soft_limit_admission(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            "codex",
+            Some(&plan),
+        )
+        .expect_err("admission should fail with a minimum cap");
+
+        assert_eq!(denial.threshold_mb, 8100);
+        assert_eq!(denial.required_threshold_mb, CODEX_REVIEW_MIN_SOFT_LIMIT_MB);
+        assert_eq!(denial.required_memory_max_mb, 9103);
+        assert!(
+            err.to_string().contains("to at least 9103MB"),
+            "error must point to the exact cap floor at soft90: {err}"
+        );
+        assert!(
+            err.guidance()
+                .iter()
+                .any(|line| line.contains("to at least 9103MB for this soft_limit_percent")),
+            "structured guidance must preserve the current soft_limit_percent context: {:?}",
+            err.guidance()
+        );
+    }
+
+    #[test]
     fn codex_writer_soft_limit_admission_denies_12000_at_default_percent() {
         let plan = isolation_plan(ResourceCapability::CgroupV2, Some(12_000), None);
 
