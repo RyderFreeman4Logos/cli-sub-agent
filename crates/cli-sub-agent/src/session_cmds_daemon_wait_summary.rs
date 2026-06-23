@@ -108,13 +108,17 @@ pub(crate) fn render_wait_result_summary(
 ) -> String {
     let provider_quota =
         crate::session_provider_quota::provider_quota_display_for_result(session_dir, result);
-    let mut lines = vec![
-        format!("Session: {session_id}"),
+    let mut lines = vec![format!("Session: {session_id}")];
+    lines.extend(crate::session_display_alias::text_lines(
+        session_dir,
+        session_id,
+    ));
+    lines.extend([
         format!("Status: {}", result.status),
         format!("Exit code: {}", result.exit_code),
         format!("Tool: {}", wait_result_tool_label(result)),
         format!("Elapsed: {}", format_wait_elapsed(result)),
-    ];
+    ]);
 
     if let Some(tokens) = extract_wait_token_summary(result) {
         lines.push(format!("Tokens: {}", tokens.render_text()));
@@ -247,7 +251,7 @@ fn render_wait_result_json(
             "cache_read_ratio": usage.cache_read_ratio(),
         })
     });
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "session_id": session_id,
         "status": result.status,
         "exit_code": result.exit_code,
@@ -268,6 +272,7 @@ fn render_wait_result_json(
         "summary": wait_display_summary(session_dir, result, provider_quota.as_ref()),
         "provider_quota_hint": provider_quota.as_ref().map(|quota| quota.hint.as_str()),
     });
+    crate::session_display_alias::apply_json_identity(&mut value, session_dir, session_id);
     serde_json::to_string_pretty(&value).map_err(Into::into)
 }
 
@@ -651,6 +656,9 @@ fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
     crate::codex_transcript_filter::render_codex_or_plain_output(raw)
 }
 
+#[cfg(test)]
+#[path = "session_cmds_daemon_wait_summary_alias_tests.rs"]
+mod wait_alias_tests;
 #[cfg(test)]
 #[path = "session_cmds_daemon_wait_summary_tests.rs"]
 mod wait_output_tests;

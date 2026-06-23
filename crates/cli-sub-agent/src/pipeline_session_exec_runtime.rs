@@ -27,6 +27,9 @@ use crate::pipeline::{
 use crate::session_guard::SessionCleanupGuard;
 use crate::startup_env::StartupSubtreeEnv;
 
+const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
+const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
 pub(super) struct SessionRuntimeInput<'a> {
     pub(super) executor: &'a Executor,
     pub(super) tool: &'a ToolName,
@@ -200,11 +203,9 @@ async fn prepare_session_runtime_inner(
     } else {
         None
     };
-    let commit_guard_enabled = matches!(input.task_type, Some("run"));
-    let require_commit_on_mutation = commit_guard_enabled
-        && input
-            .config
-            .is_some_and(|cfg| cfg.session.require_commit_on_mutation);
+    let commit_guard_enabled = terminal_commit_guard_enabled(input.task_type, session);
+    let require_commit_on_mutation =
+        terminal_commit_required(input.task_type, session, input.config, commit_guard_enabled);
     let is_git = crate::run_cmd::is_git_worktree(input.project_root);
     let inside_git_worktree = commit_guard_enabled && is_git;
     let capture_snapshot = session_exec_audit::capture_git_workspace_snapshot_if_needed;
@@ -448,4 +449,68 @@ async fn prepare_session_runtime_inner(
             sa_mode,
         },
     })
+}
+
+fn is_review_fix_finding_execution(task_type: Option<&str>, session: &MetaSessionState) -> bool {
+    matches!(task_type, Some(REVIEWER_SUB_SESSION_TASK_TYPE))
+        && session.task_context.task_type.as_deref() == Some(REVIEW_FIX_FINDING_TASK_TYPE)
+}
+
+fn terminal_commit_guard_enabled(task_type: Option<&str>, session: &MetaSessionState) -> bool {
+    matches!(task_type, Some("run")) || is_review_fix_finding_execution(task_type, session)
+}
+
+fn terminal_commit_required(
+    task_type: Option<&str>,
+    session: &MetaSessionState,
+    config: Option<&ProjectConfig>,
+    commit_guard_enabled: bool,
+) -> bool {
+    if is_review_fix_finding_execution(task_type, session) {
+        return true;
+    }
+    commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session_with_task(task_type: Option<&str>) -> MetaSessionState {
+        let mut session = MetaSessionState::default();
+        session.task_context.task_type = task_type.map(str::to_string);
+        session
+    }
+
+    #[test]
+    fn fix_finding_reviewer_sub_session_enables_terminal_commit_guard() {
+        let session = session_with_task(Some(REVIEW_FIX_FINDING_TASK_TYPE));
+
+        assert!(terminal_commit_guard_enabled(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            &session,
+        ));
+        assert!(terminal_commit_required(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            &session,
+            None,
+            true,
+        ));
+    }
+
+    #[test]
+    fn plain_reviewer_sub_session_does_not_enable_terminal_commit_guard() {
+        let session = session_with_task(Some("review"));
+
+        assert!(!terminal_commit_guard_enabled(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            &session,
+        ));
+        assert!(!terminal_commit_required(
+            Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+            &session,
+            None,
+            false,
+        ));
+    }
 }

@@ -1044,8 +1044,13 @@ async fn execute_post_exec_gate_command_reaps_backgrounded_pipe_holder() {
     .expect("gate must not hang when a backgrounded child holds the pipe open")
     .expect("post-exec gate command should run");
 
-    // The leader's own exit is still reported faithfully.
-    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
+    assert_eq!(outcome.exit, PostExecGateCommandExit::ResidualProcesses);
+    assert!(outcome.captured_output.contains("live process-group"));
+    assert!(
+        outcome
+            .captured_output
+            .contains("reaped pipe-holding descendants")
+    );
 
     // Wait past the subshell's +6s mark: a surviving holder would have created
     // the sentinel by now. Its absence proves the group kill reaped it.
@@ -1056,65 +1061,12 @@ async fn execute_post_exec_gate_command_reaps_backgrounded_pipe_holder() {
     );
 }
 
-/// Round-3 PGID-reuse-safety regression (#1726): when a backgrounded pipe-holder
-/// CLOSES the inherited pipe and exits in response to the drain-expiry `SIGTERM`,
-/// the cleanup must NOT follow with an unconditional `SIGKILL` to the (now
-/// possibly-released) process group — a blind second signal could race PGID reuse
-/// and hit an unrelated recycled group. The holder here traps `SIGTERM`, releases
-/// the pipe (so the pump reaches EOF and the escalation takes the no-`SIGKILL`
-/// branch), then SURVIVES well past the two-phase `SIGKILL` grace before dropping
-/// a sentinel. The sentinel's PRESENCE proves no `SIGKILL` reached the group; the
-/// pre-fix unconditional `SIGKILL` would have killed the holder mid-sleep, before
-/// it could write the sentinel.
-#[tokio::test]
-#[cfg(unix)]
-async fn execute_post_exec_gate_command_sigterm_responsive_holder_skips_sigkill() {
-    let project_dir = tempdir().unwrap();
-    let sentinel = project_dir
-        .path()
-        .join("sigterm-responsive-holder-survived");
-    let env = HashMap::from([(
-        "GATE_TEST_SENTINEL".to_string(),
-        sentinel.to_string_lossy().into_owned(),
-    )]);
-
-    // Backgrounded subshell holds the inherited stdout/stderr open via `sleep`.
-    // It CATCHES `SIGTERM`: the handler closes both pipe ends (releasing EOF to
-    // the pump) but keeps RUNNING, waits 2s (well past the 100ms two-phase
-    // `SIGKILL` grace), then writes the sentinel and exits. The leader exits 0
-    // immediately (NORMAL-exit path), so by the time the drain grace expires the
-    // leader is already reaped and the PGID is anchored ONLY by this descendant.
-    let command = r#"(trap 'exec 1>&- 2>&-; sleep 2; : > "$GATE_TEST_SENTINEL"; exit 0' TERM; sleep 30) & exit 0"#;
-
-    let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        execute_post_exec_gate_command(command, project_dir.path(), 30, Some(env)),
-    )
-    .await
-    .expect("gate must not hang when a backgrounded child holds the pipe open")
-    .expect("post-exec gate command should run");
-
-    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
-
-    // Give the SIGTERM-surviving holder time to pass its post-SIGTERM delay and
-    // write the sentinel. Its PRESENCE proves the cleanup did NOT escalate to a
-    // blind `SIGKILL` once the pipe was already closed.
-    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-    assert!(
-        sentinel.exists(),
-        "a SIGTERM-responsive pipe-holder that already closed the pipe must NOT be SIGKILLed; \
-         an absent sentinel means a blind second signal raced PGID reuse"
-    );
-}
-
-/// Round-3 escalation regression (#1726): a backgrounded pipe-holder that IGNORES
-/// `SIGTERM` (so its child `sleep` inherits the ignore too) keeps the inherited
-/// pipe open, leaving a live group member present. The drain-expiry cleanup MUST
-/// therefore escalate to `SIGKILL` — which is reuse-safe precisely because that
-/// live member still anchors the PGID — and reap the holder. The runner must
-/// still return within `timeout + grace`, and the holder must be gone before it
-/// can write its sentinel. This guards the live-member `SIGKILL` branch against a
-/// future regression that drops escalation entirely.
+/// Round-3 escalation regression (#1726) with #2348 terminal semantics: a
+/// backgrounded pipe-holder that IGNORES `SIGTERM` (so its child `sleep`
+/// inherits the ignore too) keeps the inherited pipe open. Cleanup must
+/// escalate to `SIGKILL`; depending on scheduler timing, the residual liveness
+/// check may either observe the group as already gone or fail closed while it is
+/// still disappearing, but the holder must not survive to write its sentinel.
 #[tokio::test]
 #[cfg(unix)]
 async fn execute_post_exec_gate_command_sigterm_ignoring_holder_escalates_to_sigkill() {
@@ -1139,7 +1091,13 @@ async fn execute_post_exec_gate_command_sigterm_ignoring_holder_escalates_to_sig
     .expect("gate must not hang when a SIGTERM-ignoring child holds the pipe open")
     .expect("post-exec gate command should run");
 
-    assert_eq!(outcome.exit, PostExecGateCommandExit::Exited(Some(0)));
+    assert_eq!(outcome.exit, PostExecGateCommandExit::ResidualProcesses);
+    assert!(outcome.captured_output.contains("live process-group"));
+    assert!(
+        outcome
+            .captured_output
+            .contains("reaped pipe-holding descendants")
+    );
 
     // Wait past the subshell's +6s mark: a holder that survived (no `SIGKILL`)
     // would have created the sentinel by now. Its absence proves the escalated

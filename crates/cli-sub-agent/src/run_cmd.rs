@@ -28,12 +28,13 @@ mod uncommitted;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
-    GitWorkspaceSnapshot, capture_git_workspace_snapshot, evaluate_post_run_commit_guard,
-    is_git_worktree,
+    GitWorkspaceSnapshot, PostRunCommitGuard, capture_git_workspace_snapshot,
+    evaluate_post_run_commit_guard, is_git_worktree,
 };
 pub(crate) use policy::{
     PostSessionCommitPolicyArgs, apply_post_session_commit_policies, execute_tool_calls_observed,
-    extract_executed_shell_commands, resolve_hook_bypass_scan_enabled,
+    extract_executed_shell_commands, is_post_run_commit_policy_gate_failure,
+    resolve_hook_bypass_scan_enabled,
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
 pub(crate) use uncommitted::{
@@ -44,7 +45,7 @@ pub(crate) use uncommitted::{
 #[cfg(test)]
 pub(crate) use crate::pipeline::promote_idle_timeout_for_explicit_wall_timeout;
 #[cfg(test)]
-pub(crate) use git::{PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status};
+pub(crate) use git::{changed_paths_from_status, tracked_paths_from_status};
 #[cfg(test)]
 pub(crate) use policy::{
     apply_lefthook_bypass_policy, apply_no_verify_commit_policy, apply_post_run_commit_policy,

@@ -57,6 +57,18 @@ const GATE_GROUP_TERM_GRACE: Duration = Duration::from_millis(100);
 /// negligible against any real gate `timeout_seconds`.
 const GATE_GROUP_ESCALATION_GRACE: Duration = Duration::from_millis(500);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatePumpDrainOutcome {
+    Drained,
+    ReapedPipeHoldingDescendants,
+}
+
+impl GatePumpDrainOutcome {
+    pub(crate) fn reaped_pipe_holding_descendants(self) -> bool {
+        matches!(self, Self::ReapedPipeHoldingDescendants)
+    }
+}
+
 /// Accumulates the combined gate output while retaining only the last
 /// [`GATE_CAPTURE_MAX_BYTES`] bytes, so a noisy or flooding gate cannot grow
 /// resident memory without bound. Tracks the total bytes observed so the
@@ -167,6 +179,62 @@ fn signal_gate_process_group(pid: i32, signal: i32) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_proc_state_and_pgrp(pid: u32) -> Option<(char, i32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let close_paren = stat.rfind(')')?;
+    let fields = stat.get(close_paren + 2..)?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _ppid = fields.next()?;
+    let pgrp = fields.next()?.parse().ok()?;
+    Some((state, pgrp))
+}
+
+/// Return true when a post-exec gate's process group still contains a live
+/// descendant after the gate command itself exited and the output pumps drained.
+///
+/// This catches descendants that intentionally close stdout/stderr (so the pump
+/// drain cannot observe them) while they keep mutating or validating the
+/// worktree in the same gate process group (#2348). Zombies are excluded: they
+/// no longer execute or mutate state, and the OS/init will reap them.
+#[cfg(target_os = "linux")]
+pub(crate) fn gate_process_group_has_live_members(child_pid: Option<u32>) -> bool {
+    let Some(child_pid) = child_pid else {
+        return false;
+    };
+    let target_pgrp = child_pid as i32;
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .any(|pid| {
+            linux_proc_state_and_pgrp(pid)
+                .is_some_and(|(state, pgrp)| pgrp == target_pgrp && !matches!(state, 'Z' | 'X'))
+        })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn gate_process_group_has_live_members(child_pid: Option<u32>) -> bool {
+    let Some(pid) = child_pid else {
+        return false;
+    };
+    let pid = pid as i32;
+    // SAFETY: kill(2) with signal 0 performs existence/permission checking only.
+    // It sends no signal, so a stale or reused PGID can at worst produce a
+    // fail-closed residual diagnostic, never terminate unrelated processes.
+    let result = unsafe { libc::kill(-pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn gate_process_group_has_live_members(_child_pid: Option<u32>) -> bool {
+    false
+}
+
 /// `SIGTERM`-then-`SIGKILL` the gate child's process GROUP (negative PID),
 /// reaping any descendant that inherited the gate's stdout/stderr pipe.
 ///
@@ -240,7 +308,7 @@ pub(crate) async fn drain_pumps_and_reap(
     stdout_pump: Option<JoinHandle<()>>,
     stderr_pump: Option<JoinHandle<()>>,
     child_pid: Option<u32>,
-) {
+) -> GatePumpDrainOutcome {
     let mut pumps: Vec<JoinHandle<()>> = [stdout_pump, stderr_pump].into_iter().flatten().collect();
     // Capture abort handles up front: dropping a `JoinHandle` only detaches the
     // task, so an explicit abort is required to stop a pump still blocked on a
@@ -252,7 +320,7 @@ pub(crate) async fn drain_pumps_and_reap(
     await_pumps_bounded(&mut pumps, GATE_PUMP_DRAIN_GRACE).await;
     pumps.retain(|pump| !pump.is_finished());
     if pumps.is_empty() {
-        return;
+        return GatePumpDrainOutcome::Drained;
     }
 
     // A backgrounded descendant is still holding a pipe write-end past the drain
@@ -274,6 +342,7 @@ pub(crate) async fn drain_pumps_and_reap(
         // skipped (there is nothing left to kill).
         if !pumps.is_empty() {
             signal_gate_process_group(pid, libc::SIGKILL);
+            tokio::time::sleep(GATE_GROUP_TERM_GRACE).await;
         }
     }
     #[cfg(not(unix))]
@@ -284,6 +353,7 @@ pub(crate) async fn drain_pumps_and_reap(
     for abort in aborts {
         abort.abort();
     }
+    GatePumpDrainOutcome::ReapedPipeHoldingDescendants
 }
 
 #[cfg(test)]

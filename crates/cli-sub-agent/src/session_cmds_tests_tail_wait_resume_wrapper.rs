@@ -4,15 +4,20 @@ use crate::session_cmds_daemon::{
     handle_session_wait_with_hooks, handle_session_wait_with_hooks_and_sampler,
     render_wait_result_summary, try_acquire_session_wait_lock,
 };
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
 
+#[path = "session_cmds_tests_tail_wait_resume_wrapper_alias_assert.rs"]
+mod alias_assert;
 #[path = "session_cmds_tests_tail_wait_resume_wrapper_alias_race.rs"]
 mod alias_race;
 
 fn create_session(
-    project_path: &std::path::Path,
+    project_path: &Path,
     description: Option<&str>,
     parent_id: Option<&str>,
     tool: Option<&str>,
@@ -20,7 +25,7 @@ fn create_session(
     csa_session::create_session_fresh(project_path, description, parent_id, tool)
 }
 
-fn run_git(project_root: &std::path::Path, args: &[&str]) {
+fn run_git(project_root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
         .arg(project_root)
@@ -36,7 +41,7 @@ fn run_git(project_root: &std::path::Path, args: &[&str]) {
     );
 }
 
-fn init_git_repo(project_root: &std::path::Path) {
+fn init_git_repo(project_root: &Path) {
     run_git(project_root, &["init", "-q"]);
     run_git(
         project_root,
@@ -44,12 +49,12 @@ fn init_git_repo(project_root: &std::path::Path) {
     );
     run_git(project_root, &["config", "user.name", "CSA Test"]);
     run_git(project_root, &["config", "commit.gpgsign", "false"]);
-    std::fs::write(project_root.join("tracked.txt"), "initial\n").unwrap();
+    fs::write(project_root.join("tracked.txt"), "initial\n").unwrap();
     run_git(project_root, &["add", "tracked.txt"]);
     run_git(project_root, &["commit", "-q", "-m", "initial"]);
 }
 
-fn move_session_to_legacy_root(project: &std::path::Path, session_id: &str) -> std::path::PathBuf {
+fn move_session_to_legacy_root(project: &Path, session_id: &str) -> PathBuf {
     let primary_root = csa_session::get_session_root(project).unwrap();
     let primary_session_dir = primary_root.join("sessions").join(session_id);
     let primary_state_dir = csa_config::paths::state_dir_write().unwrap();
@@ -57,26 +62,26 @@ fn move_session_to_legacy_root(project: &std::path::Path, session_id: &str) -> s
     let relative_root = primary_root.strip_prefix(&primary_state_dir).unwrap();
     let legacy_root = legacy_state_dir.join(relative_root);
     let legacy_sessions_dir = legacy_root.join("sessions");
-    std::fs::create_dir_all(&legacy_sessions_dir).unwrap();
+    fs::create_dir_all(&legacy_sessions_dir).unwrap();
     let legacy_session_dir = legacy_sessions_dir.join(session_id);
-    std::fs::rename(&primary_session_dir, &legacy_session_dir).unwrap();
+    fs::rename(&primary_session_dir, &legacy_session_dir).unwrap();
     legacy_session_dir
 }
 
-fn set_tree_file_mtimes_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
-    let stale_time = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(seconds_ago))
+fn set_tree_file_mtimes_seconds_ago(path: &Path, seconds_ago: u64) {
+    let stale_time = SystemTime::now()
+        .checked_sub(Duration::from_secs(seconds_ago))
         .unwrap();
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
             let path = entry.path();
             let file_type = entry.file_type().unwrap();
             if file_type.is_dir() {
                 stack.push(path);
             } else if file_type.is_file() {
-                let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-                file.set_times(std::fs::FileTimes::new().set_modified(stale_time))
+                let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+                file.set_times(fs::FileTimes::new().set_modified(stale_time))
                     .unwrap();
             }
         }
@@ -89,7 +94,7 @@ fn handle_session_wait_on_resume_wrapper_uses_worker_result() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -100,7 +105,7 @@ fn handle_session_wait_on_resume_wrapper_uses_worker_result() {
     let wrapper_id = wrapper.meta_session_id;
     let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
     csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 0\nstatus = \"success\"\n",
     )
@@ -132,7 +137,7 @@ fn handle_session_wait_on_resume_wrapper_continues_while_worker_target_alive_wit
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -146,13 +151,13 @@ fn handle_session_wait_on_resume_wrapper_continues_while_worker_target_alive_wit
     let worker_dir = get_session_dir(project, &worker_id).unwrap();
     let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
     csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 0\nstatus = \"success\"\n",
     )
     .unwrap();
     set_tree_file_mtimes_seconds_ago(&wrapper_dir, 120);
-    std::fs::write(
+    fs::write(
         worker_dir.join("stderr.log"),
         "worker target still producing diagnostics\n",
     )
@@ -179,8 +184,8 @@ fn handle_session_wait_on_resume_wrapper_continues_while_worker_target_alive_wit
             wait_timeout_secs: 0,
             memory_warn_mb: None,
             timing: WaitLoopTiming {
-                poll_interval: std::time::Duration::from_millis(1),
-                memory_sample_interval: std::time::Duration::from_secs(15),
+                poll_interval: Duration::from_millis(1),
+                memory_sample_interval: Duration::from_secs(15),
             },
         },
         |_project_root, current_session_id, trigger| {
@@ -222,7 +227,7 @@ fn handle_session_wait_on_resume_wrapper_treats_wrapper_worktree_lock_as_live_in
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -275,7 +280,7 @@ fn handle_session_wait_on_resume_wrapper_memory_warn_samples_worker_target() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -293,7 +298,7 @@ fn handle_session_wait_on_resume_wrapper_memory_warn_samples_worker_target() {
     let worker_dir = get_session_dir(project, &worker_id).unwrap();
     let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
     csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
-    std::fs::write(
+    fs::write(
         worker_dir.join("stderr.log"),
         "worker target still producing diagnostics\n",
     )
@@ -317,8 +322,8 @@ fn handle_session_wait_on_resume_wrapper_memory_warn_samples_worker_target() {
             wait_timeout_secs: 5,
             memory_warn_mb: Some(64),
             timing: WaitLoopTiming {
-                poll_interval: std::time::Duration::from_millis(1),
-                memory_sample_interval: std::time::Duration::ZERO,
+                poll_interval: Duration::from_millis(1),
+                memory_sample_interval: Duration::ZERO,
             },
         },
         |_project_root, _current_session_id, _trigger| {
@@ -351,7 +356,7 @@ fn handle_session_wait_on_resume_wrapper_reconciles_worker_after_wrapper_complet
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -362,7 +367,7 @@ fn handle_session_wait_on_resume_wrapper_reconciles_worker_after_wrapper_complet
     let wrapper_id = wrapper.meta_session_id;
     let wrapper_dir = get_session_dir(project, &wrapper_id).unwrap();
     csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 0\nstatus = \"success\"\n",
     )
@@ -423,7 +428,7 @@ fn handle_session_wait_on_fix_finding_wrapper_reports_fix_session_missing_result
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -455,7 +460,7 @@ fn handle_session_wait_on_fix_finding_wrapper_reports_fix_session_missing_result
     let fix_session_id = fix_session.meta_session_id;
     assert_ne!(fix_session_id, original_review_id);
 
-    std::fs::write(project.join("tracked.txt"), "fixed but not recorded\n").unwrap();
+    fs::write(project.join("tracked.txt"), "fixed but not recorded\n").unwrap();
 
     let wrapper =
         csa_session::create_session_fresh(project, Some("fix-finding wrapper"), None, None)
@@ -469,7 +474,7 @@ fn handle_session_wait_on_fix_finding_wrapper_reports_fix_session_missing_result
         csa_session::read_resume_target_from_dir(&wrapper_dir).unwrap(),
         Some(fix_session_id.clone())
     );
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 1\nstatus = \"failure\"\n",
     )
@@ -496,6 +501,14 @@ fn handle_session_wait_on_fix_finding_wrapper_reports_fix_session_missing_result
         .unwrap()
         .expect("fix session should get synthetic diagnostic result");
     let fix_dir = get_session_dir(project, &fix_session_id).unwrap();
+    let wrapper_summary = render_wait_result_summary(&fix_dir, &wrapper_id, &fix_result);
+    alias_assert::assert_fix_finding_wrapper_summary(
+        &wrapper_summary,
+        &wrapper_id,
+        &fix_session_id,
+        &original_review_id,
+    );
+
     let summary = render_wait_result_summary(&fix_dir, &fix_session_id, &fix_result);
 
     assert!(
@@ -525,7 +538,7 @@ fn handle_session_wait_on_resume_wrapper_follows_worker_in_legacy_root() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -538,7 +551,7 @@ fn handle_session_wait_on_resume_wrapper_follows_worker_in_legacy_root() {
     let worker_dir = move_session_to_legacy_root(project, &worker_id);
     csa_session::write_resume_target(project, &wrapper_id, &worker_id)
         .expect("resume wrapper alias should accept a legacy-root target");
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 0\nstatus = \"success\"\n",
     )
@@ -569,7 +582,7 @@ fn handle_session_wait_on_resume_wrapper_uses_target_wait_lock() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
+    fs::create_dir_all(&state_home).unwrap();
     let _home_guard = EnvVarGuard::set("HOME", td.path());
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
@@ -582,7 +595,7 @@ fn handle_session_wait_on_resume_wrapper_uses_target_wait_lock() {
     let worker_dir = move_session_to_legacy_root(project, &worker_id);
     csa_session::write_resume_target(project, &wrapper_id, &worker_id)
         .expect("resume wrapper alias should accept a legacy-root target");
-    std::fs::write(
+    fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 0\nstatus = \"success\"\n",
     )

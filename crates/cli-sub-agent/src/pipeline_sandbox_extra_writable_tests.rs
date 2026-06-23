@@ -56,6 +56,7 @@ fn test_rust_env_writable_rejects_sensitive_and_usr_local_paths() {
         (csa_core::env::CARGO_HOME_ENV_KEY, "/etc"),
         (csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local"),
         (csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/boot"),
+        (csa_core::env::CARGO_TARGET_DIR_ENV_KEY, "/usr/local"),
         (csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "/run/csa-mise"),
     ] {
         let execution_env = HashMap::from([(key.to_string(), value.to_string())]);
@@ -113,8 +114,15 @@ fn test_rust_env_writable_preserves_explicit_safe_values() {
     let cargo_home = rust_state.join("cargo-home");
     let rustup_home = rust_state.join("rustup-home");
     let cargo_install_root = rust_state.join("cargo-install-root");
+    let cargo_target_dir = rust_state.join("target");
     let mise_config = rust_state.join("mise-config");
-    for path in [&cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+    for path in [
+        &cargo_home,
+        &rustup_home,
+        &cargo_install_root,
+        &cargo_target_dir,
+        &mise_config,
+    ] {
         std::fs::create_dir_all(path).expect("create explicit Rust env dir");
     }
     let cfg = sandbox_config();
@@ -132,6 +140,10 @@ fn test_rust_env_writable_preserves_explicit_safe_values() {
             cargo_install_root.to_string_lossy().into_owned(),
         ),
         (
+            csa_core::env::CARGO_TARGET_DIR_ENV_KEY.to_string(),
+            cargo_target_dir.to_string_lossy().into_owned(),
+        ),
+        (
             csa_core::env::MISE_CONFIG_DIR_ENV_KEY.to_string(),
             mise_config.to_string_lossy().into_owned(),
         ),
@@ -144,13 +156,70 @@ fn test_rust_env_writable_preserves_explicit_safe_values() {
         panic!("Expected explicit safe Rust env writable paths to be preserved");
     };
     let sandbox = opts.sandbox.expect("expected sandbox context");
-    for path in [&cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+    for path in [
+        &cargo_home,
+        &rustup_home,
+        &cargo_install_root,
+        &cargo_target_dir,
+        &mise_config,
+    ] {
         assert!(
             sandbox
                 .isolation_plan
                 .writable_paths
                 .contains(&path.canonicalize().unwrap()),
             "explicit Rust env path {} should be granted writable access, got: {:?}",
+            path.display(),
+            sandbox.isolation_plan.writable_paths
+        );
+    }
+}
+
+#[test]
+fn test_rust_env_writable_materializes_ambient_cargo_dirs_for_sandbox() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let home = project_root.path().join("home");
+    let cargo_target_dir = project_root.path().join("ambient-target");
+    let cargo_install_root = project_root.path().join("ambient-install-root");
+    for path in [&home, &cargo_target_dir, &cargo_install_root] {
+        std::fs::create_dir_all(path).expect("create ambient Rust env dir");
+    }
+    let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("HOME utf8"));
+    let _target = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        cargo_target_dir.to_str().expect("target utf8"),
+    );
+    let _install_root = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        cargo_install_root.to_str().expect("install root utf8"),
+    );
+    let cfg = sandbox_config();
+    let execution_env =
+        crate::pipeline_env::build_merged_env(crate::pipeline_env::MergedEnvRequest {
+            extra_env: None,
+            config: Some(&cfg),
+            global_config: None,
+            project_root: Some(project_root.path()),
+            tool_name: "codex",
+            current_depth: 0,
+            pattern_internal: false,
+            allow_git_push: false,
+        });
+    let result =
+        resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected ambient Cargo dirs to be granted writable sandbox access");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    for path in [&cargo_target_dir, &cargo_install_root] {
+        assert!(
+            sandbox
+                .isolation_plan
+                .writable_paths
+                .contains(&path.canonicalize().unwrap()),
+            "{} should be writable, got: {:?}",
             path.display(),
             sandbox.isolation_plan.writable_paths
         );

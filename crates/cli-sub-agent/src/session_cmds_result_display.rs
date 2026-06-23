@@ -20,13 +20,22 @@ use post_exec_gate::{
     gate_failure_rendered_section, print_rendered_sections, rendered_fallback_sections,
 };
 
-pub(super) fn display_result_json(
+pub(super) fn display_result_json_with_identity(
+    session_id: &str,
+    session_dir: &Path,
     result: &SessionResultView,
     transcript_summary: Option<&TranscriptSummary>,
     review_meta: Option<&ReviewSessionMeta>,
     token_usage: Option<&TokenUsage>,
 ) -> Result<()> {
-    let payload = build_result_json_payload(result, transcript_summary, review_meta, token_usage)?;
+    let payload = build_result_json_payload_with_identity(
+        session_id,
+        session_dir,
+        result,
+        transcript_summary,
+        review_meta,
+        token_usage,
+    )?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
@@ -43,6 +52,9 @@ pub(super) fn display_result_text(
     let provider_quota =
         crate::session_provider_quota::provider_quota_display_for_result(session_dir, envelope);
     println!("Session: {session_id}");
+    for line in crate::session_display_alias::text_lines(session_dir, session_id) {
+        println!("{line}");
+    }
     println!("Status:  {}", envelope.status);
     println!("Exit:    {}", envelope.exit_code);
     println!("Tool:    {}", envelope.tool);
@@ -120,11 +132,6 @@ pub(super) fn display_result_text(
     }
 }
 
-/// Load total_token_usage from a session's state.toml on disk.
-///
-/// Returns None on any parse/read failure or when the field is absent.
-/// Reading directly avoids the project-root coupling of `load_session`,
-/// which lets cross-project sessions render their token totals too.
 pub(super) fn load_total_token_usage(session_dir: &Path) -> Option<TokenUsage> {
     let state_path = session_dir.join("state.toml");
     let content = fs::read_to_string(&state_path).ok()?;
@@ -244,6 +251,20 @@ pub(super) fn build_result_json_payload(
         let usage = normalized_token_usage_for_output(usage);
         payload["total_token_usage"] = token_usage_json_value(&usage);
     }
+    Ok(payload)
+}
+
+pub(super) fn build_result_json_payload_with_identity(
+    session_id: &str,
+    session_dir: &Path,
+    result: &SessionResultView,
+    transcript_summary: Option<&TranscriptSummary>,
+    review_meta: Option<&ReviewSessionMeta>,
+    token_usage: Option<&TokenUsage>,
+) -> Result<serde_json::Value> {
+    let mut payload =
+        build_result_json_payload(result, transcript_summary, review_meta, token_usage)?;
+    crate::session_display_alias::apply_json_identity(&mut payload, session_dir, session_id);
     Ok(payload)
 }
 
