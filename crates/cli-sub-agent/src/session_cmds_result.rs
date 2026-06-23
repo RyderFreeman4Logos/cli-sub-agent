@@ -18,7 +18,7 @@ mod display;
 mod tool_output;
 
 use display::{
-    display_pre_exec_summary_if_present, display_result_json, display_result_text,
+    display_pre_exec_summary_if_present, display_result_json_with_identity, display_result_text,
     display_structured_output, load_total_token_usage,
 };
 
@@ -134,6 +134,11 @@ pub(crate) fn handle_session_result(
         resolved_id = target.session_id;
         session_dir = target.session_dir;
     }
+    let display_session_id = if follows_resume_target {
+        wrapper_id.as_str()
+    } else {
+        resolved_id.as_str()
+    };
 
     let daemon_completion_result =
         match crate::session_cmds_daemon::finalize_daemon_completion_if_present(&session_dir) {
@@ -211,7 +216,7 @@ pub(crate) fn handle_session_result(
         return Ok(());
     }
     if structured.is_active() {
-        return display_structured_output(&session_dir, &resolved_id, &structured, json);
+        return display_structured_output(&session_dir, display_session_id, &structured, json);
     }
 
     let transcript_summary = match load_transcript_summary(&session_dir) {
@@ -264,7 +269,9 @@ pub(crate) fn handle_session_result(
             // local project path; load directly from the session_dir state.toml.
             let token_usage = load_total_token_usage(&session_dir);
             if json {
-                display_result_json(
+                display_result_json_with_identity(
+                    display_session_id,
+                    &session_dir,
                     &result_view,
                     transcript_summary.as_ref(),
                     review_meta.as_ref(),
@@ -272,7 +279,7 @@ pub(crate) fn handle_session_result(
                 )?;
             } else {
                 display_result_text(
-                    &resolved_id,
+                    display_session_id,
                     &session_dir,
                     &result_view,
                     transcript_summary.as_ref(),
@@ -383,12 +390,16 @@ pub(crate) use artifacts::handle_session_artifacts;
 #[cfg(test)]
 use display::{
     build_all_sections_json_payload, build_gate_aware_summary_content, build_result_json_payload,
-    build_summary_section_json_payload, display_all_sections, display_single_section,
-    display_summary_section, gate_summary_employee_section, load_structured_post_exec_gate_report,
+    build_result_json_payload_with_identity, build_summary_section_json_payload,
+    display_all_sections, display_single_section, display_summary_section,
+    gate_summary_employee_section, load_structured_post_exec_gate_report,
     render_result_sidecar_for_text, render_token_usage_lines, structured_sections_with_gate_first,
 };
 pub(crate) use tool_output::handle_session_tool_output;
 
+#[cfg(test)]
+#[path = "session_cmds_result_identity_tests.rs"]
+mod identity_tests;
 #[cfg(test)]
 #[path = "session_cmds_result_post_exec_gate_tests.rs"]
 mod post_exec_gate_tests;

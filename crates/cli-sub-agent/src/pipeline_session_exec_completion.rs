@@ -12,6 +12,8 @@ use super::session_exec_runtime::SessionCompletionPlan;
 use super::session_exec_write_guard::apply_write_restriction_violations;
 use crate::pipeline::SessionExecutionResult;
 
+const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
 pub(super) struct CompletionInput<'a> {
     pub(super) executor: &'a Executor,
     pub(super) tool: &'a ToolName,
@@ -150,6 +152,13 @@ pub(super) async fn complete_session_execution(
                 execute_events_observed,
             },
         );
+        apply_fix_finding_terminal_guard(
+            session,
+            commit_created,
+            commit_guard.as_ref(),
+            &mut result,
+        );
+        apply_fix_finding_terminal_guard_summary(input.project_root, session, &mut result);
     }
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor: input.executor,
@@ -196,6 +205,72 @@ pub(super) async fn complete_session_execution(
         commit_created,
     })
 }
+
+fn apply_fix_finding_terminal_guard_summary(
+    project_root: &Path,
+    session: &MetaSessionState,
+    result: &mut csa_process::ExecutionResult,
+) {
+    if !is_fix_finding_session(session)
+        || !crate::run_cmd::is_post_run_commit_policy_gate_failure(result)
+    {
+        return;
+    }
+
+    let reason = result
+        .csa_gate_failure
+        .as_deref()
+        .unwrap_or("commit-policy");
+    let side_effects =
+        crate::session_fix_finding_recovery::side_effect_diagnostic(project_root, session);
+    let summary = format!(
+        "`csa review --fix-finding` session failed closed: no qualifying amend/commit \
+         completed cleanly before the child reported success (reason={reason}). \
+         {side_effects}. Recovery: inspect `git status --short`, `git diff`, and \
+         `git diff --staged`; preserve/finish or discard dirty side effects; create a \
+         hook-enabled amend/commit if appropriate; then run a fresh exact-head \
+         `csa review` before push/PR."
+    );
+    result.summary = summary.clone();
+    if !result.stderr_output.contains(&summary) {
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&summary);
+        result.stderr_output.push('\n');
+    }
+}
+
+fn apply_fix_finding_terminal_guard(
+    session: &MetaSessionState,
+    commit_created: Option<bool>,
+    commit_guard: Option<&crate::run_cmd::PostRunCommitGuard>,
+    result: &mut csa_process::ExecutionResult,
+) {
+    if !is_fix_finding_session(session)
+        || result.exit_code != 0
+        || crate::run_cmd::is_post_run_commit_policy_gate_failure(result)
+    {
+        return;
+    }
+
+    if commit_guard.is_some_and(|guard| guard.workspace_mutated) {
+        result.note_gate_failure("commit-policy-uncommitted");
+        return;
+    }
+
+    if commit_created == Some(false) {
+        result.note_gate_failure("commit-policy-ref-update");
+    }
+}
+
+fn is_fix_finding_session(session: &MetaSessionState) -> bool {
+    session.task_context.task_type.as_deref() == Some(REVIEW_FIX_FINDING_TASK_TYPE)
+}
+
+#[cfg(test)]
+#[path = "pipeline_session_exec_completion_fix_finding_tests.rs"]
+mod fix_finding_tests;
 
 #[cfg(test)]
 mod tests {
@@ -423,5 +498,29 @@ mod tests {
 
         assert_eq!(completed.commit_created, Some(true));
         assert_eq!(completed.execution.exit_code, 0);
+    }
+
+    #[test]
+    fn fix_finding_terminal_guard_fails_dirty_side_effects_after_amend() {
+        let mut session = MetaSessionState::default();
+        session.task_context.task_type = Some(REVIEW_FIX_FINDING_TASK_TYPE.to_string());
+        let commit_guard = crate::run_cmd::PostRunCommitGuard {
+            workspace_mutated: true,
+            head_changed: true,
+            changed_paths: vec!["tracked.txt".to_string()],
+        };
+        let mut result = csa_process::ExecutionResult {
+            exit_code: 0,
+            model_completed: Some(true),
+            ..Default::default()
+        };
+
+        apply_fix_finding_terminal_guard(&session, Some(true), Some(&commit_guard), &mut result);
+
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(
+            result.csa_gate_failure.as_deref(),
+            Some("commit-policy-uncommitted")
+        );
     }
 }

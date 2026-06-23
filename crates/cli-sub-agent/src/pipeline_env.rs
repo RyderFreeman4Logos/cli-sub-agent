@@ -45,6 +45,7 @@ pub(crate) fn build_merged_env(request: MergedEnvRequest<'_>) -> HashMap<String,
     let mut merged_env = extra_env.cloned().unwrap_or_default();
     csa_core::env::scrub_subtree_contract_env_map(&mut merged_env);
     csa_core::env::strip_git_push_authorization_keys(&mut merged_env);
+    materialize_ambient_rust_env_inputs(&mut merged_env);
     if !merged_env.contains_key("PATH")
         && let Some(path) = std::env::var_os("PATH")
     {
@@ -152,6 +153,7 @@ pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<
         csa_core::env::CARGO_HOME_ENV_KEY,
         csa_core::env::RUSTUP_HOME_ENV_KEY,
         csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
         csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
     ] {
         let Some(value) = env.get(key).filter(|value| !value.trim().is_empty()) else {
@@ -163,6 +165,26 @@ pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<
         }
     }
     paths
+}
+
+fn materialize_ambient_rust_env_inputs(env: &mut HashMap<String, String>) {
+    for key in [
+        "HOME",
+        csa_core::env::CARGO_HOME_ENV_KEY,
+        csa_core::env::RUSTUP_HOME_ENV_KEY,
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+        csa_core::env::MISE_DATA_DIR_ENV_KEY,
+    ] {
+        if env.contains_key(key) {
+            continue;
+        }
+        let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        env.insert(key.to_string(), value.to_string_lossy().into_owned());
+    }
 }
 
 fn apply_rust_session_env_contract(env: &mut HashMap<String, String>, project_root: Option<&Path>) {
@@ -189,6 +211,11 @@ fn apply_rust_session_env_contract_inner(
             env,
             csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
             &cargo_install_root,
+        );
+        materialize_existing_project_env_path(
+            env,
+            csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+            project_root.map(|root| root.join("target")),
         );
     }
 
@@ -252,6 +279,25 @@ fn ensure_project_env_path(env: &mut HashMap<String, String>, key: &str, fallbac
     }
 
     env.insert(key.to_string(), fallback.to_string_lossy().into_owned());
+}
+
+fn materialize_existing_project_env_path(
+    env: &mut HashMap<String, String>,
+    key: &str,
+    fallback: Option<PathBuf>,
+) {
+    let Some(path) = env_path(env, key) else {
+        return;
+    };
+    let effective = if csa_core::env::rust_state_path_needs_session_override(&path) {
+        let Some(fallback) = fallback else {
+            return;
+        };
+        fallback
+    } else {
+        path
+    };
+    env.insert(key.to_string(), effective.to_string_lossy().into_owned());
 }
 
 fn preferred_rustup_home(env: &HashMap<String, String>, home: &Path) -> PathBuf {

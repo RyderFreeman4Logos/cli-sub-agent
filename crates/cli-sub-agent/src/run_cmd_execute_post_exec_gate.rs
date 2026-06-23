@@ -11,7 +11,8 @@ use csa_config::ProjectConfig;
 use tokio::process::Command;
 
 use crate::run_cmd_post_exec_gate_capture::{
-    BoundedTailCapture, drain_pumps_and_reap, kill_gate_process_group, tee_gate_stream,
+    BoundedTailCapture, GatePumpDrainOutcome, drain_pumps_and_reap,
+    gate_process_group_has_live_members, kill_gate_process_group, tee_gate_stream,
 };
 
 #[path = "run_cmd_execute_post_exec_gate_index.rs"]
@@ -19,10 +20,6 @@ mod gate_index;
 
 use gate_index::post_exec_gate_env_with_temp_index;
 
-/// Outcome of running the post-exec gate command, including the combined
-/// stdout+stderr captured for structured failure surfacing (#1726). The output
-/// is always tee'd to the parent's stdout/stderr too, so the raw transcript
-/// (`full.md`) is unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostExecGateCommandOutcome {
     pub(super) exit: PostExecGateCommandExit,
@@ -33,15 +30,11 @@ pub(super) struct PostExecGateCommandOutcome {
 pub(super) enum PostExecGateCommandExit {
     Exited(Option<i32>),
     TimedOut,
+    ResidualProcesses,
 }
 
-/// Test-only constructors. Production builds the struct literal directly (the
-/// real runner threads an arbitrary exit AND captured output through at once),
-/// so these convenience constructors are only used by the synthetic runners in
-/// the test submodule.
 #[cfg(test)]
 impl PostExecGateCommandOutcome {
-    /// Outcome with no captured output (test helper / synthetic runners).
     pub(super) fn exited(code: Option<i32>) -> Self {
         Self {
             exit: PostExecGateCommandExit::Exited(code),
@@ -49,8 +42,6 @@ impl PostExecGateCommandOutcome {
         }
     }
 
-    /// Outcome carrying captured gate output (used by the real runner and by
-    /// tests that exercise the structured surfacing path).
     pub(super) fn exited_with(code: Option<i32>, output: impl Into<String>) -> Self {
         Self {
             exit: PostExecGateCommandExit::Exited(code),
@@ -58,7 +49,6 @@ impl PostExecGateCommandOutcome {
         }
     }
 
-    /// Timeout outcome with no captured output (test helper).
     pub(super) fn timed_out() -> Self {
         Self {
             exit: PostExecGateCommandExit::TimedOut,
@@ -78,9 +68,7 @@ pub(super) enum PostExecGateOutcome {
 pub(super) struct PostExecGateFailure {
     kind: PostExecGateFailureKind,
     diagnostic: String,
-    /// The gate command that failed (e.g. `"just pre-commit"`).
     gate_command: String,
-    /// Combined captured stdout+stderr of the gate command (pre-redaction).
     captured_output: String,
 }
 
@@ -88,6 +76,7 @@ pub(super) struct PostExecGateFailure {
 pub(super) enum PostExecGateFailureKind {
     Exited(Option<i32>),
     TimedOut,
+    ResidualProcesses,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +101,7 @@ impl PostExecGateFailure {
             PostExecGateFailureKind::Exited(Some(code)) => code,
             PostExecGateFailureKind::Exited(None) => -1,
             PostExecGateFailureKind::TimedOut => 124,
+            PostExecGateFailureKind::ResidualProcesses => 125,
         }
     }
 }
@@ -356,7 +346,7 @@ pub(super) fn execute_post_exec_gate_command(
             .take()
             .map(|reader| tee_gate_stream(reader, tokio::io::stderr(), Arc::clone(&captured)));
 
-        let exit =
+        let mut exit =
             match tokio::time::timeout(Duration::from_secs(timeout_seconds), child.wait()).await {
                 Ok(wait_result) => {
                     let status = wait_result.with_context(|| {
@@ -368,11 +358,6 @@ pub(super) fn execute_post_exec_gate_command(
                     PostExecGateCommandExit::Exited(status.code())
                 }
                 Err(_) => {
-                    // Kill the whole process group BEFORE reaping the leader, so
-                    // the un-reaped leader anchors the PGID against reuse; then
-                    // reap under a short bound so a wedged reap cannot reintroduce
-                    // an unbounded wait. `start_kill` is the cross-platform
-                    // backstop (the group kill is a no-op off Unix).
                     kill_gate_process_group(child_pid).await;
                     let _ = child.start_kill();
                     let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
@@ -380,15 +365,37 @@ pub(super) fn execute_post_exec_gate_command(
                 }
             };
 
-        // Drain the tee tasks under a bounded grace, reaping the process group
-        // if a backgrounded grandchild still holds a pipe write-end open — so
-        // `timeout_seconds` bounds the TOTAL operation, not just `child.wait()`.
-        drain_pumps_and_reap(stdout_pump, stderr_pump, child_pid).await;
+        let drain_outcome = drain_pumps_and_reap(stdout_pump, stderr_pump, child_pid).await;
 
-        let captured_output = captured
+        // A child can close stdout/stderr before continuing in the same group.
+        // Conversely, a descendant can keep stdout/stderr inherited until the
+        // drain path reaps it; both cases mean a successful leader exit is not
+        // a clean gate success.
+        if matches!(exit, PostExecGateCommandExit::Exited(Some(0)))
+            && (drain_outcome.reaped_pipe_holding_descendants()
+                || gate_process_group_has_live_members(child_pid))
+        {
+            exit = PostExecGateCommandExit::ResidualProcesses;
+        }
+
+        let mut captured_output = captured
             .lock()
             .map(|mut guard| guard.render())
             .unwrap_or_default();
+        if matches!(exit, PostExecGateCommandExit::ResidualProcesses) {
+            if !captured_output.is_empty() && !captured_output.ends_with('\n') {
+                captured_output.push('\n');
+            }
+            let message = match drain_outcome {
+                GatePumpDrainOutcome::Drained => {
+                    "csa: post-exec gate left live process-group members after the gate command exited\n"
+                }
+                GatePumpDrainOutcome::ReapedPipeHoldingDescendants => {
+                    "csa: post-exec gate left live process-group members or reaped pipe-holding descendants after the gate command exited\n"
+                }
+            };
+            captured_output.push_str(message);
+        }
 
         Ok(PostExecGateCommandOutcome {
             exit,
@@ -480,6 +487,25 @@ where
             gate_command: gate_config.command.clone(),
             captured_output,
         })),
+        PostExecGateCommandExit::ResidualProcesses => {
+            Ok(PostExecGateOutcome::Failed(PostExecGateFailure {
+                kind: PostExecGateFailureKind::ResidualProcesses,
+                diagnostic: format!(
+                    "csa: post-exec gate left live process-group members or reaped pipe-holding descendants after the gate command exited.\n\
+                     gate command: {}\n\
+                     cwd: {}\n\
+                     employee session: {}\n\
+                     branch: {}\n\
+                     next step: wait for or terminate residual gate processes if any remain, inspect the worktree, and re-run verification manually. v1 gate does NOT auto-retry.",
+                    gate_config.command,
+                    project_root.display(),
+                    session_id.unwrap_or("(ephemeral)"),
+                    branch,
+                ),
+                gate_command: gate_config.command.clone(),
+                captured_output,
+            }))
+        }
     }
 }
 
@@ -617,6 +643,9 @@ where
 #[path = "run_cmd_execute_post_exec_tests.rs"]
 mod post_exec_tests;
 
+#[cfg(test)]
+#[path = "run_cmd_execute_post_exec_residual_tests.rs"]
+mod post_exec_residual_tests;
 #[cfg(test)]
 #[path = "run_cmd_execute_post_exec_staged_gate_tests.rs"]
 mod post_exec_staged_gate_tests;

@@ -96,6 +96,8 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
     let _rustup_home = ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
     let _cargo_install_root =
         ScopedEnvVarRestore::set(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/usr/local");
+    let _cargo_target_dir =
+        ScopedEnvVarRestore::set(csa_core::env::CARGO_TARGET_DIR_ENV_KEY, "/usr/local");
     let _mise_config =
         ScopedEnvVarRestore::set(csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "/usr/local");
     let _mise_data = ScopedEnvVarRestore::set(
@@ -142,6 +144,17 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
     );
     assert_eq!(
         merged
+            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(
+            temp.path()
+                .join("target")
+                .to_str()
+                .expect("cargo target dir utf8")
+        )
+    );
+    assert_eq!(
+        merged
             .get(csa_core::env::RUSTUP_HOME_ENV_KEY)
             .map(String::as_str),
         Some(mise_rust.to_str().expect("mise rust utf8"))
@@ -181,6 +194,7 @@ fn build_merged_env_defaults_missing_rust_state_to_known_good_paths() {
     let _rustup_home = ScopedEnvVarRestore::unset(csa_core::env::RUSTUP_HOME_ENV_KEY);
     let _cargo_install_root =
         ScopedEnvVarRestore::unset(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY);
+    let _cargo_target_dir = ScopedEnvVarRestore::unset(csa_core::env::CARGO_TARGET_DIR_ENV_KEY);
     let _mise_config = ScopedEnvVarRestore::unset(csa_core::env::MISE_CONFIG_DIR_ENV_KEY);
     let _mise_data = ScopedEnvVarRestore::set(
         csa_core::env::MISE_DATA_DIR_ENV_KEY,
@@ -220,6 +234,10 @@ fn build_merged_env_defaults_missing_rust_state_to_known_good_paths() {
                 .expect("cargo install root utf8")
         )
     );
+    assert!(
+        !merged.contains_key(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+        "missing CARGO_TARGET_DIR must not be materialized into a CSA override"
+    );
     assert_eq!(
         merged
             .get(csa_core::env::RUSTUP_HOME_ENV_KEY)
@@ -242,8 +260,16 @@ fn build_merged_env_materializes_safe_ambient_rust_state_for_sandbox() {
     let cargo_home = temp.path().join("ambient-cargo-home");
     let rustup_home = temp.path().join("ambient-rustup-home");
     let cargo_install_root = temp.path().join("ambient-cargo-install-root");
+    let cargo_target_dir = temp.path().join("ambient-target");
     let mise_config = temp.path().join("ambient-mise-config");
-    for dir in [&home, &cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+    for dir in [
+        &home,
+        &cargo_home,
+        &rustup_home,
+        &cargo_install_root,
+        &cargo_target_dir,
+        &mise_config,
+    ] {
         std::fs::create_dir_all(dir).expect("create ambient env dir");
     }
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
@@ -258,6 +284,10 @@ fn build_merged_env_materializes_safe_ambient_rust_state_for_sandbox() {
     let _cargo_install_root = ScopedEnvVarRestore::set(
         csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
         cargo_install_root.to_str().expect("cargo install root utf8"),
+    );
+    let _cargo_target_dir = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        cargo_target_dir.to_str().expect("cargo target dir utf8"),
     );
     let _mise_config = ScopedEnvVarRestore::set(
         csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
@@ -292,6 +322,12 @@ fn build_merged_env_materializes_safe_ambient_rust_state_for_sandbox() {
     );
     assert_eq!(
         merged
+            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(cargo_target_dir.to_str().expect("cargo target dir utf8"))
+    );
+    assert_eq!(
+        merged
             .get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY)
             .map(String::as_str),
         Some(mise_config.to_str().expect("mise config utf8"))
@@ -301,7 +337,58 @@ fn build_merged_env_materializes_safe_ambient_rust_state_for_sandbox() {
     assert!(writable_paths.contains(&cargo_home));
     assert!(writable_paths.contains(&rustup_home));
     assert!(writable_paths.contains(&cargo_install_root));
+    assert!(writable_paths.contains(&cargo_target_dir));
     assert!(writable_paths.contains(&mise_config));
+}
+
+#[test]
+fn build_merged_env_preserves_ambient_cargo_dirs_without_home() {
+    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cargo_install_root = temp.path().join("ambient-install-root");
+    let cargo_target_dir = temp.path().join("ambient-target");
+    for dir in [&cargo_install_root, &cargo_target_dir] {
+        std::fs::create_dir_all(dir).expect("create ambient Cargo dir");
+    }
+    let _home = ScopedEnvVarRestore::unset("HOME");
+    let _cargo_home = ScopedEnvVarRestore::unset(csa_core::env::CARGO_HOME_ENV_KEY);
+    let _rustup_home = ScopedEnvVarRestore::unset(csa_core::env::RUSTUP_HOME_ENV_KEY);
+    let _cargo_install_root = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        cargo_install_root.to_str().expect("cargo install root utf8"),
+    );
+    let _cargo_target_dir = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        cargo_target_dir.to_str().expect("cargo target dir utf8"),
+    );
+    let cfg = test_config_with_node_heap_limit(None);
+
+    let merged = crate::pipeline_env::build_merged_env(MergedEnvRequest {
+        extra_env: None,
+        config: Some(&cfg),
+        global_config: None,
+        project_root: Some(temp.path()),
+        tool_name: "codex",
+        current_depth: 0,
+        pattern_internal: false,
+        allow_git_push: false,
+    });
+
+    assert_eq!(
+        merged
+            .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+            .map(String::as_str),
+        Some(cargo_install_root.to_str().expect("cargo install root utf8"))
+    );
+    assert_eq!(
+        merged
+            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(cargo_target_dir.to_str().expect("cargo target dir utf8"))
+    );
+    let writable_paths = crate::pipeline_env::rust_session_writable_paths(&merged);
+    assert!(writable_paths.contains(&cargo_install_root));
+    assert!(writable_paths.contains(&cargo_target_dir));
 }
 
 #[test]
@@ -312,8 +399,16 @@ fn build_merged_env_preserves_explicit_writable_rust_state() {
     let cargo_home = temp.path().join("explicit-cargo");
     let rustup_home = temp.path().join("explicit-rustup");
     let cargo_install_root = temp.path().join("explicit-install");
+    let cargo_target_dir = temp.path().join("explicit-target");
     let mise_config = temp.path().join("explicit-mise-config");
-    for dir in [&home, &cargo_home, &rustup_home, &cargo_install_root, &mise_config] {
+    for dir in [
+        &home,
+        &cargo_home,
+        &rustup_home,
+        &cargo_install_root,
+        &cargo_target_dir,
+        &mise_config,
+    ] {
         std::fs::create_dir_all(dir).expect("create explicit env dir");
     }
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
@@ -334,6 +429,10 @@ fn build_merged_env_preserves_explicit_writable_rust_state() {
         (
             csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY.to_string(),
             cargo_install_root.to_string_lossy().into_owned(),
+        ),
+        (
+            csa_core::env::CARGO_TARGET_DIR_ENV_KEY.to_string(),
+            cargo_target_dir.to_string_lossy().into_owned(),
         ),
         (
             csa_core::env::MISE_CONFIG_DIR_ENV_KEY.to_string(),
@@ -363,6 +462,10 @@ fn build_merged_env_preserves_explicit_writable_rust_state() {
     assert_eq!(
         merged.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY),
         extra_env.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+    );
+    assert_eq!(
+        merged.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+        extra_env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
     );
     assert_eq!(
         merged.get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY),

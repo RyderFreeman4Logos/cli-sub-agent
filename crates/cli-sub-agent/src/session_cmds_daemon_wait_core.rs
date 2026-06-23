@@ -176,6 +176,11 @@ pub(crate) fn handle_session_wait_with_emitters(
         }
 
         let result_session_id = wait_target.session_id.as_str();
+        let display_session_id = if wait_target.follows_resume_target {
+            resolved.session_id.as_str()
+        } else {
+            result_session_id
+        };
         let result_session_dir = &wait_target.session_dir;
         let session_live = session_has_live_execution(
             worktree_lock_root.as_deref(),
@@ -278,7 +283,7 @@ pub(crate) fn handle_session_wait_with_emitters(
             if let Some(result) = loaded_result {
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
-                    result_session_id,
+                    display_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
@@ -332,7 +337,7 @@ pub(crate) fn handle_session_wait_with_emitters(
         if let Some(result) = completed_result {
             let streamed_output = (emitters.emit_terminal_output)(
                 result_session_dir,
-                result_session_id,
+                display_session_id,
                 Some(&result),
                 wait_options.output_mode,
             )?;
@@ -378,7 +383,7 @@ pub(crate) fn handle_session_wait_with_emitters(
             if let Some(result) = reconciled_result {
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
-                    result_session_id,
+                    display_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
@@ -412,7 +417,7 @@ pub(crate) fn handle_session_wait_with_emitters(
             )? {
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
-                    result_session_id,
+                    display_session_id,
                     Some(&result),
                     wait_options.output_mode,
                 )?;
