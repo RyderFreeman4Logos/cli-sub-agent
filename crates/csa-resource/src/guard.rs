@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use sysinfo::System;
 use tracing::warn;
 
@@ -34,6 +34,81 @@ pub struct SpawnMemoryAdmission {
     pub active_session_count: u64,
     /// Number of active sessions whose process tree RSS was sampled successfully.
     pub sampled_session_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryAdmissionKind {
+    Reserve,
+    HostSpawn,
+    ActiveSession,
+}
+
+impl MemoryAdmissionKind {
+    pub const fn denial_class(self) -> &'static str {
+        match self {
+            Self::Reserve | Self::HostSpawn | Self::ActiveSession => "host_memory_admission",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryAdmissionError {
+    message: String,
+    pub kind: MemoryAdmissionKind,
+    pub available_phys_mb: u64,
+    pub available_swap_mb: u64,
+    pub available_combined_mb: u64,
+    pub total_ram_mb: u64,
+    pub reserve_mb: u64,
+    pub required_available_mb: Option<u64>,
+    pub projected_spawn_mb: Option<u64>,
+    pub active_session_rss_mb: Option<u64>,
+    pub active_session_projected_mb: Option<u64>,
+    pub active_session_count: Option<u64>,
+    pub sampled_session_count: Option<u64>,
+}
+
+impl MemoryAdmissionError {
+    fn new(message: String, kind: MemoryAdmissionKind, snapshot: MemoryAdmissionSnapshot) -> Self {
+        Self {
+            message,
+            kind,
+            available_phys_mb: snapshot.available_phys_mb,
+            available_swap_mb: snapshot.available_swap_mb,
+            available_combined_mb: snapshot.available_combined_mb,
+            total_ram_mb: snapshot.total_ram_mb,
+            reserve_mb: snapshot.reserve_mb,
+            required_available_mb: snapshot.required_available_mb,
+            projected_spawn_mb: snapshot.projected_spawn_mb,
+            active_session_rss_mb: snapshot.active_session_rss_mb,
+            active_session_projected_mb: snapshot.active_session_projected_mb,
+            active_session_count: snapshot.active_session_count,
+            sampled_session_count: snapshot.sampled_session_count,
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryAdmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MemoryAdmissionError {}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MemoryAdmissionSnapshot {
+    available_phys_mb: u64,
+    available_swap_mb: u64,
+    available_combined_mb: u64,
+    total_ram_mb: u64,
+    reserve_mb: u64,
+    required_available_mb: Option<u64>,
+    projected_spawn_mb: Option<u64>,
+    active_session_rss_mb: Option<u64>,
+    active_session_projected_mb: Option<u64>,
+    active_session_count: Option<u64>,
+    sampled_session_count: Option<u64>,
 }
 
 /// Guards resource availability before launching tools.
@@ -145,6 +220,15 @@ fn evaluate_memory_availability(
     reserve_mb: u64,
     admission: Option<SpawnMemoryAdmission>,
 ) -> Result<()> {
+    let base_snapshot = MemoryAdmissionSnapshot {
+        available_phys_mb,
+        available_swap_mb,
+        available_combined_mb,
+        total_ram_mb,
+        reserve_mb,
+        ..Default::default()
+    };
+
     if available_phys_mb < reserve_mb {
         let message = format!(
             "CSA: low memory — available={available_phys_mb}MB < required={reserve_mb}MB. \
@@ -153,10 +237,15 @@ fn evaluate_memory_availability(
              swap_available_mb={available_swap_mb} combined_available_mb={available_combined_mb}"
         );
         eprintln!("{message}");
-        bail!(
-            "{message}. Free system memory or reduce [resources] min_free_memory_mb in \
-             .csa/config.toml. For one csa run, pass --min-free-memory-mb <MB>."
+        let error = MemoryAdmissionError::new(
+            format!(
+                "{message}. Free system memory or reduce [resources] min_free_memory_mb in \
+                 .csa/config.toml. For one csa run, pass --min-free-memory-mb <MB>."
+            ),
+            MemoryAdmissionKind::Reserve,
+            base_snapshot,
         );
+        return Err(error.into());
     }
 
     let warn_threshold = reserve_mb.saturating_mul(WARNING_MULTIPLIER_NUM) / WARNING_MULTIPLIER_DEN;
@@ -195,13 +284,26 @@ fn evaluate_memory_availability(
                 active_projected = admission.active_session_projected_mb,
             );
             eprintln!("{message}");
-            bail!(
-                "{message}. Free host memory, wait for active CSA sessions to finish, or lower \
-                 tool memory limits before spawning more work. For one csa run, pass \
-                 --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
-                 to lower the reserve. Persistent config keys: resources.memory_max_mb, \
-                 tools.<tool>.memory_max_mb, resources.min_free_memory_mb."
+            let error = MemoryAdmissionError::new(
+                format!(
+                    "{message}. Free host memory, wait for active CSA sessions to finish, or lower \
+                     tool memory limits before spawning more work. For one csa run, pass \
+                     --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
+                     to lower the reserve. Persistent config keys: resources.memory_max_mb, \
+                     tools.<tool>.memory_max_mb, resources.min_free_memory_mb."
+                ),
+                MemoryAdmissionKind::HostSpawn,
+                MemoryAdmissionSnapshot {
+                    required_available_mb: Some(required_available_mb),
+                    projected_spawn_mb: Some(admission.projected_spawn_mb),
+                    active_session_rss_mb: Some(admission.active_session_rss_mb),
+                    active_session_projected_mb: Some(admission.active_session_projected_mb),
+                    active_session_count: Some(admission.active_session_count),
+                    sampled_session_count: Some(admission.sampled_session_count),
+                    ..base_snapshot
+                },
             );
+            return Err(error.into());
         }
 
         let host_safe_limit_mb = total_ram_mb.saturating_mul(ACTIVE_SESSION_SAFE_FRACTION_NUM)
@@ -225,11 +327,24 @@ fn evaluate_memory_availability(
                 projected_spawn_mb = admission.projected_spawn_mb,
             );
             eprintln!("{message}");
-            bail!(
-                "{message}. CSA is refusing to launch work that could collectively exhaust host RAM. \
-                 For one csa run, pass --memory-max-mb <MB> to lower projected_spawn. \
-                 Persistent config keys: resources.memory_max_mb or tools.<tool>.memory_max_mb."
+            let error = MemoryAdmissionError::new(
+                format!(
+                    "{message}. CSA is refusing to launch work that could collectively exhaust host RAM. \
+                     For one csa run, pass --memory-max-mb <MB> to lower projected_spawn. \
+                     Persistent config keys: resources.memory_max_mb or tools.<tool>.memory_max_mb."
+                ),
+                MemoryAdmissionKind::ActiveSession,
+                MemoryAdmissionSnapshot {
+                    required_available_mb: Some(host_safe_limit_mb),
+                    projected_spawn_mb: Some(admission.projected_spawn_mb),
+                    active_session_rss_mb: Some(admission.active_session_rss_mb),
+                    active_session_projected_mb: Some(admission.active_session_projected_mb),
+                    active_session_count: Some(admission.active_session_count),
+                    sampled_session_count: Some(admission.sampled_session_count),
+                    ..base_snapshot
+                },
             );
+            return Err(error.into());
         }
 
         let host_warning_limit_mb = host_safe_limit_mb

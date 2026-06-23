@@ -44,6 +44,7 @@ mod memory_migrate;
 mod memory_soft_limit_recovery_display;
 mod merge_cmd;
 mod mktsk_cmd;
+mod no_provider_launch;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;

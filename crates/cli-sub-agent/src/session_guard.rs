@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use csa_session::{
-    SaveOptions, SessionResult, create_session, save_result_with_options, save_session,
+    NO_PROVIDER_LAUNCH_ARTIFACT_PATH, NoProviderLaunchDiagnostic, SaveOptions, SessionArtifact,
+    SessionResult, create_session, save_result_with_options, save_session,
 };
 
 /// RAII guard that cleans up a newly created session directory on failure.
@@ -80,7 +81,37 @@ pub(crate) fn write_pre_exec_error_result(
     tool_name: &str,
     error: &anyhow::Error,
 ) {
+    write_pre_exec_error_result_inner(project_root, session_id, tool_name, error, None);
+}
+
+pub(crate) fn write_pre_exec_error_result_with_no_provider(
+    project_root: &Path,
+    session_id: &str,
+    tool_name: &str,
+    error: &anyhow::Error,
+    no_provider_launch: NoProviderLaunchDiagnostic,
+) {
+    write_pre_exec_error_result_inner(
+        project_root,
+        session_id,
+        tool_name,
+        error,
+        Some(no_provider_launch),
+    );
+}
+
+fn write_pre_exec_error_result_inner(
+    project_root: &Path,
+    session_id: &str,
+    tool_name: &str,
+    error: &anyhow::Error,
+    no_provider_launch: Option<NoProviderLaunchDiagnostic>,
+) {
     let now = chrono::Utc::now();
+    let artifacts = no_provider_launch
+        .as_ref()
+        .map(|_| vec![SessionArtifact::new(NO_PROVIDER_LAUNCH_ARTIFACT_PATH)])
+        .unwrap_or_default();
     let result = SessionResult {
         post_exec_gate: None,
         status: "failure".to_string(),
@@ -93,7 +124,7 @@ pub(crate) fn write_pre_exec_error_result(
         started_at: now,
         completed_at: now,
         events_count: 0,
-        artifacts: Vec::new(),
+        artifacts,
         ..Default::default()
     };
     if let Err(e) = save_result_with_options(
@@ -105,6 +136,12 @@ pub(crate) fn write_pre_exec_error_result(
         },
     ) {
         warn!("Failed to save pre-execution error result: {}", e);
+    }
+    if let Some(diagnostic) = no_provider_launch
+        && let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id)
+        && let Err(e) = csa_session::write_no_provider_launch_diagnostic(&session_dir, &diagnostic)
+    {
+        warn!("Failed to save pre-execution no-provider diagnostic: {}", e);
     }
     // Best-effort cooldown marker
     csa_session::write_cooldown_marker_for_project(project_root, session_id, now);

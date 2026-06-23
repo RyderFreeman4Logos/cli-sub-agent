@@ -73,6 +73,40 @@ fn classify_review_failover_error_uses_late_gemini_http_400_for_review_fallback(
 }
 
 #[test]
+fn classify_review_failover_error_detects_memory_soft_limit_admission() {
+    let failure = classify_review_failover_error(
+        ToolName::Codex,
+        Some("codex/openai/gpt-5.5/xhigh"),
+        "CSA: memory_soft_limit_admission denied -- codex reviewer soft memory threshold is 5734MB",
+        Some(std::time::Duration::from_secs(1)),
+    )
+    .expect("reviewer memory admission should be failover eligible");
+
+    assert_eq!(
+        failure.reason,
+        crate::resource_admission_soft_limit::MEMORY_SOFT_LIMIT_ADMISSION_REASON
+    );
+    assert_eq!(failure.quota_exhausted, Some(false));
+}
+
+#[test]
+fn classify_review_failover_error_detects_host_memory_admission() {
+    let failure = classify_review_failover_error(
+        ToolName::Codex,
+        Some("codex/openai/gpt-5.5/xhigh"),
+        "CSA: host memory admission denied — available=11385MB < required=12858MB",
+        Some(std::time::Duration::from_secs(1)),
+    )
+    .expect("reviewer host admission should be failover eligible");
+
+    assert_eq!(
+        failure.reason,
+        crate::no_provider_launch::HOST_MEMORY_ADMISSION_REASON
+    );
+    assert_eq!(failure.quota_exhausted, Some(false));
+}
+
+#[test]
 fn classify_review_failover_reason_detects_gemini_noninteractive_manual_auth() {
     let stderr = "\
 Error authenticating: FatalAuthenticationError: Manual authorization is required but the current session is non-interactive. \

@@ -1,4 +1,6 @@
-use super::session_exec_pre_exec::persist_pipeline_pre_exec_failure;
+use super::session_exec_pre_exec::{
+    PipelinePreExecFailureDetails, persist_pipeline_pre_exec_failure,
+};
 use crate::session_guard::SessionCleanupGuard;
 use anyhow::{Context, Result};
 use csa_lock::WorktreeWriteLock;
@@ -21,6 +23,7 @@ pub(super) fn acquire_or_persist_failure(
             err,
             cleanup_guard,
             None,
+            PipelinePreExecFailureDetails::default(),
         )
     })
 }

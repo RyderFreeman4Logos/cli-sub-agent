@@ -85,8 +85,11 @@ pub use post_exec_gate_report::{
 pub use process_tree_memory::{SessionTreeMemorySampler, session_tree_rss_mb};
 pub use redact::{redact_event, redact_text_content};
 pub use result::{
-    MemorySoftLimitRecoveryDiagnostic, RequireCommitRecoveryDiagnostic, SessionArtifact,
-    SessionManagerFields, SessionResult, UncommittedChanges,
+    MemorySoftLimitRecoveryDiagnostic, NO_PROVIDER_LAUNCH_ARTIFACT_PATH,
+    NO_PROVIDER_LAUNCH_SCHEMA_VERSION, NoProviderLaunchDiagnostic,
+    NoProviderLaunchMemoryDiagnostic, RequireCommitRecoveryDiagnostic, SessionArtifact,
+    SessionManagerFields, SessionResult, UncommittedChanges, read_no_provider_launch_diagnostic,
+    write_no_provider_launch_diagnostic,
 };
 pub use review_artifact::{
     Finding, FindingsFile, REVIEW_VERDICT_SCHEMA_VERSION, ReviewArtifact, ReviewDiffSize,

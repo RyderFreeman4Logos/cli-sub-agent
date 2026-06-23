@@ -48,7 +48,7 @@ mod session_exec_write_lock;
 #[path = "pipeline_session_exec_state_preflight.rs"]
 mod state_preflight;
 use self::session_exec_pre_exec::{
-    check_resources_before_spawn, persist_pipeline_pre_exec_failure,
+    PipelinePreExecFailureDetails, check_resources_before_spawn, persist_pipeline_pre_exec_failure,
     write_fatal_error_marker_sidecar,
 };
 pub(crate) use session_exec_api::execute_with_session;
@@ -140,6 +140,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 err,
                 &mut cleanup_guard,
                 None,
+                PipelinePreExecFailureDetails::default(),
             ));
         }
     };
@@ -158,6 +159,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 err,
                 &mut cleanup_guard,
                 None,
+                PipelinePreExecFailureDetails::default(),
             ));
         }
     };
@@ -177,6 +179,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         &mut session,
         &mut cleanup_guard,
         resource_overrides,
+        task_type,
     )?;
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {

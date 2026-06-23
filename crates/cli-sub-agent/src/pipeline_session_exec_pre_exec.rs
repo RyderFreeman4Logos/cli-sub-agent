@@ -10,7 +10,16 @@ use crate::resource_admission::{
     build_spawn_memory_admission, spawn_memory_projection_mb_with_overrides,
 };
 use crate::run_resource_overrides::RunResourceOverrides;
-use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+use crate::session_guard::{
+    SessionCleanupGuard, write_pre_exec_error_result, write_pre_exec_error_result_with_no_provider,
+};
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct PipelinePreExecFailureDetails<'a> {
+    pub(super) config: Option<&'a ProjectConfig>,
+    pub(super) task_type: Option<&'a str>,
+    pub(super) resource_overrides: RunResourceOverrides,
+}
 
 pub(super) fn check_resources_before_spawn(
     config: Option<&ProjectConfig>,
@@ -19,6 +28,7 @@ pub(super) fn check_resources_before_spawn(
     session: &mut MetaSessionState,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
     resource_overrides: RunResourceOverrides,
+    task_type: Option<&str>,
 ) -> anyhow::Result<()> {
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
@@ -35,6 +45,11 @@ pub(super) fn check_resources_before_spawn(
             err.context("Failed to persist pre-spawn memory projection"),
             cleanup_guard,
             None,
+            PipelinePreExecFailureDetails {
+                config,
+                task_type,
+                resource_overrides,
+            },
         ));
     }
     let admission =
@@ -50,6 +65,11 @@ pub(super) fn check_resources_before_spawn(
             err,
             cleanup_guard,
             Some("low_memory"),
+            PipelinePreExecFailureDetails {
+                config,
+                task_type,
+                resource_overrides,
+            },
         ));
     }
     if let Some(cfg) = config {
@@ -92,6 +112,7 @@ pub(super) fn write_fatal_error_marker_sidecar(
             anyhow::anyhow!(err).context("Failed to reset active liveness scope"),
             cleanup_guard,
             None,
+            PipelinePreExecFailureDetails::default(),
         )
     })?;
 
@@ -108,6 +129,7 @@ pub(super) fn write_fatal_error_marker_sidecar(
             anyhow::anyhow!(err).context("Failed to write fatal error marker sidecar"),
             cleanup_guard,
             None,
+            PipelinePreExecFailureDetails::default(),
         )
     })
 }
@@ -131,8 +153,29 @@ pub(super) fn persist_pipeline_pre_exec_failure(
     err: anyhow::Error,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
     termination_reason: Option<&str>,
+    details: PipelinePreExecFailureDetails<'_>,
 ) -> anyhow::Error {
-    write_pre_exec_error_result(project_root, &session.meta_session_id, tool_name, &err);
+    let no_provider_launch = crate::no_provider_launch::diagnostic_from_error(
+        crate::no_provider_launch::NoProviderLaunchContext {
+            session,
+            tool_name,
+            task_type: details.task_type,
+            config: details.config,
+            resource_overrides: details.resource_overrides,
+        },
+        &err,
+    );
+    if let Some(diagnostic) = no_provider_launch {
+        write_pre_exec_error_result_with_no_provider(
+            project_root,
+            &session.meta_session_id,
+            tool_name,
+            &err,
+            diagnostic,
+        );
+    } else {
+        write_pre_exec_error_result(project_root, &session.meta_session_id, tool_name, &err);
+    }
     let cleared_admission_projection =
         crate::resource_admission::clear_spawn_memory_projection(session);
     if let Some(reason) = termination_reason {

@@ -211,6 +211,7 @@ mod tests {
             large_diff_warning: false,
             large_diff_warning_threshold: None,
             large_diff_warning_changed_lines: None,
+            no_provider_launch: None,
         }
     }
 

@@ -5,7 +5,7 @@ use crate::large_diff_warning::LargeDiffWarningReport;
 use chrono::{DateTime, Utc};
 use csa_core::types::FallbackAttempt;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::fmt;
+use std::{fmt, path::Path};
 use toml::Value as TomlValue;
 
 pub const RESULT_FILE_NAME: &str = "result.toml";
@@ -258,6 +258,92 @@ pub struct MemorySoftLimitRecoveryDiagnostic {
     pub head_summary: Option<String>,
     /// Stable recovery action code for callers.
     pub suggested_recovery_action: String,
+}
+
+pub const NO_PROVIDER_LAUNCH_ARTIFACT_PATH: &str = "output/no-verdict.json";
+pub const NO_PROVIDER_LAUNCH_SCHEMA_VERSION: u32 = 1;
+
+/// Machine-readable diagnostic for sessions that were rejected before the
+/// external tool/provider launched.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoProviderLaunchDiagnostic {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub tool: String,
+    /// Stable role label such as "writer" or "reviewer".
+    pub role: String,
+    /// Raw task/session class when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_class: Option<String>,
+    /// Stable denial class, e.g. "memory_soft_limit_admission" or
+    /// "host_memory_admission".
+    pub denial_class: String,
+    pub no_provider_launch: bool,
+    pub provider_side_effects: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    pub memory: NoProviderLaunchMemoryDiagnostic,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guidance: Vec<String>,
+}
+
+/// Memory-specific fields for a no-provider-launch diagnostic.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoProviderLaunchMemoryDiagnostic {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_memory_max_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_limit_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_threshold_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_floor_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_memory_max_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_memory_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_available_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projected_spawn_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_session_rss_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_session_projected_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_session_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_session_count: Option<u64>,
+}
+
+pub fn write_no_provider_launch_diagnostic(
+    session_dir: &Path,
+    diagnostic: &NoProviderLaunchDiagnostic,
+) -> std::io::Result<()> {
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir)?;
+    let json = serde_json::to_vec_pretty(diagnostic)?;
+    std::fs::write(session_dir.join(NO_PROVIDER_LAUNCH_ARTIFACT_PATH), json)
+}
+
+pub fn read_no_provider_launch_diagnostic(
+    session_dir: &Path,
+) -> std::io::Result<Option<NoProviderLaunchDiagnostic>> {
+    let path = session_dir.join(NO_PROVIDER_LAUNCH_ARTIFACT_PATH);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path)?;
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| std::io::Error::other(format!("parse no-provider diagnostic: {error}")))
 }
 
 /// Structured result of a session execution.
