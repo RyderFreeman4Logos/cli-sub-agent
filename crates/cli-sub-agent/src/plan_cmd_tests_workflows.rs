@@ -357,8 +357,8 @@ fn dev2merge_plan_step_has_mktd_timeout_seconds_variable() {
         "Step 7 prompt must reference MKTD_TIMEOUT_SECONDS for hard-cap on mktd wall-clock"
     );
     assert!(
-        prompt.contains("timeout") && prompt.contains("csa plan run"),
-        "Step 7 prompt must wrap `csa plan run` with the shell `timeout` command"
+        prompt.contains("timeout") && prompt.contains(r#""${CSA_BIN}" plan run"#),
+        "Step 7 prompt must wrap `\"${{CSA_BIN}}\" plan run` with the shell `timeout` command"
     );
     assert!(
         prompt.contains("MKTD_TIMEOUT_SECONDS:-1800"),

@@ -86,6 +86,134 @@ fn mktd_save_step_persists_issue_quoted_content_without_shell_parse_break() -> a
 
 #[cfg(unix)]
 #[test]
+fn mktd_save_step_normalizes_wrapped_spec_toml_before_persist() -> anyhow::Result<()> {
+    for (case_name, step_8_output) in [
+        (
+            "prose-leading fenced TOML",
+            format!(
+                "I will now provide the requested spec artifact.\n\n```toml\n{}\n```\n",
+                spec_toml()
+            ),
+        ),
+        (
+            "CSA-section wrapped fenced TOML",
+            format!(
+                "<!-- CSA:SECTION:summary -->\n```toml\n{}\n```\n<!-- CSA:SECTION:summary:END -->\n",
+                spec_toml()
+            ),
+        ),
+    ] {
+        let save_script = load_mktd_save_script()?;
+        let project_dir = tempfile::tempdir()?;
+        let session_dir = tempfile::tempdir()?;
+        let bin_dir = tempfile::tempdir()?;
+        let csa_stub = bin_dir.path().join("csa");
+        std::fs::write(&csa_stub, csa_stub_script())?;
+        make_executable(&csa_stub)?;
+        install_save_script_path_tools(bin_dir.path())?;
+
+        run_git(project_dir.path(), &["init"])?;
+        run_git(project_dir.path(), &["checkout", "-b", "fix/2375-test"])?;
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&save_script)
+            .current_dir(project_dir.path())
+            .env("PATH", bin_dir.path())
+            .env("CSA_SESSION_DIR", session_dir.path())
+            .env("STEP_12_OUTPUT", tricky_todo())
+            .env("STEP_8_OUTPUT", step_8_output)
+            .env("STEP_2_OUTPUT", "English")
+            .env("FEATURE", case_name)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{case_name} should normalize before persist\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let spec_artifact =
+            std::fs::read_to_string(session_dir.path().join("output/mktd-save/spec.toml"))?;
+        assert!(
+            spec_artifact.starts_with("schema_version = 1\n"),
+            "{case_name} should write raw TOML spec.toml: {spec_artifact}"
+        );
+        assert!(
+            !spec_artifact.contains("```")
+                && !spec_artifact.contains("CSA:SECTION")
+                && !spec_artifact.contains("I will now provide"),
+            "{case_name} should strip wrapper/prose from spec.toml: {spec_artifact}"
+        );
+
+        let raw_spec =
+            std::fs::read_to_string(session_dir.path().join("output/mktd-save/spec.raw.txt"))?;
+        assert!(
+            raw_spec.contains("```toml") || raw_spec.contains("CSA:SECTION"),
+            "{case_name} should preserve the raw producer output for diagnostics"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn mktd_save_step_rejects_unrecoverable_prose_spec_before_persist() -> anyhow::Result<()> {
+    let save_script = load_mktd_save_script()?;
+    let project_dir = tempfile::tempdir()?;
+    let session_dir = tempfile::tempdir()?;
+    let bin_dir = tempfile::tempdir()?;
+    let csa_stub = bin_dir.path().join("csa");
+    std::fs::write(&csa_stub, csa_stub_script())?;
+    make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
+
+    run_git(project_dir.path(), &["init"])?;
+    run_git(project_dir.path(), &["checkout", "-b", "fix/2375-bad-spec"])?;
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(save_script)
+        .current_dir(project_dir.path())
+        .env("PATH", bin_dir.path())
+        .env("CSA_SESSION_DIR", session_dir.path())
+        .env("STEP_12_OUTPUT", tricky_todo())
+        .env(
+            "STEP_8_OUTPUT",
+            "I will describe the plan here instead of emitting TOML.",
+        )
+        .env("STEP_2_OUTPUT", "English")
+        .env("FEATURE", "unrecoverable prose spec")
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "unrecoverable prose spec should fail before persist"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("spec artifact-shape error"),
+        "Save TODO should report an artifact-shape diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("first content: non-TOML"),
+        "Save TODO should classify unrecoverable prose: {stderr}"
+    );
+    assert!(
+        stderr.contains("Raw spec artifact path:"),
+        "Save TODO should point at the bounded raw artifact: {stderr}"
+    );
+    assert!(
+        !stderr.contains("csa todo persist failed"),
+        "Save TODO must fail before csa todo persist: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<()> {
     let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path)?;
@@ -160,6 +288,21 @@ fn simple_first_fence_body(prompt: &str) -> Option<&str> {
     let rest = &prompt[code_start..];
     let fence_end = rest.find("```")?;
     Some(rest[..fence_end].trim())
+}
+
+#[cfg(unix)]
+fn load_mktd_save_script() -> anyhow::Result<String> {
+    let workflow_path = workspace_root().join("patterns/mktd/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path)?;
+    let plan = plan_from_toml(&workflow)?;
+    let save_step = plan
+        .steps
+        .iter()
+        .find(|step| step.id == 13)
+        .expect("missing mktd save step");
+    extract_bash_code_block(&save_step.prompt)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("mktd save step must have bash block"))
 }
 
 #[cfg(unix)]

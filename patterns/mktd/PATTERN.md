@@ -521,6 +521,7 @@ identifiers, or other shell-sensitive content.
 
 ```bash
 LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
+CSA_BIN="${CSA_BIN:-csa}"
 PROMPT_FILE="$(mktemp)" || exit 1
 trap 'rc=$?; rm -f "$PROMPT_FILE"; exit $rc' EXIT INT TERM
 {
@@ -542,8 +543,8 @@ trap 'rc=$?; rm -f "$PROMPT_FILE"; exit $rc' EXIT INT TERM
   printf '%s\n' "## Output Requirements"
   printf '%s\n' "Provide explicit verdict and confidence in your conclusion."
 } > "$PROMPT_FILE" || { echo "Failed to write prompt file" >&2; exit 1; }
-SID=$(csa debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout --prompt-file "$PROMPT_FILE") || { echo "csa debate failed" >&2; exit 1; }
-DEBATE_JSON="$(csa session wait --session "$SID" 2>&1)" || { echo "csa debate failed" >&2; exit 1; }
+SID=$("${CSA_BIN}" debate --sa-mode true --rounds 3 --format json --idle-timeout 600 --no-stream-stdout --prompt-file "$PROMPT_FILE") || { echo "csa debate failed" >&2; exit 1; }
+DEBATE_JSON="$("${CSA_BIN}" session wait --session "$SID" 2>&1)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
 RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
 case "${RAW_VERDICT}" in
@@ -674,11 +675,13 @@ LANG_ARGS=()
 if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
   LANG_ARGS+=("--language" "${RESOLVED_LANGUAGE}")
 fi
-TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}" | head -n1) || { echo "csa todo create failed" >&2; exit 1; }
+CSA_BIN="${CSA_BIN:-csa}"
+TODO_TS=$("${CSA_BIN}" todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}" | head -n1) || { echo "csa todo create failed" >&2; exit 1; }
 SAVE_DIR="${CSA_SESSION_DIR:?CSA_SESSION_DIR must be set}/output/mktd-save"
 mkdir -p "${SAVE_DIR}" || { echo "create mktd save output dir failed" >&2; exit 1; }
 TODO_ARTIFACT="${SAVE_DIR}/TODO.md"
 SPEC_ARTIFACT="${SAVE_DIR}/spec.toml"
+RAW_SPEC_ARTIFACT="${SAVE_DIR}/spec.raw.txt"
 EPIC_ARTIFACT="${SAVE_DIR}/epic-plan.toml"
 FENCE=$(printf '\140\140\140')
 printf '%s\n' "${FINAL_TODO}" > "${TODO_ARTIFACT}" || { echo "write TODO artifact failed" >&2; exit 1; }
@@ -691,45 +694,26 @@ if [[ -n "${EPIC_PLAN:-}" ]]; then
   EPIC_ARGS+=(--epic-plan-file "${EPIC_ARTIFACT}")
 fi
 SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
-printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_ARTIFACT}" || { echo "write spec artifact failed" >&2; exit 1; }
-[[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
-[[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
-FIRST_SPEC_LINE=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${SPEC_ARTIFACT}") || { echo "read spec artifact failed" >&2; exit 1; }
-LOWER_SPEC_LINE=$(printf '%s' "${FIRST_SPEC_LINE}" | tr '[:upper:]' '[:lower:]')
-SPEC_MARKER_KIND=""
-case "${LOWER_SPEC_LINE}" in
-  '<!-- csa:section:'*) SPEC_MARKER_KIND="CSA section marker" ;;
-  '<!--'*) SPEC_MARKER_KIND="HTML marker" ;;
-  '<!doctype html'*|'<html'*) SPEC_MARKER_KIND="HTML document marker" ;;
-  "${FENCE}"*) SPEC_MARKER_KIND="Markdown code fence" ;;
-esac
-if [[ -n "${SPEC_MARKER_KIND}" ]]; then
-  printf 'spec artifact-shape error: expected TOML spec.toml; first marker kind: %s\nSpec artifact path: %s\n' "${SPEC_MARKER_KIND}" "${SPEC_ARTIFACT}" >&2
+printf '%s\n' "${SPEC_CONTENT}" > "${RAW_SPEC_ARTIFACT}" || { echo "write raw spec artifact failed" >&2; exit 1; }
+extract_spec_toml() { perl -0CSDA -we '
+my($f,$s)=(shift,<>);
+sub ok{$_[0]=~/(^|\n)schema_version\s*=\s*1(\s*\n|$)/s&&$_[0]=~/(^|\n)plan_ulid\s*=/s&&$_[0]=~/(^|\n)\[\[criteria\]\](\s*\n|$)/s}
+while($s=~/\Q$f\E[ \t]*(?:(?:toml|spec\.toml)(?:[ \t][^\n]*)?)?[ \t]*\n(.*?)\n\Q$f\E/sg){my$b=$1;if(ok($b)){print$b;exit 0}}
+(my$h=$s)=~s/\A\s*//s;$h=~s/\n.*\z//s;
+if(ok($s)&&$h=~/^(#|schema_version\s*=|plan_ulid\s*=|summary\s*=|\[\[criteria\]\])/){print$s;exit 0}
+exit 1' "${FENCE}" "$1"; }
+if ! extract_spec_toml "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then
+  l=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${RAW_SPEC_ARTIFACT}") || { echo "read raw spec artifact failed" >&2; exit 1; }
+  lc=$(printf '%s' "$l" | tr '[:upper:]' '[:lower:]'); k="non-TOML"
+  case "$lc" in '<!-- csa:section:'*) k="CSA section marker" ;; '<!--'*) k="HTML marker" ;; '<!doctype html'*|'<html'*) k="HTML document marker" ;; "${FENCE}"*) k="Markdown code fence" ;; esac
+  printf 'spec artifact-shape error: expected raw TOML or fenced TOML; first content: %s\nSpec artifact path: %s\nRaw spec artifact path: %s\n' "$k" "${SPEC_ARTIFACT}" "${RAW_SPEC_ARTIFACT}" >&2
   exit 1
 fi
-# Pre-persist gates must run before commit; `csa todo persist` repeats core checks under lock.
+[[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
+[[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
 grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}" || { echo "TODO artifact has no non-empty checkbox tasks" >&2; exit 1; }
-# Every open task needs its own `DONE WHEN:`; persist repeats this under lock.
-awk '
-function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
-function scan(text,   pos, rest) {
-  pos = index(text, "DONE WHEN:")
-  if (pos > 0) { rest = substr(text, pos + 10); sub(/^[ \t]+/, "", rest); if (length(rest) > 0) has_clause = 1 }
-}
-{
-  is_open = ($0 ~ /^- \[ \] .+/)
-  if ($0 ~ /^- \[[ xX]\]/ || $0 ~ /^#/) { flush(); if (is_open == 1) { in_open = 1; scan($0) }; next }
-  if (in_open == 1) scan($0)
-}
-END { flush(); exit (bad + 0) }
-' "${TODO_ARTIFACT}" || { echo "TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause" >&2; exit 1; }
-grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" || { echo "spec artifact missing schema_version = 1" >&2; exit 1; }
-grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" || { echo "spec artifact plan_ulid unresolved or mismatched" >&2; exit 1; }
-grep -q '^summary = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing summary" >&2; exit 1; }
-grep -q '^\[\[criteria\]\]$' "${SPEC_ARTIFACT}" || { echo "spec artifact has no criteria entries" >&2; exit 1; }
-grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" || { echo "bad criterion kind" >&2; exit 1; }
-grep -q '^id = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion id" >&2; exit 1; }
-grep -q '^description = "' "${SPEC_ARTIFACT}" || { echo "spec artifact missing criterion description" >&2; exit 1; }
+perl -0ne '$bad=0; for(split /\n(?=- \[[ xX]\] |#)/){$bad=1 if /^- \[ \] / && !/DONE WHEN:\s*\S/s} exit $bad' "${TODO_ARTIFACT}" || { echo "TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause" >&2; exit 1; }
+grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" && grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" && grep -q '^summary = "' "${SPEC_ARTIFACT}" && grep -q '^\[\[criteria\]\]$' "${SPEC_ARTIFACT}" && grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" && grep -q '^id = "' "${SPEC_ARTIFACT}" && grep -q '^description = "' "${SPEC_ARTIFACT}" || { echo "bad spec artifact" >&2; exit 1; }
 SUMMARY_LINE=$(sed -n 's/^summary = "\(.*\)"$/\1/p' "${SPEC_ARTIFACT}" | head -n1)
 printf '%s\n' "${SUMMARY_LINE}" | perl -CSDA -ne '$found ||= /\p{Han}/; END { exit($found ? 0 : 1) }' || { echo "summary lacks Han" >&2; exit 1; }
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
@@ -748,14 +732,14 @@ elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
   [[ "${CJK_COUNT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO CJK chars < ${MIN_CJK}" >&2; exit 1; }
 fi
 e="${SAVE_DIR}/persist.stderr"
-TODO_PATH=$(csa todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}" 2>"$e") || {
+TODO_PATH=$("${CSA_BIN}" todo persist -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "finalize: ${FEATURE}" 2>"$e") || {
   rc=$?
   printf 'csa todo persist failed (exit %s)\nSpec artifact path: %s\nPersist stderr artifact: %s\n' "$rc" "$SPEC_ARTIFACT" "$e" >&2
   [[ ! -s "$e" ]] || tail -80 "$e" >&2
   exit "$rc"
 }
 [[ -n "${TODO_PATH:-}" ]] || { echo "csa todo persist did not return a TODO path" >&2; exit 1; }
-csa todo show -t "${TODO_TS}" --path
+"${CSA_BIN}" todo show -t "${TODO_TS}" --path
 ```
 
 ## Step 14: Persist References & Design Document
@@ -780,23 +764,24 @@ TODO_PATH="${STEP_13_OUTPUT}"
 [[ -n "${TODO_PATH:-}" ]] || { echo "STEP_13_OUTPUT empty — cannot persist refs" >&2; exit 1; }
 TODO_DIR="$(dirname "${TODO_PATH}")"
 TODO_TS="$(basename "${TODO_DIR}")"
+CSA_BIN="${CSA_BIN:-csa}"
 if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_3_OUTPUT}" recon-structure.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_3_OUTPUT}" recon-structure.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_4_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_4_OUTPUT}" recon-patterns.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_4_OUTPUT}" recon-patterns.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_5_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_5_OUTPUT}" recon-constraints.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_5_OUTPUT}" recon-constraints.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_6_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_6_OUTPUT}" recon-invariants.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_6_OUTPUT}" recon-invariants.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_9_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_9_OUTPUT}" threat-model.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_9_OUTPUT}" threat-model.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_10_OUTPUT:-}" ]]; then
-  csa todo ref add -t "${TODO_TS}" --content "${STEP_10_OUTPUT}" debate-evidence.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${STEP_10_OUTPUT}" debate-evidence.md 2>/dev/null || true
 fi
 
 # Persist ADR extraction blocks emitted by Step 12 when present, otherwise Step 7.
@@ -822,7 +807,7 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
     if [[ -n "${ADR_FILE:-}" && -n "${ADR_CONTENT:-}" ]]; then
       ADR_TITLE=$(printf '%s\n' "${ADR_CONTENT}" | sed -n 's/^# //p' | head -n1)
       [[ -n "${ADR_TITLE:-}" ]] || ADR_TITLE="${ADR_FILE%.md}"
-      csa todo ref add -t "${TODO_TS}" --content "${ADR_CONTENT}" "${ADR_FILE}" 2>/dev/null || true
+      "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${ADR_CONTENT}" "${ADR_FILE}" 2>/dev/null || true
       ADR_INDEX="${ADR_INDEX}- ${ADR_FILE}: ${ADR_TITLE}"$'\n'
     fi
     ADR_FILE=""
@@ -833,7 +818,7 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
 done <<< "${ADR_SOURCE}"
 if [[ -n "${ADR_INDEX:-}" ]]; then
   ADR_INDEX_DOC=$(printf '%s\n\n%s' "# ADR Index: ${FEATURE}" "${ADR_INDEX}")
-  csa todo ref add -t "${TODO_TS}" --content "${ADR_INDEX_DOC}" adr-index.md 2>/dev/null || true
+  "${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${ADR_INDEX_DOC}" adr-index.md 2>/dev/null || true
 fi
 
 # Generate consolidated design document (not git-tracked)
@@ -855,9 +840,9 @@ DESIGN_DOC=$(printf '%s\n\n' \
   "${STEP_9_OUTPUT}" \
   "## Debate Evidence" \
   "${STEP_10_OUTPUT}")
-csa todo ref add -t "${TODO_TS}" --content "${DESIGN_DOC}" design.md 2>/dev/null || true
+"${CSA_BIN}" todo ref add -t "${TODO_TS}" --content "${DESIGN_DOC}" design.md 2>/dev/null || true
 
-csa todo ref list -t "${TODO_TS}" 2>/dev/null || echo "(no refs persisted)"
+"${CSA_BIN}" todo ref list -t "${TODO_TS}" 2>/dev/null || echo "(no refs persisted)"
 ```
 
 ## Step 15: Phase 4 — User Approval

@@ -75,6 +75,10 @@ fn dev2merge_plan_step_resolves_mktd_by_pattern_unless_explicit_path_set() {
     let script = dev2merge_workflow_step_bash("Plan with mktd");
 
     assert!(
+        script.contains("CSA_BIN=\"${CSA_BIN:-csa}\""),
+        "Step 7 must default CSA_BIN to csa while honoring the exact parent binary when provided"
+    );
+    assert!(
         script.contains("MKTD=(--pattern mktd); [ -n \"${MKTD_WORKFLOW_PATH:-}\" ]"),
         "Step 7 must expose an explicit mktd workflow path override while defaulting to pattern resolution"
     );
@@ -89,6 +93,21 @@ fn dev2merge_plan_step_resolves_mktd_by_pattern_unless_explicit_path_set() {
     assert!(
         !script.contains("csa plan run --sa-mode true patterns/mktd/workflow.toml"),
         "Step 7 must not invoke target-repo-local patterns/mktd/workflow.toml by default"
+    );
+    assert!(
+        script.contains(
+            "timeout -k 30 \"${MKTD_TIMEOUT_SECONDS}\" \"${CSA_BIN}\" plan run --sa-mode true"
+        ),
+        "Step 7 must run nested mktd through CSA_BIN so exact-head parents do not fall back to stale PATH csa"
+    );
+    assert!(
+        script.contains("\"${CSA_BIN}\" todo list --format json")
+            && script.contains("\"${CSA_BIN}\" todo show -t \"${LATEST_TS}\" --path"),
+        "Step 7 must use CSA_BIN for post-mktd TODO discovery too"
+    );
+    assert!(
+        !script.contains("timeout -k 30 \"${MKTD_TIMEOUT_SECONDS}\" csa plan run"),
+        "Step 7 must not use bare csa for nested mktd"
     );
 }
 

@@ -44,7 +44,7 @@ pub(crate) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig
         );
     }
 
-    let includes_codex = tools.iter().any(|tool| *tool == "codex");
+    let includes_codex = tools.contains(&"codex");
     ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),

@@ -523,3 +523,38 @@ async fn spawn_bash_step_exposes_pattern_internal_marker() {
         "weave bash step must see CSA_PATTERN_INTERNAL=1 (#1847)"
     );
 }
+
+/// #2375: workflow bash steps that recursively call `csa` need a stable path
+/// to the exact binary that launched the current plan run. Otherwise a parent
+/// using `target/release/csa` can spawn nested work through a stale installed
+/// `csa` found on PATH.
+#[tokio::test]
+async fn spawn_bash_step_exposes_current_executable_as_csa_bin() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let project_root = temp.path();
+    let workflow_path = project_root.join("workflow.toml");
+    let env_vars: HashMap<String, String> = HashMap::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+
+    let output = spawn_bash(
+        "test -n \"${CSA_BIN:-}\" && test -x \"${CSA_BIN}\" && printf '%s' \"${CSA_BIN}\"",
+        &env_vars,
+        project_root,
+        &workflow_path,
+        &startup_env,
+    )
+    .await
+    .expect("bash step should spawn");
+
+    assert!(
+        output.status.success(),
+        "CSA_BIN should point at an executable path: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        std::env::current_exe()
+            .expect("current executable path")
+            .to_string_lossy()
+    );
+}
