@@ -62,6 +62,7 @@ pub(crate) async fn dispatch(
         issue,
         tool,
         model_spec,
+        tier,
         dry_run,
         chunked,
         resume,
@@ -72,6 +73,18 @@ pub(crate) async fn dispatch(
         daemon_child,
         session_id,
     } = cmd;
+
+    if let Some(tier_name) = tier {
+        anyhow::bail!(
+            "`csa plan run` does not accept --tier because the plan runner executes \
+             workflow steps and does not select a provider itself.\n\
+             For dev2merge/mktd implementation routing, pass the workflow variable: \
+             csa plan run <workflow> --var IMPL_TIER={tier_name}\n\
+             For mktd plan-authoring sessions, use --var PLAN_TIER={tier_name}. \
+             For one workflow step, put csa run --tier <name> in that step or use an \
+             Implementation override: csa run --tier {tier_name} ..."
+        );
+    }
 
     // Resolve `--issue <N>` into workflow variables before the daemon/foreground
     // split. Fetching in the top-level invocation means a bad issue number or

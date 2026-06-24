@@ -175,6 +175,28 @@ fn test_review_allows_tier_flag() {
 }
 
 #[test]
+fn test_review_legacy_tier_4_hard_selector_suggests_critical_tier() {
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "tier-4-critical",
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
+        &["gemini-cli"],
+    );
+
+    let err = resolve_review_tier_name(Some(&cfg), &global, Some("tier-4-hard"), false, false)
+        .expect_err("legacy tier selector should not silently resolve");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Tier selector 'tier-4-hard' not found"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("Did you mean 'tier-4-critical'?"),
+        "stale tier selector should include migration hint: {msg}"
+    );
+}
+
+#[test]
 fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();

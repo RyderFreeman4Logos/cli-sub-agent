@@ -37,6 +37,10 @@ pub enum PlanCommands {
         #[arg(long, value_parser = parse_model_spec_arg)]
         model_spec: Option<String>,
 
+        /// Unsupported for plan-level routing; use --var IMPL_TIER=<NAME> or workflow csa run --tier.
+        #[arg(long, value_name = "NAME")]
+        tier: Option<String>,
+
         /// Show execution plan without running
         #[arg(long)]
         dry_run: bool,
