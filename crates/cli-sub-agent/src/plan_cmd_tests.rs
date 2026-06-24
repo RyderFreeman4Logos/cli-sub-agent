@@ -70,17 +70,21 @@ fn dev2merge_declares_review_completed_for_push_gate() {
             .iter()
             .find(|step| step.title == title)
             .unwrap_or_else(|| panic!("dev2merge must contain {title}"));
-        let verdict_check_index = review_step
+        let helper_index = review_step
             .prompt
-            .find(r#"csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD""#)
-            .unwrap_or_else(|| panic!("{title} must check the full-diff verdict before push"));
+            .find("cumulative-review-batch.sh")
+            .unwrap_or_else(|| panic!("{title} must run the cumulative review helper"));
         let completed_marker_index = review_step
             .prompt
             .find("CSA_VAR:REVIEW_COMPLETED=true")
             .unwrap_or_else(|| panic!("{title} must emit REVIEW_COMPLETED"));
         assert!(
-            verdict_check_index < completed_marker_index,
-            "{title} must validate PASS/CLEAN before emitting REVIEW_COMPLETED"
+            helper_index < completed_marker_index,
+            "{title} must finish cumulative review gating before emitting REVIEW_COMPLETED"
+        );
+        assert!(
+            !review_step.prompt.contains("csa review --check-verdict"),
+            "{title} must not run unconditional exact-head check-verdict after batching helper"
         );
     }
     assert!(

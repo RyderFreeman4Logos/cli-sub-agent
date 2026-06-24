@@ -347,9 +347,8 @@ Even FAST_PATH runs cumulative review before push.
 
 ```bash
 set -euo pipefail
-bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/cumulative-review-batch.sh" --default-branch "${DEFAULT_BRANCH}" -- \
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
-csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 13)" required=true -->'
 ```'''
@@ -575,15 +574,13 @@ title = "Pre-PR Cumulative Review Gate"
 tool = "bash"
 prompt = '''
 Cumulative review covering all commits since the default branch.
-Sets REVIEW_COMPLETED=true as gate for push step.
-REVIEW_COMPLETED is declared in workflow variables so CSA_VAR injection survives
-into Step 13.
+Helper owns verdict check; batching skip needs no current-head artifact.
+Sets REVIEW_COMPLETED=true for the push gate.
 
 ```bash
 set -euo pipefail
-bash scripts/csa/cumulative-review-batch.sh --default-branch "${DEFAULT_BRANCH}" -- \
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/cumulative-review-batch.sh" --default-branch "${DEFAULT_BRANCH}" -- \
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
-csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 13)" required=true -->'
 ```
@@ -644,12 +641,16 @@ id = 14
 title = "Pre-PR Review Verdict Check"
 tool = "bash"
 prompt = '''
-Hard gate before PR creation: the current branch HEAD must have a PASS/CLEAN
-review verdict for the full cumulative diff (`${DEFAULT_BRANCH}...HEAD`).
+Hard gate before PR creation: require REVIEW_COMPLETED, or fall back to an
+exact-head verdict check for `${DEFAULT_BRANCH}...HEAD`.
 
 ```bash
 set -euo pipefail
-csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
+if [ "${REVIEW_COMPLETED:-}" = "true" ]; then
+  echo "Pre-PR review already verified."
+else
+  csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD"
+fi
 echo "CSA_VAR:REVIEW_VERDICT_CHECKED=true"
 echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 15)" required=true -->'
 ```'''
