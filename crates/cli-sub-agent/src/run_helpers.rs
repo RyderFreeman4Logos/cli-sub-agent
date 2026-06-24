@@ -64,9 +64,9 @@ pub(crate) use tier_bypass_gate::{
 pub(crate) use tier_resolution::{
     TierToolResolution, collect_available_tier_models_with_global_config,
     collect_preferred_tier_models_with_global_config, evaluate_tier_models,
-    resolve_preferred_tool_from_tier_with_global_config,
+    evaluate_tier_models_with_global_config, resolve_preferred_tool_from_tier_with_global_config,
     resolve_runtime_available_tier_fallback_with_global_config,
-    resolve_tool_from_tier_with_global_config,
+    resolve_tool_from_tier_with_global_config, validate_tier_model_spec_compatibility,
 };
 #[cfg(test)]
 pub(crate) use tier_resolution::{

@@ -128,6 +128,7 @@ fn category_strings_are_stable_and_distinct() {
         FailoverSkipKind::AvailabilityDetectionMiss,
         FailoverSkipKind::TransportError,
         FailoverSkipKind::AttemptedAndErrored,
+        FailoverSkipKind::IncompatibleModel,
         FailoverSkipKind::MalformedSpec,
     ];
     let categories: Vec<&str> = kinds.iter().map(|k| k.category()).collect();
@@ -137,6 +138,10 @@ fn category_strings_are_stable_and_distinct() {
     assert_eq!(
         FailoverSkipKind::AvailabilityDetectionMiss.category(),
         "availability-detection-miss"
+    );
+    assert_eq!(
+        FailoverSkipKind::IncompatibleModel.category(),
+        "incompatible-model"
     );
 }
 
@@ -156,6 +161,7 @@ fn only_permanent_quota_counts_as_quota_exhausted() {
     assert!(!FailoverSkipKind::AvailabilityDetectionMiss.is_quota());
     assert!(!FailoverSkipKind::TransportError.is_quota());
     assert!(!FailoverSkipKind::AttemptedAndErrored.is_quota());
+    assert!(!FailoverSkipKind::IncompatibleModel.is_quota());
 }
 
 // Serialization-level guard for the same contract: a plain 429 attempt failure

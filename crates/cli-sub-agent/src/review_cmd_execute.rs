@@ -845,5 +845,9 @@ mod readonly_tests;
 mod tier_tests;
 
 #[cfg(test)]
+#[path = "review_cmd_execute_issue2409_tests.rs"]
+mod issue2409_tests;
+
+#[cfg(test)]
 #[path = "review_cmd_execute_redirect_guard_tests.rs"]
 mod redirect_guard_tests;

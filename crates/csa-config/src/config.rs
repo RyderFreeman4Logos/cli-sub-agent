@@ -680,17 +680,17 @@ init_timeout_seconds = 120
 # models = ["gemini-cli/google/gemini-2.5-flash/low"]
 # [tiers.tier-2-standard]
 # description = "Standard tasks: balanced models"
-# models = ["codex/openai/o3/medium", "gemini-cli/google/gemini-2.5-pro/medium"]
+# models = ["codex/openai/gpt-5.4/medium", "gemini-cli/google/gemini-2.5-pro/medium"]
 # [tiers.tier-3-heavy]
 # description = "Complex tasks: strongest models"
-# models = ["claude-code/anthropic/claude-sonnet-4-5-20250929/high", "codex/openai/o3/high"]
+# models = ["claude-code/anthropic/claude-sonnet-4-5-20250929/high", "codex/openai/gpt-5.5/high"]
 # [tier_mapping]
 # default = "tier-2-standard"
 # quick = "tier-1-quick"
 # complex = "tier-3-heavy"
 # [aliases]
 # fast = "gemini-cli/google/gemini-2.5-flash/low"
-# smart = "codex/openai/o3/high"
+# smart = "codex/openai/gpt-5.5/high"
 # [tool_aliases]
 # gem = "gemini-cli"
 # cc = "claude-code"

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
+use csa_executor::{ModelSpec, model_spec::ModelSpecValidationError};
 use tracing::warn;
 
 use super::{is_tool_runtime_available_for_config_with_env, parse_tool_name};
@@ -64,6 +65,14 @@ pub(crate) fn evaluate_tier_models_with_global_config(
             });
             continue;
         };
+        if let Err(kind) = validate_tier_model_spec_compatibility(spec) {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: Some(tool),
+                kind,
+            });
+            continue;
+        }
         if !config.is_tool_enabled(tool_str) {
             excluded.push(TierModelExclusion {
                 model_spec: spec.clone(),
@@ -94,6 +103,24 @@ pub(crate) fn evaluate_tier_models_with_global_config(
     }
 
     (included, excluded)
+}
+
+pub(crate) fn validate_tier_model_spec_compatibility(
+    spec: &str,
+) -> std::result::Result<(), FailoverSkipKind> {
+    let parsed = ModelSpec::parse(spec).map_err(|_| FailoverSkipKind::MalformedSpec)?;
+    let known_tools: Vec<&'static str> = csa_config::global::all_known_tools()
+        .iter()
+        .map(|tool| tool.as_str())
+        .collect();
+    match parsed.validate_with_catalog(&known_tools) {
+        Ok(()) => Ok(()),
+        Err(ModelSpecValidationError::UnknownProvider { .. })
+        | Err(ModelSpecValidationError::UnknownModel { .. }) => {
+            Err(FailoverSkipKind::IncompatibleModel)
+        }
+        Err(ModelSpecValidationError::UnknownTool { .. }) => Err(FailoverSkipKind::MalformedSpec),
+    }
 }
 
 /// Available tier models in definition order. Thin wrapper over
