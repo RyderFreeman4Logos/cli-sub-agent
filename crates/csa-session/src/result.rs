@@ -348,6 +348,8 @@ pub fn read_no_provider_launch_diagnostic(
 
 /// Structured result of a session execution.
 /// Written to `sessions/{id}/result.toml` after each tool invocation.
+pub const SESSION_OUTCOME_CHANGES_APPLIED_UNCOMMITTED: &str = "changes_applied_uncommitted";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionResult {
     /// Execution status: "success", "failure", "timeout", "signal"
@@ -456,6 +458,12 @@ impl SessionResult {
             137 | 143 => "signal".to_string(), // SIGKILL / SIGTERM
             _ => "failure".to_string(),
         }
+    }
+
+    /// Machine-readable outcome derived from typed result fields.
+    pub fn outcome_code(&self) -> Option<&'static str> {
+        (self.status == "success" && self.exit_code == 0 && self.uncommitted_changes.is_some())
+            .then_some(SESSION_OUTCOME_CHANGES_APPLIED_UNCOMMITTED)
     }
 }
 

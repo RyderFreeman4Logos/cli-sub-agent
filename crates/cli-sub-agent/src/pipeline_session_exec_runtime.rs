@@ -475,7 +475,7 @@ fn terminal_commit_required(
     commit_guard_enabled: bool,
 ) -> bool {
     if is_review_fix_finding_execution(task_type, session) {
-        return true;
+        return false;
     }
     commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation)
 }
@@ -491,14 +491,14 @@ mod tests {
     }
 
     #[test]
-    fn fix_finding_reviewer_sub_session_enables_terminal_commit_guard() {
+    fn fix_finding_reviewer_sub_session_captures_without_requiring_commit() {
         let session = session_with_task(Some(REVIEW_FIX_FINDING_TASK_TYPE));
 
         assert!(terminal_commit_guard_enabled(
             Some(REVIEWER_SUB_SESSION_TASK_TYPE),
             &session,
         ));
-        assert!(terminal_commit_required(
+        assert!(!terminal_commit_required(
             Some(REVIEWER_SUB_SESSION_TASK_TYPE),
             &session,
             None,

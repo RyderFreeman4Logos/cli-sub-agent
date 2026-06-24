@@ -38,7 +38,7 @@ fn init_git_repo(project_root: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn completion_fails_fix_finding_reviewer_sub_session_when_dirty_without_amend() {
+async fn completion_reports_fix_finding_dirty_success_as_uncommitted_outcome() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
@@ -123,31 +123,31 @@ async fn completion_fails_fix_finding_reviewer_sub_session_when_dirty_without_am
     .await
     .expect("complete session");
 
-    assert_eq!(completed.execution.exit_code, 1);
-    assert_eq!(
-        completed.execution.csa_gate_failure.as_deref(),
-        Some("commit-policy-uncommitted")
-    );
-    assert!(completed.execution.summary.contains("--fix-finding"));
-    assert!(
-        completed
-            .execution
-            .summary
-            .contains("no qualifying amend/commit")
-    );
-    assert!(
-        completed
-            .execution
-            .summary
-            .contains("modified=[tracked.txt]")
-    );
+    assert_eq!(completed.execution.exit_code, 0);
+    assert!(completed.execution.csa_gate_failure.is_none());
     let persisted = load_result(project_root, &session.meta_session_id)
         .expect("load result")
         .expect("result should be saved");
-    assert_eq!(persisted.status, "failure");
-    assert_eq!(persisted.exit_code, 1);
-    assert!(persisted.summary.contains("--fix-finding"));
-    assert!(persisted.summary.contains("git status --short"));
+    assert_eq!(persisted.status, "success");
+    assert_eq!(persisted.exit_code, 0);
+    let uncommitted = persisted
+        .uncommitted_changes
+        .as_ref()
+        .expect("dirty fix-finding success should record typed uncommitted changes");
+    assert_eq!(uncommitted.files, vec!["tracked.txt".to_string()]);
+
+    let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
+        &session_dir,
+        &session.meta_session_id,
+        &persisted,
+    );
+    assert!(wait_summary.contains("Status: success"));
+    assert!(wait_summary.contains("Exit code: 0"));
+    assert!(wait_summary.contains("Outcome: changes_applied_uncommitted"));
+    assert!(
+        wait_summary.contains("writer session ended with 1 uncommitted files"),
+        "{wait_summary}"
+    );
 }
 
 #[tokio::test]
@@ -235,13 +235,13 @@ async fn completion_fails_fix_finding_reviewer_sub_session_when_no_amend_complet
     assert_eq!(completed.execution.exit_code, 1);
     assert_eq!(
         completed.execution.csa_gate_failure.as_deref(),
-        Some("commit-policy-ref-update")
+        Some("fix-finding-no-change")
     );
     assert!(
         completed
             .execution
             .summary
-            .contains("no qualifying amend/commit")
+            .contains("no repository changes")
     );
     assert!(
         completed

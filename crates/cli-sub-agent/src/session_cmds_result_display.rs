@@ -222,6 +222,9 @@ pub(super) fn build_result_json_payload(
         }
         payload["summary"] = serde_json::Value::String(authoritative_summary);
     }
+    if let Some(outcome) = result.envelope.outcome_code() {
+        payload["outcome"] = serde_json::Value::String(outcome.to_string());
+    }
     if let Some(sidecar) = result
         .manager_sidecar
         .as_ref()

@@ -125,6 +125,8 @@ pub(super) async fn complete_session_execution(
     let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
     let mut commit_created = None;
     if commit_guard_enabled {
+        let effective_require_commit_on_mutation =
+            require_commit_on_mutation && !is_fix_finding_session(session);
         commit_created = pre_run_workspace
             .as_ref()
             .zip(post_run_workspace.as_ref())
@@ -133,7 +135,7 @@ pub(super) async fn complete_session_execution(
             pre_run_workspace.as_ref(),
             post_run_workspace.as_ref(),
         );
-        let policy_evaluation_failed = require_commit_on_mutation
+        let policy_evaluation_failed = effective_require_commit_on_mutation
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
@@ -143,7 +145,7 @@ pub(super) async fn complete_session_execution(
                 output_format: input.output_format,
                 prompt: input.prompt,
                 tool_name: input.executor.tool_name(),
-                require_commit_on_mutation,
+                require_commit_on_mutation: effective_require_commit_on_mutation,
                 commit_guard: commit_guard.as_ref(),
                 policy_evaluation_failed,
                 hook_bypass_scan_enabled,
@@ -211,22 +213,20 @@ fn apply_fix_finding_terminal_guard_summary(
     session: &MetaSessionState,
     result: &mut csa_process::ExecutionResult,
 ) {
-    if !is_fix_finding_session(session)
-        || !crate::run_cmd::is_post_run_commit_policy_gate_failure(result)
-    {
+    if !is_fix_finding_session(session) || !is_fix_finding_terminal_guard_failure(result) {
         return;
     }
 
     let reason = result
         .csa_gate_failure
         .as_deref()
-        .unwrap_or("commit-policy");
+        .unwrap_or("fix-finding-terminal-guard");
     let side_effects =
         crate::session_fix_finding_recovery::side_effect_diagnostic(project_root, session);
+    let failure_detail = fix_finding_terminal_failure_detail(reason);
     let summary = format!(
-        "`csa review --fix-finding` session failed closed: no qualifying amend/commit \
-         completed cleanly before the child reported success (reason={reason}). \
-         {side_effects}. Recovery: inspect `git status --short`, `git diff`, and \
+        "`csa review --fix-finding` session failed closed: {failure_detail} \
+         (reason={reason}). {side_effects}. Recovery: inspect `git status --short`, `git diff`, and \
          `git diff --staged`; preserve/finish or discard dirty side effects; create a \
          hook-enabled amend/commit if appropriate; then run a fresh exact-head \
          `csa review` before push/PR."
@@ -238,6 +238,27 @@ fn apply_fix_finding_terminal_guard_summary(
         }
         result.stderr_output.push_str(&summary);
         result.stderr_output.push('\n');
+    }
+}
+
+fn is_fix_finding_terminal_guard_failure(result: &csa_process::ExecutionResult) -> bool {
+    result.csa_gate_failure.as_deref().is_some_and(|reason| {
+        reason == "fix-finding-no-change"
+            || crate::run_cmd::is_post_run_commit_policy_gate_failure(result)
+    })
+}
+
+fn fix_finding_terminal_failure_detail(reason: &str) -> &'static str {
+    match reason {
+        "fix-finding-no-change" => "child reported success but no repository changes were detected",
+        "commit-policy-ref-update" => "git commit was attempted but HEAD did not advance cleanly",
+        "commit-policy-no-verify" => "forbidden git commit --no-verify was detected",
+        "commit-policy-lefthook-bypass" => "forbidden LEFTHOOK bypass was detected during the fix",
+        "commit-policy-unverifiable" => "CSA could not verify the repository mutation state",
+        "commit-policy-uncommitted" => {
+            "a strict commit policy required committed changes but dirty work remained"
+        }
+        _ => "a terminal fix-finding policy failed",
     }
 }
 
@@ -255,12 +276,11 @@ fn apply_fix_finding_terminal_guard(
     }
 
     if commit_guard.is_some_and(|guard| guard.workspace_mutated) {
-        result.note_gate_failure("commit-policy-uncommitted");
         return;
     }
 
     if commit_created == Some(false) {
-        result.note_gate_failure("commit-policy-ref-update");
+        result.note_gate_failure("fix-finding-no-change");
     }
 }
 
@@ -501,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn fix_finding_terminal_guard_fails_dirty_side_effects_after_amend() {
+    fn fix_finding_terminal_guard_allows_dirty_side_effects_after_amend() {
         let mut session = MetaSessionState::default();
         session.task_context.task_type = Some(REVIEW_FIX_FINDING_TASK_TYPE.to_string());
         let commit_guard = crate::run_cmd::PostRunCommitGuard {
@@ -517,10 +537,7 @@ mod tests {
 
         apply_fix_finding_terminal_guard(&session, Some(true), Some(&commit_guard), &mut result);
 
-        assert_eq!(result.exit_code, 1);
-        assert_eq!(
-            result.csa_gate_failure.as_deref(),
-            Some("commit-policy-uncommitted")
-        );
+        assert_eq!(result.exit_code, 0);
+        assert!(result.csa_gate_failure.is_none());
     }
 }
