@@ -23,11 +23,11 @@ mod memory_soft_limit_recovery;
 mod require_commit;
 
 #[cfg(test)]
+use diff_tokens::{DIFF_BYTES_PER_TOKEN, estimate_diff_stream_tokens, tracked_diff_byte_limit};
 use diff_tokens::{
-    DIFF_BYTES_PER_TOKEN, default_tracked_diff_token_threshold, estimate_diff_stream_tokens,
-    tracked_diff_byte_limit,
+    default_tracked_diff_token_threshold, estimate_changed_surface_tokens,
+    tracked_diff_token_threshold,
 };
-use diff_tokens::{estimate_changed_surface_tokens, tracked_diff_token_threshold};
 
 pub(crate) fn is_writer_session(sa_mode: bool, task_type: Option<&str>) -> bool {
     !sa_mode && matches!(task_type, Some("run"))
@@ -466,8 +466,7 @@ fn collect_uncommitted_changes_with_token_threshold(
     collect_uncommitted_changes_with_filter(project_root, None, Some(token_threshold))
 }
 
-#[cfg(test)]
-fn collect_uncommitted_changes_for_changed_paths(
+pub(crate) fn collect_uncommitted_changes_for_changed_paths(
     project_root: &Path,
     changed_paths: &[String],
 ) -> Option<csa_session::UncommittedChanges> {

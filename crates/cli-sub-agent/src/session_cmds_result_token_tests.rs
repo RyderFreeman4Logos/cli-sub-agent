@@ -46,6 +46,32 @@ fn build_result_json_payload_derives_total_from_input_and_output_when_persisted_
     assert!((ratio - expected_ratio).abs() < f64::EPSILON);
 }
 
+#[test]
+fn build_result_json_payload_includes_uncommitted_success_outcome() {
+    let mut envelope = session_result();
+    envelope.summary = "fix applied; tests passed".to_string();
+    envelope.uncommitted_changes = Some(csa_session::UncommittedChanges {
+        file_count: 1,
+        insertions: 3,
+        deletions: 1,
+        approx_diff_tokens: 128,
+        files: vec!["src/lib.rs".to_string()],
+        truncated: 0,
+    });
+    let result = SessionResultView {
+        envelope,
+        manager_sidecar: None,
+        legacy_sidecar: None,
+    };
+
+    let payload = build_result_json_payload(&result, None, None, None).unwrap();
+
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["exit_code"], 0);
+    assert_eq!(payload["outcome"], "changes_applied_uncommitted");
+    assert_eq!(payload["uncommitted_changes"]["files"][0], "src/lib.rs");
+}
+
 fn conflicting_token_usage() -> TokenUsage {
     TokenUsage {
         input_tokens: Some(2_329_258),

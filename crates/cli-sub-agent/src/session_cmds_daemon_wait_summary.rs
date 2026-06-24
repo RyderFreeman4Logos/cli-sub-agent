@@ -119,6 +119,9 @@ pub(crate) fn render_wait_result_summary(
         format!("Tool: {}", wait_result_tool_label(result)),
         format!("Elapsed: {}", format_wait_elapsed(result)),
     ]);
+    if let Some(outcome) = result.outcome_code() {
+        lines.push(format!("Outcome: {outcome}"));
+    }
 
     if let Some(tokens) = extract_wait_token_summary(result) {
         lines.push(format!("Tokens: {}", tokens.render_text()));
@@ -255,6 +258,7 @@ fn render_wait_result_json(
         "session_id": session_id,
         "status": result.status,
         "exit_code": result.exit_code,
+        "outcome": result.outcome_code(),
         "tool": wait_result_tool_label(result),
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,

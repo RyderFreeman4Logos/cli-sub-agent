@@ -38,8 +38,8 @@ pub(crate) use policy::{
 };
 pub(crate) use shell::detect_no_verify_commit_commands;
 pub(crate) use uncommitted::{
-    format_large_diff_warning_block, format_uncommitted_warning, is_writer_session,
-    working_tree_changed_lines,
+    collect_uncommitted_changes_for_changed_paths, format_large_diff_warning_block,
+    format_uncommitted_warning, is_writer_session, working_tree_changed_lines,
 };
 
 #[cfg(test)]
