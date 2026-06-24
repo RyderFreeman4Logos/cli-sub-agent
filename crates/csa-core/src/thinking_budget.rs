@@ -3,6 +3,7 @@
 /// Named thinking-budget values accepted in `tool/provider/model/budget` specs.
 pub const VALID_BUDGETS: &[&str] = &[
     "default",
+    "none",
     "low",
     "medium",
     "med",
@@ -14,7 +15,7 @@ pub const VALID_BUDGETS: &[&str] = &[
 
 /// Human-readable accepted thinking-budget values for validation errors.
 pub const VALID_BUDGET_DESCRIPTION: &str =
-    "default, low, medium, med, high, xhigh, extra-high, max, or a number";
+    "default, none, low, medium, med, high, xhigh, extra-high, max, or a number";
 
 /// Return whether `value` is an accepted thinking-budget keyword or custom
 /// numeric token budget.
@@ -30,6 +31,7 @@ mod tests {
     #[test]
     fn accepts_named_budget_case_insensitively() {
         assert!(is_valid_budget("XHIGH"));
+        assert!(is_valid_budget("None"));
     }
 
     #[test]

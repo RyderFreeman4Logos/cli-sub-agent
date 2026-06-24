@@ -37,6 +37,8 @@ pub(crate) enum FailoverSkipKind {
     TransportError,
     /// Model was attempted and returned an error (non-quota, non-transport).
     AttemptedAndErrored,
+    /// Model spec is well-formed but incompatible with the configured tool/backend.
+    IncompatibleModel,
     /// Spec malformed: could not parse `tool/provider/model/thinking`.
     MalformedSpec,
 }
@@ -53,6 +55,7 @@ impl FailoverSkipKind {
             Self::AvailabilityDetectionMiss => "availability-detection-miss",
             Self::TransportError => "transport-error",
             Self::AttemptedAndErrored => "attempted-and-errored",
+            Self::IncompatibleModel => "incompatible-model",
             Self::MalformedSpec => "malformed-spec",
         }
     }

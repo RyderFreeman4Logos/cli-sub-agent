@@ -161,7 +161,7 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
     let config = project_config_with_tier(&[
         "codex/openai/gpt-5.4/high",
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "opencode/openrouter/sonnet/high",
+        "opencode/anthropic/claude-sonnet-4-6/high",
         "claude-code/anthropic/sonnet/xhigh",
     ]);
     let global = GlobalConfig::default();
@@ -412,7 +412,7 @@ fn large_diff_auto_escalation_respects_explicit_reviewer_count() {
     let config = project_config_with_tier(&[
         "codex/openai/gpt-5.4/high",
         "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "opencode/openrouter/sonnet/high",
+        "opencode/anthropic/claude-sonnet-4-6/high",
     ]);
     let global = GlobalConfig::default();
 

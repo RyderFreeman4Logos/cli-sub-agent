@@ -144,10 +144,10 @@ impl ThinkingBudget {
 
     /// Parse thinking budget from string.
     ///
-    /// Accepts: default, low, medium/med, high, xhigh/extra-high, or a numeric value.
+    /// Accepts: default/none, low, medium/med, high, xhigh/extra-high, max, or a numeric value.
     pub fn parse(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
-            "default" => Ok(Self::DefaultBudget),
+            "default" | "none" => Ok(Self::DefaultBudget),
             "low" => Ok(Self::Low),
             "medium" | "med" => Ok(Self::Medium),
             "high" => Ok(Self::High),
@@ -367,6 +367,14 @@ mod tests {
         ));
         assert!(matches!(
             ThinkingBudget::parse("DEFAULT").unwrap(),
+            ThinkingBudget::DefaultBudget
+        ));
+        assert!(matches!(
+            ThinkingBudget::parse("none").unwrap(),
+            ThinkingBudget::DefaultBudget
+        ));
+        assert!(matches!(
+            ThinkingBudget::parse("None").unwrap(),
             ThinkingBudget::DefaultBudget
         ));
     }
@@ -597,5 +605,19 @@ mod tests {
         assert_eq!(spec.provider, "anthropic");
         assert_eq!(spec.model, "default");
         assert!(matches!(spec.thinking_budget, ThinkingBudget::Max));
+    }
+
+    #[test]
+    fn test_parse_spec_with_none_budget_uses_tool_default() {
+        let spec = ModelSpec::parse("claude-code/anthropic/claude-sonnet-4-20250514/none").unwrap();
+        assert_eq!(spec.tool, "claude-code");
+        assert_eq!(spec.provider, "anthropic");
+        assert_eq!(spec.model, "claude-sonnet-4-20250514");
+        assert!(matches!(
+            spec.thinking_budget,
+            ThinkingBudget::DefaultBudget
+        ));
+        assert!(spec.validate_with_catalog(&["claude-code"]).is_ok());
+        assert_eq!(spec.thinking_budget.claude_effort(), None);
     }
 }

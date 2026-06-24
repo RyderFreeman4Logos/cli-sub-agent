@@ -14,19 +14,32 @@ pub(crate) struct ResolvedReviewSelection {
 fn force_resolve_review_tool_from_tier(
     tier: &str,
     config: &ProjectConfig,
+    global_config: &GlobalConfig,
     tool: ToolName,
 ) -> Option<crate::run_helpers::TierToolResolution> {
     let tier_config = config.tiers.get(tier)?;
     tier_config.models.iter().find_map(|model_spec| {
         let parts: Vec<&str> = model_spec.splitn(4, '/').collect();
-        if parts.len() == 4 && parts[0] == tool.as_str() {
-            Some(crate::run_helpers::TierToolResolution {
-                tool,
-                model_spec: model_spec.clone(),
-            })
-        } else {
-            None
+        if parts.len() != 4 || parts[0] != tool.as_str() {
+            return None;
         }
+        if crate::run_helpers::validate_tier_model_spec_compatibility(model_spec).is_err() {
+            return None;
+        }
+        let extra_env = global_config
+            .build_execution_env(tool.as_str(), csa_config::ExecutionEnvOptions::default());
+        if !crate::run_helpers::is_tool_runtime_available_for_config_with_env(
+            tool.as_str(),
+            Some(config),
+            Some(model_spec),
+            extra_env.as_ref(),
+        ) {
+            return None;
+        }
+        Some(crate::run_helpers::TierToolResolution {
+            tool,
+            model_spec: model_spec.clone(),
+        })
     })
 }
 
@@ -123,7 +136,7 @@ pub(crate) fn resolve_review_selection(
         {
             let tier_preference_order = vec![tool.as_str().to_string()];
             let resolution = if force_override_user_config {
-                force_resolve_review_tool_from_tier(tier, cfg, tool).map_or_else(
+                force_resolve_review_tool_from_tier(tier, cfg, global_config, tool).map_or_else(
                     || {
                         crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
                             tier,
@@ -202,6 +215,13 @@ pub(crate) fn resolve_review_selection(
                 Some(global_config),
                 &[],
             );
+        let (_, excluded_models_after_checks) =
+            crate::run_helpers::evaluate_tier_models_with_global_config(
+                tier,
+                cfg,
+                Some(global_config),
+                &[],
+            );
         let configured_tools: Vec<&str> = tier_tools
             .iter()
             .map(|(tool_name, _)| tool_name.as_str())
@@ -210,13 +230,19 @@ pub(crate) fn resolve_review_selection(
             .iter()
             .map(|resolution| resolution.tool.as_str())
             .collect();
+        let excluded_models: Vec<String> = excluded_models_after_checks
+            .iter()
+            .map(|exclusion| format!("{}={}", exclusion.model_spec, exclusion.kind.category()))
+            .collect();
         anyhow::bail!(
             "Tier '{}' resolved for review, but none of its tools are currently available.\n\
              Configured tier tools: [{}].\n\
-             Available tier tools after enablement/install checks: [{}].",
+             Available tier tools after enablement/install checks: [{}].\n\
+             Excluded tier models after routing checks: [{}].",
             tier,
             configured_tools.join(", "),
-            available_tools.join(", ")
+            available_tools.join(", "),
+            excluded_models.join(", ")
         );
     }
 
