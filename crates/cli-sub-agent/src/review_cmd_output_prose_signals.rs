@@ -6,7 +6,8 @@ use csa_session::{ReviewFinding, Severity};
 
 use super::artifacts::has_blocking_severity;
 use super::clean_detection::{
-    contains_clean_phrase, detect_prose_clean_conclusion, detect_prose_fail_conclusion,
+    contains_clean_phrase, current_round_review_sections, detect_prose_clean_conclusion,
+    detect_prose_fail_conclusion,
 };
 use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
@@ -19,6 +20,7 @@ use crate::review_cmd::prose_findings::{
 pub(super) struct ReviewProseSignals {
     pub(super) severity_counts: BTreeMap<Severity, u32>,
     pub(super) blocking_summary: bool,
+    pub(super) fail_conclusion: bool,
     pub(super) parsed_findings_sections: bool,
     pub(super) unparseable_findings_sections: bool,
     pub(super) cross_dimension_blockers: bool,
@@ -39,10 +41,22 @@ impl ReviewProseSignals {
 }
 
 pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSignals> {
-    let prose = current_round_review_prose_contents(session_dir)?;
+    let prose = review_prose_contents(session_dir, CanonicalProseMode::IncludeWhenDistinct)?;
+    review_prose_signals_from_contents(prose)
+}
+
+pub(super) fn current_round_review_prose_signals(session_dir: &Path) -> Result<ReviewProseSignals> {
+    let prose = review_prose_contents(session_dir, CanonicalProseMode::FallbackOnly)?;
+    review_prose_signals_from_contents(prose)
+}
+
+fn review_prose_signals_from_contents(
+    prose: CurrentRoundReviewProseContents,
+) -> Result<ReviewProseSignals> {
     let mut signals = ReviewProseSignals {
         severity_counts: zero_severity_counts(),
         blocking_summary: prose.blocking_summary,
+        fail_conclusion: false,
         parsed_findings_sections: false,
         unparseable_findings_sections: false,
         cross_dimension_blockers: false,
@@ -62,37 +76,35 @@ pub(super) fn review_prose_signals(session_dir: &Path) -> Result<ReviewProseSign
     Ok(signals)
 }
 
+enum CanonicalProseMode {
+    IncludeWhenDistinct,
+    FallbackOnly,
+}
+
 struct CurrentRoundReviewProseContents {
     blocking_summary: bool,
     contents: Vec<(String, String)>,
 }
 
-fn current_round_review_prose_contents(
+fn review_prose_contents(
     session_dir: &Path,
+    canonical_mode: CanonicalProseMode,
 ) -> Result<CurrentRoundReviewProseContents> {
-    let mut latest_summary = None;
-    let mut latest_details = None;
-
-    for (section, content) in csa_session::read_all_sections(session_dir)? {
-        match section.id.as_str() {
-            "summary" => latest_summary = Some(content),
-            "details" => latest_details = Some(content),
-            _ => {}
-        }
-    }
-
     let mut contents = Vec::new();
-    if let Some(content) = latest_summary {
-        push_review_content(&mut contents, "summary", content);
-    }
-
-    if let Some(content) = latest_details {
-        push_review_content(&mut contents, "details", content);
+    if let Some(current_sections) = current_round_review_sections(session_dir)? {
+        for (section_id, content) in current_sections {
+            push_review_content(&mut contents, &section_id, content);
+        }
     }
     let indexed_review_content_count = contents.len();
 
-    if let Some(content) =
-        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
+    let should_load_canonical = match canonical_mode {
+        CanonicalProseMode::IncludeWhenDistinct => true,
+        CanonicalProseMode::FallbackOnly => indexed_review_content_count == 0,
+    };
+    if should_load_canonical
+        && let Some(content) =
+            crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
         && !review_content_is_covered_by_sections(&contents, &content)
     {
         push_review_content(&mut contents, "canonical", content);
@@ -181,6 +193,7 @@ fn record_review_prose_signal(
     signals.unparseable_findings_sections |= unparseable_findings_sections;
     signals.cross_dimension_blockers |= cross_dimension_enumeration_has_blocker(content);
     signals.checklist_violation_findings |= checklist_violation_references_finding(content);
+    signals.fail_conclusion |= detect_prose_fail_conclusion(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let counts = severity_counts_from_review_findings(&findings);

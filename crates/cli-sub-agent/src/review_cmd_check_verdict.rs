@@ -603,23 +603,39 @@ fn review_session_acceptance_status(
         .with_context(|| format!("failed to read {}", verdict_path.display()))?;
     let artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
-    let accepted = meta.accepts_clean_review_verdict(artifact.decision);
+    let mut acceptance_meta = meta.clone();
+    let mut acceptance_artifact = artifact;
+    let mut accepted = acceptance_meta.accepts_clean_review_verdict(acceptance_artifact.decision);
+    if !accepted
+        && crate::review_cmd::output::consistency::repair_clean_empty_fail_review_verdict(
+            session_dir,
+        )?
+    {
+        if let Some(repaired_meta) = read_review_meta(session_dir)? {
+            acceptance_meta = repaired_meta;
+        }
+        let repaired_raw = fs::read_to_string(&verdict_path)
+            .with_context(|| format!("failed to read {}", verdict_path.display()))?;
+        acceptance_artifact = serde_json::from_str(&repaired_raw)
+            .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
+        accepted = acceptance_meta.accepts_clean_review_verdict(acceptance_artifact.decision);
+    }
     debug!(
-        session_id = %meta.session_id,
-        meta_decision = %meta.decision,
-        meta_verdict = %meta.verdict,
-        meta_exit_code = meta.exit_code,
-        meta_fix_attempted = meta.fix_attempted,
-        meta_fix_converged = meta.fix_clean_converged(),
-        artifact_decision = %artifact.decision,
-        artifact_verdict = %artifact.verdict_legacy,
+        session_id = %acceptance_meta.session_id,
+        meta_decision = %acceptance_meta.decision,
+        meta_verdict = %acceptance_meta.verdict,
+        meta_exit_code = acceptance_meta.exit_code,
+        meta_fix_attempted = acceptance_meta.fix_attempted,
+        meta_fix_converged = acceptance_meta.fix_clean_converged(),
+        artifact_decision = %acceptance_artifact.decision,
+        artifact_verdict = %acceptance_artifact.verdict_legacy,
         accepted,
         verdict_path = %verdict_path.display(),
         "Read review verdict artifact"
     );
     Ok(ReviewVerdictAcceptanceStatus {
         is_pass: accepted,
-        severity_counts: artifact.severity_counts,
+        severity_counts: acceptance_artifact.severity_counts,
     })
 }
 

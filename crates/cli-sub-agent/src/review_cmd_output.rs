@@ -12,7 +12,7 @@ mod artifacts;
 #[path = "review_cmd_output_clean.rs"]
 pub(super) mod clean_detection;
 #[path = "review_cmd_output_consistency.rs"]
-mod consistency;
+pub(crate) mod consistency;
 #[path = "review_cmd_output_diagnostics.rs"]
 mod diagnostics;
 #[path = "review_cmd_output_exit.rs"]
@@ -23,6 +23,8 @@ mod fail_closed;
 mod no_provider;
 #[path = "review_cmd_output_prose_signals.rs"]
 mod prose_signals;
+#[path = "review_cmd_output_refresh.rs"]
+mod refresh;
 #[path = "review_cmd_output_sections.rs"]
 mod sections;
 #[path = "review_cmd_output_summary.rs"]
@@ -53,6 +55,7 @@ pub(super) use fail_closed::fail_closed_review_meta;
 use fail_closed::fail_closed_review_verdict_artifact;
 use no_provider::attach_no_provider_launch_diagnostic;
 use prose_signals::{reconcile_counts_with_prose, review_prose_signals};
+use refresh::refresh_structured_output_before_verdict;
 pub(super) use sections::{
     derive_review_result_summary, has_structured_review_content, sanitize_review_output,
 };
@@ -74,9 +77,6 @@ const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
 const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
 pub(super) const GEMINI_AUTH_PROMPT_STATUS_REASON: &str = "gemini_auth_prompt";
 
-/// Persist a [`ReviewVerdictArtifact`] to `{session_dir}/output/review-verdict.json`.
-///
-/// Best-effort: failures are logged as warnings but do not fail the review.
 #[cfg(test)]
 pub(super) fn persist_review_verdict(
     project_root: &Path,
@@ -95,6 +95,7 @@ pub(super) fn persist_review_verdict_artifact(
 ) -> Option<ReviewVerdictArtifact> {
     match csa_session::get_session_dir(project_root, &meta.session_id) {
         Ok(session_dir) => {
+            refresh_structured_output_before_verdict(&session_dir, &meta.session_id);
             let mut artifact = if meta.requires_fail_closed_verdict() {
                 fail_closed_review_verdict_artifact(meta, findings, prior_round_refs.clone())
             } else {

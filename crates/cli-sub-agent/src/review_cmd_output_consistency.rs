@@ -8,11 +8,16 @@ use csa_session::{
     write_findings_toml,
 };
 
-use super::artifacts::severity_counts_are_zero;
 use super::artifacts::{
     has_blocking_severity, load_findings_toml_from_output, load_review_artifact_from_output,
+    severity_counts_are_zero, severity_counts_for_artifact,
 };
-use super::prose_signals::{reconcile_counts_with_prose, review_prose_signals};
+use super::clean_detection::review_contains_prose_clean_conclusion;
+use super::prose_signals::{
+    current_round_review_prose_signals, reconcile_counts_with_prose, review_prose_signals,
+};
+use super::review_meta_for_verdict_artifact;
+use super::text::zero_severity_counts;
 use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
@@ -41,6 +46,16 @@ pub(super) fn enforce_final_verdict_consistency(
         || prose_signals.unparseable_findings_sections
         || prose_signals.cross_dimension_blockers
         || prose_signals.checklist_violation_findings;
+    let clean_prose_conclusion = review_contains_prose_clean_conclusion(session_dir)?;
+    let repair_prose_signals = current_round_review_prose_signals(session_dir)?;
+    let repair_fail_prose_conclusion = repair_prose_signals.fail_conclusion;
+    let blocking_summary_for_repair = (repair_fail_prose_conclusion || !clean_prose_conclusion)
+        && repair_prose_signals.blocking_summary;
+    let has_hard_prose_failure_evidence = blocking_summary_for_repair
+        || repair_prose_signals.parsed_findings_sections
+        || repair_prose_signals.unparseable_findings_sections
+        || repair_prose_signals.cross_dimension_blockers
+        || repair_prose_signals.checklist_violation_findings;
     let skip_prose_override =
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let findings_file = if findings_file.findings.is_empty()
@@ -61,7 +76,14 @@ pub(super) fn enforce_final_verdict_consistency(
         findings_file
     };
 
-    let findings_counts = severity_counts_from_review_findings(&findings_file.findings);
+    let placeholder_findings_only =
+        findings_file_contains_only_empty_fail_placeholder(&findings_file);
+    let effective_findings_empty = findings_file.findings.is_empty() || placeholder_findings_only;
+    let findings_counts = if placeholder_findings_only {
+        zero_severity_counts()
+    } else {
+        severity_counts_from_review_findings(&findings_file.findings)
+    };
     if !skip_prose_override {
         artifact.severity_counts =
             reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
@@ -79,9 +101,19 @@ pub(super) fn enforce_final_verdict_consistency(
         .as_ref()
         .map(|artifact| artifact.findings.as_slice())
         .unwrap_or(&[]);
+    let review_artifact_counts = review_artifact
+        .as_ref()
+        .map(|artifact| severity_counts_for_artifact(artifact, zero_severity_counts));
+    let review_artifact_has_blocking_counts = review_artifact_counts
+        .as_ref()
+        .is_some_and(has_blocking_severity);
+    let review_artifact_has_blocking_risk = review_artifact.as_ref().is_some_and(|artifact| {
+        artifact.overall_risk.as_deref().is_some_and(|risk| {
+            risk.eq_ignore_ascii_case("high") || risk.eq_ignore_ascii_case("critical")
+        })
+    });
     let has_review_artifact_findings = !review_artifact_findings.is_empty();
-    let has_structured_findings =
-        !findings_file.findings.is_empty() || has_review_artifact_findings;
+    let has_structured_findings = !effective_findings_empty || has_review_artifact_findings;
     let structured_mismatch =
         !severity_counts_are_zero(&artifact.severity_counts) && !has_structured_findings;
     let blocking_prose =
@@ -96,6 +128,29 @@ pub(super) fn enforce_final_verdict_consistency(
     let cross_dimension_blocker_mismatch = cross_dimension_blocker
         && !has_structured_findings
         && severity_counts_are_zero(&artifact.severity_counts);
+
+    if empty_fail_placeholder_can_recover_to_pass(
+        artifact,
+        EmptyFailRecoverySignals {
+            placeholder_findings_only,
+            has_structured_findings,
+            has_prose_failure_evidence: has_hard_prose_failure_evidence,
+            resume_to_fix,
+            review_artifact_has_fail_signal: review_artifact_has_blocking_counts
+                || review_artifact_has_blocking_risk,
+            clean_prose_conclusion,
+            fail_prose_conclusion: repair_fail_prose_conclusion,
+        },
+    ) {
+        artifact.decision = ReviewDecision::Pass;
+        artifact.verdict_legacy = "CLEAN".to_string();
+        artifact.severity_counts = zero_severity_counts();
+        artifact.failure_reason = None;
+        write_findings_toml(session_dir, &FindingsFile::default())
+            .map_err(|error| anyhow::anyhow!("write recovered clean findings.toml: {error}"))?;
+        clear_empty_findings_markers(session_dir);
+        return Ok(());
+    }
 
     if unparsed_findings_prose || checklist_violation_mismatch || cross_dimension_blocker_mismatch {
         artifact
@@ -144,6 +199,117 @@ pub(super) fn enforce_final_verdict_consistency(
     }
 
     Ok(())
+}
+
+pub(crate) fn repair_clean_empty_fail_review_verdict(session_dir: &Path) -> Result<bool> {
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    if !verdict_path.is_file() {
+        return Ok(false);
+    }
+    let meta = read_review_meta(session_dir)?;
+    if meta
+        .as_ref()
+        .is_some_and(csa_session::ReviewSessionMeta::requires_fail_closed_verdict)
+    {
+        return Ok(false);
+    }
+    let raw = fs::read_to_string(&verdict_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", verdict_path.display()))?;
+    let mut artifact: ReviewVerdictArtifact = serde_json::from_str(&raw)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", verdict_path.display()))?;
+    let original_artifact = artifact.clone();
+    enforce_final_verdict_consistency(session_dir, &mut artifact)?;
+    if artifact == original_artifact {
+        return Ok(false);
+    }
+
+    csa_session::write_review_verdict(session_dir, &artifact)
+        .map_err(|error| anyhow::anyhow!("write {}: {error}", verdict_path.display()))?;
+    if let Some(meta) = meta
+        && !meta.requires_fail_closed_verdict()
+    {
+        let final_meta = review_meta_for_verdict_artifact(&meta, &artifact);
+        write_review_meta_preserving_extra(session_dir, &final_meta)?;
+    }
+    Ok(true)
+}
+
+fn read_review_meta(session_dir: &Path) -> Result<Option<csa_session::ReviewSessionMeta>> {
+    let path = session_dir.join("review_meta.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    let meta = serde_json::from_str(&raw)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))?;
+    Ok(Some(meta))
+}
+
+fn write_review_meta_preserving_extra(
+    session_dir: &Path,
+    meta: &csa_session::ReviewSessionMeta,
+) -> Result<()> {
+    let path = session_dir.join("review_meta.json");
+    let meta_value = serde_json::to_value(meta)?;
+    let mut value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(existing), Some(updated)) = (value.as_object_mut(), meta_value.as_object()) {
+        for (key, new_value) in updated {
+            existing.insert(key.clone(), new_value.clone());
+        }
+    } else {
+        value = meta_value;
+    }
+    let json = serde_json::to_string_pretty(&value)?;
+    fs::write(&path, json).map_err(|error| anyhow::anyhow!("write {}: {error}", path.display()))
+}
+
+struct EmptyFailRecoverySignals {
+    placeholder_findings_only: bool,
+    has_structured_findings: bool,
+    has_prose_failure_evidence: bool,
+    resume_to_fix: bool,
+    review_artifact_has_fail_signal: bool,
+    clean_prose_conclusion: bool,
+    fail_prose_conclusion: bool,
+}
+
+fn empty_fail_placeholder_can_recover_to_pass(
+    artifact: &ReviewVerdictArtifact,
+    signals: EmptyFailRecoverySignals,
+) -> bool {
+    if artifact.decision != ReviewDecision::Fail {
+        return false;
+    }
+    let placeholder_artifact = artifact.failure_reason.as_deref()
+        == Some(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+        || signals.placeholder_findings_only;
+    if !placeholder_artifact
+        || signals.has_structured_findings
+        || signals.has_prose_failure_evidence
+        || signals.resume_to_fix
+        || signals.review_artifact_has_fail_signal
+    {
+        return false;
+    }
+    if signals.fail_prose_conclusion {
+        return false;
+    }
+    signals.clean_prose_conclusion
+}
+
+fn findings_file_contains_only_empty_fail_placeholder(findings_file: &FindingsFile) -> bool {
+    let [finding] = findings_file.findings.as_slice() else {
+        return false;
+    };
+    finding.id == "artifact-generation-001"
+        && finding.file_ranges.is_empty()
+        && finding
+            .description
+            .contains(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
 }
 
 fn ensure_failed_verdict_findings_artifact(

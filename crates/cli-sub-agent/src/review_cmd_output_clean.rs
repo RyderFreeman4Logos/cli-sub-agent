@@ -210,8 +210,18 @@ fn is_ascii_word_byte(byte: u8) -> bool {
 }
 
 pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Result<bool> {
-    if let Some(summary) = csa_session::read_section(session_dir, "summary")?
-        && detect_prose_clean_conclusion(&summary)
+    if let Some(current_sections) = current_round_review_sections(session_dir)? {
+        for (_, content) in current_sections {
+            if detect_prose_clean_conclusion(&content) {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
+    if let Some(review_text) =
+        crate::review_cmd::findings_toml::load_canonical_review_text(session_dir)?
+        && detect_prose_clean_conclusion(&review_text)
     {
         return Ok(true);
     }
@@ -225,6 +235,31 @@ pub(super) fn review_contains_prose_clean_conclusion(session_dir: &Path) -> Resu
         .map_err(|error| anyhow::anyhow!("read {}: {error}", full_output_path.display()))?;
     let review_text = extract_review_text(&raw_output).unwrap_or(raw_output);
     Ok(detect_prose_clean_conclusion(&review_text))
+}
+
+pub(super) fn current_round_review_sections(
+    session_dir: &Path,
+) -> Result<Option<Vec<(String, String)>>> {
+    let mut sections = Vec::new();
+    for (section, content) in csa_session::read_all_sections(session_dir)? {
+        if matches!(section.id.as_str(), "summary" | "details") {
+            sections.push((section.id, content));
+        }
+    }
+
+    let Some(last_index) = sections.len().checked_sub(1) else {
+        return Ok(None);
+    };
+    let start_index = if sections[last_index].0 == "details"
+        && last_index > 0
+        && sections[last_index - 1].0 == "summary"
+    {
+        last_index - 1
+    } else {
+        last_index
+    };
+
+    Ok(Some(sections.split_off(start_index)))
 }
 
 /// Detect whether review prose AFFIRMATIVELY concludes FAIL via a bounded verdict

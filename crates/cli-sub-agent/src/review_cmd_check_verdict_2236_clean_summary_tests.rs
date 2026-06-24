@@ -147,6 +147,99 @@ fn write_legacy_success_result_with_created_at(
     session.meta_session_id
 }
 
+fn write_empty_fail_placeholder_artifacts(session_dir: &Path, session_id: &str) {
+    let mut verdict = ReviewVerdictArtifact::from_parts(
+        session_id.to_string(),
+        ReviewDecision::Fail,
+        "HAS_ISSUES",
+        &[],
+        Vec::new(),
+    );
+    verdict.failure_reason = Some("fail_verdict_empty_findings_artifact".to_string());
+    verdict.severity_counts.insert(Severity::Medium, 1);
+    csa_session::write_review_verdict(session_dir, &verdict).expect("write fail verdict");
+    csa_session::write_findings_toml(
+        session_dir,
+        &csa_session::FindingsFile {
+            findings: vec![csa_session::ReviewFinding {
+                id: "artifact-generation-001".to_string(),
+                severity: Severity::Medium,
+                file_ranges: Vec::new(),
+                is_regression_of_commit: None,
+                suggested_test_scenario: None,
+                description: "Artifact generation failed: review verdict is FAIL but CSA could not extract a structured finding. Reason: fail_verdict_empty_findings_artifact. Inspect output/details.md and output/review-verdict.json.".to_string(),
+            }],
+        },
+    )
+    .expect("write placeholder findings.toml");
+}
+
+fn write_failed_empty_artifact_review_session(
+    project_root: &Path,
+    branch: &str,
+    head_sha: &str,
+    summary: &str,
+    details: &str,
+    diff_fingerprint: &str,
+    created_at: DateTime<Utc>,
+) -> String {
+    let session_id = write_legacy_success_result_with_created_at(
+        project_root,
+        branch,
+        head_sha,
+        summary,
+        created_at,
+    );
+    let session_dir = csa_session::get_session_dir(project_root, &session_id).unwrap();
+    csa_session::persist_structured_output(
+        &session_dir,
+        &format!(
+            "<!-- CSA:SECTION:summary -->\n{summary}\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\n{details}\n<!-- CSA:SECTION:details:END -->\n"
+        ),
+    )
+    .expect("persist clean review sections");
+    csa_session::save_result(
+        project_root,
+        &session_id,
+        &SessionResult {
+            status: SessionResult::status_from_exit_code(1),
+            exit_code: 1,
+            summary: summary.to_string(),
+            tool: "codex".to_string(),
+            started_at: created_at,
+            completed_at: created_at,
+            ..Default::default()
+        },
+    )
+    .expect("save failing result");
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: head_sha.to_string(),
+            decision: ReviewDecision::Fail.as_str().to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            review_mode: None,
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "codex".to_string(),
+            scope: REQUIRED_FULL_DIFF_SCOPE.to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: created_at,
+            diff_fingerprint: Some(diff_fingerprint.to_string()),
+            fix_convergence: None,
+        },
+    )
+    .expect("write fail review meta");
+    write_empty_fail_placeholder_artifacts(&session_dir, &session_id);
+    session_id
+}
+
 #[test]
 fn issue_2236_check_verdict_recovers_bounded_clean_verdict_summary_shapes() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
@@ -242,6 +335,81 @@ fn issue_2236_check_verdict_recovers_bounded_clean_verdict_summary_shapes() {
         .expect("recovered review-verdict.json should parse");
         assert_eq!(artifact.decision, ReviewDecision::Pass, "{case_name}");
         assert_eq!(artifact.verdict_legacy, "CLEAN", "{case_name}");
+    }
+}
+
+#[test]
+fn issue_2405_check_verdict_repairs_empty_fail_artifact_for_clean_summaries() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let state_home = TempDir::new().unwrap();
+    let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
+    let cases = [
+        (
+            "pass summary",
+            "PASS",
+            "No blocking findings. Prior findings were re-verified as resolved.",
+        ),
+        (
+            "no-blockers summary",
+            "No blocking findings in `main...HEAD`. The prior high finding is resolved.",
+            "Open questions:\n- None blocking.",
+        ),
+    ];
+
+    for (case_name, summary, details) in cases {
+        let (project, branch, head_sha) = setup_feature_repo();
+        let expected_diff_fingerprint = crate::review_cmd::compute_review_diff_fingerprint(
+            project.path(),
+            REQUIRED_FULL_DIFF_SCOPE,
+        )
+        .expect("feature branch should have a main...HEAD diff");
+        let session_created_at =
+            utc_timestamp(latest_reflog_timestamp_secs(project.path(), "main") + 1);
+        let session_id = write_failed_empty_artifact_review_session(
+            project.path(),
+            &branch,
+            &head_sha,
+            summary,
+            details,
+            &expected_diff_fingerprint,
+            session_created_at,
+        );
+        let session_dir = csa_session::get_session_dir(project.path(), &session_id).unwrap();
+
+        let args = parse_review_args(&["csa", "review", "--check-verdict"]);
+        let exit = handle_check_verdict(project.path(), &args).unwrap();
+        assert_eq!(
+            exit, 0,
+            "{case_name}: check-verdict should repair and accept the clean exact-head review"
+        );
+
+        let meta = read_review_meta(&session_dir)
+            .unwrap()
+            .expect("review_meta.json should remain present");
+        assert_eq!(meta.decision, ReviewDecision::Pass.as_str(), "{case_name}");
+        assert_eq!(meta.verdict, "CLEAN", "{case_name}");
+        assert_eq!(meta.exit_code, 0, "{case_name}");
+        assert_eq!(
+            meta.diff_fingerprint.as_deref(),
+            Some(expected_diff_fingerprint.as_str()),
+            "{case_name}"
+        );
+
+        let artifact: ReviewVerdictArtifact = serde_json::from_str(
+            &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json"))
+                .expect("review-verdict.json should be repaired"),
+        )
+        .expect("repaired review-verdict.json should parse");
+        assert_eq!(artifact.decision, ReviewDecision::Pass, "{case_name}");
+        assert_eq!(artifact.verdict_legacy, "CLEAN", "{case_name}");
+        assert!(artifact.severity_counts.values().all(|count| *count == 0));
+
+        let findings: csa_session::FindingsFile = toml::from_str(
+            &std::fs::read_to_string(session_dir.join("output").join("findings.toml"))
+                .expect("findings.toml should be repaired"),
+        )
+        .expect("parse findings.toml");
+        assert!(findings.findings.is_empty(), "{case_name}");
     }
 }
 
