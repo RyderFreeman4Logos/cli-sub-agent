@@ -7,6 +7,9 @@ pub(super) fn select_actionable_failure_line(text: &str) -> Option<String> {
     if let Some(detail) = select_todo_persist_failure_detail(&all_lines) {
         return Some(detail);
     }
+    if let Some(detail) = select_todo_validation_failure_detail(&all_lines) {
+        return Some(detail);
+    }
     let lines: Vec<&str> = all_lines
         .into_iter()
         .filter(|line| !is_low_signal_failure_line(line))
@@ -39,7 +42,7 @@ fn select_todo_persist_failure_detail(lines: &[&str]) -> Option<String> {
     if !parts.contains(&persist_line) {
         parts.push(persist_line);
     }
-    for line in prioritized_todo_persist_context_lines(lines) {
+    for line in prioritized_todo_context_lines(lines) {
         if !parts.contains(&line) {
             parts.push(line);
         }
@@ -48,10 +51,26 @@ fn select_todo_persist_failure_detail(lines: &[&str]) -> Option<String> {
     Some(truncate_failure_detail(&parts.join(" | ")))
 }
 
-fn prioritized_todo_persist_context_lines<'a>(lines: &'a [&str]) -> Vec<&'a str> {
+fn select_todo_validation_failure_detail(lines: &[&str]) -> Option<String> {
+    let diagnostic = lines
+        .iter()
+        .rev()
+        .copied()
+        .find(|line| is_todo_validation_diagnostic(line))?;
+    let mut parts = vec![diagnostic];
+    for line in prioritized_todo_context_lines(lines) {
+        if !parts.contains(&line) {
+            parts.push(line);
+        }
+    }
+    Some(truncate_failure_detail(&parts.join(" | ")))
+}
+
+fn prioritized_todo_context_lines<'a>(lines: &'a [&str]) -> Vec<&'a str> {
     let mut prioritized = Vec::new();
     for predicate in [
         is_spec_artifact_path as fn(&str) -> bool,
+        is_raw_spec_artifact_path,
         is_first_marker_kind,
         is_todo_artifact_path,
         is_persist_stderr_artifact,
@@ -67,6 +86,10 @@ fn prioritized_todo_persist_context_lines<'a>(lines: &'a [&str]) -> Vec<&'a str>
 
 fn is_spec_artifact_path(line: &str) -> bool {
     line.starts_with("Spec artifact path:")
+}
+
+fn is_raw_spec_artifact_path(line: &str) -> bool {
+    line.starts_with("Raw spec artifact path:")
 }
 
 fn is_first_marker_kind(line: &str) -> bool {
@@ -86,18 +109,30 @@ fn is_todo_persist_wrapper(line: &str) -> bool {
 }
 
 fn is_todo_persist_diagnostic(line: &str) -> bool {
-    if is_todo_persist_wrapper(line) {
-        return false;
-    }
+    !is_todo_persist_wrapper(line) && is_todo_validation_diagnostic(line)
+}
+
+fn is_todo_validation_diagnostic(line: &str) -> bool {
     let normalized = line.to_ascii_lowercase();
     normalized.contains("failed to parse spec file")
         || normalized.contains("toml parse error")
         || normalized.contains("spec artifact-shape error")
+        || normalized.contains("bad spec artifact")
+        || normalized.contains("spec artifact is empty")
+        || normalized.contains("todo artifact is empty")
+        || normalized.contains("todo artifact has")
         || normalized.contains("generated todo")
         || normalized.contains("generated spec")
         || normalized.contains("spec plan_ulid")
         || normalized.contains("without a mechanically-verifiable")
         || normalized.contains("invalid criterion")
+        || normalized.contains("no non-empty checkbox tasks")
+        || normalized.contains("summary lacks han")
+        || normalized.contains("todo han chars")
+        || normalized.contains("todo cjk chars")
+        || normalized.contains("step_8_output is empty")
+        || normalized.contains("neither step_12_output")
+        || normalized.contains("csa todo create failed")
 }
 
 fn is_low_signal_failure_line(line: &str) -> bool {
