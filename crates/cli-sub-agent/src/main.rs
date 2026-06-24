@@ -328,6 +328,21 @@ async fn run() -> Result<()> {
                 exit_current_process(exit_code);
             }
             let effective_no_daemon = no_daemon || goal.is_some();
+            run_cmd_daemon::validate_run_tier_policy_before_daemon_spawn(
+                run_cmd_daemon::RunDaemonTierPolicyPreflight {
+                    no_daemon: effective_no_daemon,
+                    daemon_child,
+                    session_id: session_id.as_deref(),
+                    cd: cd.as_deref(),
+                    direct_tool_requested: tool.is_some(),
+                    auto_route: auto_route.as_deref(),
+                    hint_difficulty: hint_difficulty.as_deref(),
+                    tier: tier.as_deref(),
+                    model_spec: model_spec.as_deref(),
+                    force,
+                    force_ignore_tier_setting,
+                },
+            )?;
             run_cmd_preflight::run_before_daemon_spawn_if_needed(
                 cd.as_deref(),
                 no_preflight,

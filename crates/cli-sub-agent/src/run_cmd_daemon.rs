@@ -13,6 +13,11 @@ const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[path = "run_cmd_daemon_review.rs"]
 mod review;
+#[path = "run_cmd_daemon_tier_policy.rs"]
+mod tier_policy;
+pub(crate) use tier_policy::{
+    RunDaemonTierPolicyPreflight, validate_run_tier_policy_before_daemon_spawn,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DaemonSpawnOptions {

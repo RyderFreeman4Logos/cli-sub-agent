@@ -775,6 +775,9 @@ mod tests_github;
 #[path = "config_tests_tail.rs"]
 mod tests_tail;
 #[cfg(test)]
+#[path = "config_tests_tier_selector_legacy.rs"]
+mod tier_selector_legacy_tests;
+#[cfg(test)]
 #[path = "config_tests_tier_selector.rs"]
 mod tier_selector_tests;
 #[cfg(test)]

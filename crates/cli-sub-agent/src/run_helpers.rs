@@ -128,17 +128,36 @@ pub(crate) fn validate_direct_tool_tier_restriction(
         return Ok(());
     }
 
-    let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+    let mut available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+    available.sort_unstable();
     let alias_hint = cfg.format_tier_aliases();
     anyhow::bail!(
         "Direct --tool is restricted when tiers are configured. \
          Use --tier <name> to specify which tier's model/thinking config to use, \
-         or --hint-difficulty <label> to route through [tier_mapping]. \
+         or use --tier <name> --tool <tool> to prefer a tool inside that tier. \
+         Use --hint-difficulty <label> to route through [tier_mapping]. \
          Emergency direct-tool bypasses require \
          [tier_policy].allow_force_bypass = true in the global CSA config. \
          Available tiers: [{}]{alias_hint}",
         available.join(", ")
     );
+}
+
+pub(crate) fn format_run_direct_tool_tier_policy_error(cfg: &ProjectConfig) -> String {
+    let mut available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+    available.sort_unstable();
+    let alias_hint = cfg.format_tier_aliases();
+    format!(
+        "Direct --tool is blocked when tiers are configured.\n\
+         Use --tier <name> for tier-based routing. To prefer a tool inside that tier, \
+         use --tier <name> --tool <tool>.\n\
+         Use --auto-route <intent> or --hint-difficulty <label> to route through \
+         [tier_mapping]. Emergency exact-model/force bypasses require \
+         [tier_policy].allow_force_bypass = true in the global CSA config.\n\
+         Example: csa run --sa-mode <true|false> --tier <name> --tool <tool> ...\n\
+         Available tiers: [{}]{alias_hint}",
+        available.join(", ")
+    )
 }
 
 pub(crate) fn validate_model_spec_tier_conflict(

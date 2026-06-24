@@ -56,17 +56,7 @@ pub(super) fn enforce_direct_tool_tier_guard(ctx: DirectToolTierGuardCtx<'_>) ->
     let cfg = ctx
         .config
         .expect("tiers_configured should imply project config is present");
-    let tier_list: Vec<&str> = cfg.tiers.keys().map(|s| s.as_str()).collect();
-    let err = anyhow::anyhow!(
-        "Direct --tool is blocked when tiers are configured.\n\
-         Use --tier <name> for tier-based routing, --auto-route <intent> or \
-         --hint-difficulty <label> to route through [tier_mapping]. \
-         Emergency exact-model/force bypasses require \
-         [tier_policy].allow_force_bypass = true in the global CSA config.\n\
-         Example: csa run --sa-mode <true|false> --tier <name> ...\n\
-         Available tiers: {}",
-        tier_list.join(", ")
-    );
+    let err = anyhow::anyhow!(crate::run_helpers::format_run_direct_tool_tier_policy_error(cfg));
     Err(ctx.pre_exec.persist(ctx.effective_tier, err))
 }
 

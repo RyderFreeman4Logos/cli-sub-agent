@@ -87,6 +87,11 @@ impl ProjectConfig {
         if selector.trim().is_empty() {
             return None;
         }
+        if let Some(replacement) = legacy_tier_selector_replacement(selector)
+            && self.tiers.contains_key(replacement)
+        {
+            return Some(replacement.to_string());
+        }
         let prefix_matches: Vec<&String> = self
             .tiers
             .keys()
@@ -118,5 +123,12 @@ impl ProjectConfig {
             .collect();
         aliases.sort();
         format!("\nAvailable tier aliases: [{}]", aliases.join(", "))
+    }
+}
+
+fn legacy_tier_selector_replacement(selector: &str) -> Option<&'static str> {
+    match selector {
+        "tier-4-hard" | "tier4-hard" => Some("tier-4-critical"),
+        _ => None,
     }
 }
