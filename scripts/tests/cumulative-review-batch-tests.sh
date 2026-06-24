@@ -30,10 +30,6 @@ make_repo() {
   printf 'init\n' >"${repo_dir}/README.md"
   git -C "${repo_dir}" add README.md
   git -C "${repo_dir}" commit -m "init" >/dev/null 2>&1
-
-  mkdir -p "${repo_dir}/scripts/csa"
-  ln -s "${ROOT_DIR}/scripts/csa/session-wait-until-done.sh" \
-    "${repo_dir}/scripts/csa/session-wait-until-done.sh"
 }
 
 add_commit() {
@@ -70,6 +66,49 @@ case "${cmd}" in
     printf '{"review":{"batch_commits":%s}}\n' "${CSA_STUB_BATCH_COMMITS:?}"
     ;;
   review)
+    shift
+    if [ "${1:-}" = "--check-verdict" ]; then
+      if [ "${CSA_STUB_CHECK_FORBIDDEN:-0}" = "1" ]; then
+        echo "check-verdict should not have been invoked" >&2
+        exit 1
+      fi
+
+      count_file="${state_dir}/check-count"
+      count=0
+      if [ -f "${count_file}" ]; then
+        count="$(cat "${count_file}")"
+      fi
+      count=$((count + 1))
+      printf '%s' "${count}" >"${count_file}"
+
+      session_id="${CSA_STUB_SESSION_ID:-01KTESTREVIEWBATCH0000000001}"
+      project_root="$(pwd -P)"
+      xdg_state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
+      session_dir="${xdg_state_home}/cli-sub-agent/${project_root#/}/sessions/${session_id}"
+      verdict_path="${session_dir}/output/review-verdict.json"
+      meta_path="${session_dir}/review_meta.json"
+
+      if jq -e --slurpfile meta "${meta_path}" '
+        (.decision // "fail") == "pass"
+        and (.severity_counts.critical // 0) == 0
+        and (.severity_counts.high // 0) == 0
+        and (($meta[0].decision // "fail") == "pass")
+        and (($meta[0].exit_code // 1) == 0)
+        and (($meta[0].status_reason // "") == "")
+        and (($meta[0].failure_reason // "") == "")
+        and (
+          (($meta[0].fix_attempted // false) | not)
+          or (($meta[0].fix_convergence.reached_genuine_clean_convergence // false) == true)
+        )
+      ' "${verdict_path}" >/dev/null; then
+        echo "Review verdict check passed"
+        exit 0
+      fi
+
+      echo "Review verdict check failed" >&2
+      exit 1
+    fi
+
     if [ "${CSA_STUB_REVIEW_FORBIDDEN:-0}" = "1" ]; then
       echo "review should not have been invoked" >&2
       exit 1
@@ -156,6 +195,7 @@ run_skip_case() {
     CSA_STUB_STATE_DIR="${state_dir}" \
     CSA_STUB_BATCH_COMMITS="3" \
     CSA_STUB_REVIEW_FORBIDDEN="1" \
+    CSA_STUB_CHECK_FORBIDDEN="1" \
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
@@ -163,6 +203,10 @@ run_skip_case() {
   grep -q "csa review: skip - batched" "${output_file}"
   if [ -f "${state_dir}/review-count" ]; then
     echo "review should not have been called in skip case" >&2
+    exit 1
+  fi
+  if [ -f "${state_dir}/check-count" ]; then
+    echo "check-verdict should not have been called in skip case" >&2
     exit 1
   fi
 }
@@ -193,7 +237,9 @@ run_missing_state_runs_review_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "run case review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "run case check-verdict count"
   assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "run case recorded head"
+  grep -q "Review verdict check passed" "${output_file}"
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
@@ -224,7 +270,9 @@ run_clean_initial_fix_without_round_records_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "clean initial fix review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "clean initial fix check-verdict count"
   assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "clean initial fix recorded head"
+  grep -q "Review verdict check passed" "${output_file}"
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
@@ -257,7 +305,9 @@ run_override_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "override case review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "override case check-verdict count"
   assert_equals "${head_sha}" "$(tr -d '\n' < "${state_file}")" "override case recorded head"
+  grep -q "Review verdict check passed" "${output_file}"
   grep -q "final_decision: CLEAN" "${output_file}"
 }
 
@@ -295,7 +345,9 @@ run_rewritten_history_runs_review_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "rewritten history review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "rewritten history check-verdict count"
   assert_equals "${new_head_sha}" "$(tr -d '\n' < "${state_file}")" "rewritten history recorded head"
+  grep -q "Review verdict check passed" "${output_file}"
   if grep -q "csa review: skip - batched" "${output_file}"; then
     echo "rewritten history should not skip review" >&2
     exit 1
@@ -315,6 +367,7 @@ run_high_severity_verdict_does_not_record_case() {
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
+  set +e
   (
     cd "${repo_dir}"
     PATH="${stub_dir}:${PATH}" \
@@ -325,13 +378,20 @@ run_high_severity_verdict_does_not_record_case() {
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
+  rc=$?
+  set -e
 
+  if [ "${rc}" -eq 0 ]; then
+    echo "high severity verdict should fail the exact-head verdict gate" >&2
+    exit 1
+  fi
   assert_equals "1" "$(cat "${state_dir}/review-count")" "high severity review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "high severity check-verdict count"
   if [ -f "${state_file}" ]; then
     echo "high severity verdict should not record passed head" >&2
     exit 1
   fi
-  grep -q "final_decision: CLEAN" "${output_file}"
+  grep -q "Review verdict check failed" "${output_file}"
 }
 
 run_uncertain_verdict_does_not_record_case() {
@@ -347,6 +407,7 @@ run_uncertain_verdict_does_not_record_case() {
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
+  set +e
   (
     cd "${repo_dir}"
     PATH="${stub_dir}:${PATH}" \
@@ -357,13 +418,20 @@ run_uncertain_verdict_does_not_record_case() {
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
+  rc=$?
+  set -e
 
+  if [ "${rc}" -eq 0 ]; then
+    echo "uncertain verdict should fail the exact-head verdict gate" >&2
+    exit 1
+  fi
   assert_equals "1" "$(cat "${state_dir}/review-count")" "uncertain verdict review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "uncertain verdict check-verdict count"
   if [ -f "${state_file}" ]; then
     echo "uncertain verdict should not record passed head" >&2
     exit 1
   fi
-  grep -q "final_decision: CLEAN" "${output_file}"
+  grep -q "Review verdict check failed" "${output_file}"
 }
 
 run_skip_decision_does_not_record_case() {
@@ -379,6 +447,7 @@ run_skip_decision_does_not_record_case() {
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
+  set +e
   (
     cd "${repo_dir}"
     PATH="${stub_dir}:${PATH}" \
@@ -389,13 +458,20 @@ run_skip_decision_does_not_record_case() {
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
+  rc=$?
+  set -e
 
+  if [ "${rc}" -eq 0 ]; then
+    echo "skip verdict should fail the exact-head verdict gate" >&2
+    exit 1
+  fi
   assert_equals "1" "$(cat "${state_dir}/review-count")" "skip verdict review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "skip verdict check-verdict count"
   if [ -f "${state_file}" ]; then
     echo "skip verdict should not record passed head" >&2
     exit 1
   fi
-  grep -q "final_decision: CLEAN" "${output_file}"
+  grep -q "Review verdict check failed" "${output_file}"
 }
 
 run_fail_zero_severity_does_not_record_case() {
@@ -411,6 +487,7 @@ run_fail_zero_severity_does_not_record_case() {
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
+  set +e
   (
     cd "${repo_dir}"
     PATH="${stub_dir}:${PATH}" \
@@ -421,13 +498,20 @@ run_fail_zero_severity_does_not_record_case() {
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
+  rc=$?
+  set -e
 
+  if [ "${rc}" -eq 0 ]; then
+    echo "fail zero severity verdict should fail the exact-head verdict gate" >&2
+    exit 1
+  fi
   assert_equals "1" "$(cat "${state_dir}/review-count")" "fail zero severity review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "fail zero severity check-verdict count"
   if [ -f "${state_file}" ]; then
     echo "fail zero severity verdict should not record passed head" >&2
     exit 1
   fi
-  grep -q "final_decision: CLEAN" "${output_file}"
+  grep -q "Review verdict check failed" "${output_file}"
 }
 
 run_failed_fix_convergence_does_not_record_case() {
@@ -443,6 +527,7 @@ run_failed_fix_convergence_does_not_record_case() {
   state_file="$(state_file_path "${repo_dir}" "feat/review-batch" "main")"
   make_csa_stub "${stub_dir}"
 
+  set +e
   (
     cd "${repo_dir}"
     PATH="${stub_dir}:${PATH}" \
@@ -454,13 +539,20 @@ run_failed_fix_convergence_does_not_record_case() {
     bash "${SCRIPT_PATH}" --default-branch main -- csa review --range main...HEAD \
       >"${output_file}" 2>&1
   )
+  rc=$?
+  set -e
 
+  if [ "${rc}" -eq 0 ]; then
+    echo "failed fix convergence should fail the exact-head verdict gate" >&2
+    exit 1
+  fi
   assert_equals "1" "$(cat "${state_dir}/review-count")" "failed fix convergence review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "failed fix convergence check-verdict count"
   if [ -f "${state_file}" ]; then
     echo "failed fix convergence should not record passed head" >&2
     exit 1
   fi
-  grep -q "final_decision: CLEAN" "${output_file}"
+  grep -q "Review verdict check failed" "${output_file}"
 }
 
 run_base_branch_change_runs_review_case() {
@@ -492,6 +584,7 @@ run_base_branch_change_runs_review_case() {
   )
 
   assert_equals "1" "$(cat "${state_dir}/review-count")" "base branch main review count"
+  assert_equals "1" "$(cat "${state_dir}/check-count")" "base branch main check-verdict count"
   assert_equals "${head_sha}" "$(tr -d '\n' < "${main_state_file}")" "base branch main recorded head"
 
   (
@@ -505,6 +598,7 @@ run_base_branch_change_runs_review_case() {
   )
 
   assert_equals "2" "$(cat "${state_dir}/review-count")" "base branch release review count"
+  assert_equals "2" "$(cat "${state_dir}/check-count")" "base branch release check-verdict count"
   assert_equals "${head_sha}" "$(tr -d '\n' < "${release_state_file}")" "base branch release recorded head"
   if grep -q "csa review: skip - batched" "${output_file_release}"; then
     echo "changing base branch should not skip review" >&2

@@ -187,23 +187,24 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | **IF FAST_PATH** | | | |
 | 4 | Simplified Commit | `just test && git commit` | bash |
 | 5 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
-| 6 | Pre-PR Review | `csa review --range` then `csa review --check-verdict --range` | bash |
+| 6 | Pre-PR Review | cumulative review helper runs `csa review --range` and owns exact-head verdict check when review runs | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run --pattern mktd` by default, `MKTD_WORKFLOW_PATH` override allowed (skipped in resume mode) | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
 | 9 | Resume Commit | resume mode only: L2 tests + commit uncommitted remainder | bash |
 | 10 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
 | 11 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
-| 12 | Pre-PR Cumulative Review Gate | `csa review --range ${DEFAULT_BRANCH}...HEAD` then `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` | bash |
+| 12 | Pre-PR Cumulative Review Gate | cumulative review helper runs `csa review --range ${DEFAULT_BRANCH}...HEAD` and owns exact-head verdict check when review runs | bash |
 | **ENDIF** | | | |
 | 13 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
-| 14 | Pre-PR Review Verdict Check | `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` requires PASS/CLEAN | bash |
+| 14 | Pre-PR Review Verdict Check | accepts `REVIEW_COMPLETED=true`; falls back to `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` on resume gaps | bash |
 | 15 | Create or Reuse PR | `gh pr create` or reuse existing, outputs `PR_NUMBER`/`PR_URL` | bash |
 | 16 | pr-bot Hard Gate | **MANDATORY** — runs pr-bot (review + merge) | bash |
 | 17 | Post-Merge Sync | Verifies PR MERGED, then checkout and fast-forward the default branch | bash |
 
-Steps 14-17 form the PR transaction. Step 14 verifies the pre-PR review verdict
-before any PR can be created. Step 15 creates the PR, Step 16 is a **hard gate**
+Steps 14-17 form the PR transaction. Step 14 verifies the pre-PR review
+completion marker before any PR can be created, and falls back to an exact-head
+verdict check when the marker is missing. Step 15 creates the PR, Step 16 is a **hard gate**
 that runs pr-bot (which performs cloud review and the actual merge). Step 17
 verifies the PR reached MERGED state before syncing — this is defense in depth against
 a skipped Step 16. Marker files provide idempotency in Step 16.
@@ -247,9 +248,9 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
 6. Rust repos with local version recipes bump if needed; non-Rust repos or repos missing those optional recipes skip without aborting.
-7. Pre-PR cumulative review passed the PASS/CLEAN verdict check before setting `REVIEW_COMPLETED=true`.
+7. Pre-PR cumulative review helper either accepted a documented batch skip or passed the exact-head verdict check before setting `REVIEW_COMPLETED=true`.
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
-9. Pre-PR review verdict check passed (`csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD`).
+9. Pre-PR review completion check passed (`REVIEW_COMPLETED=true`, or fallback `csa review --check-verdict --range ${DEFAULT_BRANCH}...HEAD` on resume gaps).
 10. PR created or reused on GitHub targeting the default branch, `PR_NUMBER` and `PR_URL` resolved.
 11. pr-bot hard gate completed: either triggered `pr-bot` or detected an already-completed run for the same PR/HEAD.
 12. PR state verified as MERGED (defense in depth against skipped Step 16).

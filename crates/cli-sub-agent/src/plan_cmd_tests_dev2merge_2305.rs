@@ -59,8 +59,20 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             "FAST_PATH Version Bump",
             "## Step 5: FAST_PATH Version Bump",
         ),
+        (
+            "FAST_PATH Pre-PR Review",
+            "## Step 6: FAST_PATH Pre-PR Review",
+        ),
         ("Plan with mktd", "## Step 7: Plan with mktd"),
         ("Ensure Version Bumped", "## Step 10: Ensure Version Bumped"),
+        (
+            "Pre-PR Cumulative Review Gate",
+            "## Step 12: Pre-PR Cumulative Review Gate",
+        ),
+        (
+            "Pre-PR Review Verdict Check",
+            "## Step 14: Pre-PR Review Verdict Check",
+        ),
     ] {
         assert_eq!(
             dev2merge_pattern_step_bash(&pattern, heading),
@@ -68,6 +80,74 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             "dev2merge PATTERN.md and workflow.toml {heading} bash blocks must stay synced"
         );
     }
+}
+
+#[test]
+fn dev2merge_cumulative_review_gates_use_bundled_helpers() {
+    let helper_dir = workspace_root().join("patterns/dev2merge/scripts/csa");
+    assert!(
+        helper_dir.join("cumulative-review-batch.sh").is_file(),
+        "dev2merge must bundle cumulative-review-batch.sh with the pattern"
+    );
+    assert!(
+        helper_dir.join("session-wait-until-done.sh").is_file(),
+        "dev2merge cumulative review helper must bundle its wait dependency"
+    );
+
+    let helper = std::fs::read_to_string(helper_dir.join("cumulative-review-batch.sh")).unwrap();
+    assert!(
+        helper.contains(r#"SESSION_WAIT_SCRIPT="${CSA_SESSION_WAIT_SCRIPT:-${SCRIPT_DIR}/session-wait-until-done.sh}""#),
+        "cumulative-review-batch.sh must resolve session-wait relative to itself"
+    );
+    assert!(
+        helper.contains(r#"csa review --check-verdict --range "${default_branch}...HEAD""#),
+        "cumulative-review-batch.sh must own the exact-head verdict check after running review"
+    );
+    assert!(
+        !helper.contains("bash scripts/csa/session-wait-until-done.sh"),
+        "cumulative-review-batch.sh must not resolve wait helper from the target repo"
+    );
+
+    for title in ["FAST_PATH Pre-PR Review", "Pre-PR Cumulative Review Gate"] {
+        let script = dev2merge_workflow_step_bash(title);
+        assert!(
+            script.contains(
+                r#"bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/cumulative-review-batch.sh" --default-branch "${DEFAULT_BRANCH}" --"#
+            ),
+            "{title} must invoke the bundled cumulative review helper through CSA_WORKFLOW_DIR with a source-tree fallback"
+        );
+        assert!(
+            !script.contains("bash scripts/csa/"),
+            "{title} must not depend on target-repo-local scripts/csa helpers"
+        );
+        assert!(
+            script.contains(r#"csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD""#),
+            "{title} must preserve SA-mode exact-range review"
+        );
+        assert!(
+            !script.contains("csa review --check-verdict"),
+            "{title} must not run unconditional exact-head check-verdict after the batching helper"
+        );
+
+        let review_index = script
+            .find("cumulative-review-batch.sh")
+            .unwrap_or_else(|| panic!("{title} must run cumulative review"));
+        let completed_marker_index = script
+            .find("CSA_VAR:REVIEW_COMPLETED=true")
+            .unwrap_or_else(|| panic!("{title} must emit REVIEW_COMPLETED"));
+        assert!(
+            review_index < completed_marker_index,
+            "{title} must let the helper finish review/batch gating before emitting REVIEW_COMPLETED"
+        );
+    }
+
+    let verdict_check = dev2merge_workflow_step_bash("Pre-PR Review Verdict Check");
+    assert!(
+        verdict_check.contains(r#""${REVIEW_COMPLETED:-}" = "true""#)
+            && verdict_check
+                .contains(r#"csa review --check-verdict --range "${DEFAULT_BRANCH}...HEAD""#),
+        "Step 14 must accept helper completion and keep exact-head check-verdict as a resume fallback"
+    );
 }
 
 #[test]
