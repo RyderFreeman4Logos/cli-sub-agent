@@ -1,5 +1,272 @@
 use super::*;
 
+fn write_empty_fail_placeholder_artifacts(session_dir: &Path, session_id: &str) {
+    let mut verdict = ReviewVerdictArtifact::from_parts(
+        session_id.to_string(),
+        ReviewDecision::Fail,
+        "HAS_ISSUES",
+        &[],
+        Vec::new(),
+    );
+    verdict.failure_reason = Some("fail_verdict_empty_findings_artifact".to_string());
+    verdict.severity_counts.insert(Severity::Medium, 1);
+    csa_session::write_review_verdict(session_dir, &verdict).expect("write fail verdict");
+    csa_session::write_findings_toml(
+        session_dir,
+        &csa_session::FindingsFile {
+            findings: vec![csa_session::ReviewFinding {
+                id: "artifact-generation-001".to_string(),
+                severity: Severity::Medium,
+                file_ranges: Vec::new(),
+                is_regression_of_commit: None,
+                suggested_test_scenario: None,
+                description: "Artifact generation failed: review verdict is FAIL but CSA could not extract a structured finding. Reason: fail_verdict_empty_findings_artifact. Inspect output/details.md and output/review-verdict.json.".to_string(),
+            }],
+        },
+    )
+    .expect("write placeholder findings.toml");
+}
+
+fn write_fail_meta(session_dir: &Path, session_id: &str) {
+    csa_session::write_review_meta(session_dir, &make_review_meta(session_id))
+        .expect("write review meta");
+}
+
+fn read_output_verdict(session_dir: &Path) -> ReviewVerdictArtifact {
+    serde_json::from_str(
+        &fs::read_to_string(session_dir.join("output").join("review-verdict.json"))
+            .expect("read verdict"),
+    )
+    .expect("parse verdict")
+}
+
+fn read_output_findings(session_dir: &Path) -> csa_session::FindingsFile {
+    toml::from_str(
+        &fs::read_to_string(session_dir.join("output").join("findings.toml"))
+            .expect("read findings.toml"),
+    )
+    .expect("parse findings.toml")
+}
+
+fn write_agent_message_output_log(session_dir: &Path, messages: &[&str]) {
+    let lines = messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            serde_json::to_string(&json!({
+                "type": "item.completed",
+                "item": {
+                    "id": format!("item_{index}"),
+                    "type": "agent_message",
+                    "text": message,
+                }
+            }))
+            .expect("serialize transcript event")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(session_dir.join("output.log"), lines).expect("write output.log");
+}
+
+#[test]
+fn issue_2405_repairs_empty_fail_artifact_when_summary_is_pass() {
+    let session_id = "01TEST2405PASSSUMMARY0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-pass-summary", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking findings.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist clean sections");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "clean PASS summary should repair the empty-fail placeholder"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert_eq!(verdict.failure_reason, None);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    let findings = read_output_findings(&session_dir);
+    assert!(findings.findings.is_empty());
+
+    let meta = fs::read_to_string(session_dir.join("review_meta.json")).expect("read meta");
+    let meta: ReviewSessionMeta = serde_json::from_str(&meta).expect("parse meta");
+    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
+    assert_eq!(meta.verdict, "CLEAN");
+    assert_eq!(meta.exit_code, 0);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2405_repairs_empty_fail_artifact_when_summary_has_no_blockers() {
+    let session_id = "01TEST2405NOBLOCKERS00000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-no-blockers-summary", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nNo blocking findings in `main...HEAD`. The prior high finding is resolved.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nOpen questions:\n- None blocking.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist clean sections");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "no-blocker summary should repair the empty-fail placeholder"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    let findings = read_output_findings(&session_dir);
+    assert!(findings.findings.is_empty());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2405_output_log_stale_fail_then_clean_repairs_empty_fail_artifact() {
+    let session_id = "01TEST2405OUTPUTLOGCLEAN00";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-output-log-stale-fail", session_id);
+    write_fail_meta(&session_dir, session_id);
+    let prior_fail = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "Verdict: FAIL\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "## Findings\n\n",
+        "1. High: stale pre-fix finding in src/lib.rs:1.\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    let final_clean = concat!(
+        "<!-- CSA:SECTION:summary -->\n",
+        "PASS\n",
+        "<!-- CSA:SECTION:summary:END -->\n\n",
+        "<!-- CSA:SECTION:details -->\n",
+        "No blocking findings remain.\n",
+        "<!-- CSA:SECTION:details:END -->\n",
+    );
+    write_agent_message_output_log(&session_dir, &[prior_fail, final_clean]);
+    csa_session::persist_structured_output_from_file(&session_dir, &session_dir.join("output.log"))
+        .expect("refresh structured output from output.log");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "current clean round from output.log should repair despite stale historical fail text"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert_eq!(verdict.failure_reason, None);
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    let findings = read_output_findings(&session_dir);
+    assert!(findings.findings.is_empty());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2405_mixed_pass_fail_empty_artifact_stays_fail_closed() {
+    let session_id = "01TEST2405MIXEDFAIL00000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-mixed-fail", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nReview verdict: FAIL. One blocking correctness issue remains.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist mixed sections");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        !super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "mixed PASS/FAIL text must not repair to clean"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("fail_verdict_empty_findings_artifact")
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2405_duplicate_stale_clean_summary_does_not_repair_to_pass() {
+    let session_id = "01TEST2405STALECLEAN0000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-stale-clean-summary", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:summary -->\nReview incomplete; final decision withheld.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nMore evidence is needed before accepting this review.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist duplicate clean then neutral sections");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        !super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "a stale clean duplicate must not repair the current neutral review to clean"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("fail_verdict_empty_findings_artifact")
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2405_stale_clean_details_do_not_repair_later_neutral_summary() {
+    let session_id = "01TEST2405STALEDETAILS000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2405-stale-clean-details", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking findings.\n<!-- CSA:SECTION:details:END -->\n\n<!-- CSA:SECTION:summary -->\nReview incomplete; final decision withheld.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist stale clean details then neutral summary");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+
+    assert!(
+        !super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "stale clean details must not repair a later neutral summary-only review to clean"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.verdict_legacy, "HAS_ISSUES");
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("fail_verdict_empty_findings_artifact")
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
 #[test]
 fn persist_review_verdict_empty_findings_with_prose_clean_summary_emits_pass() {
     let session_id = "01TESTPROSECLEANEN000000000";
