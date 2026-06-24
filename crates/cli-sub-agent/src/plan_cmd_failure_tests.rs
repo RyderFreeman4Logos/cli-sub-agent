@@ -1,5 +1,6 @@
 use super::*;
 use std::path::Path;
+use std::process::Command;
 
 fn run_test_git(project_root: &Path, args: &[&str]) {
     let output = Command::new("git")
@@ -14,6 +15,24 @@ fn run_test_git(project_root: &Path, args: &[&str]) {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn run_test_git_output(project_root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .expect("git command should start");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string()
 }
 
 fn init_recovery_test_repo(project_root: &Path, track_weave_lock: bool) {
@@ -36,7 +55,7 @@ fn init_recovery_test_repo(project_root: &Path, track_weave_lock: bool) {
 }
 
 fn current_branch(project_root: &Path) -> String {
-    run_git(project_root, &["branch", "--show-current"]).expect("branch should resolve")
+    run_test_git_output(project_root, &["branch", "--show-current"])
 }
 
 fn write_plan_journal(project_root: &Path, content: &str) {
@@ -289,6 +308,114 @@ fn failure_summary_surfaces_todo_persist_validation_detail() {
         assert!(
             rendered.contains("csa todo persist failed"),
             "parent-visible failure should preserve the persist wrapper context: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn failure_summary_prefers_mktd_validation_over_quoted_issue_prose() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some(
+            [
+                "Exit code 1",
+                "stderr (last 40 lines):",
+                "✗ FAIL   Step 13 - Save TODO (0.02s) — Exit code 1",
+                "TODO artifact path: /tmp/mktd-save/TODO.md",
+                "Spec artifact path: /tmp/mktd-save/spec.toml",
+                "ERROR: TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause.",
+                "stdout (last 40 lines):",
+                "- Full smoke failed after ~13.1 minutes.",
+                "Error: 1 step(s) failed (1 execution, 0 unsupported-skip)",
+            ]
+            .join("\n"),
+        ),
+        output: None,
+        session_id: None,
+        command: Some("timeout -k 30 1800 csa plan run --sa-mode true --pattern mktd".to_string()),
+        stderr: None,
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    for rendered in [&summary_line, &summary_section] {
+        assert!(
+            rendered.contains("TODO artifact has an open task"),
+            "parent-visible failure should prefer the mktd/TODO validation diagnostic: {rendered}"
+        );
+        assert!(
+            rendered.contains("Spec artifact path: /tmp/mktd-save/spec.toml"),
+            "parent-visible failure should include artifact context: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Failure detail: - Full smoke failed")
+                && !rendered.contains("detail=- Full smoke failed"),
+            "quoted issue prose must not become the actionable failure detail: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn dev2merge_recovery_snapshot_declares_weave_lock_drift() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, true);
+    let snapshot = capture_failure_recovery_snapshot("dev2merge", &project_root)
+        .expect("dev2merge should capture a failure recovery snapshot");
+
+    std::fs::write(project_root.join(WEAVE_LOCK), "lock = 1\nplan drift\n")
+        .expect("write post-snapshot weave.lock change");
+
+    let recovery = snapshot.recover_after_failure(&project_root);
+    let workflow_path = project_root.join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some("Exit code 1".to_string()),
+        output: None,
+        session_id: None,
+        command: Some("csa plan run --pattern mktd".to_string()),
+        stderr: Some("ERROR: TODO artifact has no non-empty checkbox tasks".to_string()),
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        Some(recovery),
+    );
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    for rendered in [&summary_line, &summary_section] {
+        assert!(
+            rendered.contains("Preserved dirty weave.lock"),
+            "parent-visible output must declare lockfile drift: {rendered}"
+        );
+        assert!(
+            rendered.contains("M weave.lock"),
+            "parent-visible output must include the dirty artifact path: {rendered}"
+        );
+        assert!(
+            rendered.contains("dev2merge"),
+            "recovery message should name the failed workflow: {rendered}"
         );
     }
 }
