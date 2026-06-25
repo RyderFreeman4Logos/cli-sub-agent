@@ -140,6 +140,71 @@ fn handle_persist_dry_run_validates_without_committing() -> anyhow::Result<()> {
 }
 
 #[test]
+fn handle_persist_dry_run_recovers_empty_spec_artifact_from_raw_spec() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let manager = TodoManager::new(project_dir.path())?;
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let plan = manager.create("Dry-run raw spec recovery", Some("fix/raw-spec-recovery"))?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, "create plan")?
+        .ok_or_else(|| anyhow::anyhow!("initial plan should commit"))?;
+    let head_before = git_head(manager.todos_dir())?;
+    let original_todo = std::fs::read_to_string(plan.todo_md_path())?;
+
+    let artifact_dir = project_dir.path().join("session-output").join("mktd-save");
+    std::fs::create_dir_all(&artifact_dir)?;
+    let todo_file = artifact_dir.join("TODO.md");
+    let spec_file = artifact_dir.join("spec.toml");
+    let raw_spec_file = artifact_dir.join("spec.raw.txt");
+    std::fs::write(
+        &todo_file,
+        "# Raw spec recovery\n\n## Tasks\n\n- [ ] Recover the raw spec artifact.\n  DONE WHEN: csa todo persist --dry-run validates the unambiguous raw spec without writing TODO state.\n",
+    )?;
+    std::fs::write(&spec_file, "")?;
+    std::fs::write(
+        &raw_spec_file,
+        format!(
+            "I will extract the TODO criteria.\n<!-- CSA:SECTION:details -->\n{}\n<!-- CSA:SECTION:details:END -->\n",
+            toml::to_string_pretty(&SpecDocument {
+                schema_version: 1,
+                plan_ulid: plan.timestamp.clone(),
+                summary: valid_han_summary(),
+                criteria: vec![SpecCriterion {
+                    kind: CriterionKind::Check,
+                    id: "check-raw-spec-recovery".to_string(),
+                    description:
+                        "Dry-run recovers an unambiguous raw spec artifact beside spec.toml."
+                            .to_string(),
+                    status: CriterionStatus::Pending,
+                }],
+            })?
+        ),
+    )?;
+
+    handle_persist(
+        plan.timestamp.clone(),
+        todo_file.display().to_string(),
+        spec_file.display().to_string(),
+        None,
+        Some("validate raw spec recovery".to_string()),
+        true,
+        Some(project_dir.path().display().to_string()),
+    )?;
+
+    assert_eq!(
+        head_before,
+        git_head(manager.todos_dir())?,
+        "dry-run raw spec recovery must not create a todos-git commit"
+    );
+    assert_eq!(
+        original_todo,
+        std::fs::read_to_string(plan.todo_md_path())?,
+        "dry-run raw spec recovery must not rewrite TODO.md"
+    );
+    Ok(())
+}
+
+#[test]
 fn handle_persist_dry_run_rejects_invalid_spec_summary_without_committing() -> anyhow::Result<()> {
     let project_dir = tempdir()?;
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
