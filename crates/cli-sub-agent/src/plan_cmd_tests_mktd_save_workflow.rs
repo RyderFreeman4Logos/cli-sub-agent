@@ -39,19 +39,24 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"FENCE=$(printf '\140\140\140')"#,
             r#"awk -v s="${FENCE}epic-plan.toml" -v e="${FENCE}" '$0 == s"#,
             r#"CSA_BIN="${CSA_BIN:-csa}""#,
-            r#"extract_spec_toml() {"#,
+            r#"extract_spec() {"#,
             r#"perl -0CSDA -we"#,
-            r#"expected raw TOML or fenced TOML"#,
+            r#"h=$(sed -n"#,
+            r#"underlying command failure: diag"#,
+            r#"Command stderr summary: %s"#,
+            r#"expected TOML spec artifact; first content: %s"#,
             r#"Raw spec artifact path: %s"#,
             r#"read raw spec artifact failed"#,
             r#"k="non-TOML""#,
-            r#"k="CSA section marker""#,
-            r#""${FENCE}"*) k="Markdown code fence" ;;"#,
-            r#"spec artifact-shape error: expected raw TOML or fenced TOML"#,
+            r#"k="diag""#,
+            r#"spec producer-contract error: expected TOML spec artifact"#,
+            r#"parser/root-cause: no spec"#,
+            r#"v="${SAVE_DIR}/validate.stderr""#,
+            r#""${CSA_BIN}" todo persist --dry-run -t "${TODO_TS}""#,
+            r#"generated TODO/spec artifacts failed csa todo persist --dry-run"#,
+            r#"parser/root-cause:"#,
             r#"first content: %s"#,
             r#"Spec artifact path: %s"#,
-            r#"grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}""#,
-            r#"perl -CSDA -ne '$found ||= /\p{Han}/; END { exit($found ? 0 : 1) }'"#,
             r#""${CSA_BIN}" todo persist -t "${TODO_TS}""#,
             r#"--todo-file "${TODO_ARTIFACT}""#,
             r#"--spec-file "${SPEC_ARTIFACT}""#,
@@ -73,6 +78,10 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             r#"'```'*) SPEC_MARKER_KIND="Markdown code fence" ;;"#,
             r#"LOWER_SPEC_LINE="${FIRST_SPEC_LINE,,}""#,
             r#"rg -q '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}""#,
+            r#"grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}""#,
+            r#"grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}""#,
+            r#"SUMMARY_LINE=$(sed -n"#,
+            r#"summary lacks Han"#,
             r#"printf '%s\n' "${SUMMARY_LINE}" | rg -q '[\p{Han}]'"#,
             r#"HAN_COUNT=$(rg -o '[\p{Han}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')"#,
             r#"CJK_COUNT=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_ARTIFACT}" | wc -l | tr -d '[:space:]')"#,
@@ -93,7 +102,7 @@ fn mktd_save_step_uses_session_output_artifacts_and_persist() {
             .find(r#"grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}""#)
             .unwrap_or_else(|| panic!("{name} must validate the TODO artifact before persist"));
         let shape_idx = content
-            .find(r#"if ! extract_spec_toml "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then"#)
+            .find(r#"if ! extract_spec "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then"#)
             .unwrap_or_else(|| panic!("{name} must shape-check spec artifact before persist"));
         assert!(
             validate_idx < persist_idx,

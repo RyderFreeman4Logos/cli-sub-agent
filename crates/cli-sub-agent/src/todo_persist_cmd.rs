@@ -1,6 +1,7 @@
 use anyhow::Result;
 use csa_todo::{
     EpicPlan, GeneratedPlanPersistRequest, SpecDocument, TodoManager, parse_spec_document,
+    validate_generated_plan_request,
 };
 
 use crate::cli::TodoCommands;
@@ -12,13 +13,22 @@ pub(crate) fn handle_command(cmd: TodoCommands) -> Result<()> {
         spec_file,
         epic_plan_file,
         message,
+        dry_run,
         cd,
     } = cmd
     else {
         unreachable!("todo_persist_cmd only handles TodoCommands::Persist")
     };
 
-    handle_persist(timestamp, todo_file, spec_file, epic_plan_file, message, cd)
+    handle_persist(
+        timestamp,
+        todo_file,
+        spec_file,
+        epic_plan_file,
+        message,
+        dry_run,
+        cd,
+    )
 }
 
 pub(crate) fn handle_persist(
@@ -27,6 +37,7 @@ pub(crate) fn handle_persist(
     spec_file: String,
     epic_plan_file: Option<String>,
     message: Option<String>,
+    dry_run: bool,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
@@ -46,6 +57,16 @@ pub(crate) fn handle_persist(
                 .map_err(|e| anyhow::anyhow!("failed to parse epic plan file '{}': {}", path, e))
         })
         .transpose()?;
+    let request = GeneratedPlanPersistRequest {
+        todo_content: &todo_content,
+        spec: &spec,
+        epic_plan: epic_plan.as_ref(),
+    };
+    if dry_run {
+        validate_generated_plan_request(&timestamp, &request)?;
+        println!("validated generated plan artifacts for {timestamp}");
+        return Ok(());
+    }
 
     // Serialize the file writes, the git commit, the saved-version count, and
     // the hook-trigger decision inside ONE hold of the TODO write lock:
@@ -61,11 +82,7 @@ pub(crate) fn handle_persist(
     let todos_dir = manager.todos_dir();
     let (persisted, (commit_msg, commit_hash, version)) = manager.persist_generated_plan_with(
         &timestamp,
-        GeneratedPlanPersistRequest {
-            todo_content: &todo_content,
-            spec: &spec,
-            epic_plan: epic_plan.as_ref(),
-        },
+        request,
         |result| -> Result<(String, Option<String>, usize)> {
             let commit_msg = message
                 .clone()

@@ -102,6 +102,20 @@ fn mktd_save_step_normalizes_wrapped_spec_toml_before_persist() -> anyhow::Resul
                 spec_toml()
             ),
         ),
+        (
+            "CSA-section wrapped raw TOML",
+            format!(
+                "<!-- CSA:SECTION:summary -->\n{}\n<!-- CSA:SECTION:summary:END -->\n",
+                spec_toml()
+            ),
+        ),
+        (
+            "CSA details section fenced TOML",
+            format!(
+                "<!-- CSA:SECTION:details -->\nProducer note outside the artifact.\n\n```toml\n{}\n```\n<!-- CSA:SECTION:details:END -->\n",
+                spec_toml()
+            ),
+        ),
     ] {
         let save_script = load_mktd_save_script()?;
         let project_dir = tempfile::tempdir()?;
@@ -159,6 +173,56 @@ fn mktd_save_step_normalizes_wrapped_spec_toml_before_persist() -> anyhow::Resul
 
 #[cfg(unix)]
 #[test]
+fn mktd_save_step_accepts_parser_valid_noncanonical_spec_toml() -> anyhow::Result<()> {
+    let save_script = load_mktd_save_script()?;
+    let project_dir = tempfile::tempdir()?;
+    let session_dir = tempfile::tempdir()?;
+    let bin_dir = tempfile::tempdir()?;
+    let csa_stub = bin_dir.path().join("csa");
+    std::fs::write(&csa_stub, csa_stub_script())?;
+    make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
+
+    run_git(project_dir.path(), &["init"])?;
+    run_git(
+        project_dir.path(),
+        &["checkout", "-b", "fix/2439-noncanonical"],
+    )?;
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(save_script)
+        .current_dir(project_dir.path())
+        .env("PATH", bin_dir.path())
+        .env("CSA_SESSION_DIR", session_dir.path())
+        .env("STEP_12_OUTPUT", tricky_todo())
+        .env("STEP_8_OUTPUT", noncanonical_spec_toml())
+        .env("STEP_2_OUTPUT", "English")
+        .env("FEATURE", "parser-valid noncanonical TOML")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "parser-valid noncanonical TOML should pass Save TODO\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let spec_artifact =
+        std::fs::read_to_string(session_dir.path().join("output/mktd-save/spec.toml"))?;
+    assert!(
+        spec_artifact.starts_with("schema_version=1\n"),
+        "Save TODO should preserve parser-valid TOML instead of requiring canonical spacing: {spec_artifact}"
+    );
+    assert!(
+        spec_artifact.contains("kind='check'"),
+        "Save TODO should accept TOML single-quoted strings after dry-run validation: {spec_artifact}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn mktd_save_step_rejects_unrecoverable_prose_spec_before_persist() -> anyhow::Result<()> {
     let save_script = load_mktd_save_script()?;
     let project_dir = tempfile::tempdir()?;
@@ -193,12 +257,20 @@ fn mktd_save_step_rejects_unrecoverable_prose_spec_before_persist() -> anyhow::R
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("spec artifact-shape error"),
-        "Save TODO should report an artifact-shape diagnostic: {stderr}"
+        stderr.contains("spec producer-contract error"),
+        "Save TODO should report a producer-contract diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("expected TOML spec artifact"),
+        "Save TODO should state the expected artifact contract: {stderr}"
     );
     assert!(
         stderr.contains("first content: non-TOML"),
         "Save TODO should classify unrecoverable prose: {stderr}"
+    );
+    assert!(
+        stderr.contains("parser/root-cause:"),
+        "Save TODO should expose the extraction root cause: {stderr}"
     );
     assert!(
         stderr.contains("Raw spec artifact path:"),
@@ -207,6 +279,126 @@ fn mktd_save_step_rejects_unrecoverable_prose_spec_before_persist() -> anyhow::R
     assert!(
         !stderr.contains("csa todo persist failed"),
         "Save TODO must fail before csa todo persist: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn mktd_save_step_rejects_truncated_spec_with_parser_root_cause() -> anyhow::Result<()> {
+    let save_script = load_mktd_save_script()?;
+    let project_dir = tempfile::tempdir()?;
+    let session_dir = tempfile::tempdir()?;
+    let bin_dir = tempfile::tempdir()?;
+    let csa_stub = bin_dir.path().join("csa");
+    std::fs::write(&csa_stub, csa_stub_script())?;
+    make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
+
+    run_git(project_dir.path(), &["init"])?;
+    run_git(
+        project_dir.path(),
+        &["checkout", "-b", "fix/2439-truncated"],
+    )?;
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(save_script)
+        .current_dir(project_dir.path())
+        .env("PATH", bin_dir.path())
+        .env("CSA_SESSION_DIR", session_dir.path())
+        .env("STEP_12_OUTPUT", tricky_todo())
+        .env(
+            "STEP_8_OUTPUT",
+            "schema_version = 1\nplan_ulid = \"__PLAN_ID__\"\nsummary = \"truncated but sentinel-complete\"\n\n[[criteria]]\nkind = \"scenario\"\nid = \"S1\"\ndescription = \"unterminated",
+        )
+        .env("STEP_2_OUTPUT", "English")
+        .env("FEATURE", "truncated spec")
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "truncated spec should fail before persist"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for required in [
+        "spec producer-contract error",
+        "parser/root-cause:",
+        "TOML parse error",
+        "Spec artifact path:",
+        "Raw spec artifact path:",
+    ] {
+        assert!(
+            stderr.contains(required),
+            "truncated spec diagnostic should contain {required}: {stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains("csa todo persist failed"),
+        "truncated spec should fail before csa todo persist: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn mktd_save_step_rejects_command_stderr_contaminated_spec() -> anyhow::Result<()> {
+    let save_script = load_mktd_save_script()?;
+    let project_dir = tempfile::tempdir()?;
+    let session_dir = tempfile::tempdir()?;
+    let bin_dir = tempfile::tempdir()?;
+    let csa_stub = bin_dir.path().join("csa");
+    std::fs::write(&csa_stub, csa_stub_script())?;
+    make_executable(&csa_stub)?;
+    install_save_script_path_tools(bin_dir.path())?;
+
+    run_git(project_dir.path(), &["init"])?;
+    run_git(
+        project_dir.path(),
+        &["checkout", "-b", "fix/2439-contaminated"],
+    )?;
+
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(save_script)
+        .current_dir(project_dir.path())
+        .env("PATH", bin_dir.path())
+        .env("CSA_SESSION_DIR", session_dir.path())
+        .env("STEP_12_OUTPUT", tricky_todo())
+        .env(
+            "STEP_8_OUTPUT",
+            format!(
+                "error: failed to create cargo target dir: Read-only file system (os error 30)\n\n```toml\n{}\n```\n",
+                spec_toml()
+            ),
+        )
+        .env("STEP_2_OUTPUT", "English")
+        .env("FEATURE", "stderr contaminated spec")
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "stderr-contaminated spec should fail before persist"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for required in [
+        "first content: diag",
+        "underlying command failure",
+        "Read-only file system",
+        "Command stderr summary:",
+        "Spec artifact path:",
+        "Raw spec artifact path:",
+    ] {
+        assert!(
+            stderr.contains(required),
+            "contaminated spec diagnostic should contain {required}: {stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains("csa todo persist failed"),
+        "contaminated spec should fail before csa todo persist: {stderr}"
     );
 
     Ok(())
@@ -374,8 +566,10 @@ case "${1:-}" in
   persist)
     todo_file=''
     spec_file=''
+    dry_run=false
     while [ "$#" -gt 0 ]; do
       case "$1" in
+        --dry-run) dry_run=true ;;
         --todo-file) shift; todo_file="${1:-}" ;;
         --spec-file) shift; spec_file="${1:-}" ;;
         --epic-plan-file) shift; test -s "${1:-}" || exit 67 ;;
@@ -384,6 +578,14 @@ case "${1:-}" in
     done
     test -s "$todo_file" || exit 65
     test -s "$spec_file" || exit 66
+    if [ "$dry_run" = true ]; then
+      if grep -q 'description = "unterminated' "$spec_file"; then
+        echo "Error: failed to parse spec file '${spec_file}': TOML parse error at line 8, column 1" >&2
+        echo "invalid basic string" >&2
+        exit 1
+      fi
+      exit 0
+    fi
     printf '%s/.todos/%s/TODO.md\n' "$PWD" "$plan_id"
     ;;
   show)
@@ -413,12 +615,17 @@ case "${1:-}" in
     ;;
   persist)
     spec_file=''
+    dry_run=false
     while [ "$#" -gt 0 ]; do
       case "$1" in
+        --dry-run) dry_run=true ;;
         --spec-file) shift; spec_file="${1:-}" ;;
       esac
       shift || true
     done
+    if [ "$dry_run" = true ]; then
+      exit 0
+    fi
     echo "Error: failed to parse spec file '${spec_file}': TOML parse error at line 6, column 1" >&2
     echo "invalid table header" >&2
     exit 1
@@ -469,6 +676,22 @@ fn spec_toml() -> &'static str {
         "id = \"check-shell-safe\"\n",
         "description = \"Save TODO preserves quoted issue excerpts.\"\n",
         "status = \"pending\"\n",
+    )
+}
+
+#[cfg(unix)]
+fn noncanonical_spec_toml() -> &'static str {
+    concat!(
+        "schema_version=1\n",
+        "plan_ulid='__PLAN_ID__'\n",
+        "summary='",
+        "\u{4fdd}\u{5b58}\u{975e}\u{89c4}\u{8303}\u{683c}\u{5f0f}\u{3002}",
+        "'\n\n",
+        "[[criteria]]\n",
+        "kind='check'\n",
+        "id='check-noncanonical'\n",
+        "description='Save TODO accepts parser-valid TOML without canonical spacing.'\n",
+        "status='pending'\n",
     )
 }
 

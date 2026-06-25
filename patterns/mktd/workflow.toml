@@ -743,27 +743,38 @@ if [[ -n "${EPIC_PLAN:-}" ]]; then
 fi
 SPEC_CONTENT="${STEP_8_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${RAW_SPEC_ARTIFACT}" || { echo "write raw spec artifact failed" >&2; exit 1; }
-extract_spec_toml() { perl -0CSDA -we '
+extract_spec() { perl -0CSDA -we '
 my($f,$s)=(shift,<>);
+my$h=$s;$h=~s/\A\s*//s;$h=~s/\n.*\z//s;exit 1 if $h=~/^(error:|fatal:|warning:|cargo:)/i;
 sub ok{$_[0]=~/(^|\n)schema_version\s*=\s*1(\s*\n|$)/s&&$_[0]=~/(^|\n)plan_ulid\s*=/s&&$_[0]=~/(^|\n)\[\[criteria\]\](\s*\n|$)/s}
-while($s=~/\Q$f\E[ \t]*(?:(?:toml|spec\.toml)(?:[ \t][^\n]*)?)?[ \t]*\n(.*?)\n\Q$f\E/sg){my$b=$1;if(ok($b)){print$b;exit 0}}
-(my$h=$s)=~s/\A\s*//s;$h=~s/\n.*\z//s;
-if(ok($s)&&$h=~/^(#|schema_version\s*=|plan_ulid\s*=|summary\s*=|\[\[criteria\]\])/){print$s;exit 0}
+sub looks{$_[0]=~/(^|\n)\s*(schema_version|plan_ulid|summary)\s*=/s||$_[0]=~/(^|\n)\s*\[\[criteria\]\]/s}
+sub head{my($b)=@_;$b=~s/\A\s*//s;$b=~s/\n.*\z//s;return $b=~/^(#|schema_version\s*=|plan_ulid\s*=|summary\s*=|\[\[criteria\]\])/}
+sub emit{my($b)=@_;if(ok($b)||(looks($b)&&head($b))){print$b;exit 0}}
+while($s=~/\Q$f\E[ \t]*(?:(?:toml|spec\.toml)(?:[ \t][^\n]*)?)?[ \t]*\n(.*?)\n\Q$f\E/sg){emit($1)}
+while($s=~/<!--[ \t]*CSA:SECTION:[^>]*-->\s*(.*?)\s*<!--[ \t]*CSA:SECTION:[^>]*:END[ \t]*-->/sg){emit($1)}
+emit($s);
 exit 1' "${FENCE}" "$1"; }
-if ! extract_spec_toml "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then
-  l=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${RAW_SPEC_ARTIFACT}") || { echo "read raw spec artifact failed" >&2; exit 1; }
+h=$(sed -n 's/^[[:space:]]*//; /[^[:space:]]/{p;q;}' "${RAW_SPEC_ARTIFACT}") || { echo "read raw spec artifact failed" >&2; exit 1; }
+if ! extract_spec "${RAW_SPEC_ARTIFACT}" > "${SPEC_ARTIFACT}"; then
+  l="$h"
   lc=$(printf '%s' "$l" | tr '[:upper:]' '[:lower:]'); k="non-TOML"
-  case "$lc" in '<!-- csa:section:'*) k="CSA section marker" ;; '<!--'*) k="HTML marker" ;; '<!doctype html'*|'<html'*) k="HTML document marker" ;; "${FENCE}"*) k="Markdown code fence" ;; esac
-  printf 'spec artifact-shape error: expected raw TOML or fenced TOML; first content: %s\nSpec artifact path: %s\nRaw spec artifact path: %s\n' "$k" "${SPEC_ARTIFACT}" "${RAW_SPEC_ARTIFACT}" >&2
+  case "$lc" in error:*|fatal:*|warning:*|cargo:*) k="diag" ;; esac
+  printf 'spec producer-contract error: expected TOML spec artifact; first content: %s\n' "$k" >&2
+  if [ "$k" = "diag" ]; then printf 'underlying command failure: diag\nCommand stderr summary: %s\n' "$l" >&2; else printf 'parser/root-cause: no spec\n' >&2; fi
+  printf 'Spec artifact path: %s\nRaw spec artifact path: %s\n' "${SPEC_ARTIFACT}" "${RAW_SPEC_ARTIFACT}" >&2
   exit 1
 fi
 [[ -s "${TODO_ARTIFACT}" ]] || { echo "TODO artifact is empty" >&2; exit 1; }
 [[ -s "${SPEC_ARTIFACT}" ]] || { echo "spec artifact is empty" >&2; exit 1; }
 grep -qE '^- \[ \] .+' "${TODO_ARTIFACT}" || { echo "TODO artifact has no non-empty checkbox tasks" >&2; exit 1; }
 perl -0ne '$bad=0; for(split /\n(?=- \[[ xX]\] |#)/){$bad=1 if /^- \[ \] / && !/DONE WHEN:\s*\S/s} exit $bad' "${TODO_ARTIFACT}" || { echo "TODO artifact has an open task without a mechanically-verifiable DONE WHEN: clause" >&2; exit 1; }
-grep -q '^schema_version = 1$' "${SPEC_ARTIFACT}" && grep -q "^plan_ulid = \"${TODO_TS}\"$" "${SPEC_ARTIFACT}" && grep -q '^summary = "' "${SPEC_ARTIFACT}" && grep -q '^\[\[criteria\]\]$' "${SPEC_ARTIFACT}" && grep -qE '^kind = "(scenario|property|check)"$' "${SPEC_ARTIFACT}" && grep -q '^id = "' "${SPEC_ARTIFACT}" && grep -q '^description = "' "${SPEC_ARTIFACT}" || { echo "bad spec artifact" >&2; exit 1; }
-SUMMARY_LINE=$(sed -n 's/^summary = "\(.*\)"$/\1/p' "${SPEC_ARTIFACT}" | head -n1)
-printf '%s\n' "${SUMMARY_LINE}" | perl -CSDA -ne '$found ||= /\p{Han}/; END { exit($found ? 0 : 1) }' || { echo "summary lacks Han" >&2; exit 1; }
+v="${SAVE_DIR}/validate.stderr"
+"${CSA_BIN}" todo persist --dry-run -t "${TODO_TS}" --todo-file "${TODO_ARTIFACT}" --spec-file "${SPEC_ARTIFACT}" "${EPIC_ARGS[@]}" "validate: ${FEATURE}" > /dev/null 2>"$v" || {
+  rc=$?; printf 'spec producer-contract error: generated TODO/spec artifacts failed csa todo persist --dry-run (exit %s)\n' "$rc" >&2
+  printf 'parser/root-cause:\n' >&2; [[ ! -s "$v" ]] || tail -80 "$v" >&2
+  printf 'Spec artifact path: %s\nRaw spec artifact path: %s\n' "${SPEC_ARTIFACT}" "${RAW_SPEC_ARTIFACT}" >&2
+  exit "$rc"
+}
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
   TASK_COUNT=$(grep -cE '^- \[ \] .+' "${TODO_ARTIFACT}")
   MIN_HAN="${TASK_COUNT}"
