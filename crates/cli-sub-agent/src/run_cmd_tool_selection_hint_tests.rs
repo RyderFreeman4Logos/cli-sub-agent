@@ -99,7 +99,7 @@ fn csa_run_tool_hint_difficulty_resolves_quick_tier() {
         &["claude-code"],
         &[(
             "tier-1-quick",
-            vec!["claude-code/anthropic/claude-haiku/low"],
+            vec!["claude-code/anthropic/claude-sonnet/high"],
         )],
         &[("quick_question", "tier-1-quick")],
     );
@@ -131,7 +131,7 @@ fn csa_run_tool_hint_difficulty_resolves_quick_tier() {
     assert_eq!(resolution.tool, ToolName::ClaudeCode);
     assert_eq!(
         resolution.model_spec.as_deref(),
-        Some("claude-code/anthropic/claude-haiku/low")
+        Some("claude-code/anthropic/claude-sonnet/high")
     );
     assert_eq!(
         resolution.resolved_tier_name.as_deref(),

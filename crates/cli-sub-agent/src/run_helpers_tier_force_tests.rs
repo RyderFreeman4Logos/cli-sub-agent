@@ -53,7 +53,7 @@ fn tier_bypass_gate_allows_bypass_flags_when_no_tiers_configured() {
 
 #[test]
 fn tier_bypass_gate_allows_bypass_flags_with_global_opt_in() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
     let global = GlobalConfig {
         tier_policy: csa_config::TierPolicyConfig {
             allow_force_bypass: true,
@@ -80,7 +80,7 @@ fn tier_bypass_gate_allows_bypass_flags_with_global_opt_in() {
 fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
     let mut cfg = config_with_tier(
         "tier-2-standard",
-        vec!["codex/openai/gpt-4/high"],
+        vec!["codex/openai/gpt-5.5/high"],
         &["codex"],
     );
     cfg.tiers.insert(
@@ -120,7 +120,7 @@ fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
 
 #[test]
 fn tier_bypass_gate_rejects_all_gated_flags_by_default() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     let err = super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
@@ -147,7 +147,7 @@ fn tier_bypass_gate_rejects_all_gated_flags_by_default() {
 
 #[test]
 fn tier_bypass_gate_allows_inherited_trusted_pin() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
@@ -166,7 +166,7 @@ fn tier_bypass_gate_allows_inherited_trusted_pin() {
 
 #[test]
 fn tier_bypass_gate_rejects_user_force_with_inherited_trusted_pin() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     let err = super::enforce_tier_bypass_gate(super::TierBypassGateCtx {
         project_config: Some(&cfg),
@@ -190,7 +190,7 @@ fn tier_bypass_gate_rejects_user_force_with_inherited_trusted_pin() {
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     // Missing all required flags
     let result = super::resolve_tool_and_model(super::RoutingRequest {
@@ -259,7 +259,7 @@ fn resolve_tool_and_model_force_ignore_tier_requires_complete_spec() {
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
     let _guard = assume_tier_tools_available();
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     // All required flags provided - should succeed
     let result = super::resolve_tool_and_model(super::RoutingRequest {
@@ -284,7 +284,7 @@ fn resolve_tool_and_model_force_ignore_tier_allows_complete_spec() {
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_uses_tool_defaults() {
     let _guard = assume_tier_tools_available();
-    let mut cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let mut cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
     let codex = cfg
         .tools
         .get_mut("codex")
@@ -320,7 +320,7 @@ fn resolve_tool_and_model_force_ignore_tier_uses_tool_defaults() {
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_bypassed_when_tier_provided() {
     let _guard = assume_tier_tools_available();
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     // When --tier is provided, validation should be skipped
     let result = super::resolve_tool_and_model(super::RoutingRequest {
@@ -360,7 +360,7 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() 
 fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
     let cfg = config_with_tier(
         "tier-1",
-        vec!["gemini-cli/google/gemini-3/high"],
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
         &["gemini-cli", "codex"],
     );
     let global = GlobalConfig {
@@ -402,7 +402,7 @@ fn resolve_tool_and_model_uses_inherited_model_spec_when_gate_default() {
     let _guard = assume_tier_tools_available();
     let cfg = config_with_tier(
         "tier-1",
-        vec!["gemini-cli/google/gemini-3/high"],
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
         &["gemini-cli", "codex"],
     );
     let global = GlobalConfig::default();
@@ -468,7 +468,7 @@ fn collect_preferred_tier_models_honors_preference_array_order() {
     let cfg = config_with_tier(
         "quality",
         vec![
-            "gemini-cli/google/gemini-3/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
             "codex/openai/gpt-5.4/high",
             "claude-code/anthropic/sonnet-4.5/high",
         ],
@@ -486,7 +486,7 @@ fn collect_preferred_tier_models_honors_preference_array_order() {
         specs,
         vec![
             "codex/openai/gpt-5.4/high",
-            "gemini-cli/google/gemini-3/high",
+            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
             "claude-code/anthropic/sonnet-4.5/high",
         ]
     );
@@ -537,7 +537,7 @@ fn resolve_tool_and_model_force_ignore_tier_skipped_when_no_tiers_configured() {
 
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_skipped_when_flag_false() {
-    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-4/high"], &["codex"]);
+    let cfg = config_with_tier("tier-1", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
 
     // When force_ignore_tier_setting = false, validation should be skipped
     let result = super::resolve_tool_and_model(super::RoutingRequest {
