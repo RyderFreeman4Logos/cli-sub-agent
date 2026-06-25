@@ -1,6 +1,5 @@
 //! Sandbox resolution and telemetry for the execution pipeline.
 //!
-//! Extracted from `pipeline.rs` to keep the main pipeline under the monolith limit.
 //! Handles enforcement mode checking, capability detection, config resolution,
 //! and first-turn telemetry recording.
 
@@ -627,6 +626,10 @@ pub(crate) fn check_sandbox_permission_errors(
 #[cfg(test)]
 #[path = "pipeline_sandbox_extra_writable_tests.rs"]
 mod extra_writable_tests;
+
+#[cfg(test)]
+#[path = "pipeline_sandbox_cargo_target_tests.rs"]
+mod cargo_target_tests;
 
 #[cfg(test)]
 #[path = "pipeline_sandbox_memory_override_tests.rs"]

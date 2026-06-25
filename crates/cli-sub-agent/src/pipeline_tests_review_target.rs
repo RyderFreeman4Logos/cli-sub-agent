@@ -12,7 +12,7 @@ fn apply_review_target_dir_leaves_existing_directory_target_untouched() {
         "/repo/legacy-review-target".to_string(),
     );
 
-    crate::pipeline_env::apply_review_target_dir(project.path(), "codex");
+    crate::pipeline_cargo_target::apply_review_target_dir(project.path(), "codex");
 
     assert_eq!(
         env.get("CARGO_TARGET_DIR").map(String::as_str),
@@ -34,7 +34,7 @@ fn apply_review_target_dir_leaves_broken_target_symlink_untouched() {
         "/repo/legacy-review-target".to_string(),
     );
 
-    crate::pipeline_env::apply_review_target_dir(project.path(), "codex");
+    crate::pipeline_cargo_target::apply_review_target_dir(project.path(), "codex");
 
     assert_eq!(
         env.get("CARGO_TARGET_DIR").map(String::as_str),
@@ -47,7 +47,7 @@ fn apply_review_target_dir_leaves_default_behavior_when_repo_target_missing() {
     let project = tempdir().expect("tempdir");
     let env: HashMap<String, String> = HashMap::new();
 
-    crate::pipeline_env::apply_review_target_dir(project.path(), "codex");
+    crate::pipeline_cargo_target::apply_review_target_dir(project.path(), "codex");
 
     assert_eq!(env.get("CARGO_TARGET_DIR").map(String::as_str), None);
 }
@@ -61,15 +61,17 @@ fn apply_review_target_dir_leaves_non_review_sessions_unchanged() {
         "/repo/legacy-review-target".to_string(),
     );
 
-    crate::pipeline_env::apply_task_target_dir_guards(
+    let report = crate::pipeline_cargo_target::apply_task_target_dir_guards(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
-    );
+    )
+    .expect("policy should resolve");
 
     assert_eq!(
         env.get("CARGO_TARGET_DIR").map(String::as_str),
         Some("/repo/legacy-review-target")
     );
+    assert!(report.explicit_override_preserved);
 }

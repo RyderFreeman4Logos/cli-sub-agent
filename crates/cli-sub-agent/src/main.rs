@@ -47,6 +47,7 @@ mod mktsk_cmd;
 mod no_provider_launch;
 mod pattern_resolver;
 mod pipeline;
+mod pipeline_cargo_target;
 mod pipeline_env;
 mod pipeline_execute;
 mod pipeline_handoff;

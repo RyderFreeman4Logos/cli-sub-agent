@@ -271,12 +271,26 @@ async fn prepare_session_runtime_inner(
             pattern_internal: input.startup_env.pattern_internal(),
             allow_git_push: input.allow_git_push,
         });
-    crate::pipeline_env::apply_task_target_dir_guards(
+    let cargo_target_policy = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
         input.task_type,
         input.executor.tool_name(),
         input.project_root,
         &mut merged_env,
-    );
+        input.extra_env,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if cargo_target_policy.should_persist_artifact()
+        && let Err(err) = crate::pipeline_cargo_target::persist_cargo_target_policy_artifact(
+            input.session_dir,
+            &cargo_target_policy,
+        )
+    {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to persist Cargo target policy artifact"
+        );
+    }
     let project_hook_overrides =
         crate::pipeline::session_hooks::build_project_hook_overrides(input.config, input.task_type);
     let hooks_config = load_hooks_config(

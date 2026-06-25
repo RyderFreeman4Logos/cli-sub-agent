@@ -308,7 +308,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     unsafe {
         std::env::set_var("PATH", format!("{}:{inherited_path}", bin_dir.display()));
     }
-    let config = run_config_with_tier("default", vec!["codex/openai/o4-mini/high"], &["codex"]);
+    let config = run_config_with_tier("default", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
     write_project_config(project_dir.path(), &config);
     let holder =
         csa_session::create_session(project_dir.path(), Some("holder"), None, Some("codex"))
