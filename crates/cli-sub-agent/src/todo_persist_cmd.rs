@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 use csa_todo::{
     EpicPlan, GeneratedPlanPersistRequest, SpecDocument, TodoManager, parse_spec_document,
@@ -45,9 +47,7 @@ pub(crate) fn handle_persist(
 
     let todo_content = std::fs::read_to_string(&todo_file)
         .map_err(|e| anyhow::anyhow!("failed to read TODO file '{}': {}", todo_file, e))?;
-    let spec_content = std::fs::read_to_string(&spec_file)
-        .map_err(|e| anyhow::anyhow!("failed to read spec file '{}': {}", spec_file, e))?;
-    let spec: SpecDocument = parse_spec_document(&spec_content, &spec_file)?;
+    let spec = load_spec_document(&spec_file)?;
     let epic_plan: Option<EpicPlan> = epic_plan_file
         .as_deref()
         .map(|path| {
@@ -121,6 +121,142 @@ pub(crate) fn handle_persist(
     println!("{}", persisted.plan.todo_md_path().display());
 
     Ok(())
+}
+
+fn load_spec_document(spec_file: &str) -> Result<SpecDocument> {
+    let spec_content = std::fs::read_to_string(spec_file)
+        .map_err(|e| anyhow::anyhow!("failed to read spec file '{}': {}", spec_file, e))?;
+    match parse_spec_document(&spec_content, spec_file) {
+        Ok(spec) => Ok(spec),
+        Err(parse_error) => recover_spec_document_from_raw_artifact(spec_file, parse_error),
+    }
+}
+
+fn recover_spec_document_from_raw_artifact(
+    spec_file: &str,
+    parse_error: anyhow::Error,
+) -> Result<SpecDocument> {
+    let raw_spec_file = Path::new(spec_file).with_file_name("spec.raw.txt");
+    if !raw_spec_file.exists() {
+        return Err(parse_error);
+    }
+
+    let raw_source = raw_spec_file.display().to_string();
+    let raw_content = std::fs::read_to_string(&raw_spec_file).map_err(|e| {
+        anyhow::anyhow!(
+            "{}; failed to read raw spec artifact '{}': {}",
+            parse_error,
+            raw_source,
+            e
+        )
+    })?;
+    let recovered = extract_unambiguous_raw_spec(&raw_content, &raw_source).map_err(|e| {
+        anyhow::anyhow!(
+            "{}; raw spec recovery failed for '{}': {}",
+            parse_error,
+            raw_source,
+            e
+        )
+    })?;
+    Ok(recovered)
+}
+
+fn extract_unambiguous_raw_spec(raw_content: &str, raw_source: &str) -> Result<SpecDocument> {
+    let mut recovered_specs: Vec<SpecDocument> = Vec::new();
+    for (label, candidate) in raw_spec_candidates(raw_content) {
+        let candidate = trim_candidate(&candidate);
+        if candidate.is_empty() {
+            continue;
+        }
+        let candidate_source = format!("{raw_source} ({label})");
+        if let Ok(spec) = parse_spec_document(candidate, &candidate_source)
+            && !recovered_specs.iter().any(|existing| existing == &spec)
+        {
+            recovered_specs.push(spec);
+        }
+    }
+
+    match recovered_specs.len() {
+        1 => Ok(recovered_specs.remove(0)),
+        0 => anyhow::bail!("no raw/fenced TOML spec candidate was found"),
+        count => anyhow::bail!(
+            "found {count} different TOML spec candidates; refusing ambiguous recovery"
+        ),
+    }
+}
+
+fn raw_spec_candidates(raw_content: &str) -> Vec<(String, String)> {
+    let mut candidates = Vec::new();
+    candidates.extend(fenced_toml_candidates(raw_content));
+    candidates.extend(csa_section_candidates(raw_content));
+    candidates.push(("full raw artifact".to_string(), raw_content.to_string()));
+    candidates
+}
+
+fn fenced_toml_candidates(raw_content: &str) -> Vec<(String, String)> {
+    let mut candidates = Vec::new();
+    let mut open_fence: Option<(bool, Vec<&str>)> = None;
+    for line in raw_content.lines() {
+        if let Some(tag) = markdown_fence_tag(line) {
+            if let Some((accept, body)) = open_fence.take() {
+                if accept {
+                    candidates.push(("fenced TOML".to_string(), body.join("\n")));
+                }
+            } else {
+                open_fence = Some((is_toml_fence_tag(tag), Vec::new()));
+            }
+            continue;
+        }
+        if let Some((_, body)) = open_fence.as_mut() {
+            body.push(line);
+        }
+    }
+    candidates
+}
+
+fn markdown_fence_tag(line: &str) -> Option<&str> {
+    line.trim_start().strip_prefix("```").map(str::trim)
+}
+
+fn is_toml_fence_tag(tag: &str) -> bool {
+    let language = tag.split_whitespace().next().unwrap_or_default();
+    language.is_empty()
+        || language.eq_ignore_ascii_case("toml")
+        || language.eq_ignore_ascii_case("spec.toml")
+}
+
+fn csa_section_candidates(raw_content: &str) -> Vec<(String, String)> {
+    let mut candidates = Vec::new();
+    let mut section_body: Option<Vec<&str>> = None;
+    for line in raw_content.lines() {
+        if section_body.is_none() && is_csa_section_start(line) {
+            section_body = Some(Vec::new());
+            continue;
+        }
+        if let Some(body) = section_body.as_mut() {
+            if is_csa_section_end(line) {
+                candidates.push(("CSA section".to_string(), body.join("\n")));
+                section_body = None;
+            } else {
+                body.push(line);
+            }
+        }
+    }
+    candidates
+}
+
+fn is_csa_section_start(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("<!--") && trimmed.contains("CSA:SECTION:") && !trimmed.contains(":END")
+}
+
+fn is_csa_section_end(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("<!--") && trimmed.contains("CSA:SECTION:") && trimmed.contains(":END")
+}
+
+fn trim_candidate(candidate: &str) -> &str {
+    candidate.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
 }
 
 #[cfg(test)]
