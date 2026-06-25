@@ -1,13 +1,17 @@
 use csa_todo::{
     CriterionKind, CriterionStatus, GeneratedPlanPersistRequest, SpecCriterion, SpecDocument,
-    TodoManager,
+    TodoManager, validate_generated_plan_request,
 };
+
+fn valid_han_summary() -> String {
+    "\u{9a8c}\u{8bc1}\u{89c4}\u{683c}\u{751f}\u{547d}\u{5468}\u{671f}".to_string()
+}
 
 fn sample_spec(plan_ulid: &str) -> SpecDocument {
     SpecDocument {
         schema_version: 1,
         plan_ulid: plan_ulid.to_string(),
-        summary: "Integration-test spec lifecycle coverage.".to_string(),
+        summary: valid_han_summary(),
         criteria: vec![
             SpecCriterion {
                 kind: CriterionKind::Scenario,
@@ -119,5 +123,29 @@ fn generated_plan_persist_survives_later_simulated_gate_failure() {
     assert!(
         String::from_utf8_lossy(&status.stdout).trim().is_empty(),
         "todos git status should be clean after atomic save"
+    );
+}
+
+#[test]
+fn generated_plan_request_rejects_unsupported_schema_version() {
+    let plan_ulid = "20260211T023000";
+    let mut spec = sample_spec(plan_ulid);
+    spec.schema_version = 2;
+
+    let err = validate_generated_plan_request(
+        plan_ulid,
+        &GeneratedPlanPersistRequest {
+            todo_content:
+                "# Plan\n\n- [ ] Validate schema.\n  DONE WHEN: unsupported spec schema versions are rejected.\n",
+            spec: &spec,
+            epic_plan: None,
+        },
+    )
+    .expect_err("unsupported schema_version must reject the generated plan request");
+
+    assert!(
+        err.to_string()
+            .contains("unsupported spec schema_version 2; expected 1"),
+        "diagnostic should identify the unsupported schema version: {err}"
     );
 }

@@ -648,6 +648,10 @@ mod tests_workflows;
 mod tests_mktd_save;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_mktd_save_schema.rs"]
+mod tests_mktd_save_schema;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_mktd_save_workflow.rs"]
 mod tests_mktd_save_workflow;
 

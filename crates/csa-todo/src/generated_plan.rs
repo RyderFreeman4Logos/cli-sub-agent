@@ -66,24 +66,7 @@ impl TodoManager {
         publish: impl FnOnce(&GeneratedPlanPersistResult) -> Result<T>,
     ) -> Result<(GeneratedPlanPersistResult, T)> {
         self.with_write_lock(|| {
-            validate_timestamp(timestamp)?;
-            if request.spec.plan_ulid != timestamp {
-                anyhow::bail!(
-                    "spec plan_ulid '{}' does not match TODO plan '{}'",
-                    request.spec.plan_ulid,
-                    timestamp
-                );
-            }
-            if let Some(epic_plan) = request.epic_plan {
-                epic_plan.validate()?;
-            }
-            // Fail-closed gate (#1820/#1822 hard-gate contract): reject generated
-            // content that violates the plan's hard invariants BEFORE any file
-            // write or commit. The mktd workflow validates the rendered artifacts
-            // before calling persist, but this guards EVERY caller (e.g. a direct
-            // `csa todo persist`) so an invalid plan can never enter the todos git
-            // history via the `publish` commit closure below.
-            validate_generated_plan_content(request.todo_content, request.spec)?;
+            validate_generated_plan_request(timestamp, &request)?;
 
             let mut plan = self.load_inner(timestamp)?;
             let spec_content =
@@ -122,6 +105,73 @@ impl TodoManager {
             Ok((result, published))
         })
     }
+}
+
+/// Validate generated TODO/spec artifacts without writing files or committing.
+///
+/// This is the non-mutating counterpart to the validation phase inside
+/// [`TodoManager::persist_generated_plan_with`]. It exists so workflows can
+/// fail before the commit boundary while still using the same Rust parser and
+/// invariant checks as the real persist path.
+pub fn validate_generated_plan_request(
+    timestamp: &str,
+    request: &GeneratedPlanPersistRequest<'_>,
+) -> Result<()> {
+    validate_timestamp(timestamp)?;
+    if request.spec.plan_ulid != timestamp {
+        anyhow::bail!(
+            "spec plan_ulid '{}' does not match TODO plan '{}'",
+            request.spec.plan_ulid,
+            timestamp
+        );
+    }
+    if request.spec.schema_version != 1 {
+        anyhow::bail!(
+            "unsupported spec schema_version {}; expected 1",
+            request.spec.schema_version
+        );
+    }
+    if let Some(epic_plan) = request.epic_plan {
+        epic_plan.validate()?;
+    }
+    validate_generated_spec_summary(&request.spec.summary)?;
+    // Reject invalid generated content before any file write or commit.
+    validate_generated_plan_content(request.todo_content, request.spec)
+}
+
+fn validate_generated_spec_summary(summary: &str) -> Result<()> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!(
+            "generated spec summary is empty; `CSA-Criteria` commit trailer requires one Chinese line"
+        );
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        anyhow::bail!(
+            "generated spec summary must be one line for the `CSA-Criteria` commit trailer"
+        );
+    }
+    if !trimmed.chars().any(is_han_char) {
+        anyhow::bail!(
+            "generated spec summary lacks Han characters; `CSA-Criteria` commit trailer requires one Chinese line"
+        );
+    }
+    Ok(())
+}
+
+fn is_han_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{20000}'..='\u{2A6DF}'
+            | '\u{2A700}'..='\u{2B73F}'
+            | '\u{2B740}'..='\u{2B81F}'
+            | '\u{2B820}'..='\u{2CEAF}'
+            | '\u{2CEB0}'..='\u{2EBEF}'
+            | '\u{30000}'..='\u{3134F}'
+    )
 }
 
 /// Reject generated plan content that violates the hard invariants every
@@ -224,11 +274,13 @@ mod tests {
     use crate::{CriterionKind, CriterionStatus, LOCK_FILE, SpecCriterion};
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    const HAN_SUMMARY: &str = "\u{9a8c}\u{8bc1}\u{6458}\u{8981}";
+
     fn sample_spec(plan_ulid: &str) -> SpecDocument {
         SpecDocument {
             schema_version: 1,
             plan_ulid: plan_ulid.to_string(),
-            summary: "lock-scope probe".to_string(),
+            summary: HAN_SUMMARY.to_string(),
             criteria: vec![SpecCriterion {
                 kind: CriterionKind::Check,
                 id: "check-lock-scope".to_string(),
@@ -241,22 +293,67 @@ mod tests {
     #[test]
     fn validate_generated_plan_content_rejects_missing_invariants() {
         let spec = sample_spec("01JABCDEF0123456789ABCDEFG");
-        // No checkbox task → rejected.
         assert!(validate_generated_plan_content("# Plan\n\nDONE WHEN: x\n", &spec).is_err());
-        // No `DONE WHEN` clause → rejected.
         assert!(validate_generated_plan_content("# Plan\n\n- [ ] do thing\n", &spec).is_err());
-        // No spec criteria → rejected (would render an empty plan).
         let mut empty = sample_spec("01JABCDEF0123456789ABCDEFG");
         empty.criteria.clear();
         assert!(
             validate_generated_plan_content("# Plan\n\n- [ ] do thing\n  DONE WHEN: y\n", &empty)
                 .is_err()
         );
-        // All invariants satisfied → accepted.
         assert!(
             validate_generated_plan_content("# Plan\n\n- [ ] do thing\n  DONE WHEN: y\n", &spec)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn validate_generated_plan_request_rejects_bad_spec_summary() {
+        let plan_ulid = "20260211T023000";
+        let todo_content = "# Plan\n\n- [ ] Validate summary.\n  DONE WHEN: the generated spec summary is checked.\n";
+
+        for (summary, expected) in [
+            ("", "summary is empty"),
+            ("   ", "summary is empty"),
+            ("English only summary", "summary lacks Han characters"),
+            (
+                "\u{9a8c}\u{8bc1}\u{6458}\u{8981}\n\u{7b2c}\u{4e8c}\u{884c}",
+                "summary must be one line",
+            ),
+        ] {
+            let mut spec = sample_spec(plan_ulid);
+            spec.summary = summary.to_string();
+            let err = validate_generated_plan_request(
+                plan_ulid,
+                &GeneratedPlanPersistRequest {
+                    todo_content,
+                    spec: &spec,
+                    epic_plan: None,
+                },
+            )
+            .expect_err("invalid summary must reject the generated plan request");
+            assert!(
+                err.to_string().contains(expected),
+                "diagnostic should mention {expected}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_generated_plan_request_accepts_chinese_summary() {
+        let plan_ulid = "20260211T023000";
+        let spec = sample_spec(plan_ulid);
+
+        validate_generated_plan_request(
+            plan_ulid,
+            &GeneratedPlanPersistRequest {
+                todo_content:
+                    "# Plan\n\n- [ ] Validate summary.\n  DONE WHEN: the generated spec summary contains Han.\n",
+                spec: &spec,
+                epic_plan: None,
+            },
+        )
+        .expect("Chinese one-line summary should satisfy the generated plan contract");
     }
 
     /// Round-8 (#1822) regression: the `DONE WHEN:` gate is PER-TASK, not a

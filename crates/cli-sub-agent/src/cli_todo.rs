@@ -64,6 +64,10 @@ pub enum TodoCommands {
         /// Commit message
         message: Option<String>,
 
+        /// Validate generated artifacts without writing files or committing
+        #[arg(long)]
+        dry_run: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,

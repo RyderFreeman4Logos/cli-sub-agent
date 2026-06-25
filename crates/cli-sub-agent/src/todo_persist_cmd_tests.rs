@@ -3,6 +3,10 @@ use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use tempfile::tempdir;
 
+fn valid_han_summary() -> String {
+    "\u{9a8c}\u{8bc1}\u{751f}\u{6210}\u{8ba1}\u{5212}".to_string()
+}
+
 #[test]
 fn handle_persist_reads_artifacts_and_commits_generated_plan() {
     let project_dir = tempdir().expect("project tempdir");
@@ -28,7 +32,7 @@ fn handle_persist_reads_artifacts_and_commits_generated_plan() {
     let spec = SpecDocument {
         schema_version: 1,
         plan_ulid: plan.timestamp.clone(),
-        summary: "Persist generated plan artifacts.".to_string(),
+        summary: valid_han_summary(),
         criteria: vec![SpecCriterion {
             kind: CriterionKind::Check,
             id: "check-persist".to_string(),
@@ -49,6 +53,7 @@ fn handle_persist_reads_artifacts_and_commits_generated_plan() {
         spec_file.display().to_string(),
         None,
         Some("finalize generated plan".to_string()),
+        false,
         Some(project_dir.path().display().to_string()),
     )
     .expect("persist generated plan");
@@ -68,6 +73,221 @@ fn handle_persist_reads_artifacts_and_commits_generated_plan() {
         String::from_utf8_lossy(&status.stdout).trim().is_empty(),
         "todos git status should be clean after handle_persist"
     );
+}
+
+#[test]
+fn handle_persist_dry_run_validates_without_committing() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let manager = TodoManager::new(project_dir.path())?;
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let plan = manager.create("Dry-run generated plan", Some("fix/persist-dry-run"))?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, "create plan")?
+        .ok_or_else(|| anyhow::anyhow!("initial plan should commit"))?;
+    let head_before = git_head(manager.todos_dir())?;
+    let original_todo = std::fs::read_to_string(plan.todo_md_path())?;
+
+    let artifact_dir = project_dir.path().join("session-output");
+    std::fs::create_dir_all(&artifact_dir)?;
+    let todo_file = artifact_dir.join("TODO.md");
+    let spec_file = artifact_dir.join("spec.toml");
+    std::fs::write(
+        &todo_file,
+        "# Dry-run plan\n\n## Tasks\n\n- [ ] Validate without committing.\n  DONE WHEN: csa todo persist --dry-run exits successfully without writing TODO state.\n",
+    )?;
+    let spec = SpecDocument {
+        schema_version: 1,
+        plan_ulid: plan.timestamp.clone(),
+        summary: valid_han_summary(),
+        criteria: vec![SpecCriterion {
+            kind: CriterionKind::Check,
+            id: "check-dry-run".to_string(),
+            description: "Dry-run validates artifacts without committing.".to_string(),
+            status: CriterionStatus::Pending,
+        }],
+    };
+    std::fs::write(&spec_file, toml::to_string_pretty(&spec)?)?;
+
+    handle_persist(
+        plan.timestamp.clone(),
+        todo_file.display().to_string(),
+        spec_file.display().to_string(),
+        None,
+        Some("validate generated plan".to_string()),
+        true,
+        Some(project_dir.path().display().to_string()),
+    )?;
+
+    assert_eq!(
+        head_before,
+        git_head(manager.todos_dir())?,
+        "dry-run must not create a todos-git commit"
+    );
+    assert_eq!(
+        original_todo,
+        std::fs::read_to_string(plan.todo_md_path())?,
+        "dry-run must not rewrite TODO.md"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(manager.todos_dir())
+        .output()?;
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "todos git status should stay clean after dry-run"
+    );
+    Ok(())
+}
+
+#[test]
+fn handle_persist_dry_run_rejects_invalid_spec_summary_without_committing() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let manager = TodoManager::new(project_dir.path())?;
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let plan = manager.create("Dry-run summary gate", Some("fix/persist-summary-gate"))?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, "create plan")?
+        .ok_or_else(|| anyhow::anyhow!("initial plan should commit"))?;
+    let head_before = git_head(manager.todos_dir())?;
+    let original_todo = std::fs::read_to_string(plan.todo_md_path())?;
+
+    let artifact_dir = project_dir.path().join("session-output");
+    std::fs::create_dir_all(&artifact_dir)?;
+    let todo_file = artifact_dir.join("TODO.md");
+    let spec_file = artifact_dir.join("spec.toml");
+    std::fs::write(
+        &todo_file,
+        "# Summary gate\n\n## Tasks\n\n- [ ] Reject invalid spec summaries.\n  DONE WHEN: csa todo persist --dry-run rejects empty and no-Han summaries.\n",
+    )?;
+
+    for (summary, expected) in [
+        ("", "generated spec summary is empty"),
+        (
+            "English only summary",
+            "generated spec summary lacks Han characters",
+        ),
+    ] {
+        let spec = SpecDocument {
+            schema_version: 1,
+            plan_ulid: plan.timestamp.clone(),
+            summary: summary.to_string(),
+            criteria: vec![SpecCriterion {
+                kind: CriterionKind::Check,
+                id: "check-summary-gate".to_string(),
+                description: "Dry-run rejects spec summaries that cannot become CSA-Criteria."
+                    .to_string(),
+                status: CriterionStatus::Pending,
+            }],
+        };
+        std::fs::write(&spec_file, toml::to_string_pretty(&spec)?)?;
+
+        let err = handle_persist(
+            plan.timestamp.clone(),
+            todo_file.display().to_string(),
+            spec_file.display().to_string(),
+            None,
+            Some("validate generated plan".to_string()),
+            true,
+            Some(project_dir.path().display().to_string()),
+        )
+        .expect_err("dry-run must reject invalid spec summaries");
+        assert!(
+            err.to_string().contains(expected),
+            "diagnostic should contain {expected}: {err}"
+        );
+    }
+
+    assert_eq!(
+        head_before,
+        git_head(manager.todos_dir())?,
+        "dry-run summary rejection must not create a todos-git commit"
+    );
+    assert_eq!(
+        original_todo,
+        std::fs::read_to_string(plan.todo_md_path())?,
+        "dry-run summary rejection must not rewrite TODO.md"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(manager.todos_dir())
+        .output()?;
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "todos git status should stay clean after dry-run summary rejection"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn handle_persist_dry_run_rejects_unsupported_schema_without_committing() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let manager = TodoManager::new(project_dir.path())?;
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let plan = manager.create("Dry-run schema gate", Some("fix/persist-schema-gate"))?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, "create plan")?
+        .ok_or_else(|| anyhow::anyhow!("initial plan should commit"))?;
+    let head_before = git_head(manager.todos_dir())?;
+    let original_todo = std::fs::read_to_string(plan.todo_md_path())?;
+
+    let artifact_dir = project_dir.path().join("session-output");
+    std::fs::create_dir_all(&artifact_dir)?;
+    let todo_file = artifact_dir.join("TODO.md");
+    let spec_file = artifact_dir.join("spec.toml");
+    std::fs::write(
+        &todo_file,
+        "# Schema gate\n\n## Tasks\n\n- [ ] Reject unsupported spec schemas.\n  DONE WHEN: csa todo persist --dry-run rejects schema_version other than 1.\n",
+    )?;
+    let spec = SpecDocument {
+        schema_version: 2,
+        plan_ulid: plan.timestamp.clone(),
+        summary: valid_han_summary(),
+        criteria: vec![SpecCriterion {
+            kind: CriterionKind::Check,
+            id: "check-schema-gate".to_string(),
+            description: "Dry-run rejects unsupported spec schema versions.".to_string(),
+            status: CriterionStatus::Pending,
+        }],
+    };
+    std::fs::write(&spec_file, toml::to_string_pretty(&spec)?)?;
+
+    let err = handle_persist(
+        plan.timestamp.clone(),
+        todo_file.display().to_string(),
+        spec_file.display().to_string(),
+        None,
+        Some("validate generated plan".to_string()),
+        true,
+        Some(project_dir.path().display().to_string()),
+    )
+    .expect_err("dry-run must reject unsupported spec schema versions");
+    assert!(
+        err.to_string()
+            .contains("unsupported spec schema_version 2; expected 1"),
+        "diagnostic should identify the unsupported schema version: {err}"
+    );
+
+    assert_eq!(
+        head_before,
+        git_head(manager.todos_dir())?,
+        "dry-run schema rejection must not create a todos-git commit"
+    );
+    assert_eq!(
+        original_todo,
+        std::fs::read_to_string(plan.todo_md_path())?,
+        "dry-run schema rejection must not rewrite TODO.md"
+    );
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(manager.todos_dir())
+        .output()?;
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "todos git status should stay clean after dry-run schema rejection"
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -106,7 +326,7 @@ timeout_secs = 5
     let spec = SpecDocument {
         schema_version: 1,
         plan_ulid: plan.timestamp.clone(),
-        summary: "Persist generated plan hook regression.".to_string(),
+        summary: valid_han_summary(),
         criteria: vec![SpecCriterion {
             kind: CriterionKind::Check,
             id: "check-persist-hook".to_string(),
@@ -123,6 +343,7 @@ timeout_secs = 5
         spec_file.display().to_string(),
         None,
         Some("finalize generated plan".to_string()),
+        false,
         Some(project_dir.path().display().to_string()),
     )?;
 
@@ -176,6 +397,7 @@ fn handle_persist_rejects_spec_section_marker_without_committing() -> anyhow::Re
         spec_file.display().to_string(),
         None,
         Some("finalize marker spec".to_string()),
+        false,
         Some(project_dir.path().display().to_string()),
     )
     .expect_err("persist must reject CSA section marker spec artifacts");
@@ -232,7 +454,7 @@ fn handle_persist_rejects_invalid_plan_without_committing() -> anyhow::Result<()
     let spec = SpecDocument {
         schema_version: 1,
         plan_ulid: plan.timestamp.clone(),
-        summary: "Invalid plan missing DONE WHEN.".to_string(),
+        summary: valid_han_summary(),
         criteria: vec![SpecCriterion {
             kind: CriterionKind::Check,
             id: "check-invalid".to_string(),
@@ -248,6 +470,7 @@ fn handle_persist_rejects_invalid_plan_without_committing() -> anyhow::Result<()
         spec_file.display().to_string(),
         None,
         Some("finalize invalid plan".to_string()),
+        false,
         Some(project_dir.path().display().to_string()),
     );
     assert!(

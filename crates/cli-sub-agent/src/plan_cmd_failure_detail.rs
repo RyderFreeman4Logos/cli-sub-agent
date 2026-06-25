@@ -4,6 +4,9 @@ pub(super) fn select_actionable_failure_line(text: &str) -> Option<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect();
+    if let Some(detail) = select_underlying_command_failure_detail(&all_lines) {
+        return Some(detail);
+    }
     if let Some(detail) = select_todo_persist_failure_detail(&all_lines) {
         return Some(detail);
     }
@@ -20,6 +23,57 @@ pub(super) fn select_actionable_failure_line(text: &str) -> Option<String> {
         .find(|line| is_high_signal_failure_line(line))
         .or_else(|| lines.last())
         .map(|line| truncate_failure_detail(line))
+}
+
+fn select_underlying_command_failure_detail(lines: &[&str]) -> Option<String> {
+    let diagnostic = lines
+        .iter()
+        .rev()
+        .copied()
+        .find(|line| is_explicit_underlying_command_failure(line))?;
+    if !has_current_underlying_command_context(lines) {
+        return None;
+    }
+    let mut parts = vec![diagnostic];
+    for line in lines
+        .iter()
+        .copied()
+        .filter(|line| is_command_stderr_summary(line))
+    {
+        if !parts.contains(&line) {
+            parts.push(line);
+        }
+    }
+    for line in prioritized_todo_context_lines(lines) {
+        if !parts.contains(&line) {
+            parts.push(line);
+        }
+    }
+    Some(truncate_failure_detail(&parts.join(" | ")))
+}
+
+fn is_explicit_underlying_command_failure(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized == "underlying command failure"
+        || normalized.starts_with("underlying command failure:")
+        || normalized.starts_with("underlying command failure ")
+}
+
+fn has_current_underlying_command_context(lines: &[&str]) -> bool {
+    lines.iter().copied().any(is_spec_artifact_path)
+        && lines
+            .iter()
+            .copied()
+            .any(is_underlying_producer_contract_line)
+}
+
+fn is_underlying_producer_contract_line(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized.contains("spec producer-contract error")
+        && (normalized.contains("first content: diag")
+            || normalized.contains("first content: command stderr")
+            || normalized.contains("first content: command stdout")
+            || normalized.contains("command stderr/stdout contamination"))
 }
 
 fn select_todo_persist_failure_detail(lines: &[&str]) -> Option<String> {
@@ -71,6 +125,7 @@ fn prioritized_todo_context_lines<'a>(lines: &'a [&str]) -> Vec<&'a str> {
     for predicate in [
         is_spec_artifact_path as fn(&str) -> bool,
         is_raw_spec_artifact_path,
+        is_first_content_line,
         is_first_marker_kind,
         is_todo_artifact_path,
         is_persist_stderr_artifact,
@@ -96,6 +151,14 @@ fn is_first_marker_kind(line: &str) -> bool {
     line.contains("first marker kind:")
 }
 
+fn is_first_content_line(line: &str) -> bool {
+    line.starts_with("First content:") || line.contains("first content:")
+}
+
+fn is_command_stderr_summary(line: &str) -> bool {
+    line.starts_with("Command stderr summary:")
+}
+
 fn is_todo_artifact_path(line: &str) -> bool {
     line.starts_with("TODO artifact path:")
 }
@@ -117,6 +180,8 @@ fn is_todo_validation_diagnostic(line: &str) -> bool {
     normalized.contains("failed to parse spec file")
         || normalized.contains("toml parse error")
         || normalized.contains("spec artifact-shape error")
+        || normalized.contains("spec producer-contract error")
+        || normalized.contains("parser/root-cause")
         || normalized.contains("bad spec artifact")
         || normalized.contains("spec artifact is empty")
         || normalized.contains("todo artifact is empty")
@@ -165,7 +230,7 @@ fn is_high_signal_failure_line(line: &str) -> bool {
 }
 
 fn truncate_failure_detail(line: &str) -> String {
-    const MAX_FAILURE_DETAIL_CHARS: usize = 240;
+    const MAX_FAILURE_DETAIL_CHARS: usize = 420;
     let mut chars = line.chars();
     let truncated: String = chars.by_ref().take(MAX_FAILURE_DETAIL_CHARS).collect();
     if chars.next().is_some() {

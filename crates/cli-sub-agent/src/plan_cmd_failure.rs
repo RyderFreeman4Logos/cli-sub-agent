@@ -273,5 +273,8 @@ fn redact_optional_text(value: &Option<String>) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "plan_cmd_failure_recovery_tests.rs"]
+mod recovery_tests;
+#[cfg(test)]
 #[path = "plan_cmd_failure_tests.rs"]
 mod tests;
