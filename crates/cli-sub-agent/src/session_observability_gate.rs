@@ -11,7 +11,7 @@ pub(super) fn infer_post_exec_gate_failure_from_log(
     result_path: &Path,
     result: &mut SessionResult,
 ) -> Result<bool> {
-    if result.post_exec_gate.is_some() || !result_failed(result) {
+    if result.post_exec_gate.is_some() {
         return Ok(false);
     }
     let log_path = session_dir.join(GATE_FAILURE_LOG_REL_PATH);
@@ -68,10 +68,6 @@ fn gate_log_is_fresh_for_result(log_path: &Path, result_path: &Path) -> bool {
     };
 
     log_modified >= result_modified
-}
-
-fn result_failed(result: &SessionResult) -> bool {
-    result.exit_code != 0 || !result.status.eq_ignore_ascii_case("success")
 }
 
 fn ensure_gate_failure_artifact(result: &mut SessionResult) {

@@ -365,6 +365,91 @@ fn handle_session_wait_ignores_intermediate_success_result_while_daemon_pid_aliv
 }
 
 #[test]
+fn issue_2450_wait_prefers_fresh_post_exec_gate_log_over_stale_success_result() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-post-exec-gate-failure-over-success"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    std::fs::write(
+        session_dir.join("daemon-completion.toml"),
+        "exit_code = 0\nstatus = \"success\"\n",
+    )
+    .unwrap();
+    save_result(
+        project,
+        &session_id,
+        &SessionResult {
+            summary: "implemented issue and commit landed".to_string(),
+            ..make_result("success", 0)
+        },
+    )
+    .unwrap();
+    let gate_log = session_dir.join(csa_session::GATE_FAILURE_LOG_REL_PATH);
+    std::fs::create_dir_all(gate_log.parent().unwrap()).unwrap();
+    std::fs::write(
+        &gate_log,
+        "error: Recipe `pre-commit` failed with exit code 101\n\
+         error: Recipe `clippy` failed with exit code 101\n",
+    )
+    .unwrap();
+
+    let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+    let exit_code = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("fresh post-exec gate log should refresh result before reconcile");
+        },
+        |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("wait should use post-exec gate verdict");
+
+    assert_eq!(
+        exit_code, 1,
+        "wait must not trust a stale employee success result after post-exec gate failure"
+    );
+    assert_eq!(
+        emitted_completion,
+        Some((session_id.clone(), "failure".to_string(), 1, false))
+    );
+    let persisted = load_result(project, &session_id)
+        .unwrap()
+        .expect("result should be persisted");
+    assert_eq!(persisted.status, "failure");
+    assert_eq!(persisted.exit_code, 1);
+    assert!(
+        persisted.summary.contains("POST-EXEC GATE FAILED"),
+        "wait summary must surface the gate verdict instead of employee self-report: {}",
+        persisted.summary
+    );
+    assert!(
+        !persisted.summary.contains("commit landed"),
+        "employee success self-report must not survive as the final summary: {}",
+        persisted.summary
+    );
+}
+
+#[test]
 fn handle_session_wait_does_not_complete_daemon_packet_without_terminal_result() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
