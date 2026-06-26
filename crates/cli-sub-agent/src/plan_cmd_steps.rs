@@ -25,6 +25,7 @@ use super::{
     PlanRunJournal, apply_repo_fingerprint, detect_repo_fingerprint, persist_plan_journal,
     substitute_vars,
 };
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 #[path = "plan_cmd_step_failure.rs"]
@@ -40,7 +41,7 @@ pub(crate) use step_target::{
     StepTarget, resolve_step_tool_with_variables, step_readonly_project_root,
 };
 
-/// Result of executing a single step.
+/// Step result.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StepResult {
     pub(crate) step_id: usize,
@@ -49,14 +50,14 @@ pub(crate) struct StepResult {
     pub(crate) duration_secs: f64,
     pub(crate) skipped: bool,
     pub(crate) error: Option<String>,
-    /// Captured step output, exposed to later steps as `${STEP_<id>_OUTPUT}`.
+    /// Output as `${STEP_<id>_OUTPUT}`.
     pub(crate) output: Option<String>,
-    /// CSA meta session ID, exposed to later steps as `${STEP_<id>_SESSION}`.
+    /// CSA session exposed as `${STEP_<id>_SESSION}`.
     pub(crate) session_id: Option<String>,
-    /// Human-readable command or dispatch description for failure reports.
+    /// Command description for failures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) command: Option<String>,
-    /// Captured stderr from the final attempt, kept out of step output variables.
+    /// Final stderr kept out of step output variables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stderr: Option<String>,
 }
@@ -72,6 +73,7 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) resume_completed_steps: &'a HashSet<usize>,
     pub(super) chunked: bool,
     pub(super) no_fs_sandbox: bool,
+    pub(super) resources: RunResourceOverrides,
     pub(super) startup_env: &'a StartupSubtreeEnv,
 }
 
@@ -82,6 +84,7 @@ pub(crate) struct StepExecutionContext<'a> {
     pub(crate) tool_override: Option<&'a ToolName>,
     pub(crate) model_spec_override: Option<&'a String>,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) resources: RunResourceOverrides,
     pub(crate) startup_env: &'a StartupSubtreeEnv,
 }
 
@@ -130,6 +133,7 @@ pub(super) async fn execute_plan_with_journal(
                 tool_override: run_ctx.tool_override,
                 model_spec_override: run_ctx.model_spec_override,
                 no_fs_sandbox: run_ctx.no_fs_sandbox,
+                resources: run_ctx.resources,
                 startup_env: run_ctx.startup_env,
             },
         )
@@ -141,7 +145,7 @@ pub(super) async fn execute_plan_with_journal(
         };
         let is_failure = !result.skipped && result.exit_code != 0;
 
-        // Inject step output for subsequent steps (successful steps only).
+        // Inject successful step output for later steps.
         let var_key = format!("STEP_{}_OUTPUT", result.step_id);
         let raw_output = result.output.as_deref().unwrap_or("").to_string();
         let assignment_markers = if !is_failure && should_inject_assignment_markers(step) {
@@ -149,7 +153,7 @@ pub(super) async fn execute_plan_with_journal(
         } else {
             Vec::new()
         };
-        // Strip CSA_VAR: lines so downstream variable references keep clean step output.
+        // Strip CSA_VAR lines from downstream output.
         let var_value = strip_assignment_marker_lines(&raw_output);
         vars.insert(var_key, var_value);
         let session_var_key = format!("STEP_{}_SESSION", result.step_id);

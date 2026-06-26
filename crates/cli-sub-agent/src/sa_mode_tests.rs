@@ -105,6 +105,35 @@ mod tests {
     }
 
     #[test]
+    fn plan_run_parses_memory_override_flags() {
+        let plan_cli = Cli::try_parse_from([
+            "csa",
+            "plan",
+            "run",
+            "--memory-max-mb",
+            "9103",
+            "--min-free-memory-mb",
+            "193",
+            "flow.toml",
+        ])
+        .expect("plan run memory override flags should parse");
+        match plan_cli.command {
+            Commands::Plan {
+                cmd:
+                    PlanCommands::Run {
+                        memory_max_mb,
+                        min_free_memory_mb,
+                        ..
+                    },
+            } => {
+                assert_eq!(memory_max_mb, Some(9103));
+                assert_eq!(min_free_memory_mb, Some(193));
+            }
+            _ => panic!("expected plan command"),
+        }
+    }
+
+    #[test]
     fn top_level_help_omits_dev2merge_subcommand() {
         // The `csa dev2merge` subcommand was removed in #1638; the dev2merge
         // pipeline is reached via `csa plan run patterns/dev2merge/workflow.toml`

@@ -17,6 +17,7 @@ fn make_args() -> PlanRunArgs {
         complete_manual_step: None,
         cd: None,
         no_fs_sandbox: false,
+        resources: Default::default(),
         current_depth: 0,
         pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
         startup_env: crate::startup_env::StartupSubtreeEnv::default(),
@@ -426,6 +427,33 @@ fn forwarded_args_preserve_no_fs_sandbox_flag() {
     ];
     let forwarded = build_forwarded_plan_args(&argv);
     assert_eq!(forwarded, vec!["--no-fs-sandbox", "workflow.toml"]);
+}
+
+#[test]
+fn forwarded_args_preserve_plan_memory_overrides() {
+    let argv = vec![
+        "csa".to_string(),
+        "plan".to_string(),
+        "run".to_string(),
+        "--memory-max-mb".to_string(),
+        "9103".to_string(),
+        "--min-free-memory-mb".to_string(),
+        "193".to_string(),
+        "workflow.toml".to_string(),
+    ];
+
+    let forwarded = build_forwarded_plan_args(&argv);
+
+    assert_eq!(
+        forwarded,
+        vec![
+            "--memory-max-mb",
+            "9103",
+            "--min-free-memory-mb",
+            "193",
+            "workflow.toml",
+        ]
+    );
 }
 
 #[test]

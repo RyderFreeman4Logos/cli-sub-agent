@@ -37,6 +37,7 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
             tool_override: None,
             model_spec_override: None,
             no_fs_sandbox: false,
+            resources: Default::default(),
             startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
         },
     )

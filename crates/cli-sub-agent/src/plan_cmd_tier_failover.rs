@@ -82,6 +82,7 @@ pub(super) async fn execute_csa_step_with_tier_failover(
                     },
                     no_fs_sandbox: step_ctx.no_fs_sandbox,
                     readonly_project_root: params.readonly_project_root,
+                    resources: step_ctx.resources,
                     startup_env: step_ctx.startup_env,
                 },
             ),
