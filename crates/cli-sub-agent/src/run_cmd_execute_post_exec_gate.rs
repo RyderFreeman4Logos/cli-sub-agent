@@ -644,6 +644,9 @@ where
 mod post_exec_tests;
 
 #[cfg(test)]
+#[path = "run_cmd_execute_post_exec_reserved_path_tests.rs"]
+mod post_exec_reserved_path_tests;
+#[cfg(test)]
 #[path = "run_cmd_execute_post_exec_residual_tests.rs"]
 mod post_exec_residual_tests;
 #[cfg(test)]

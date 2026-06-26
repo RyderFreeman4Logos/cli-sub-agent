@@ -206,6 +206,71 @@ fn test_create_session_with_daemon_env_uses_preassigned_id() {
 }
 
 #[test]
+fn test_create_session_with_daemon_env_ignores_preassigned_id_without_project_root() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path();
+    let session_id = "01K00000000000000000000002";
+    let session_dir = get_session_root(project)
+        .unwrap()
+        .join("sessions")
+        .join(session_id);
+
+    let state = create_session_with_daemon_env(
+        project,
+        Some("independent session"),
+        None,
+        None,
+        Some(session_id),
+        Some(&session_dir),
+        None,
+    )
+    .unwrap();
+
+    assert_ne!(state.meta_session_id, session_id);
+    assert!(
+        get_session_dir(project, &state.meta_session_id)
+            .unwrap()
+            .exists()
+    );
+    assert!(!session_dir.join(STATE_FILE_NAME).exists());
+}
+
+#[test]
+fn test_create_session_with_daemon_env_ignores_preassigned_id_for_other_project() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("requested");
+    let daemon_project = td.path().join("daemon");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&daemon_project).unwrap();
+    let session_id = "01K00000000000000000000003";
+    let session_dir = get_session_root(&daemon_project)
+        .unwrap()
+        .join("sessions")
+        .join(session_id);
+
+    let state = create_session_with_daemon_env(
+        &project,
+        Some("independent session"),
+        None,
+        None,
+        Some(session_id),
+        Some(&session_dir),
+        Some(&daemon_project),
+    )
+    .unwrap();
+
+    assert_ne!(state.meta_session_id, session_id);
+    assert!(
+        get_session_dir(&project, &state.meta_session_id)
+            .unwrap()
+            .exists()
+    );
+    assert!(!session_dir.join(STATE_FILE_NAME).exists());
+}
+
+#[test]
 fn test_list_sessions_with_tool_filter() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);

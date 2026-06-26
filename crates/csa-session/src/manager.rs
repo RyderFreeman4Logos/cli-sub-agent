@@ -89,7 +89,7 @@ pub fn create_session(
         description,
         parent_id,
         tool,
-        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env()),
+        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env(project_path)),
     )
 }
 
@@ -127,7 +127,7 @@ pub(crate) fn create_session_in(
         description,
         parent_id,
         tool,
-        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env()),
+        SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_env(project_path)),
     )
 }
 

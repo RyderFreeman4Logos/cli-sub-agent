@@ -159,7 +159,7 @@ fn record_writer_uncommitted_changes_with_config(
     result: &mut csa_process::ExecutionResult,
     record: WriterUncommittedRecord<'_>,
 ) -> Option<csa_session::LargeDiffWarningReport> {
-    if !is_writer_session(record.sa_mode, Some("run")) {
+    if !is_writer_session(record.sa_mode, Some("run")) && !record.require_commit {
         return None;
     }
     let token_threshold = tracked_diff_token_threshold(record.large_diff_config);

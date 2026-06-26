@@ -9,13 +9,14 @@ pub(crate) enum SessionIdStrategy {
     Fresh,
 }
 
-pub(crate) fn preassigned_daemon_session_id_from_env() -> Option<String> {
+pub(crate) fn preassigned_daemon_session_id_from_env(project_path: &Path) -> Option<String> {
     let session_id = std::env::var(super::DAEMON_SESSION_ID_ENV)
         .ok()
         .filter(|value| !value.is_empty())?;
     let session_dir = std::env::var_os(super::DAEMON_SESSION_DIR_ENV);
     let project_root = std::env::var_os(super::DAEMON_PROJECT_ROOT_ENV);
     preassigned_daemon_session_id_from_values(
+        project_path,
         Some(session_id.as_str()),
         session_dir.as_deref().map(Path::new),
         project_root.as_deref().map(Path::new),
@@ -23,13 +24,22 @@ pub(crate) fn preassigned_daemon_session_id_from_env() -> Option<String> {
 }
 
 pub(crate) fn preassigned_daemon_session_id_from_values(
+    project_path: &Path,
     session_id: Option<&str>,
-    session_dir: Option<&Path>,
+    _session_dir: Option<&Path>,
     project_root: Option<&Path>,
 ) -> Option<String> {
     let session_id = session_id.filter(|value| !value.is_empty())?;
-    let has_daemon_context = session_dir.is_some() || project_root.is_some();
-    has_daemon_context.then(|| session_id.to_string())
+    let project_root = project_root?;
+    same_project_path(project_path, project_root).then(|| session_id.to_string())
+}
+
+fn same_project_path(left: &Path, right: &Path) -> bool {
+    normalize_project_path(left) == normalize_project_path(right)
+}
+
+fn normalize_project_path(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Create a session using explicit daemon env values rather than mutating the
@@ -51,6 +61,7 @@ pub fn create_session_with_daemon_env(
         parent_id,
         tool,
         SessionIdStrategy::DaemonAware(preassigned_daemon_session_id_from_values(
+            project_path,
             daemon_session_id,
             daemon_session_dir,
             daemon_project_root,
