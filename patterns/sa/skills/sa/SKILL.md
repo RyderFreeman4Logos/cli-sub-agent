@@ -160,8 +160,9 @@ liveness failure, or direct user instruction.
 
 For codebase exploration (searching code, reading multiple files, understanding architecture),
 Layer 1 and Layer 2 employees **MUST prefer `csa run` over Claude Code's built-in `Agent` tool
-with `subagent_type=Explore`**. CSA tokens (gemini-cli/codex) are significantly cheaper than
-Claude tokens, and CSA tools have larger context windows for processing many files simultaneously.
+with `subagent_type=Explore`** when a supported CSA routing tool is available. Codex and
+OpenCode can be cheaper than Claude tokens, and CSA tools have large context windows for
+processing many files simultaneously.
 Reserve the built-in Explore agent only for quick searches that need <3 queries.
 
 ## Structured Communication Protocol

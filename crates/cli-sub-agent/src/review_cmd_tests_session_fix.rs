@@ -113,13 +113,13 @@ fn write_session_result(project_root: &Path, session_id: &str, tool: &str) {
 }
 
 fn review_config_with_quality_tier() -> ProjectConfig {
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let mut config = project_config_with_enabled_tools(&["opencode", "codex"]);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {
             description: "Test quality tier".to_string(),
             models: vec![
-                "gemini-cli/google/default/xhigh".to_string(),
+                "opencode/openai/gpt-5/xhigh".to_string(),
                 "codex/openai/gpt-5.5/xhigh".to_string(),
             ],
             strategy: TierStrategy::default(),
@@ -135,12 +135,12 @@ fn review_config_with_quality_tier() -> ProjectConfig {
 }
 
 fn review_config_with_gemini_only_quality_tier() -> ProjectConfig {
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let mut config = project_config_with_enabled_tools(&["opencode", "codex"]);
     config.tiers.insert(
         "quality".to_string(),
         csa_config::config::TierConfig {
             description: "Test quality tier".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["opencode/openai/gpt-5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -457,7 +457,7 @@ fn review_session_fix_rejects_explicit_tool_mismatch_before_child_session_creati
     let args = parse_session_fix_args(
         project_dir.path(),
         &source.meta_session_id,
-        &["--tool", "gemini-cli"],
+        &["--tool", "opencode"],
     );
 
     let err = validate_session_fix_before_daemon(&args)
@@ -469,7 +469,7 @@ fn review_session_fix_rejects_explicit_tool_mismatch_before_child_session_creati
         "unexpected error: {msg}"
     );
     assert!(
-        msg.contains("explicit --tool 'gemini-cli'"),
+        msg.contains("explicit --tool 'opencode'"),
         "unexpected error: {msg}"
     );
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();

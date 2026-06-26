@@ -6,7 +6,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)](https://www.rust-lang.org/)
 
 CSA is a **headless IDE runtime for AI agents**. It provides a unified CLI that
-orchestrates multiple AI coding tools (claude-code, codex, gemini-cli, opencode)
+orchestrates multiple AI coding tools (claude-code, codex, opencode)
 as composable Unix processes -- enabling recursive sub-agent spawning,
 model-heterogeneous code review, and resource-aware scheduling.
 
@@ -15,7 +15,7 @@ model-heterogeneous code review, and resource-aware scheduling.
 Built-in sub-agents and agent-teams are **homogeneous** -- they only use one
 model family. Reviews suffer from same-model blind spots. CSA enforces
 **heterogeneous execution**: if the parent is Claude, the reviewer is
-automatically Codex or Gemini, and vice versa. No silent fallback.
+automatically a different supported model family such as Codex or Claude. No silent fallback.
 
 ## Key Features
 
@@ -79,7 +79,7 @@ See [Getting Started](docs/getting-started.md) for full installation and setup i
 ```
 Main Agent (depth=0, claude-code)
   |-- Reviewer (depth=1, codex)         # heterogeneous review
-  |   +-- Analyzer (depth=2, gemini)    # deep analysis
+  |   +-- Analyzer (depth=2, opencode)  # deep analysis
   +-- Debater (depth=1, codex)          # adversarial debate
       +-- Adversary (depth=2, claude)   # counter-argument
 ```
@@ -111,7 +111,6 @@ See [Architecture](docs/architecture.md) for design principles and dependency gr
 |------|----------|-----------|---------|
 | **claude-code** | Anthropic | ACP | 200K |
 | **codex** | OpenAI | ACP | 200K |
-| **gemini-cli** | Google | Legacy CLI | 2M |
 | **opencode** | OpenRouter | Legacy CLI | 200K |
 
 `claude-code` and `codex` both default to ACP runtimes today. `csa doctor`

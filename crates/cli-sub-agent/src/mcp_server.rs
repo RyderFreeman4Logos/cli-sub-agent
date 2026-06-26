@@ -220,7 +220,7 @@ fn get_tools() -> Vec<McpToolDef> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Tool to use (gemini-cli, opencode, codex, claude-code). With tier, this is a soft preference before remaining tier fallbacks."
+                        "description": "Tool to use (opencode, codex, claude-code). With tier, this is a soft preference before remaining tier fallbacks."
                     },
                     "prompt": {
                         "type": "string",

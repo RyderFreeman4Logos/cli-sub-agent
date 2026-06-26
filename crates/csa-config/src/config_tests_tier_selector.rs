@@ -9,7 +9,7 @@ fn test_resolve_tier_selector_direct_tier() {
         "tier1".to_string(),
         TierConfig {
             description: "test".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -54,7 +54,7 @@ fn test_resolve_tier_selector_alias() {
         "tier-2-standard".to_string(),
         TierConfig {
             description: "test".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -103,7 +103,7 @@ fn test_resolve_tier_selector_direct_wins_on_collision() {
         "default".to_string(),
         TierConfig {
             description: "direct tier".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -236,7 +236,7 @@ fn test_resolve_tier_selector_prefix_unique() {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -310,7 +310,7 @@ fn test_resolve_tier_selector_prefix_ambiguous() {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -361,7 +361,7 @@ fn test_resolve_tier_selector_exact_wins_over_prefix() {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -413,7 +413,7 @@ fn test_suggest_tier_prefix() {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -464,7 +464,7 @@ fn test_suggest_tier_substring() {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -552,7 +552,7 @@ fn test_resolve_tier_selector_empty_string_rejected() {
         "tier-1-quick".to_string(),
         TierConfig {
             description: "test".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -602,7 +602,7 @@ fn compound_tier_fixture(tool_aliases: HashMap<String, String>) -> ProjectConfig
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -671,13 +671,11 @@ fn test_try_parse_compound_builtin_alias_suffix() {
             csa_core::types::ToolName::ClaudeCode,
         )),
     );
-    // `gemini` → GeminiCli (built-in alias from ToolArg::from_str).
+    // `gemini` was a legacy alias for the removed gemini-cli integration and
+    // must not parse as a tier suffix anymore.
     assert_eq!(
         config.try_parse_compound_tier_tool("tier-4-critical-gemini"),
-        Some((
-            "tier-4-critical".to_string(),
-            csa_core::types::ToolName::GeminiCli,
-        )),
+        None,
     );
 }
 

@@ -88,8 +88,12 @@ Once squashed, the original commits cannot be reconstructed from the default bra
 ### Quick Start
 
 ```bash
-csa plan run patterns/dev2merge/workflow.toml
+csa plan run --sa-mode true patterns/dev2merge/workflow.toml
 ```
+
+Root `plan run` callers must pass explicit `--sa-mode true|false`. Use
+`--sa-mode true` for autonomous agent workflows and `--sa-mode false` only for
+deliberate interactive/human runs.
 
 To drive the pipeline from a specific GitHub issue, pass `--issue <N>`. CSA
 fetches the issue body (using the project's configured `GH_CONFIG_DIR`, falling
@@ -97,7 +101,7 @@ back to default `gh` auth on a permission/not-found error) and injects it as the
 `FEATURE_INPUT` workflow variable that the dev2merge planning step consumes:
 
 ```bash
-csa plan run patterns/dev2merge/workflow.toml --issue 1638
+csa plan run --sa-mode true patterns/dev2merge/workflow.toml --issue 1638
 ```
 
 `--issue <N>` is mutually exclusive with an explicit `--var FEATURE_INPUT=...`:
@@ -112,7 +116,7 @@ When the implementation already exists and is committed on the feature branch
 PR → merge → sync — without re-planning:
 
 ```bash
-csa plan run patterns/dev2merge/workflow.toml --var DEV2MERGE_MODE=resume
+csa plan run --sa-mode true patterns/dev2merge/workflow.toml --var DEV2MERGE_MODE=resume
 ```
 
 `DEV2MERGE_MODE` defaults to `full` (the complete pipeline). `resume` skips

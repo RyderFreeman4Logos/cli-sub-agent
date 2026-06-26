@@ -46,7 +46,7 @@ pub struct FilesystemSandboxConfig {
     pub extra_readable: Vec<PathBuf>,
 
     /// Per-tool writable path overrides.  Keys are canonical tool names
-    /// (e.g. `"claude-code"`, `"gemini-cli"`).
+    /// (e.g. `"claude-code"`, `"codex"`).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_writable_overrides: HashMap<String, Vec<PathBuf>>,
 }

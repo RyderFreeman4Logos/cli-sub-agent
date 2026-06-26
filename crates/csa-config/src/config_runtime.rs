@@ -54,8 +54,9 @@ fn profile_defaults(profile: ToolResourceProfile) -> ProfileDefaults {
 fn default_memory_max_mb_for_tool(tool: &str) -> Option<u64> {
     match tool {
         "gemini-cli" => {
-            // Gemini CLI workloads are highly variable. A hard 2GB default often
-            // fails in real projects before useful output is produced.
+            // Legacy Gemini-family session records are highly variable. A hard
+            // 2GB default often fails in real projects before useful output is
+            // produced.
             None
         }
         "codex" => {
@@ -80,7 +81,8 @@ fn default_memory_swap_max_mb_for_tool(tool: &str) -> Option<u64> {
 
 fn default_node_heap_limit_mb_for_tool(tool: &str) -> Option<u64> {
     if tool == "gemini-cli" {
-        // Let gemini-cli decide Node heap sizing unless user explicitly pins it.
+        // Let legacy Gemini-family tool records decide Node heap sizing unless
+        // the user explicitly pins it.
         return None;
     }
     match default_profile(tool) {

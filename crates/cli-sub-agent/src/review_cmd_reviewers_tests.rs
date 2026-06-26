@@ -160,7 +160,7 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let config = project_config_with_tier(&[
         "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "opencode/openai/gpt-5/xhigh",
         "opencode/anthropic/claude-sonnet-4-6/high",
         "claude-code/anthropic/sonnet/xhigh",
     ]);
@@ -176,7 +176,7 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
         large_diff_auto_escalation: false,
         explicit_tool: None,
         explicit_model_spec: None,
-        primary_tool: ToolName::GeminiCli,
+        primary_tool: ToolName::Opencode,
         resolved_tier_name: Some("quality"),
         config: Some(&config),
         global_config: &global,
@@ -186,7 +186,7 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
     assert_eq!(selection.reviewers, 3);
     assert_eq!(
         selection.selected_tools,
-        vec![ToolName::GeminiCli, ToolName::Codex, ToolName::Opencode]
+        vec![ToolName::Opencode, ToolName::Codex, ToolName::ClaudeCode]
     );
     assert_eq!(distinct_model_family_count(&selection.selected_tools), 3);
 }
@@ -194,10 +194,8 @@ fn auto_reviewer_selection_uses_all_distinct_tier_tools_up_to_cap() {
 #[test]
 fn large_diff_auto_escalation_selects_heterogeneous_reviewers_for_non_range_scope() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
@@ -221,16 +219,14 @@ fn large_diff_auto_escalation_selects_heterogeneous_reviewers_for_non_range_scop
     assert!(distinct_model_family_count(&selection.selected_tools) >= 2);
     assert_eq!(
         selection.selected_tools,
-        vec![ToolName::Codex, ToolName::GeminiCli]
+        vec![ToolName::Codex, ToolName::Opencode]
     );
 }
 
 fn assert_large_diff_auto_escalation_stays_single_reviewer(fix: bool, session_present: bool) {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_effective_reviewer_selection(&AutoReviewerRequest {
@@ -267,10 +263,7 @@ fn large_diff_auto_escalation_keeps_session_on_single_reviewer_path() {
 fn auto_range_reviewer_roster_prefers_review_tool_without_filtering_tier() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let config = project_config_with_tier_and_review_tool(
-        &[
-            "codex/openai/gpt-5.4/high",
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        ],
+        &["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"],
         ToolSelection::Whitelist(vec!["codex".to_string()]),
     );
     let global = GlobalConfig::default();
@@ -288,20 +281,20 @@ fn auto_range_reviewer_roster_prefers_review_tool_without_filtering_tier() {
 
     assert_eq!(
         pool.reviewer_tools,
-        vec![ToolName::Codex, ToolName::GeminiCli]
+        vec![ToolName::Codex, ToolName::Opencode]
     );
     assert!(
         pool.tier_reviewer_specs
             .iter()
-            .any(|resolution| resolution.tool == ToolName::GeminiCli)
+            .any(|resolution| resolution.tool == ToolName::Opencode)
     );
 }
 
 fn assert_auto_execution_uses_selected_heterogeneous_roster(large_diff_auto_escalation: bool) {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let config = project_config_with_tier(&[
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "antigravity-cli/google/gemini-3.1-pro-preview/xhigh",
+        "opencode/openai/gpt-5/xhigh",
+        "openai-compat/openai/gpt-5/xhigh",
         "codex/openai/gpt-5.4/high",
     ]);
     let global = GlobalConfig::default();
@@ -315,7 +308,7 @@ fn assert_auto_execution_uses_selected_heterogeneous_roster(large_diff_auto_esca
         large_diff_auto_escalation,
         explicit_tool: None,
         explicit_model_spec: None,
-        primary_tool: ToolName::GeminiCli,
+        primary_tool: ToolName::Opencode,
         resolved_tier_name: Some("quality"),
         config: Some(&config),
         global_config: &global,
@@ -328,18 +321,18 @@ fn assert_auto_execution_uses_selected_heterogeneous_roster(large_diff_auto_esca
         effective.reviewers,
         Some(&selected_tools),
         None,
-        ToolName::GeminiCli,
+        ToolName::Opencode,
         Some("quality"),
         Some(&config),
         &global,
     )
     .expect("auto-selected reviewer roster should resolve for execution");
-    let same_family_pair = [ToolName::GeminiCli, ToolName::AntigravityCli];
+    let same_family_pair = [ToolName::Opencode, ToolName::OpenaiCompat];
     assert_eq!(pool.reviewer_tools, selected_tools);
     assert!(distinct_model_family_count(&pool.reviewer_tools) >= 2);
     assert_eq!(
         &pool.reviewer_tools[..2],
-        [ToolName::GeminiCli, ToolName::Codex].as_slice()
+        [ToolName::Opencode, ToolName::Codex].as_slice()
     );
     assert_ne!(&pool.reviewer_tools[..2], same_family_pair.as_slice());
 }
@@ -353,10 +346,8 @@ fn auto_execution_uses_selected_heterogeneous_reviewer_roster_for_range_and_larg
 #[test]
 fn auto_reviewer_selection_respects_single_flag() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
@@ -381,10 +372,8 @@ fn auto_reviewer_selection_respects_single_flag() {
 #[test]
 fn auto_reviewer_selection_respects_explicit_reviewer_override() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
@@ -411,7 +400,7 @@ fn large_diff_auto_escalation_respects_explicit_reviewer_count() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let config = project_config_with_tier(&[
         "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+        "opencode/openai/gpt-5/xhigh",
         "opencode/anthropic/claude-sonnet-4-6/high",
     ]);
     let global = GlobalConfig::default();
@@ -439,10 +428,8 @@ fn large_diff_auto_escalation_respects_explicit_reviewer_count() {
 #[test]
 fn auto_reviewer_selection_respects_explicit_model_spec_override() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
@@ -454,7 +441,7 @@ fn auto_reviewer_selection_respects_explicit_model_spec_override() {
         scope_is_range: true,
         large_diff_auto_escalation: true,
         explicit_tool: None,
-        explicit_model_spec: Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh"),
+        explicit_model_spec: Some("opencode/openai/gpt-5/xhigh"),
         primary_tool: ToolName::Codex,
         resolved_tier_name: Some("quality"),
         config: Some(&config),
@@ -467,10 +454,8 @@ fn auto_reviewer_selection_respects_explicit_model_spec_override() {
 #[test]
 fn auto_reviewer_selection_respects_explicit_tool_override() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {
@@ -496,8 +481,8 @@ fn auto_reviewer_selection_respects_explicit_tool_override() {
 fn large_diff_auto_escalation_requires_two_model_families() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let config = project_config_with_tier(&[
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-        "antigravity-cli/google/gemini-3.1-pro-preview/xhigh",
+        "opencode/openai/gpt-5/xhigh",
+        "openai-compat/openai/gpt-5/xhigh",
     ]);
     let global = GlobalConfig::default();
 
@@ -511,7 +496,7 @@ fn large_diff_auto_escalation_requires_two_model_families() {
         large_diff_auto_escalation: true,
         explicit_tool: None,
         explicit_model_spec: None,
-        primary_tool: ToolName::GeminiCli,
+        primary_tool: ToolName::Opencode,
         resolved_tier_name: Some("quality"),
         config: Some(&config),
         global_config: &global,
@@ -523,10 +508,8 @@ fn large_diff_auto_escalation_requires_two_model_families() {
 #[test]
 fn auto_reviewer_selection_skips_non_range_scope() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
-    let config = project_config_with_tier(&[
-        "codex/openai/gpt-5.4/high",
-        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-    ]);
+    let config =
+        project_config_with_tier(&["codex/openai/gpt-5.4/high", "opencode/openai/gpt-5/xhigh"]);
     let global = GlobalConfig::default();
 
     let selection = resolve_auto_reviewer_selection(&AutoReviewerRequest {

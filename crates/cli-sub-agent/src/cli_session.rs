@@ -49,7 +49,7 @@ pub enum SessionCommands {
         show_version: bool,
     },
 
-    /// Compress session context (gemini-cli: /compress, others: /compact)
+    /// Compress session context
     Compress {
         /// Session ULID or prefix (positional alternative to --session)
         #[arg(conflicts_with = "session")]

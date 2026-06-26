@@ -11,12 +11,6 @@ max_concurrent = 3  # Default max parallel instances per tool
 
 # Per-tool overrides. Uncomment and configure as needed.
 #
-# [tools.gemini-cli]
-# max_concurrent = 5
-# api_key = "AI..."  # Fallback only after quota exhaustion; fresh invocations stay OAuth-first.
-# [tools.gemini-cli.env]
-# CSA_GEMINI_INCLUDE_DIRECTORIES = "/abs/path/one,/abs/path/two"
-#
 # [tools.claude-code]
 # max_concurrent = 1
 # [tools.claude-code.env]
@@ -40,7 +34,7 @@ max_concurrent = 3  # Default max parallel instances per tool
 # Example: prefer Claude Code for worker tasks, then Codex.
 # [preferences]
 # primary_writer_spec = "codex/openai/gpt-5.4/high"
-# tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
+# tool_priority = ["claude-code", "codex", "opencode"]
 
 # Optional GitHub CLI auth override for issue workflows.
 # When unset, CSA falls back to ~/.config/gh-aider for issue reads/comments.

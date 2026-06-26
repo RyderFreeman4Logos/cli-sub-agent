@@ -149,10 +149,6 @@ fn seed_completed_session(
 #[test]
 fn mcp_parse_tool_name_all_valid_tools() {
     assert!(matches!(
-        parse_tool_name("gemini-cli").unwrap(),
-        ToolName::GeminiCli
-    ));
-    assert!(matches!(
         parse_tool_name("opencode").unwrap(),
         ToolName::Opencode
     ));
@@ -161,6 +157,8 @@ fn mcp_parse_tool_name_all_valid_tools() {
         parse_tool_name("claude-code").unwrap(),
         ToolName::ClaudeCode
     ));
+    let err = parse_tool_name("gemini-cli").unwrap_err();
+    assert!(err.to_string().contains("no longer supported"));
 }
 
 #[test]

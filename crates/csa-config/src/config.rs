@@ -134,8 +134,8 @@ pub struct ProjectConfig {
     pub aliases: HashMap<String, String>,
     /// Tool name aliases: maps short names to canonical tool names.
     ///
-    /// Example: `gem = "gemini-cli"`, `cc = "claude-code"`.
-    /// Built-in aliases (`gemini` → `gemini-cli`, `claude` → `claude-code`)
+    /// Example: `cx = "codex"`, `cc = "claude-code"`.
+    /// Built-in aliases (`claude` → `claude-code`)
     /// are always available without configuration.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_aliases: HashMap<String, String>,
@@ -278,9 +278,9 @@ impl ProjectConfig {
     fn load_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
-        // Check for deprecated keys before deserializing (serde silently ignores them)
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
+            reject_removed_refs(&raw, path, "")?;
             crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
                 .with_context(|| format!("Invalid config: {}", path.display()))?;
         }
@@ -296,6 +296,7 @@ impl ProjectConfig {
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
+            reject_removed_refs(&raw, path, "")?;
             reject_project_tier_policy(&raw, &path.display().to_string())
                 .with_context(|| format!("Invalid config: {}", path.display()))?;
             crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
@@ -326,9 +327,10 @@ impl ProjectConfig {
             format!("Failed to parse project config: {}", overlay_path.display())
         })?;
 
-        // Check for deprecated keys in both configs
         warn_deprecated_keys(&base_val, &base_path.display().to_string());
         warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
+        reject_removed_refs(&base_val, base_path, "user ")?;
+        reject_removed_refs(&overlay_val, overlay_path, "project ")?;
         reject_project_tier_policy(&overlay_val, &overlay_path.display().to_string())
             .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
@@ -673,14 +675,12 @@ init_timeout_seconds = 120
 # enabled = true
 # codex_auto_trust = false
 # tmux_mode = false
-# [tools.gemini-cli]
-# enabled = true
 # [tiers.tier-1-quick]
 # description = "Quick tasks: fast models"
-# models = ["gemini-cli/google/gemini-2.5-flash/low"]
+# models = ["codex/openai/gpt-5.4/low"]
 # [tiers.tier-2-standard]
 # description = "Standard tasks: balanced models"
-# models = ["codex/openai/gpt-5.4/medium", "gemini-cli/google/gemini-2.5-pro/medium"]
+# models = ["codex/openai/gpt-5.4/medium", "claude-code/anthropic/claude-sonnet-4-5-20250929/medium"]
 # [tiers.tier-3-heavy]
 # description = "Complex tasks: strongest models"
 # models = ["claude-code/anthropic/claude-sonnet-4-5-20250929/high", "codex/openai/gpt-5.5/high"]
@@ -689,10 +689,9 @@ init_timeout_seconds = 120
 # quick = "tier-1-quick"
 # complex = "tier-3-heavy"
 # [aliases]
-# fast = "gemini-cli/google/gemini-2.5-flash/low"
+# fast = "codex/openai/gpt-5.4/low"
 # smart = "codex/openai/gpt-5.5/high"
 # [tool_aliases]
-# gem = "gemini-cli"
 # cc = "claude-code"
 # [hooks]
 # pre_run = "cargo fmt --all"
@@ -707,7 +706,6 @@ init_timeout_seconds = 120
     /// Resolve alias to model spec string.
     ///
     /// If input is an alias key, returns the resolved value.
-    /// Otherwise, returns the input unchanged.
     pub fn resolve_alias(&self, input: &str) -> String {
         self.aliases
             .get(input)
@@ -745,6 +743,11 @@ pub(crate) fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Valu
     }
 }
 
+fn reject_removed_refs(raw: &toml::Value, path: &Path, label: &str) -> Result<()> {
+    crate::validate::reject_removed_gemini_cli_in_raw_config(raw, &path.display().to_string())
+        .with_context(|| format!("Invalid {label}config"))
+}
+
 fn parse_session_wait_memory_warn_mb(raw: &toml::Value) -> Option<u64> {
     let value = raw
         .get("session_wait")
@@ -771,6 +774,9 @@ mod tests;
 #[cfg(test)]
 #[path = "config_tests_github.rs"]
 mod tests_github;
+#[cfg(test)]
+#[path = "config_tests_removed_gemini.rs"]
+mod tests_removed_gemini;
 #[cfg(test)]
 #[path = "config_tests_tail.rs"]
 mod tests_tail;

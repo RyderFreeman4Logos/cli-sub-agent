@@ -63,7 +63,7 @@ csa run --sa-mode false --tier tier-2-standard --tool codex "try codex first, th
 csa run --sa-mode false --tool claude --hint-difficulty quick_question "answer briefly"
 csa run --sa-mode false --auto-route analysis "trace the auth flow"
 csa run --sa-mode false --last "continue where I left off"
-echo "analyze this" | csa run --sa-mode false --tier tier-1-quick --tool gemini-cli
+echo "analyze this" | csa run --sa-mode false --tier tier-1-quick --tool codex
 ```
 
 ## `csa review` -- Code review

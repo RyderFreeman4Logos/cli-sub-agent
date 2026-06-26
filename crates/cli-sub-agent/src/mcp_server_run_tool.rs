@@ -332,7 +332,9 @@ pub(super) fn resolve_mcp_model_pin(
 /// Parse tool name from string.
 pub(super) fn parse_tool_name(tool_str: &str) -> Result<ToolName> {
     match tool_str {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "gemini-cli" | "gemini" => {
+            anyhow::bail!("{}", csa_core::types::removed_tool_error("gemini-cli"))
+        }
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),

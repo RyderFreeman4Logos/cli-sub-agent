@@ -7,7 +7,6 @@ This guide covers installation, initial setup, and your first CSA commands.
 - At least one supported AI tool installed:
   - [claude-code](https://docs.anthropic.com/en/docs/claude-code) (Anthropic)
   - [codex](https://github.com/openai/codex) (OpenAI)
-  - [gemini-cli](https://github.com/google-gemini/gemini-cli) (Google)
   - [opencode](https://github.com/sst/opencode) (OpenRouter)
 - Git 2.30+
 - Optional: [mise](https://mise.jdx.dev/) for binary version management

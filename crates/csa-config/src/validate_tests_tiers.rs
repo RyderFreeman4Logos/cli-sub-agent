@@ -7,7 +7,7 @@ fn test_validate_multiple_tiers_all_valid() {
         "tier-1-quick".to_string(),
         TierConfig {
             description: "Quick tasks".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -87,7 +87,7 @@ fn test_validate_tier_with_multiple_models_all_valid() {
         TierConfig {
             description: "Has multiple models".to_string(),
             models: vec![
-                "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
+                "codex/openai/gpt-5.5/xhigh".to_string(),
                 "codex/openai/gpt-5.4/default".to_string(),
             ],
             strategy: TierStrategy::default(),
@@ -142,7 +142,7 @@ fn test_validate_tier_with_one_bad_model_in_list() {
         TierConfig {
             description: "One good, one bad".to_string(),
             models: vec![
-                "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
+                "codex/openai/gpt-5.5/xhigh".to_string(),
                 "bad-spec".to_string(), // invalid
             ],
             strategy: TierStrategy::default(),
@@ -745,7 +745,7 @@ fn test_validate_review_tier_valid_accepted() {
         "tier-4-critical".to_string(),
         TierConfig {
             description: "Critical tier".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,

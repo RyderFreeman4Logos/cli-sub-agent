@@ -6,7 +6,6 @@ use crate::config::{FORK_PREFIX_BUDGET_MAX_TOKENS, FORK_PREFIX_BUDGET_MIN_TOKENS
 use crate::global::ToolSelection;
 
 const KNOWN_TOOLS: &[&str] = &[
-    "gemini-cli",
     "opencode",
     "codex",
     "claude-code",
@@ -78,6 +77,81 @@ pub(crate) fn validate_tool_transport_overrides_in_raw_config(raw: &toml::Value)
     }
 
     Ok(())
+}
+
+pub(crate) fn reject_removed_gemini_cli_in_raw_config(
+    raw: &toml::Value,
+    source: &str,
+) -> Result<()> {
+    reject_removed_gemini_cli_value(raw, source, "$")
+}
+
+fn reject_removed_gemini_cli_value(raw: &toml::Value, source: &str, path: &str) -> Result<()> {
+    match raw {
+        toml::Value::Table(table) => {
+            for (key, value) in table {
+                let child_path = format!("{path}.{key}");
+                if is_semantic_tool_key_table(path) && csa_core::types::is_removed_tool_name(key) {
+                    return Err(removed_gemini_cli_reference_error(source, &child_path, key));
+                }
+                reject_removed_gemini_cli_value(value, source, &child_path)?;
+            }
+        }
+        toml::Value::Array(items) => {
+            for (index, value) in items.iter().enumerate() {
+                reject_removed_gemini_cli_value(value, source, &format!("{path}[{index}]"))?;
+            }
+        }
+        toml::Value::String(value) if is_removed_gemini_cli_config_value(path, value) => {
+            return Err(removed_gemini_cli_reference_error(source, path, value));
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn is_semantic_tool_key_table(path: &str) -> bool {
+    matches!(path, "$.tools" | "$.resources.initial_estimates")
+}
+
+fn is_removed_gemini_cli_config_value(path: &str, value: &str) -> bool {
+    if is_semantic_tool_value_path(path) {
+        return csa_core::types::is_removed_tool_name(value);
+    }
+    if is_semantic_model_spec_value_path(path) {
+        return is_removed_gemini_cli_model_spec(value);
+    }
+    false
+}
+
+fn is_semantic_tool_value_path(path: &str) -> bool {
+    matches!(path, "$.defaults.tool" | "$.review.tool" | "$.debate.tool")
+        || path.starts_with("$.review.tool[")
+        || path.starts_with("$.debate.tool[")
+        || path.starts_with("$.tool_aliases.")
+        || path.starts_with("$.preferences.tool_priority[")
+}
+
+fn is_semantic_model_spec_value_path(path: &str) -> bool {
+    path.starts_with("$.aliases.")
+        || path == "$.preferences.primary_writer_spec"
+        || (path.starts_with("$.tiers.") && path.contains(".models["))
+}
+
+fn is_removed_gemini_cli_model_spec(value: &str) -> bool {
+    let tool_part = value.split_once('/').map_or(value, |(tool, _)| tool);
+    csa_core::types::is_removed_tool_name(tool_part)
+}
+
+fn removed_gemini_cli_reference_error(source: &str, path: &str, value: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Invalid config {source}: removed tool reference '{value}' at {path}.\n\
+         {}\n\
+         Action: remove this entry or replace it with codex/claude-code. Do not replace it with \
+         antigravity-cli as a general fallback.",
+        csa_core::types::removed_tool_error("gemini-cli")
+    )
 }
 
 pub(crate) fn validate_tool_transport_overrides(config: &ProjectConfig) -> Result<()> {
@@ -341,25 +415,18 @@ fn transport_key(tool_name: &str) -> String {
 fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
     let single_supported = [
         "auto",
-        "gemini-cli",
         "opencode",
         "codex",
         "claude-code",
         "antigravity-cli",
     ];
-    let whitelist_supported = [
-        "gemini-cli",
-        "opencode",
-        "codex",
-        "claude-code",
-        "antigravity-cli",
-    ];
+    let whitelist_supported = ["opencode", "codex", "claude-code", "antigravity-cli"];
     match tool {
         ToolSelection::Single(s) => {
             if !single_supported.contains(&s.as_str()) {
                 bail!(
                     "Invalid [{section}].tool value '{s}'. \
-                     Supported values: auto, gemini-cli, antigravity-cli, opencode, codex, claude-code."
+                     Supported values: auto, antigravity-cli, opencode, codex, claude-code."
                 );
             }
         }
@@ -368,7 +435,7 @@ fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
                 if !whitelist_supported.contains(&t.as_str()) {
                     bail!(
                         "Invalid tool '{t}' in [{section}].tool array. \
-                         Supported values: gemini-cli, antigravity-cli, opencode, codex, claude-code. \
+                         Supported values: antigravity-cli, opencode, codex, claude-code. \
                          ('auto' is not valid inside a whitelist array)"
                     );
                 }
@@ -482,7 +549,6 @@ fn warn_fork_prefix_budget_out_of_range(config: &ProjectConfig) {
 /// Unknown entries are harmless (sorted to end) but likely indicate a typo.
 fn warn_unknown_tool_priority(config: &ProjectConfig) {
     let known_tools = [
-        "gemini-cli",
         "opencode",
         "codex",
         "claude-code",
@@ -511,6 +577,15 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
 
     // Validate tool name is a known tool
     let tool_part = parts[0];
+    if csa_core::types::is_removed_tool_name(tool_part) {
+        bail!(
+            "Tier '{tier_name}' has model spec '{model_spec}' with removed tool '{}'.\n\
+             {}\n\
+             Action: remove this model from the tier or replace it with a codex/claude-code spec.",
+            tool_part,
+            csa_core::types::removed_tool_error("gemini-cli")
+        );
+    }
     let known_tools: Vec<&str> = crate::global::all_known_tools()
         .iter()
         .map(|t| t.as_str())

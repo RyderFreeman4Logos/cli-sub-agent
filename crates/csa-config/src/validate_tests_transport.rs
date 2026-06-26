@@ -59,24 +59,6 @@ fn validate_tool_transport_matrix_matches_phase_3_contract() {
             expected_message: None,
         },
         Case {
-            tool: "gemini-cli",
-            value: "auto",
-            should_pass: true,
-            expected_message: None,
-        },
-        Case {
-            tool: "gemini-cli",
-            value: "cli",
-            should_pass: true,
-            expected_message: None,
-        },
-        Case {
-            tool: "gemini-cli",
-            value: "acp",
-            should_pass: false,
-            expected_message: Some("gemini-cli does not support ACP transport"),
-        },
-        Case {
             tool: "opencode",
             value: "auto",
             should_pass: true,

@@ -4,8 +4,9 @@ use super::*;
 
 #[test]
 fn parse_tool_name_gemini_cli() {
-    let result = parse_tool_name("gemini-cli").unwrap();
-    assert!(matches!(result, ToolName::GeminiCli));
+    let err = parse_tool_name("gemini-cli").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("no longer supported"), "{msg}");
 }
 
 #[test]

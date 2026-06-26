@@ -79,7 +79,9 @@ pub(crate) fn resolve_step_tool(
             "note" => return Ok(StepTarget::Note),
             "manual" => return Ok(StepTarget::Manual),
             "await-user" => return Ok(StepTarget::AwaitUser),
-            "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
+            "gemini-cli" | "gemini" => {
+                bail!("{}", csa_core::types::removed_tool_error("gemini-cli"))
+            }
             "antigravity-cli" => return Ok(StepTarget::csa(ToolName::AntigravityCli, None)),
             "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
             "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
@@ -92,7 +94,7 @@ pub(crate) fn resolve_step_tool(
             }
             "weave" => return Ok(StepTarget::WeaveInclude),
             other => bail!(
-                "Unknown tool '{}' in step {} ('{}'). Known: bash, note, manual, await-user, gemini-cli, opencode, codex, claude-code, csa, weave",
+                "Unknown tool '{}' in step {} ('{}'). Known: bash, note, manual, await-user, opencode, codex, claude-code, csa, weave",
                 other,
                 step.id,
                 step.title
@@ -201,7 +203,7 @@ fn is_deterministic_step_tool(explicit_tool: Option<&str>) -> bool {
 
 fn parse_tool_name(tool: &str) -> Result<ToolName> {
     match tool {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "gemini-cli" | "gemini" => bail!("{}", csa_core::types::removed_tool_error("gemini-cli")),
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),

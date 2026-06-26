@@ -222,11 +222,7 @@ pub(super) fn config_with_tier(
 
 #[test]
 fn resolve_tool_from_tier_returns_none_for_missing_tier() {
-    let cfg = config_with_tier(
-        "tier-1",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
-    );
+    let cfg = config_with_tier("tier-1", vec!["opencode/openai/gpt-5/xhigh"], &["opencode"]);
     let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None, &[], &[]);
     assert!(result.is_none());
 }
@@ -236,33 +232,33 @@ fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "test-tier",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = super::resolve_tool_from_tier("test-tier", &cfg, None, &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
-    assert_eq!(res.tool, ToolName::GeminiCli);
-    assert_eq!(res.model_spec, "gemini-cli/google/default/xhigh");
+    assert_eq!(res.tool, ToolName::Opencode);
+    assert_eq!(res.model_spec, "opencode/openai/gpt-5/xhigh");
 }
 
 #[test]
 fn resolve_tool_from_tier_prefers_heterogeneous() {
     let _tool_availability = assume_tier_tools_available();
-    // Parent=claude-code(Anthropic), tier has gemini-cli+claude-code; prefer gemini for heterogeneity.
+    // Parent=claude-code(Anthropic), tier has opencode+claude-code; prefer opencode for heterogeneity.
     let cfg = config_with_tier(
         "test-tier",
         vec![
             "claude-code/anthropic/default/xhigh",
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
         ],
-        &["claude-code", "gemini-cli"],
+        &["claude-code", "opencode"],
     );
     let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), &[], &[]);
     assert!(result.is_some());
     let res = result.unwrap();
-    assert_eq!(res.tool, ToolName::GeminiCli);
-    assert_eq!(res.model_spec, "gemini-cli/google/default/xhigh");
+    assert_eq!(res.tool, ToolName::Opencode);
+    assert_eq!(res.model_spec, "opencode/openai/gpt-5/xhigh");
 }
 
 #[test]
@@ -284,11 +280,11 @@ fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
 #[test]
 fn resolve_tool_from_tier_skips_disabled_tools() {
     let _tool_availability = assume_tier_tools_available();
-    // gemini-cli is disabled, only claude-code is enabled.
+    // opencode is disabled, only claude-code is enabled.
     let cfg = config_with_tier(
         "test-tier",
         vec![
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/default/xhigh",
         ],
         &["claude-code"],
@@ -305,7 +301,7 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
     // All tools in tier are disabled.
     let cfg = config_with_tier(
         "test-tier",
-        vec!["gemini-cli/google/default/xhigh"],
+        vec!["opencode/openai/gpt-5/xhigh"],
         &[], // no enabled tools
     );
     let result = super::resolve_tool_from_tier("test-tier", &cfg, None, &[], &[]);
@@ -317,17 +313,17 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
 #[test]
 fn resolve_preferred_tool_from_tier_fails_fast_on_disabled_pinned_candidate() {
     let _tool_availability = assume_tier_tools_available();
-    // claude-code IS a tier candidate but is disabled in config; gemini-cli is
+    // claude-code IS a tier candidate but is disabled in config; opencode is
     // the enabled tier default. An explicit `--tool claude-code` pin must error
-    // instead of silently falling through to gemini-cli (#1836). Resolution is
+    // instead of silently falling through to opencode (#1836). Resolution is
     // upstream of failover, so this fail-fast fires regardless of --no-failover.
     let cfg = config_with_tier(
         "tier-4-critical",
         vec![
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/default/xhigh",
         ],
-        &["gemini-cli"], // claude-code disabled
+        &["opencode"], // claude-code disabled
     );
     let preference_order = vec!["claude-code".to_string()];
     let result = super::resolve_preferred_tool_from_tier(
@@ -350,16 +346,13 @@ fn resolve_preferred_tool_from_tier_fails_fast_on_disabled_pinned_candidate() {
 #[test]
 fn resolve_preferred_tool_from_tier_soft_reorders_enabled_candidate() {
     let _tool_availability = assume_tier_tools_available();
-    // gemini-cli is the tier default, but the user pins the ENABLED candidate
+    // opencode is the tier default, but the user pins the ENABLED candidate
     // codex; the soft-reorder must surface codex without error (#1749 preserved,
     // regression guard — the disabled fail-fast must not catch enabled pins).
     let cfg = config_with_tier(
         "tier-4-critical",
-        vec![
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-            "codex/openai/gpt-5.5/xhigh",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.5/xhigh"],
+        &["opencode", "codex"],
     );
     let preference_order = vec!["codex".to_string()];
     let resolution = super::resolve_preferred_tool_from_tier(
@@ -381,8 +374,8 @@ fn resolve_preferred_tool_from_tier_rejects_non_candidate_pin() {
     // pins fail fast instead of silently substituting a different tool.
     let cfg = config_with_tier(
         "tier-4-critical",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli", "opencode"],
+        vec!["codex/openai/gpt-5.5/xhigh"],
+        &["opencode", "codex"],
     );
     let preference_order = vec!["opencode".to_string()];
     let err = super::resolve_preferred_tool_from_tier(
@@ -409,10 +402,10 @@ fn resolve_tool_and_model_fails_fast_on_disabled_pinned_tier_candidate() {
     let cfg = config_with_tier(
         "tier-4-critical",
         vec![
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/default/xhigh",
         ],
-        &["gemini-cli"], // claude-code disabled
+        &["opencode"], // claude-code disabled
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::ClaudeCode),
@@ -433,11 +426,11 @@ fn resolve_tool_and_model_fails_fast_on_disabled_pinned_tier_candidate() {
 fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
-        tool: Some(ToolName::GeminiCli),
+        tool: Some(ToolName::Opencode),
         config: Some(&cfg),
         ..super::RoutingRequest::new(std::path::Path::new("/tmp"))
     });
@@ -462,8 +455,8 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
 fn resolve_tool_and_model_rejects_unconfigured_model_spec_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         model_spec: Some("codex/openai/gpt-5.4/high"),
@@ -483,7 +476,7 @@ fn resolve_tool_and_model_allows_configured_model_spec_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
         vec!["codex/openai/gpt-5.5/high"],
-        &["gemini-cli", "codex"],
+        &["opencode", "codex"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         model_spec: Some("codex/openai/gpt-5.5/high"),
@@ -506,8 +499,8 @@ fn resolve_tool_and_model_allows_configured_model_spec_when_tiers_configured() {
 fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         model: Some("custom-model"), // --model provided
@@ -527,8 +520,8 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
 fn resolve_tool_and_model_blocks_direct_thinking_alone_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         thinking: Some("low"),
@@ -548,8 +541,8 @@ fn resolve_tool_and_model_blocks_direct_thinking_alone_when_tiers_configured() {
 fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
@@ -569,8 +562,8 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
 fn resolve_tool_and_model_force_override_user_config_does_not_bypass_tiers() {
     let cfg = config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
@@ -636,8 +629,8 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         config: Some(&cfg),
@@ -650,11 +643,8 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
         result.unwrap_err()
     );
     let (tool, model_spec, _) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -662,8 +652,8 @@ fn resolve_tool_and_model_tier_shorthand_resolves_from_tier() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "tier-4-critical",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
 
     for selector in ["tier4", "tier-4"] {
@@ -678,11 +668,8 @@ fn resolve_tool_and_model_tier_shorthand_resolves_from_tier() {
             result.unwrap_err()
         );
         let (tool, model_spec, _) = result.unwrap();
-        assert_eq!(tool, ToolName::GeminiCli);
-        assert_eq!(
-            model_spec.as_deref(),
-            Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-        );
+        assert_eq!(tool, ToolName::Opencode);
+        assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
     }
 }
 
@@ -692,11 +679,11 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
     let cfg = config_with_tier(
         "tier-4-critical",
         vec![
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "codex/openai/gpt-5.4/xhigh",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
-        &["gemini-cli", "codex", "claude-code"],
+        &["opencode", "codex", "claude-code"],
     );
     let result = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
@@ -720,10 +707,10 @@ fn resolve_tool_and_model_tier_with_tool_rejects_missing_tool_candidate() {
     let cfg = config_with_tier(
         "quality",
         vec![
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
-        &["gemini-cli", "codex", "claude-code"],
+        &["opencode", "codex", "claude-code"],
     );
     let err = super::resolve_tool_and_model(super::RoutingRequest {
         tool: Some(ToolName::Codex),
@@ -744,8 +731,8 @@ fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
     let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
 
     let result = super::resolve_tool_and_model(super::RoutingRequest {
@@ -762,19 +749,16 @@ fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
         result.unwrap_err()
     );
     let (tool, model_spec, _) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
 fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
     let cfg = config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
 
     let result = super::resolve_tool_and_model(super::RoutingRequest {
@@ -803,11 +787,7 @@ fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
 #[test]
 fn resolve_tool_and_model_tier_alias_resolves_correctly() {
     let _tool_availability = assume_tier_tools_available();
-    let mut cfg = config_with_tier(
-        "tier1",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
-    );
+    let mut cfg = config_with_tier("tier1", vec!["opencode/openai/gpt-5/xhigh"], &["opencode"]);
     cfg.tier_mapping
         .insert("default".to_string(), "tier1".to_string());
 
@@ -822,20 +802,13 @@ fn resolve_tool_and_model_tier_alias_resolves_correctly() {
         result.unwrap_err()
     );
     let (tool, model_spec, _) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
 fn resolve_tool_and_model_invalid_tier_selector_includes_aliases_in_error() {
-    let mut cfg = config_with_tier(
-        "tier1",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
-    );
+    let mut cfg = config_with_tier("tier1", vec!["opencode/openai/gpt-5/xhigh"], &["opencode"]);
     cfg.tier_mapping
         .insert("alias1".to_string(), "tier1".to_string());
 

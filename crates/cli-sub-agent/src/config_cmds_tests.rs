@@ -30,13 +30,7 @@ impl Drop for EnvVarGuard {
 }
 
 fn write_global_config(contents: &str) -> std::path::PathBuf {
-    // Mirror every production read path. Both `GlobalConfig::load()` and
-    // `ProjectConfig::load()` resolve the user-level config via
-    // `paths::config_dir().join("config.toml")`, so the test fixture must
-    // populate whatever that resolver returns for the current environment.
-    // Also populate `GlobalConfig::config_path()` (the canonical write path)
-    // so production code and tests agree on which bytes they see on
-    // platforms where the read and write resolvers can disagree.
+    // Mirror both production read and write paths for user-level config.
     let read_path =
         csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
     std::fs::create_dir_all(read_path.parent().expect("user config dir")).unwrap();
@@ -202,7 +196,12 @@ fn resolve_effective_execution_key_uses_compile_default_when_no_config_exists() 
 
 #[test]
 fn resolve_effective_execution_key_prefers_project_override() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
     std::fs::write(

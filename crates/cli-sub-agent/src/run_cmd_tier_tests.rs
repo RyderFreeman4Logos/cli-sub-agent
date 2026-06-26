@@ -110,8 +110,8 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     let config = run_config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     write_project_config(project_dir.path(), &config);
 

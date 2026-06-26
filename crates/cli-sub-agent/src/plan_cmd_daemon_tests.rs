@@ -1,7 +1,6 @@
-//! Tests for `plan_cmd_daemon`.
-
 use super::*;
 use crate::plan_cmd::PlanRunArgs;
+use crate::test_env_lock::isolate_user_config_locked as iso;
 use std::process::Command;
 
 fn make_args() -> PlanRunArgs {
@@ -114,7 +113,8 @@ fn describe_unknown_when_no_source_provided() {
 
 #[tokio::test]
 async fn daemon_child_failed_plan_writes_structured_failure_output() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _user_config_env = iso(temp.path()).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);
@@ -174,7 +174,8 @@ on_fail = "abort"
 
 #[tokio::test]
 async fn daemon_child_failed_pr_bot_preserves_weave_lock_after_snapshot() {
-    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _user_config_env = iso(temp.path()).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);

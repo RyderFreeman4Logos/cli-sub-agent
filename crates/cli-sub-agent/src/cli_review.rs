@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{ArgGroup, ValueEnum};
 use csa_core::types::{ToolArg, ToolName};
 
-use super::{Commands, parse_model_spec_arg, parse_spec_path_arg};
+use super::{Commands, parse_cli_tool_name, parse_model_spec_arg, parse_spec_path_arg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -50,7 +50,7 @@ pub struct ReviewArgs {
     /// Unlike `csa run`, explicit --tool keeps failover enabled; use --no-failover to fail fast.
     /// Combine with --tier to use that tier's model/thinking for the selected tool.
     /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_cli_tool_name)]
     pub tool: Option<ToolName>,
     /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
@@ -82,7 +82,7 @@ pub struct ReviewArgs {
     pub thinking: Option<String>,
 
     /// Disable automatic retry/failover on transient errors (cross-tool 429 failover,
-    /// same-tool ACP crash retry, Gemini rate-limit/quota retry phases, debate outer
+    /// same-tool ACP crash retry, provider rate-limit/quota retry phases, debate outer
     /// retry loop). Useful with --model-spec to pin an exact selection and fail fast.
     #[arg(long)]
     pub no_failover: bool,
@@ -490,7 +490,7 @@ pub struct DebateArgs {
     pub thinking: Option<String>,
 
     /// Disable automatic retry/failover on transient errors (cross-tool 429 failover,
-    /// same-tool ACP crash retry, Gemini rate-limit/quota retry phases, debate outer
+    /// same-tool ACP crash retry, provider rate-limit/quota retry phases, debate outer
     /// retry loop). Useful with --model-spec to pin an exact selection and fail fast.
     #[arg(long)]
     pub no_failover: bool,

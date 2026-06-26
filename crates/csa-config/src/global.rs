@@ -48,7 +48,7 @@ pub struct GlobalConfig {
     /// MCP hub unix socket for shared proxy mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_proxy_socket: Option<String>,
-    /// Tool name aliases (`gem` → `gemini-cli`). Project-level wins.
+    /// Tool name aliases (`cx` → `codex`). Project-level wins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_aliases: HashMap<String, String>,
     /// `csa run` behavior defaults; project config overrides through the merged project view.
@@ -322,7 +322,7 @@ pub struct ReviewConfig {
     /// Review tool selection.
     ///
     /// Accepts a single tool name (`"codex"`), `"auto"` for heterogeneous
-    /// auto-selection, or an array of tool names (`["codex", "gemini-cli"]`)
+    /// auto-selection, or an array of tool names (`["codex", "claude-code"]`)
     /// as a whitelist for auto-selection. An empty array is equivalent to `"auto"`.
     #[serde(default)]
     pub tool: ToolSelection,
@@ -346,7 +346,7 @@ pub struct ReviewConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     /// Default model for `csa review`. Overrides the tool's own default model
-    /// selection (e.g., gemini-cli model steering) without requiring a tier.
+    /// selection without requiring a tier.
     /// Without an active tier: CLI `--model` > this field > tool default.
     /// With an active review tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -485,7 +485,7 @@ pub struct DebateConfig {
     /// Debate tool selection.
     ///
     /// Accepts a single tool name (`"codex"`), `"auto"` for heterogeneous
-    /// auto-selection, or an array of tool names (`["codex", "gemini-cli"]`)
+    /// auto-selection, or an array of tool names (`["codex", "claude-code"]`)
     /// as a whitelist for auto-selection. An empty array is equivalent to `"auto"`.
     #[serde(default)]
     pub tool: ToolSelection,
@@ -495,7 +495,7 @@ pub struct DebateConfig {
     #[serde(default = "default_debate_timeout_seconds")]
     pub timeout_seconds: u64,
     /// Default model for `csa debate`. Overrides the tool's own default model
-    /// selection (e.g., gemini-cli model steering) without requiring a tier.
+    /// selection without requiring a tier.
     /// Without an active tier: CLI `--model` > this field > tool default.
     /// With an active debate tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -648,16 +648,20 @@ pub fn select_heterogeneous_tool(
         .copied()
 }
 
-/// Returns all known tool names as a static slice.
+/// Returns all currently supported tool names as a static slice.
 pub fn all_known_tools() -> &'static [ToolName] {
     &[
-        ToolName::GeminiCli,
         ToolName::Opencode,
         ToolName::Codex,
         ToolName::ClaudeCode,
         ToolName::OpenaiCompat,
         ToolName::AntigravityCli,
     ]
+}
+
+/// Returns tools eligible for automatic routing and general fallback.
+pub fn routing_candidate_tools() -> &'static [ToolName] {
+    csa_core::types::ROUTING_CANDIDATE_TOOLS
 }
 
 /// Sort tools by a priority list. Listed tools appear first (in priority order).
@@ -755,12 +759,11 @@ pub struct GlobalToolConfig {
     /// Accepts: low, medium, high, xhigh, max, or a numeric token count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
-    /// API key for fallback authentication. Used when OAuth quota is exhausted
-    /// (e.g., gemini-cli falls back to API key auth after 429 retries fail).
+    /// API key for fallback authentication where supported by the provider.
     /// NOT injected into env by default — only used as a last resort.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    /// Allow gemini-cli to continue after disabling unhealthy MCP servers.
+    /// Legacy no-op: retained for backward-compatible config deserialization.
     /// Defaults to true so startup-time MCP degradation is non-fatal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_degraded_mcp: Option<bool>,

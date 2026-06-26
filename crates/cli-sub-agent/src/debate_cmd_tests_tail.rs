@@ -397,12 +397,12 @@ async fn handle_debate_rejects_direct_tool_tier_before_session_creation() {
     unsafe {
         std::env::remove_var("CSA_SESSION_ID");
     }
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let mut config = project_config_with_enabled_tools(&["opencode", "codex"]);
     config.tiers.insert(
         "default".to_string(),
         csa_config::config::TierConfig {
             description: "Test tier".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["opencode/openai/gpt-5/xhigh".to_string()],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
             max_turns: None,
@@ -464,9 +464,9 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
 
     {
         let (binary, version, stderr_line) = (
-            "gemini",
-            "gemini-cli 1.0.0",
-            "reason: 'QUOTA_EXHAUSTED'; monthly spending cap reached",
+            "codex",
+            "codex-cli 1.0.0",
+            "codex_429_retry_exhausted: temporary codex 429 rate limit persisted after 3 retries",
         );
         let path = bin_dir.join(binary);
         std::fs::write(
@@ -487,7 +487,7 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
 
-    let mut config = project_config_with_enabled_tools(&["gemini-cli"]);
+    let mut config = project_config_with_enabled_tools(&["codex"]);
     config.review = Some(csa_config::ReviewConfig {
         gate_command: Some("true".to_string()),
         ..Default::default()
@@ -497,9 +497,9 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
         csa_config::config::TierConfig {
             description: "quality".to_string(),
             models: vec![
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
-                "gemini-cli/google/gemini-3.1-pro/high".to_string(),
-                "gemini-cli/google/gemini-2.5-pro/medium".to_string(),
+                "codex/openai/gpt-5.4/xhigh".to_string(),
+                "codex/openai/gpt-5/high".to_string(),
+                "codex/openai/gpt-5/medium".to_string(),
             ],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
@@ -555,11 +555,9 @@ async fn handle_debate_marks_unavailable_when_all_tier_models_fail() {
     assert_eq!(parsed["decision"], "unavailable");
     assert_eq!(parsed["verdict"], "UNAVAILABLE");
     let failure_reason = parsed["failure_reason"].as_str().expect("failure_reason");
-    assert!(
-        failure_reason.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh=QUOTA_EXHAUSTED")
-    );
-    assert!(failure_reason.contains("gemini-cli/google/gemini-3.1-pro/high=QUOTA_EXHAUSTED"));
-    assert!(failure_reason.contains("gemini-cli/google/gemini-2.5-pro/medium=QUOTA_EXHAUSTED"));
+    assert!(failure_reason.contains("codex/openai/gpt-5.4/xhigh="));
+    assert!(failure_reason.contains("codex/openai/gpt-5/high="));
+    assert!(failure_reason.contains("codex/openai/gpt-5/medium="));
 }
 
 #[cfg(unix)]
@@ -568,7 +566,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
     let _available_guard =
         EnvVarGuard::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
-    let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
+    let mut config = project_config_with_enabled_tools(&["codex", "opencode"]);
     config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     config.tiers.insert(
         "quality".to_string(),
@@ -577,7 +575,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
             models: vec![
                 "codex/openai/gpt-5.4/medium".to_string(),
                 "codex/openai/gpt-5/high".to_string(),
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "opencode/openai/gpt-5/xhigh".to_string(),
             ],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
@@ -603,8 +601,8 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
             ),
             (ToolName::Codex, Some("codex/openai/gpt-5/high".to_string())),
             (
-                ToolName::GeminiCli,
-                Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+                ToolName::Opencode,
+                Some("opencode/openai/gpt-5/xhigh".to_string()),
             ),
         ]
     );

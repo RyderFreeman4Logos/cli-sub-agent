@@ -389,7 +389,7 @@ fn resolve_debate_tool_from_selection(
     if let Some(tool_name) = selection.as_single() {
         let tool = crate::run_helpers::parse_tool_name(tool_name).map_err(|_| {
             anyhow::anyhow!(
-                "Invalid [debate].tool value '{tool_name}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
+                "Invalid [debate].tool value '{tool_name}'. Supported values: auto, opencode, codex, claude-code."
             )
         })?;
         // Verify the tool is enabled in the project config
@@ -456,7 +456,7 @@ fn select_auto_debate_tool(
     let parent_str = parent_tool?;
     let parent_tool_name = crate::run_helpers::parse_tool_name(parent_str).ok()?;
     let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
-        let tools: Vec<_> = csa_config::global::all_known_tools()
+        let tools: Vec<_> = csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
             .filter(|t| {
@@ -467,7 +467,7 @@ fn select_auto_debate_tool(
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
     } else {
-        let all = csa_config::global::all_known_tools();
+        let all = csa_config::global::routing_candidate_tools();
         let tools: Vec<_> = all
             .iter()
             .filter(|t| {
@@ -504,6 +504,7 @@ fn resolve_same_model_fallback(
     // but only if the configured runtime binary is actually available.
     if let Some(parent_str) = parent_tool
         && let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str)
+        && csa_config::global::routing_candidate_tools().contains(&tool)
     {
         let enabled = project_config
             .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
@@ -517,13 +518,13 @@ fn resolve_same_model_fallback(
 
     // No usable parent tool — select the first enabled tool from project config
     let candidates: Vec<_> = if let Some(cfg) = project_config {
-        csa_config::global::all_known_tools()
+        csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| cfg.is_tool_enabled(t.as_str()))
             .copied()
             .collect()
     } else {
-        csa_config::global::all_known_tools().to_vec()
+        csa_config::global::routing_candidate_tools().to_vec()
     };
     if let Some(tool) = candidates.iter().find(|t| {
         crate::run_helpers::is_tool_binary_available_for_config(t.as_str(), project_config)
@@ -552,10 +553,10 @@ Supported auto mapping: claude-code <-> codex\n\n\
 Choose one:\n\
 1) Global config (user-level): {global_path}\n\
    [debate]\n\
-   tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
+   tool = \"codex\"  # or \"claude-code\", \"opencode\"\n\
 2) Project config override: {project_path}\n\
    [debate]\n\
-   tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
+   tool = \"codex\"  # or \"claude-code\", \"opencode\"\n\
 3) CLI override: csa debate --sa-mode <true|false> --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )

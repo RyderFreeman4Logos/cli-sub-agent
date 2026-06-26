@@ -223,7 +223,7 @@ fn is_argument_list_too_long(error: &std::io::Error) -> bool {
     error.raw_os_error() == Some(libc::E2BIG)
 }
 
-/// Execute a step via CSA tool (codex, claude-code, gemini-cli, opencode).
+/// Execute a step via CSA tool (codex, claude-code, opencode).
 ///
 /// Stale forwarded session strategy: fallback to a fresh session (approach B).
 /// Rationale: token reuse is an optimization, while workflow completion is

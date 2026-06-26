@@ -108,7 +108,6 @@ Send the tool-specific compaction command:
 
 | Tool | Compression Command |
 |------|---------------------|
-| gemini-cli | `/compress` |
 | codex | `/compact` |
 | claude-code | `/compact` |
 | opencode | (not supported) |

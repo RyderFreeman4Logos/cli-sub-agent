@@ -180,7 +180,7 @@ const STREAM_START_EVENT_TYPES: &[&str] = &["system", "thread.started", "turn.st
 
 /// Event types that positively identify a JSON streaming transcript (claude-code / codex).
 /// Used to keep [`stream_started_without_terminal_event`] from misclassifying non-streaming
-/// output (gemini-cli / opencode plain text, rate-limit event blobs) as an incomplete stream.
+/// output (plain text or rate-limit event blobs) as an incomplete stream.
 const STREAM_EVENT_TYPES: &[&str] = &[
     // claude-code stream-json
     "system",
@@ -206,7 +206,7 @@ const STREAM_EVENT_TYPES: &[&str] = &[
 /// exit code before reclassifying the reviewer as unavailable.
 ///
 /// Conservative by construction: returns `false` unless the output is *recognized* as a
-/// claude-code/codex JSON stream (so plain-text gemini-cli/opencode output is never flagged),
+/// claude-code/codex JSON stream (so plain-text tool output is never flagged),
 /// and `false` as soon as any terminal event is seen (so a completed reviewer that merely
 /// exits non-zero is never flagged).
 pub(in crate::review_cmd) fn stream_started_without_terminal_event(raw_output: &str) -> bool {

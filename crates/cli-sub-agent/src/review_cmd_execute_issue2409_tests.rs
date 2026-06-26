@@ -35,7 +35,7 @@ fn issue_2409_review_tier_filters_codex_o3_before_candidate_selection() {
     let config = config_with_review_tier(
         &["codex", "claude-code"],
         &[
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "codex/openai/o3/medium",
             "claude-code/anthropic/claude-sonnet-4-20250514/none",
         ],
@@ -86,7 +86,7 @@ fn issue_2409_review_tier_filters_codex_o3_before_candidate_selection() {
         &[],
     );
     assert_eq!(chain.len(), 2);
-    assert_eq!(chain[0].tool, "gemini-cli");
+    assert_eq!(chain[0].tool, "opencode");
     assert_eq!(chain[0].skip_reason, "disabled");
     assert_eq!(chain[1].tool, "codex");
     assert_eq!(
@@ -103,10 +103,7 @@ fn issue_2409_review_tier_without_compatible_model_errors_before_provider_select
         ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let config = config_with_review_tier(
         &["codex"],
-        &[
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-            "codex/openai/o3/medium",
-        ],
+        &["opencode/openai/gpt-5/xhigh", "codex/openai/o3/medium"],
     );
     let global = GlobalConfig::default();
 
@@ -125,7 +122,7 @@ fn issue_2409_review_tier_without_compatible_model_errors_before_provider_select
     let message = err.to_string();
     assert!(message.contains("none of its tools are currently available"));
     assert!(
-        message.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh=disabled"),
+        message.contains("opencode/openai/gpt-5/xhigh=disabled"),
         "{message}"
     );
     assert!(

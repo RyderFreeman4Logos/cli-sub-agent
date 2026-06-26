@@ -31,7 +31,6 @@ context precisely:
 |------|-------------------|----------------|
 | claude-code | ACP (`cli` opt-in) | `claude-code-acp` / `claude` |
 | codex | ACP (`acp` explicit) | `codex-acp` |
-| gemini-cli | CLI only | `gemini` |
 | opencode | CLI only | `opencode` |
 
 The `Transport` trait abstracts both execution modes. `TransportFactory`
@@ -43,7 +42,7 @@ the current build default is ACP, so the default path probes `codex-acp`.
 Config validation accepts codex `auto` and `acp` values without performing a
 binary presence check, and `csa doctor` surfaces missing adapters and install
 hints. Project config still rejects `tools.codex.transport = "cli"` today.
-`gemini-cli` and `opencode` remain direct CLI tools.
+`opencode` remains a direct CLI tool.
 
 To force Claude Code onto the native CLI runtime:
 

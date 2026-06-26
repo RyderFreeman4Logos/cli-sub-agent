@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// TOML examples:
 /// ```toml
 /// tool = "codex"                      # Single: always use codex
-/// tool = ["codex", "gemini-cli"]      # Legacy no-tier auto whitelist; active-tier preference order
+/// tool = ["codex", "claude-code"]     # Legacy no-tier auto whitelist; active-tier preference order
 /// tool = []                           # Empty: same as "auto"
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -36,7 +36,7 @@ impl ToolSelection {
     ///
     /// - `Single("auto")` → `None` (no restriction)
     /// - `Single("codex")` → `None` (direct selection, not a filter)
-    /// - `Whitelist(["codex", "gemini-cli"])` → `Some(&["codex", "gemini-cli"])`
+    /// - `Whitelist(["codex", "claude-code"])` → `Some(&["codex", "claude-code"])`
     /// - `Whitelist([])` → `None` (empty = no restriction)
     pub fn whitelist(&self) -> Option<&[String]> {
         match self {
@@ -57,7 +57,7 @@ impl ToolSelection {
     ///
     /// - `Single("auto")` -> empty preference list
     /// - `Single("codex")` -> `["codex"]`
-    /// - `Whitelist(["codex", "gemini-cli"])` -> same ordered list
+    /// - `Whitelist(["codex", "claude-code"])` -> same ordered list
     /// - `Whitelist([])` -> empty preference list
     pub fn preference_order(&self) -> Vec<String> {
         match self {
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn whitelist_returns_tools() {
-        let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
+        let sel = ToolSelection::Whitelist(vec!["codex".into(), "claude-code".into()]);
         assert!(!sel.is_auto());
         assert_eq!(sel.whitelist().unwrap().len(), 2);
     }
@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn preference_order_returns_ordered_array() {
-        let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
-        assert_eq!(sel.preference_order(), vec!["codex", "gemini-cli"]);
+        let sel = ToolSelection::Whitelist(vec!["codex".into(), "claude-code".into()]);
+        assert_eq!(sel.preference_order(), vec!["codex", "claude-code"]);
     }
 
     #[test]
@@ -209,10 +209,10 @@ mod tests {
 
     #[test]
     fn allows_checks_whitelist() {
-        let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
+        let sel = ToolSelection::Whitelist(vec!["codex".into(), "claude-code".into()]);
         assert!(sel.allows("codex"));
-        assert!(sel.allows("gemini-cli"));
-        assert!(!sel.allows("claude-code"));
+        assert!(sel.allows("claude-code"));
+        assert!(!sel.allows("opencode"));
     }
 
     #[test]
@@ -227,8 +227,8 @@ mod tests {
 
     #[test]
     fn display_whitelist() {
-        let sel = ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()]);
-        assert_eq!(sel.to_string(), "[codex, gemini-cli]");
+        let sel = ToolSelection::Whitelist(vec!["codex".into(), "claude-code".into()]);
+        assert_eq!(sel.to_string(), "[codex, claude-code]");
     }
 
     #[test]
@@ -254,11 +254,11 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_whitelist() {
-        let toml_str = r#"tool = ["codex", "gemini-cli"]"#;
+        let toml_str = r#"tool = ["codex", "claude-code"]"#;
         let parsed: Wrapper = toml::from_str(toml_str).unwrap();
         assert_eq!(
             parsed.tool,
-            ToolSelection::Whitelist(vec!["codex".into(), "gemini-cli".into()])
+            ToolSelection::Whitelist(vec!["codex".into(), "claude-code".into()])
         );
     }
 

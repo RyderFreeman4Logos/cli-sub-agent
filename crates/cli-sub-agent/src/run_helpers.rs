@@ -178,7 +178,7 @@ pub(crate) fn validate_model_spec_tier_conflict(
 /// Returns true when `--tier` is specified without an explicit `--tool`.
 ///
 /// Auto-routing in this case may silently select the wrong tool for the task
-/// (e.g., gemini-cli with allow_edit=false for write tasks).
+/// (e.g., an explicit-only or read-only tool for write tasks).
 pub(crate) fn tier_without_tool_should_warn(tier: Option<&str>, tool_explicitly_set: bool) -> bool {
     tier.is_some() && !tool_explicitly_set
 }
@@ -191,11 +191,11 @@ pub(crate) fn warn_if_tier_without_tool(tier: Option<&str>, tool_explicitly_set:
         tracing::warn!(
             tier = tier.unwrap_or(""),
             "--tier without --tool uses auto-routing; \
-             specify --tool auto|claude-code|codex|gemini-cli to control tool selection"
+             specify --tool auto|claude-code|codex|opencode to control tool selection"
         );
         eprintln!(
             "warning: --tier without --tool uses auto-routing; \
-             specify --tool auto|claude-code|codex|gemini-cli to control tool selection"
+             specify --tool auto|claude-code|codex|opencode to control tool selection"
         );
     }
 }
@@ -456,7 +456,7 @@ pub(crate) fn resolve_tool_and_model(
 
     // Case 3: no tool/model_spec; use tiers, or --force any enabled runtime.
     if force {
-        for tool in csa_config::global::all_known_tools() {
+        for tool in csa_config::global::routing_candidate_tools() {
             let name = tool.as_str();
             let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
             let extra_env = runtime_env_for_tool(name);
@@ -473,8 +473,8 @@ pub(crate) fn resolve_tool_and_model(
             }
         }
         anyhow::bail!(
-            "No installed and enabled tools found. Install at least one tool \
-             (gemini-cli, opencode, codex, claude-code) or check enabled status."
+            "No installed and enabled tools found. Install at least one supported routing tool \
+             (opencode, codex, claude-code) or check enabled status."
         );
     }
 
@@ -521,7 +521,7 @@ pub(crate) fn resolve_tool_and_model(
     if let Some(cfg) = config
         && cfg.tiers.is_empty()
     {
-        for tool in csa_config::global::all_known_tools() {
+        for tool in csa_config::global::routing_candidate_tools() {
             let name = tool.as_str();
             let extra_env = runtime_env_for_tool(name);
             if cfg.is_tool_auto_selectable(name)

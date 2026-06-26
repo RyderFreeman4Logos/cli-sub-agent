@@ -8,13 +8,7 @@ use csa_config::{GlobalConfig, ProjectConfig, TierStrategy};
 use csa_core::types::OutputFormat;
 use std::{env, fmt::Write as _, path::Path};
 
-const BUILTIN_TOOLS: &[&str] = &[
-    "gemini-cli",
-    "opencode",
-    "codex",
-    "claude-code",
-    "antigravity-cli",
-];
+const BUILTIN_TOOLS: &[&str] = &["opencode", "codex", "claude-code"];
 
 /// Map tool name (from model spec) to its executable binary name.
 fn tool_exe_name(tool: &str, config: &ProjectConfig) -> String {
@@ -707,15 +701,15 @@ mod tests {
         let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
         std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
             .expect("create user config dir");
-        // Use gemini-cli + acp as the still-invalid combination after #1128 flipped
-        // codex CLI to a legal value. gemini-cli has no ACP transport, so the merge
+        // Use opencode + acp as the still-invalid combination after #1128 flipped
+        // codex CLI to a legal value. opencode has no ACP transport, so the merge
         // still produces a validation error tagged on the offending key. The invalid
         // value lives in USER config; project config stays valid so the project view
         // remains Valid in isolation.
         std::fs::write(
             &user_config_path,
             r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
         )
@@ -724,7 +718,7 @@ transport = "acp"
         write_project_config(
             td.path(),
             r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 
 [tiers.tier-1]
@@ -752,7 +746,7 @@ default = "tier-1"
         assert!(
             report.diagnostics[0]
                 .message
-                .contains("tools.gemini-cli.transport"),
+                .contains("tools.opencode.transport"),
             "diagnostic should surface the merged-config key: {:?}",
             report.diagnostics[0]
         );
@@ -761,7 +755,7 @@ default = "tier-1"
             "text output should surface the effective-config diagnostic: {rendered}"
         );
         assert!(
-            rendered.contains("Built-in tools: gemini-cli, opencode, codex, claude-code"),
+            rendered.contains("Built-in tools: opencode, codex, claude-code"),
             "text output should keep best-effort routing context: {rendered}"
         );
         assert!(
@@ -782,7 +776,7 @@ default = "tier-1"
             json["diagnostics"][0]["message"]
                 .as_str()
                 .expect("routing json diagnostic message")
-                .contains("tools.gemini-cli.transport"),
+                .contains("tools.opencode.transport"),
             "json output should surface the merged-config key: {json}"
         );
         assert_eq!(json["context"]["vcs_backend"], serde_json::json!("git"));

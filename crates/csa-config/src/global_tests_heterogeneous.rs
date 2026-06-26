@@ -114,13 +114,23 @@ task_pool_workers = 4
 #[test]
 fn test_all_known_tools() {
     let tools = all_known_tools();
-    assert_eq!(tools.len(), 6);
-    assert!(tools.contains(&ToolName::GeminiCli));
+    assert_eq!(tools.len(), 5);
+    assert!(!tools.contains(&ToolName::GeminiCli));
     assert!(tools.contains(&ToolName::Opencode));
     assert!(tools.contains(&ToolName::Codex));
     assert!(tools.contains(&ToolName::ClaudeCode));
     assert!(tools.contains(&ToolName::OpenaiCompat));
     assert!(tools.contains(&ToolName::AntigravityCli));
+}
+
+#[test]
+fn test_routing_candidate_tools_exclude_explicit_only_tools() {
+    let tools = routing_candidate_tools();
+    assert!(!tools.contains(&ToolName::GeminiCli));
+    assert!(!tools.contains(&ToolName::AntigravityCli));
+    assert!(tools.contains(&ToolName::Codex));
+    assert!(tools.contains(&ToolName::ClaudeCode));
+    assert!(tools.contains(&ToolName::Opencode));
 }
 
 #[test]
@@ -162,20 +172,19 @@ fn test_all_tool_slots_includes_extra_config_tools() {
     );
 
     let slots = config.all_tool_slots();
-    // 4 static tools + 1 custom = 5
-    assert_eq!(slots.len(), 5);
+    // 3 static routing tools + 1 custom = 4
+    assert_eq!(slots.len(), 4);
     let custom = slots.iter().find(|(t, _)| *t == "custom-tool").unwrap();
     assert_eq!(custom.1, 7);
 }
 
 #[test]
-fn test_all_tool_slots_default_config_has_four_tools() {
+fn test_all_tool_slots_default_config_has_three_tools() {
     let config = GlobalConfig::default();
     let slots = config.all_tool_slots();
-    assert_eq!(slots.len(), 4);
+    assert_eq!(slots.len(), 3);
 
     let names: Vec<&str> = slots.iter().map(|(n, _)| *n).collect();
-    assert!(names.contains(&"gemini-cli"));
     assert!(names.contains(&"opencode"));
     assert!(names.contains(&"codex"));
     assert!(names.contains(&"claude-code"));

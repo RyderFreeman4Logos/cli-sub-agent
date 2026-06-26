@@ -169,7 +169,7 @@ fn ordered_global_candidates(
     };
 
     for tool in csa_config::global::sort_tools_by_effective_priority(
-        csa_config::global::all_known_tools(),
+        csa_config::global::routing_candidate_tools(),
         config,
         global_config,
     ) {

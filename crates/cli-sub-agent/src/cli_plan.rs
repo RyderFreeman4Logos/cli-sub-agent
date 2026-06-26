@@ -4,7 +4,7 @@
 use clap::Subcommand;
 use csa_core::types::ToolName;
 
-use super::parse_model_spec_arg;
+use super::{parse_cli_tool_name, parse_model_spec_arg};
 
 #[derive(Subcommand)]
 pub enum PlanCommands {
@@ -30,7 +30,7 @@ pub enum PlanCommands {
         issue: Option<u64>,
 
         /// Override tool for all CSA steps (ignores tier routing)
-        #[arg(long)]
+        #[arg(long, value_parser = parse_cli_tool_name)]
         tool: Option<ToolName>,
 
         /// Override model spec for all CSA steps (tool/provider/model/thinking format)

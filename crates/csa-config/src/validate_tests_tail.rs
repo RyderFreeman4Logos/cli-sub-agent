@@ -218,7 +218,6 @@ fn test_validate_review_batch_commits_zero_rejected() {
 fn test_validate_all_known_review_tools_accepted() {
     let known = [
         "auto",
-        "gemini-cli",
         "opencode",
         "codex",
         "claude-code",
@@ -273,7 +272,6 @@ fn test_validate_all_known_review_tools_accepted() {
 fn test_validate_all_known_debate_tools_accepted() {
     let known = [
         "auto",
-        "gemini-cli",
         "opencode",
         "codex",
         "claude-code",
@@ -329,13 +327,7 @@ fn test_validate_all_known_tools_accepted() {
     let dir = tempdir().unwrap();
 
     let mut tools = HashMap::new();
-    for name in &[
-        "gemini-cli",
-        "opencode",
-        "codex",
-        "claude-code",
-        "antigravity-cli",
-    ] {
+    for name in &["opencode", "codex", "claude-code", "antigravity-cli"] {
         tools.insert(name.to_string(), ToolConfig::default());
     }
 

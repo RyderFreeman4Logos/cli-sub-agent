@@ -170,7 +170,7 @@ fn exclusion_attempt(exclusion: &TierModelExclusion) -> FallbackAttempt {
 /// flag the scheduler already computed.
 #[derive(Debug, Clone)]
 pub(crate) struct AttemptFailure {
-    /// Full model spec (e.g. `gemini-cli/google/gemini-3.1-pro-preview/xhigh`).
+    /// Full model spec (e.g. `codex/openai/gpt-5.5/xhigh`).
     pub(crate) model_spec: String,
     /// Normalized failover reason (e.g. the scheduler's `"QUOTA_EXHAUSTED"`).
     pub(crate) reason: String,

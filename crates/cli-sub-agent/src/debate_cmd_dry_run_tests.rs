@@ -28,10 +28,10 @@ fn debate_cli_parses_dry_run_flag() {
 
 #[test]
 fn debate_explicit_tool_keeps_failover_enabled_by_default() {
-    let args = parse_debate_args(&["csa", "debate", "--tool", "gemini-cli", "question"]);
+    let args = parse_debate_args(&["csa", "debate", "--tool", "codex", "question"]);
     assert!(matches!(
         args.tool,
-        Some(ToolArg::Specific(ToolName::GeminiCli))
+        Some(ToolArg::Specific(ToolName::Codex))
     ));
     assert!(!args.no_failover);
 }

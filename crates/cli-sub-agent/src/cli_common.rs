@@ -40,6 +40,26 @@ pub(crate) fn validate_return_to(value: &str) -> std::result::Result<String, Str
         .map_err(|e| e.to_string())
 }
 
+pub(crate) fn parse_cli_tool_name(
+    tool: &str,
+) -> std::result::Result<csa_core::types::ToolName, String> {
+    if csa_core::types::is_removed_tool_name(tool) {
+        return Err(csa_core::types::removed_tool_error(tool));
+    }
+    match tool {
+        "opencode" => Ok(csa_core::types::ToolName::Opencode),
+        "codex" => Ok(csa_core::types::ToolName::Codex),
+        "claude-code" => Ok(csa_core::types::ToolName::ClaudeCode),
+        "openai-compat" => Ok(csa_core::types::ToolName::OpenaiCompat),
+        "antigravity-cli" => Ok(csa_core::types::ToolName::AntigravityCli),
+        "claude" => Ok(csa_core::types::ToolName::ClaudeCode),
+        "antigravity" => Ok(csa_core::types::ToolName::AntigravityCli),
+        _ => Err(format!(
+            "unknown tool '{tool}'. Valid values: opencode, codex, claude-code, openai-compat, antigravity-cli"
+        )),
+    }
+}
+
 pub(crate) fn parse_model_spec_arg(spec: &str) -> std::result::Result<String, String> {
     let (value, warning) = parse_model_spec_arg_with_warning(spec)?;
     if let Some(warning) = warning {
@@ -63,6 +83,9 @@ pub(crate) fn parse_model_spec_arg_with_warning(
         return Err(format!(
             "Invalid model spec '{spec}': tool/provider/model/thinking_budget segments cannot be empty"
         ));
+    }
+    if csa_core::types::is_removed_tool_name(&parsed.tool) {
+        return Err(csa_core::types::removed_tool_error(&parsed.tool));
     }
 
     match parsed.validate_with_catalog(&known_tools) {
@@ -90,7 +113,7 @@ pub(crate) fn parse_spec_path_arg(spec: &str) -> std::result::Result<String, Str
 
 #[cfg(test)]
 mod tests {
-    use super::parse_model_spec_arg_with_warning;
+    use super::{parse_cli_tool_name, parse_model_spec_arg_with_warning};
 
     #[test]
     fn parse_model_spec_arg_warns_and_passes_unknown_model() {
@@ -120,5 +143,23 @@ mod tests {
             .expect_err("empty tool should remain malformed");
 
         assert!(err.contains("segments cannot be empty"), "{err}");
+    }
+
+    #[test]
+    fn parse_model_spec_arg_rejects_removed_gemini_cli() {
+        let err =
+            parse_model_spec_arg_with_warning("gemini-cli/google/gemini-3-pro/xhigh").unwrap_err();
+
+        assert!(err.contains("no longer supported"), "{err}");
+        assert!(err.contains("discontinued"), "{err}");
+        assert!(err.contains("antigravity-cli"), "{err}");
+    }
+
+    #[test]
+    fn parse_cli_tool_name_rejects_removed_gemini_cli() {
+        let err = parse_cli_tool_name("gemini-cli").unwrap_err();
+
+        assert!(err.contains("no longer supported"), "{err}");
+        assert!(err.contains("provider is discontinued"), "{err}");
     }
 }

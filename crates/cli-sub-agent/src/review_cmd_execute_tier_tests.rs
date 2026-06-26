@@ -266,7 +266,7 @@ async fn execute_review_falls_back_to_next_tier_model_and_persists_routing_metad
 
 #[cfg(unix)]
 #[tokio::test]
-async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists_routing_chain() {
+async fn execute_review_skips_removed_gemini_spec_to_codex_and_persists_routing_chain() {
     use std::os::unix::fs::PermissionsExt;
 
     if which::which("bwrap").is_err() {
@@ -320,7 +320,7 @@ async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists
         Some("quality".to_string()),
         true,
         None,
-        "review: manual-auth-tier-fallback-success".to_string(),
+        "review: removed-gemini-tier-fallback-success".to_string(),
         project_dir.path(),
         Some(&config),
         &global,
@@ -342,7 +342,7 @@ async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists
         Some(false),
     )
     .await
-    .expect("manual-auth tier fallback should succeed");
+    .expect("removed gemini tier fallback should reach codex");
 
     assert_eq!(result.executed_tool, ToolName::Codex);
     assert_eq!(
@@ -364,7 +364,7 @@ async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists
     assert_eq!(persisted.fallback_tool.as_deref(), Some("codex"));
     assert!(
         persisted.fallback_reason.is_none(),
-        "legacy fallback_reason stays quota-only; auth provenance lives in fallback_chain"
+        "legacy fallback_reason stays quota-only; removed-spec provenance lives in fallback_chain"
     );
     let fallback_chain = persisted
         .fallback_chain
@@ -376,7 +376,7 @@ async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists
         fallback_chain[0].model_spec.as_deref(),
         Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
     );
-    assert_eq!(fallback_chain[0].skip_reason, "auth_unavailable");
+    assert_eq!(fallback_chain[0].skip_reason, "malformed-spec");
     assert!(!fallback_chain[0].quota_exhausted);
 
     let routing_json =
@@ -388,7 +388,7 @@ async fn execute_review_falls_back_from_gemini_manual_auth_to_codex_and_persists
         .expect("routing fallback_chain array");
     assert_eq!(routing_chain.len(), 1);
     assert_eq!(routing_chain[0]["tool"], "gemini-cli");
-    assert_eq!(routing_chain[0]["skip_reason"], "auth_unavailable");
+    assert_eq!(routing_chain[0]["skip_reason"], "malformed-spec");
     assert_eq!(routing_chain[0]["quota_exhausted"], false);
 }
 
@@ -649,7 +649,7 @@ async fn execute_review_marks_unavailable_when_all_tier_models_fail() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn execute_review_manual_auth_then_codex_unavailable_stays_unavailable() {
+async fn execute_review_removed_gemini_then_codex_unavailable_stays_unavailable() {
     use std::os::unix::fs::PermissionsExt;
 
     if which::which("bwrap").is_err() {
@@ -705,7 +705,7 @@ async fn execute_review_manual_auth_then_codex_unavailable_stays_unavailable() {
         Some("quality".to_string()),
         true,
         None,
-        "review: manual-auth-tier-all-failed".to_string(),
+        "review: removed-gemini-tier-all-failed".to_string(),
         project_dir.path(),
         Some(&config),
         &global,
@@ -738,12 +738,8 @@ async fn execute_review_manual_auth_then_codex_unavailable_stays_unavailable() {
     assert!(result.routed_to.is_none());
     assert_ne!(result.execution.execution.exit_code, 0);
     let primary_failure = result.primary_failure.as_deref().expect("primary_failure");
-    assert!(primary_failure.contains("auth_unavailable"));
     assert!(primary_failure.contains("HTTP 401"));
     let failure_reason = result.failure_reason.as_deref().expect("failure_reason");
-    assert!(
-        failure_reason.contains("gemini-cli/google/gemini-3.1-pro-preview/xhigh=auth_unavailable")
-    );
     assert!(failure_reason.contains("codex/openai/gpt-5.4/high=HTTP 401"));
 
     let session_dir =
@@ -758,7 +754,7 @@ async fn execute_review_manual_auth_then_codex_unavailable_stays_unavailable() {
         .expect("routing fallback_chain array");
     assert_eq!(routing_chain.len(), 2);
     assert_eq!(routing_chain[0]["tool"], "gemini-cli");
-    assert_eq!(routing_chain[0]["skip_reason"], "auth_unavailable");
+    assert_eq!(routing_chain[0]["skip_reason"], "malformed-spec");
     assert_eq!(routing_chain[0]["quota_exhausted"], false);
     assert_eq!(routing_chain[1]["tool"], "codex");
     assert_eq!(routing_chain[1]["skip_reason"], "attempted-and-errored");

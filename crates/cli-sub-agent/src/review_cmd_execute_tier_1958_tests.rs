@@ -129,7 +129,7 @@ async fn execute_review_falls_back_from_gemini_status_400_to_codex() {
         .expect("result fallback_chain");
     assert_eq!(fallback_chain.len(), 1);
     assert_eq!(fallback_chain[0].tool, "gemini-cli");
-    assert_eq!(fallback_chain[0].skip_reason, "attempted-and-errored");
+    assert_eq!(fallback_chain[0].skip_reason, "malformed-spec");
     assert!(!fallback_chain[0].quota_exhausted);
 }
 
@@ -236,8 +236,8 @@ async fn execute_review_falls_back_from_gemini_quota_exhausted_to_codex() {
         fallback_chain[0].model_spec.as_deref(),
         Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
     );
-    assert_eq!(fallback_chain[0].skip_reason, "oauth-quota");
-    assert!(fallback_chain[0].quota_exhausted);
+    assert_eq!(fallback_chain[0].skip_reason, "malformed-spec");
+    assert!(!fallback_chain[0].quota_exhausted);
 }
 
 #[cfg(unix)]
@@ -362,7 +362,7 @@ async fn execute_review_falls_back_from_gemini_status_400_transport_error_to_cod
         fallback_chain[0].model_spec.as_deref(),
         Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
     );
-    assert_eq!(fallback_chain[0].skip_reason, "attempted-and-errored");
+    assert_eq!(fallback_chain[0].skip_reason, "malformed-spec");
     assert!(!fallback_chain[0].quota_exhausted);
 
     let gemini_sessions = csa_session::list_sessions(project_dir.path(), Some(&["gemini-cli"]))

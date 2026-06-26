@@ -1,6 +1,6 @@
 use super::*;
+use crate::test_env_lock::{TEST_ENV_LOCK, isolate_user_config};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::{Arc, Barrier};
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
@@ -175,6 +175,8 @@ async fn execute_plan_stops_after_manual_handoff() {
 #[tokio::test]
 async fn handle_plan_run_complete_manual_step_continues_after_pending_handoff() {
     let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
     let workflow_path = write_manual_handoff_workflow(tmp.path());
 
     handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
@@ -217,6 +219,8 @@ async fn handle_plan_run_complete_manual_step_continues_after_pending_handoff() 
 #[tokio::test]
 async fn handle_plan_run_concurrent_complete_manual_step_runs_post_manual_steps_once() {
     let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
     let workflow_path = write_manual_handoff_append_workflow(tmp.path());
 
     handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
@@ -284,6 +288,8 @@ async fn handle_plan_run_concurrent_complete_manual_step_runs_post_manual_steps_
 #[tokio::test]
 async fn handle_plan_run_complete_manual_step_accepts_zero_step_id() {
     let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
     let workflow_path = write_manual_handoff_workflow_with_manual_step_id(tmp.path(), 0);
 
     handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
@@ -314,6 +320,8 @@ async fn handle_plan_run_complete_manual_step_accepts_zero_step_id() {
 #[tokio::test]
 async fn complete_manual_step_rejects_non_pending_step_id() {
     let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
     let workflow_path = write_manual_handoff_workflow(tmp.path());
     let plan = plan_from_toml(&std::fs::read_to_string(&workflow_path).unwrap()).unwrap();
 

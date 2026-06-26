@@ -41,7 +41,7 @@ Legacy compatibility format accepted by the guard:
 
 ```text
 Review: codex session 01ABC... (status=success, summary=PASS)
-Review: gemini-cli session 01DEF... (status=success, summary=CLEAN)
+Review: claude-code session 01DEF... (status=success, summary=CLEAN)
 ```
 
 `summary=FAIL` (or `verdict=Fail`) blocks compression. A commit with no explicit

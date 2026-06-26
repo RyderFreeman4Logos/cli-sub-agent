@@ -368,7 +368,7 @@ fn explicit_claude_code_cli_transport_reports_json_transport_details() {
 }
 
 /// Doctor must surface transport validation errors with the offending key path.
-/// Uses gemini-cli + ACP (still rejected post-#1128) because the original
+/// Uses opencode + ACP (still rejected post-#1128) because the original
 /// codex+cli rejection became obsolete after the codex CLI default flip.
 #[test]
 fn doctor_load_rejects_invalid_tool_transport_override() {
@@ -376,7 +376,7 @@ fn doctor_load_rejects_invalid_tool_transport_override() {
     write_project_config(
         td.path(),
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     );
@@ -385,7 +385,7 @@ transport = "acp"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("tools.gemini-cli.transport"),
+        message.contains("tools.opencode.transport"),
         "doctor should surface the exact config key: {message}"
     );
     assert!(
@@ -472,15 +472,15 @@ fn doctor_project_config_display_ignores_invalid_user_global_config() {
     let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
     std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
         .expect("create user config dir");
-    // gemini-cli + acp is the still-invalid combination after #1128 flipped
-    // codex CLI to a legal transport. gemini-cli has no ACP transport, so the
+    // opencode + acp is the still-invalid combination after #1128 flipped
+    // codex CLI to a legal transport. opencode has no ACP transport, so the
     // merge still produces a validation error tagged on the offending key.
     // The invalid value lives in USER config; project config stays valid so
     // doctor still reports `.csa/config.toml` as Valid in isolation.
     std::fs::write(
         &user_config_path,
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -489,14 +489,14 @@ transport = "acp"
     write_project_config(
         td.path(),
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 "#,
     );
 
     let merged_error = ProjectConfig::load(td.path()).expect_err("merged load should fail");
     assert!(
-        format!("{merged_error:#}").contains("tools.gemini-cli.transport"),
+        format!("{merged_error:#}").contains("tools.opencode.transport"),
         "test fixture should exercise an invalid user-level transport override: {merged_error}"
     );
 
@@ -629,15 +629,15 @@ fn doctor_text_reports_invalid_effective_config() {
     let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
     std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
         .expect("create user config dir");
-    // gemini-cli + acp is the still-invalid combination after #1128 flipped
-    // codex CLI to a legal transport. gemini-cli has no ACP transport, so the
+    // opencode + acp is the still-invalid combination after #1128 flipped
+    // codex CLI to a legal transport. opencode has no ACP transport, so the
     // merge still produces a validation error tagged on the offending key.
     // The invalid value lives in USER config; project config stays valid so
     // doctor still reports `.csa/config.toml` as Valid in isolation.
     std::fs::write(
         &user_config_path,
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -646,7 +646,7 @@ transport = "acp"
     write_project_config(
         td.path(),
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 "#,
     );
@@ -669,7 +669,7 @@ transport = "auto"
         "doctor text should surface the invalid effective-config branch: {rendered}"
     );
     assert!(
-        rendered.contains("tools.gemini-cli.transport"),
+        rendered.contains("tools.opencode.transport"),
         "doctor text should surface the exact merged-config key: {rendered}"
     );
     assert!(
@@ -695,15 +695,15 @@ fn doctor_json_reports_invalid_effective_config() {
     let user_config_path = ProjectConfig::user_config_path().expect("resolve user config path");
     std::fs::create_dir_all(user_config_path.parent().expect("user config dir"))
         .expect("create user config dir");
-    // gemini-cli + acp is the still-invalid combination after #1128 flipped
-    // codex CLI to a legal transport. gemini-cli has no ACP transport, so the
+    // opencode + acp is the still-invalid combination after #1128 flipped
+    // codex CLI to a legal transport. opencode has no ACP transport, so the
     // merge still produces a validation error tagged on the offending key.
     // The invalid value lives in USER config; project config stays valid so
     // doctor still reports `.csa/config.toml` as Valid in isolation.
     std::fs::write(
         &user_config_path,
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -712,7 +712,7 @@ transport = "acp"
     write_project_config(
         td.path(),
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 "#,
     );
@@ -729,7 +729,7 @@ transport = "auto"
     assert_eq!(report["config"]["valid"], serde_json::json!(true));
     assert_eq!(effective["valid"], serde_json::json!(false));
     assert!(
-        effective_error.contains("tools.gemini-cli.transport"),
+        effective_error.contains("tools.opencode.transport"),
         "doctor JSON should surface the exact merged-config key: {effective_error}"
     );
     assert!(
