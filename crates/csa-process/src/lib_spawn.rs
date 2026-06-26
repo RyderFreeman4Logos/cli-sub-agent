@@ -189,9 +189,15 @@ pub async fn spawn_tool_sandboxed(
                 plan.writable_paths.clone()
             };
             landlock_paths = Some(paths);
+            let mut cmd = cmd;
+            apply_plan_env_overrides(&mut cmd, plan);
             cmd
         }
-        FilesystemCapability::None => cmd,
+        FilesystemCapability::None => {
+            let mut cmd = cmd;
+            apply_plan_env_overrides(&mut cmd, plan);
+            cmd
+        }
     };
 
     let has_bwrap = plan.filesystem == FilesystemCapability::Bwrap;
@@ -279,6 +285,15 @@ fn propagate_explicit_envs(
 fn scrub_git_push_authorization_env(target: &mut Command) {
     for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
         target.env_remove(key);
+    }
+}
+
+fn apply_plan_env_overrides(target: &mut Command, plan: &IsolationPlan) {
+    let mut env_overrides = plan.env_overrides.clone();
+    csa_core::env::scrub_subtree_contract_env_map(&mut env_overrides);
+    csa_core::env::strip_git_push_authorization_keys(&mut env_overrides);
+    for (key, value) in env_overrides {
+        target.env(key, value);
     }
 }
 
@@ -426,6 +441,63 @@ mod tests {
             soft_limit_percent: None,
             memory_monitor_interval_seconds: None,
         }
+    }
+
+    fn no_filesystem_wrapper_plan_with_tmpdir(tmpdir: &str) -> IsolationPlan {
+        IsolationPlan {
+            resource: ResourceCapability::None,
+            filesystem: FilesystemCapability::None,
+            writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
+            env_overrides: HashMap::from([("TMPDIR".to_string(), tmpdir.to_string())]),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_bwrap_spawn_applies_plan_env_overrides_over_explicit_env() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let session_tmp = temp.path().join("session-tmp");
+        std::fs::create_dir_all(&session_tmp).expect("create session tmpdir");
+        let expected_tmpdir = session_tmp.to_string_lossy().into_owned();
+        let mut original = Command::new("/bin/sh");
+        original
+            .arg("-c")
+            .arg("printf probe > \"$TMPDIR/probe\" && printf '%s' \"$TMPDIR\"")
+            .env("TMPDIR", "/usr/local/tmp");
+        let plan = no_filesystem_wrapper_plan_with_tmpdir(&expected_tmpdir);
+
+        let (child, _handle) = spawn_tool_sandboxed(
+            original,
+            None,
+            SpawnOptions::default(),
+            Some(&plan),
+            "codex",
+            "01KTEST",
+        )
+        .await
+        .expect("spawn should succeed");
+        let result = crate::wait_and_capture(child, crate::StreamMode::BufferOnly)
+            .await
+            .expect("wait should succeed");
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(
+            result.output, expected_tmpdir,
+            "non-bwrap sandbox paths must still apply IsolationPlan env overrides"
+        );
+        assert_eq!(
+            std::fs::read_to_string(session_tmp.join("probe")).expect("read tmpdir probe"),
+            "probe",
+            "normalized TMPDIR must be writable by the child process"
+        );
     }
 
     #[test]

@@ -239,6 +239,61 @@ fn require_commit_without_created_commit_fails_successful_self_report() {
 }
 
 #[test]
+fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
+    let temp = init_repo_with_initial_commit();
+    let root = temp.path();
+    std::fs::write(root.join("tracked.txt"), "staged but not committed\n")
+        .expect("write tracked change");
+    run_git(root, &["add", "tracked.txt"]);
+    let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
+        .expect("session should be created");
+    let session_result = session_result("success", 0);
+    csa_session::save_result(root, &session.meta_session_id, &session_result)
+        .expect("result should be saved");
+    let mut execution = csa_process::ExecutionResult {
+        exit_code: 0,
+        summary: "hook failed but employee self-reported success".to_string(),
+        ..Default::default()
+    };
+
+    record_writer_uncommitted_changes_with_config(
+        root,
+        Some(&session.meta_session_id),
+        &mut execution,
+        WriterUncommittedRecord {
+            sa_mode: true,
+            require_commit: true,
+            changed_paths: Some(&["tracked.txt".to_string()]),
+            commit_created: Some(false),
+            large_diff_config: &RunLargeDiffWarningConfig::default(),
+        },
+    );
+
+    let loaded = csa_session::load_result(root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(execution.exit_code, 1);
+    assert_eq!(
+        execution.csa_gate_failure.as_deref(),
+        Some("writer-uncommitted")
+    );
+    assert_eq!(loaded.status, "failure");
+    assert_eq!(loaded.exit_code, 1);
+    assert_eq!(loaded.summary, REQUIRE_COMMIT_REASON);
+    let recovery = loaded
+        .require_commit_recovery
+        .expect("explicit require-commit must fail closed in sa-mode");
+    assert!(recovery.require_commit);
+    assert!(!recovery.commit_created);
+    assert!(recovery.dirty_worktree);
+    assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
+    assert_eq!(
+        recovery.suggested_recovery_action,
+        REQUIRE_COMMIT_RECOVERY_ACTION
+    );
+}
+
+#[test]
 fn require_commit_recovery_records_bounded_redacted_blocker_summary() {
     let temp = init_repo_with_initial_commit();
     let root = temp.path();

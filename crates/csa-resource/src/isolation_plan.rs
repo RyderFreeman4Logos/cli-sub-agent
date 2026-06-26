@@ -236,6 +236,9 @@ impl IsolationPlanBuilder {
             "TMPDIR".to_string(),
             sandbox_tmpdir.to_string_lossy().into_owned(),
         );
+        if !matches!(self.filesystem, FilesystemCapability::Bwrap) {
+            add_dir_or_creatable_parent(&mut self.writable_paths, &sandbox_tmpdir);
+        }
 
         // Submodule detection: if .git is a file (not a directory), the project
         // root is inside a git submodule.  Walk up to find the superproject root
@@ -508,6 +511,10 @@ mod path_tests;
 #[cfg(test)]
 #[path = "isolation_plan_rust_env_tests.rs"]
 mod rust_env_tests;
+
+#[cfg(test)]
+#[path = "isolation_plan_tmpdir_tests.rs"]
+mod tmpdir_tests;
 
 #[cfg(test)]
 #[path = "isolation_plan_claude_tests.rs"]

@@ -40,7 +40,7 @@ pub(crate) fn compute_changed_paths(
     if pre == post {
         if fingerprints_differ(pre_fingerprints, post_fingerprints) {
             // Fingerprints are aggregate — report all paths from post-status.
-            return paths_from_porcelain_status(post).into_iter().collect();
+            return reportable_paths_from_entries(collect_status_entries(post));
         }
         return Vec::new();
     }
@@ -55,35 +55,33 @@ pub(crate) fn compute_changed_paths(
     let pre_entries: BTreeSet<String> = collect_status_entries(pre);
     let post_entries: BTreeSet<String> = collect_status_entries(post);
 
-    let mut changed = BTreeSet::new();
+    let mut changed_entries = BTreeSet::new();
 
     // New or modified entries in post.
     for entry in &post_entries {
-        if !pre_entries.contains(entry)
-            && let Some(path) = path_from_entry(entry)
-        {
-            changed.insert(path);
+        if !pre_entries.contains(entry) {
+            changed_entries.insert(entry.clone());
         }
     }
 
     // Entries that disappeared (files cleaned/deleted during execution).
     for entry in &pre_entries {
-        if !post_entries.contains(entry)
-            && let Some(path) = path_from_entry(entry)
-        {
-            changed.insert(path);
+        if !post_entries.contains(entry) {
+            changed_entries.insert(entry.clone());
         }
     }
 
     // Fallback: if the entry-level diff is empty but status strings differ
     // (e.g., only fingerprint changed), use the symmetric difference of paths.
-    if changed.is_empty() {
+    if changed_entries.is_empty() {
+        let mut changed = BTreeSet::new();
         for path in pre_paths.symmetric_difference(&post_paths) {
             changed.insert(path.clone());
         }
+        return changed.into_iter().collect();
     }
 
-    changed.into_iter().collect()
+    reportable_paths_from_entries(changed_entries)
 }
 
 /// Returns true when fingerprints are available and at least one differs.
@@ -213,6 +211,35 @@ fn paths_from_porcelain_status(status: &str) -> BTreeSet<String> {
         .into_iter()
         .filter_map(|entry| path_from_entry(&entry))
         .collect()
+}
+
+fn reportable_paths_from_entries(entries: BTreeSet<String>) -> Vec<String> {
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = path_from_entry(&entry)?;
+            if is_untracked_entry(&entry) && is_csa_internal_state_path(&path) {
+                None
+            } else {
+                Some(path)
+            }
+        })
+        .collect()
+}
+
+fn is_untracked_entry(entry: &str) -> bool {
+    entry.as_bytes().get(..2) == Some(b"??")
+}
+
+fn is_csa_internal_state_path(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    matches!(
+        path.as_str(),
+        path if path.starts_with("state/cli-sub-agent/")
+            || path.starts_with(".local/state/cli-sub-agent/")
+            || path.starts_with("state/csa/")
+            || path.starts_with(".local/state/csa/")
+    )
 }
 
 fn collect_status_entries(status: &str) -> BTreeSet<String> {
@@ -440,6 +467,60 @@ members = ["crates/*"]
         let post = " M src/lib.rs\0?? src/new.rs\0";
         let paths = compute_changed_paths(Some(pre), Some(post), None, None);
         assert!(paths.contains(&"src/new.rs".to_string()));
+    }
+
+    #[test]
+    fn compute_changed_paths_excludes_session_state_artifacts() {
+        let pre = "";
+        let post = " M tracked.txt\0?? state/cli-sub-agent/tmp/.tmpIej7BN/sessions/\0";
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
+        assert_eq!(paths, vec!["tracked.txt".to_string()]);
+    }
+
+    #[test]
+    fn compute_changed_paths_preserves_tracked_reserved_state_path() {
+        let pre = "";
+        let post = " M state/cli-sub-agent/src/lib.rs\0";
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
+
+        assert_eq!(paths, vec!["state/cli-sub-agent/src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn compute_changed_paths_preserves_indexed_reserved_state_path() {
+        let pre = "";
+        let post = "A  state/csa/src/lib.rs\0";
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
+
+        assert_eq!(paths, vec!["state/csa/src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn compute_changed_paths_filters_untracked_reserved_state_artifact() {
+        let pre = "";
+        let post = "?? state/cli-sub-agent/tmp/.tmpIej7BN/sessions/\0";
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn compute_changed_paths_fingerprint_preserves_tracked_reserved_state_path() {
+        let status = " M state/cli-sub-agent/src/lib.rs\0?? state/cli-sub-agent/tmp/session/\0";
+        let pre_fp = SnapshotFingerprints {
+            tracked_worktree: Some(111),
+            tracked_index: Some(222),
+            untracked: Some(333),
+        };
+        let post_fp = SnapshotFingerprints {
+            tracked_worktree: Some(999),
+            tracked_index: Some(222),
+            untracked: Some(333),
+        };
+        let paths =
+            compute_changed_paths(Some(status), Some(status), Some(&pre_fp), Some(&post_fp));
+
+        assert_eq!(paths, vec!["state/cli-sub-agent/src/lib.rs".to_string()]);
     }
 
     #[test]

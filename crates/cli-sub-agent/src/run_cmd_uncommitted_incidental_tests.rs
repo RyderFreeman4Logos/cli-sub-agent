@@ -1,11 +1,14 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::test_session_sandbox::ScopedSessionSandbox;
+
 use super::*;
 
 #[tokio::test]
 async fn require_commit_recovery_uses_raw_exit_after_incidental_downgrade() {
     let temp = init_repo_with_initial_commit();
+    let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let root = temp.path();
     let mut session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
