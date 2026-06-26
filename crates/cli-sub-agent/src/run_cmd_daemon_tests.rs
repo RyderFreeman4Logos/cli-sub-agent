@@ -114,25 +114,26 @@ fn assert_daemon_wrapper_pin_resolves_for_command(command: &str, startup_env: &S
 
 #[test]
 fn run_daemon_options_detect_omitted_stdin_prompt_without_skill() {
-    let options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[]);
+    let options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[], false);
     assert_eq!(options.run_stdin_prompt, RunStdinPrompt::Omitted);
 }
 
 #[test]
 fn run_daemon_options_do_not_capture_stdin_for_skill_only_run() {
-    let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None, false, &[]);
+    let options = DaemonSpawnOptions::for_run(Some("demo"), None, None, None, false, &[], false);
     assert_eq!(options.run_stdin_prompt, RunStdinPrompt::None);
 }
 
 #[test]
 fn run_daemon_options_detect_positional_stdin_sentinel() {
-    let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None, false, &[]);
+    let options = DaemonSpawnOptions::for_run(None, Some("-"), None, None, false, &[], false);
     assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PositionalSentinel);
 }
 
 #[test]
 fn run_daemon_options_detect_prompt_file_stdin_sentinel() {
-    let options = DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")), false, &[]);
+    let options =
+        DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")), false, &[], false);
     assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
 }
 

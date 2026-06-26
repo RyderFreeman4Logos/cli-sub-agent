@@ -1,5 +1,6 @@
 use std::{io, path::Path};
 
+use anyhow::Context;
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
 use csa_resource::SpawnMemoryAdmission;
@@ -12,6 +13,7 @@ const FALLBACK_SPAWN_PROJECTION_MB: u64 = 4096;
 const RECENT_ACTIVE_FALLBACK_PROJECTION_MB: u64 = 4096;
 const RECENT_ACTIVE_FALLBACK_WINDOW_SECS: i64 = 15 * 60;
 const PRE_SPAWN_ADMISSION_MODE: &str = "admission";
+const PRE_SPAWN_MEMORY_ADMITTED_FILE: &str = ".pre-spawn-memory-admitted.toml";
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct ActiveSessionMemory {
@@ -57,6 +59,29 @@ pub(crate) fn persist_spawn_memory_projection(
         csa_session::save_session(session)?;
     }
     Ok(())
+}
+
+pub(crate) fn spawn_memory_admission_ready_path(session_dir: &Path) -> std::path::PathBuf {
+    session_dir.join(PRE_SPAWN_MEMORY_ADMITTED_FILE)
+}
+
+pub(crate) fn persist_spawn_memory_admission_ready(
+    project_root: &Path,
+    session_id: &str,
+    projected_spawn_mb: u64,
+) -> anyhow::Result<()> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+    let path = spawn_memory_admission_ready_path(&session_dir);
+    let content = format!(
+        "status = \"admitted\"\nprojected_spawn_mb = {projected_spawn_mb}\nrecorded_at = \"{}\"\n",
+        Utc::now().to_rfc3339()
+    );
+    std::fs::write(&path, content).with_context(|| {
+        format!(
+            "Failed to persist pre-spawn memory admission marker at {}",
+            path.display()
+        )
+    })
 }
 
 fn update_spawn_memory_projection(session: &mut MetaSessionState, projected_spawn_mb: u64) -> bool {
