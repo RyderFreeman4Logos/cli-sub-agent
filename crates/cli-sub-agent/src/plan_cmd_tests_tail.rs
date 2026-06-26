@@ -27,10 +27,7 @@ async fn execute_step_skips_when_condition_is_false() {
     let tmp = tempfile::tempdir().unwrap();
     let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(result.skipped, "unset condition var must skip");
-    assert_eq!(
-        result.exit_code, 0,
-        "condition-false skip is intentional, not a failure"
-    );
+    assert_eq!(result.exit_code, 0, "condition-false skip succeeds");
 }
 
 #[tokio::test]
@@ -101,10 +98,7 @@ async fn execute_step_skips_weave_include() {
     let tmp = tempfile::tempdir().unwrap();
     let result = execute_step(&step, &vars, tmp.path(), None, None, None).await;
     assert!(result.skipped);
-    assert_eq!(
-        result.exit_code, 0,
-        "INCLUDE skip should be success (harmless)"
-    );
+    assert_eq!(result.exit_code, 0, "INCLUDE skip succeeds");
 }
 
 #[tokio::test]
@@ -219,6 +213,7 @@ async fn execute_plan_stops_for_await_user() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        resources: Default::default(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
@@ -285,6 +280,7 @@ async fn execute_plan_continues_after_skipped_await_user_step() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        resources: Default::default(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 

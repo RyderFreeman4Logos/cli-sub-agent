@@ -270,6 +270,7 @@ fn evaluate_memory_availability(
     {
         let required_available_mb = reserve_mb.saturating_add(admission.projected_spawn_mb);
         if available_phys_mb < required_available_mb {
+            let host_cap_upper_mb = available_phys_mb.saturating_sub(reserve_mb);
             let message = format!(
                 "CSA: host memory admission denied — available={available_phys_mb}MB < \
                  required={required_available_mb}MB (reserve={reserve_mb}MB + \
@@ -291,8 +292,12 @@ fn evaluate_memory_availability(
                      MemAvailable only; swap and combined memory are reported for diagnostics but \
                      do not satisfy this pre-spawn gate. For one csa run, pass \
                      --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
-                     to lower the reserve. Persistent config keys: resources.memory_max_mb, \
-                     tools.<tool>.memory_max_mb, resources.min_free_memory_mb."
+                     to lower the reserve. Current host-only retry upper bound is \
+                     memory_max_mb <= {host_cap_upper_mb}MB with reserve={reserve_mb}MB; \
+                     role-specific soft-limit lower bounds may require a higher cap, so choose \
+                     a value inside both bounds or free memory/lower reserve. Persistent config \
+                     keys: resources.memory_max_mb, tools.<tool>.memory_max_mb, \
+                     resources.min_free_memory_mb."
                 ),
                 MemoryAdmissionKind::HostSpawn,
                 MemoryAdmissionSnapshot {
@@ -540,6 +545,7 @@ mod tests {
         assert!(msg.contains("swap and combined memory are reported for diagnostics"));
         assert!(msg.contains("--memory-max-mb <MB>"));
         assert!(msg.contains("--min-free-memory-mb <MB>"));
+        assert!(msg.contains("memory_max_mb <= 5904MB"));
         assert!(msg.contains("tools.<tool>.memory_max_mb"));
     }
 

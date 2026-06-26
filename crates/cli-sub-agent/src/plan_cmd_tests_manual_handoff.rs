@@ -127,6 +127,7 @@ fn plan_run_args(project_root: &Path, workflow_path: &Path) -> PlanRunArgs {
         complete_manual_step: None,
         cd: Some(project_root.display().to_string()),
         no_fs_sandbox: false,
+        resources: Default::default(),
         current_depth: 0,
         pipeline_source: PlanRunPipelineSource::DirectPlanRun,
         startup_env: crate::startup_env::StartupSubtreeEnv::default(),
@@ -154,6 +155,7 @@ async fn execute_plan_stops_after_manual_handoff() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
+        resources: Default::default(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
@@ -357,6 +359,7 @@ async fn execute_plan_resume_replays_manual_handoff_step() {
             resume_completed_steps: &completed,
             chunked: false,
             no_fs_sandbox: false,
+            resources: Default::default(),
             startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
         };
 
@@ -392,6 +395,7 @@ async fn execute_plan_resume_replays_manual_handoff_step() {
         resume_completed_steps: &resumed_completed,
         chunked: false,
         no_fs_sandbox: false,
+        resources: Default::default(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 

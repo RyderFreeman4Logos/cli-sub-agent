@@ -20,6 +20,7 @@ use crate::pipeline::determine_project_root;
 use crate::plan_cmd::{
     self, FEATURE_INPUT_VAR, ISSUE_NUMBER_VAR, PlanRunArgs, PlanRunPipelineSource, handle_plan_run,
 };
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 use crate::{error_hints, error_report, exit_current_process};
 
@@ -69,6 +70,8 @@ pub(crate) async fn dispatch(
         complete_manual_step,
         cd,
         no_fs_sandbox,
+        memory_max_mb,
+        min_free_memory_mb,
         foreground,
         daemon_child,
         session_id,
@@ -86,14 +89,7 @@ pub(crate) async fn dispatch(
         );
     }
 
-    // Resolve `--issue <N>` into workflow variables before the daemon/foreground
-    // split. Fetching in the top-level invocation means a bad issue number or
-    // auth failure fails fast with a non-zero exit rather than surfacing only
-    // via the daemon session result, and the issue is fetched exactly once: the
-    // resolved variables are forwarded to the daemon child in place of `--issue`
-    // (see `forwarded_args_with_feature_input`). A daemon child never sees
-    // `--issue` (the parent strips it), so this branch only runs in the
-    // top-level/foreground process.
+    // Resolve --issue once in the parent; daemon children receive forwarded vars.
     let mut vars = vars;
     let mut forwarded_args = None;
     if let Some(issue_number) = issue {
@@ -133,6 +129,7 @@ pub(crate) async fn dispatch(
         complete_manual_step,
         cd,
         no_fs_sandbox,
+        resources: RunResourceOverrides::new(memory_max_mb, min_free_memory_mb),
         current_depth,
         pipeline_source,
         startup_env: startup_env.clone(),

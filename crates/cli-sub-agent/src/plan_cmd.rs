@@ -28,6 +28,7 @@ use weave::compiler::{ExecutionPlan, plan_from_toml};
 use crate::pattern_resolver;
 use crate::pipeline::determine_project_root;
 use crate::plan_display::{print_plan, print_summary};
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 #[path = "plan_cmd_exec.rs"]
@@ -185,6 +186,7 @@ pub(crate) struct PlanRunArgs {
     pub complete_manual_step: Option<usize>,
     pub cd: Option<String>,
     pub no_fs_sandbox: bool,
+    pub resources: RunResourceOverrides,
     pub current_depth: u32,
     pub pipeline_source: PlanRunPipelineSource,
     pub startup_env: StartupSubtreeEnv,
@@ -215,6 +217,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         complete_manual_step,
         cd,
         no_fs_sandbox,
+        resources,
         current_depth,
         pipeline_source,
         startup_env,
@@ -389,6 +392,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         resume_completed_steps: &resume_context.completed_steps,
         chunked,
         no_fs_sandbox,
+        resources,
         startup_env: &startup_env,
     };
 

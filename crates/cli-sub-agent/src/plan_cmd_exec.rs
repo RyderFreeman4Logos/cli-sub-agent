@@ -16,6 +16,7 @@ use crate::pipeline::{
     ParentSessionSource, SessionCreationMode, execute_with_session_and_meta_with_parent_source,
 };
 use crate::run_helpers::build_executor;
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -32,6 +33,7 @@ pub(super) struct CsaStepExecutionOptions<'a> {
     pub(super) forwarded_session: Option<&'a str>,
     pub(super) no_fs_sandbox: bool,
     pub(super) readonly_project_root: bool,
+    pub(super) resources: RunResourceOverrides,
     pub(super) startup_env: &'a StartupSubtreeEnv,
 }
 
@@ -322,7 +324,7 @@ pub(super) async fn execute_csa_step(
             None,
             ParentSessionSource::ExplicitOnly,
             SessionCreationMode::FreshChild,
-            Default::default(),
+            options.resources,
             options.no_fs_sandbox,
             options.readonly_project_root,
             &[],   // extra_writable

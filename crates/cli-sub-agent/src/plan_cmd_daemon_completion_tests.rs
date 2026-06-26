@@ -58,6 +58,7 @@ fn plan_daemon_args(project_root: &Path) -> PlanRunArgs {
         complete_manual_step: None,
         cd: Some(project_root.display().to_string()),
         no_fs_sandbox: false,
+        resources: Default::default(),
         current_depth: 0,
         pipeline_source: PlanRunPipelineSource::DirectPlanRun,
         startup_env: StartupSubtreeEnv::default(),

@@ -70,6 +70,14 @@ pub enum PlanCommands {
         #[arg(long)]
         no_fs_sandbox: bool,
 
+        /// Override memory cap/projection for CSA tool steps in this plan run.
+        #[arg(long, value_name = "MB", value_parser = clap::value_parser!(u64).range(256..))]
+        memory_max_mb: Option<u64>,
+
+        /// Override minimum MemAvailable reserve for CSA tool steps in this plan run.
+        #[arg(long, value_name = "MB")]
+        min_free_memory_mb: Option<u64>,
+
         /// Block instead of daemonizing (auto for --dry-run/--chunked/--resume).
         #[arg(long)]
         foreground: bool,

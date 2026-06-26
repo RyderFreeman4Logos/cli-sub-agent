@@ -15,6 +15,11 @@ set dotenv-load := true
 # Calculate repo root (compatible with submodules)
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
 _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
+# Default Cargo/rustc fan-out for Just recipes; override with
+# `CARGO_BUILD_JOBS=<n> just ...`. Do not default NEXTEST_TEST_THREADS here:
+# full-suite runs need nextest's normal parallelism to avoid serializing
+# thousands of tests.
+export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", "1")
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
@@ -195,7 +200,7 @@ deny:
 # ==============================================================================
 
 # Run all tests in the workspace across default and feature builds.
-# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
+# Env: CARGO_BUILD_JOBS defaults to 1; NEXTEST_TEST_THREADS is caller-controlled.
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
@@ -204,14 +209,14 @@ test:
     {{_cargo}} nextest run --workspace --all-features
 
 # Run e2e tests only.
-# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
+# Env: CARGO_BUILD_JOBS defaults to 1; NEXTEST_TEST_THREADS is caller-controlled.
 test-e2e:
     just check-cargo-target-writable
     just check-nextest-state-writable
     {{_cargo}} nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
-# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
+# Env: CARGO_BUILD_JOBS defaults to 1; NEXTEST_TEST_THREADS is caller-controlled.
 # Usage: just test-p my-crate
 test-p package:
     just check-cargo-target-writable
@@ -219,7 +224,7 @@ test-p package:
     {{_cargo}} nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
-# Env: CARGO_BUILD_JOBS caps cargo/rustc parallelism; NEXTEST_TEST_THREADS caps test fan-out.
+# Env: CARGO_BUILD_JOBS defaults to 1; NEXTEST_TEST_THREADS is caller-controlled.
 # Usage: just test-f login_validation
 test-f pattern:
     just check-cargo-target-writable

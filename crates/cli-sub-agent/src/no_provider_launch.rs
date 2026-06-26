@@ -181,45 +181,52 @@ fn suggested_host_memory_retry(
     let required_floor_mb = memory.required_floor_mb?;
     let soft_limit_percent = memory.soft_limit_percent?;
     let available_mb = memory.available_memory_mb?;
-    let suggested_cap_mb = round_up_to_100(required_cap_mb);
+    let current_reserve_mb = memory.reserve_mb.unwrap_or(0);
+    let current_upper_mb = available_mb.saturating_sub(current_reserve_mb);
     let suggested_soft_threshold_mb =
-        memory_policy::soft_limit_threshold_mb(suggested_cap_mb, soft_limit_percent)?;
-    if suggested_soft_threshold_mb < required_floor_mb || available_mb <= suggested_cap_mb {
+        memory_policy::soft_limit_threshold_mb(required_cap_mb, soft_limit_percent)?;
+    if suggested_soft_threshold_mb < required_floor_mb || available_mb <= required_cap_mb {
         return None;
     }
 
-    let max_reserve_mb = available_mb.saturating_sub(suggested_cap_mb);
-    let current_reserve_mb = memory.reserve_mb.unwrap_or(max_reserve_mb);
-    let preferred_reserve_mb = current_reserve_mb.min(6_000);
+    if required_cap_mb <= current_upper_mb {
+        let host_required_mb = required_cap_mb.saturating_add(current_reserve_mb);
+        return Some(format!(
+            "Suggested bounded retry for {tool_name}: --memory-max-mb {required_cap_mb} \
+             (current retry window is {required_cap_mb}..={current_upper_mb}MB with \
+             min_free_memory_mb={current_reserve_mb}; soft_limit_percent={soft_limit_percent} \
+             gives soft threshold {suggested_soft_threshold_mb}MB >= required floor \
+             {required_floor_mb}MB; host required {host_required_mb}MB <= physical \
+             available {available_mb}MB)."
+        ));
+    }
+
+    let max_reserve_mb = available_mb.saturating_sub(required_cap_mb);
+    if max_reserve_mb == 0 {
+        return None;
+    }
+    let preferred_reserve_mb = current_reserve_mb.clamp(1, 6_000);
     let suggested_reserve_mb = if max_reserve_mb >= preferred_reserve_mb {
         preferred_reserve_mb
     } else {
-        round_down_to_100(max_reserve_mb)
+        max_reserve_mb
     };
-    if suggested_reserve_mb == 0 {
-        return None;
-    }
-
-    let host_required_mb = suggested_cap_mb.saturating_add(suggested_reserve_mb);
+    let suggested_upper_mb = available_mb.saturating_sub(suggested_reserve_mb);
+    let host_required_mb = required_cap_mb.saturating_add(suggested_reserve_mb);
     if host_required_mb > available_mb {
         return None;
     }
 
     Some(format!(
-        "Suggested bounded retry for {tool_name}: --memory-max-mb {suggested_cap_mb} \
-         --min-free-memory-mb {suggested_reserve_mb} (minimum cap for \
-         soft_limit_percent={soft_limit_percent} is {required_cap_mb}MB; suggested soft \
-         threshold {suggested_soft_threshold_mb}MB >= required floor {required_floor_mb}MB; \
+        "Suggested bounded retry for {tool_name}: --memory-max-mb {required_cap_mb} \
+         --min-free-memory-mb {suggested_reserve_mb} (no cap satisfies the current \
+         retry window because required lower bound {required_cap_mb}MB > current \
+         upper bound {current_upper_mb}MB at min_free_memory_mb={current_reserve_mb}; \
+         lowering reserve opens retry window {required_cap_mb}..={suggested_upper_mb}MB; \
+         soft_limit_percent={soft_limit_percent} gives soft threshold \
+         {suggested_soft_threshold_mb}MB >= required floor {required_floor_mb}MB; \
          host required {host_required_mb}MB <= physical available {available_mb}MB)."
     ))
-}
-
-fn round_up_to_100(value: u64) -> u64 {
-    value.saturating_add(99) / 100 * 100
-}
-
-fn round_down_to_100(value: u64) -> u64 {
-    value / 100 * 100
 }
 
 pub(crate) fn enrich_review_diagnostic(
@@ -258,9 +265,33 @@ mod tests {
 
         assert!(joined.contains("physical MemAvailable only"));
         assert!(joined.contains("swap/combined memory is diagnostic"));
-        assert!(joined.contains("--memory-max-mb 9200 --min-free-memory-mb 6000"));
-        assert!(joined.contains("minimum cap for soft_limit_percent=90 is 9103MB"));
-        assert!(joined.contains("soft threshold 8280MB >= required floor 8192MB"));
-        assert!(joined.contains("host required 15200MB <= physical available 17033MB"));
+        assert!(joined.contains("--memory-max-mb 9103 --min-free-memory-mb 6000"));
+        assert!(joined.contains("required lower bound 9103MB > current upper bound 8033MB"));
+        assert!(joined.contains("soft threshold 8192MB >= required floor 8192MB"));
+        assert!(joined.contains("host required 15103MB <= physical available 17033MB"));
+    }
+
+    #[test]
+    fn host_memory_reviewer_guidance_preserves_tight_retry_window() {
+        let memory = NoProviderLaunchMemoryDiagnostic {
+            effective_memory_max_mb: Some(10_000),
+            soft_limit_percent: Some(90),
+            soft_threshold_mb: Some(9_000),
+            required_floor_mb: Some(8_192),
+            required_memory_max_mb: Some(9_103),
+            reserve_mb: Some(256),
+            available_memory_mb: Some(9_296),
+            required_available_mb: Some(10_256),
+            projected_spawn_mb: Some(10_000),
+            ..Default::default()
+        };
+
+        let guidance = host_memory_guidance(Some("reviewer_sub_session"), "codex", &memory);
+        let joined = guidance.join("\n");
+
+        assert!(joined.contains("--memory-max-mb 9103 --min-free-memory-mb 193"));
+        assert!(joined.contains("required lower bound 9103MB > current upper bound 9040MB"));
+        assert!(joined.contains("lowering reserve opens retry window 9103..=9103MB"));
+        assert!(joined.contains("host required 9296MB <= physical available 9296MB"));
     }
 }

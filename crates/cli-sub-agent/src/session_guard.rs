@@ -112,11 +112,12 @@ fn write_pre_exec_error_result_inner(
         .as_ref()
         .map(|_| vec![SessionArtifact::new(NO_PROVIDER_LAUNCH_ARTIFACT_PATH)])
         .unwrap_or_default();
+    let summary = pre_exec_summary(error, no_provider_launch.as_ref());
     let result = SessionResult {
         post_exec_gate: None,
         status: "failure".to_string(),
         exit_code: 1,
-        summary: format!("pre-exec: {error}"),
+        summary,
         tool: tool_name.to_string(),
         original_tool: None,
         fallback_tool: None,
@@ -145,6 +146,26 @@ fn write_pre_exec_error_result_inner(
     }
     // Best-effort cooldown marker
     csa_session::write_cooldown_marker_for_project(project_root, session_id, now);
+}
+
+fn pre_exec_summary(
+    error: &anyhow::Error,
+    no_provider_launch: Option<&NoProviderLaunchDiagnostic>,
+) -> String {
+    let mut summary = format!("pre-exec: {error}");
+    let Some(diagnostic) = no_provider_launch else {
+        return summary;
+    };
+    if diagnostic.guidance.is_empty() {
+        return summary;
+    }
+
+    summary.push_str("\nGuidance:");
+    for item in &diagnostic.guidance {
+        summary.push_str("\n- ");
+        summary.push_str(item);
+    }
+    summary
 }
 
 fn create_pre_exec_failure_session(
