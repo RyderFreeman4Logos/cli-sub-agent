@@ -27,6 +27,7 @@ pub(crate) struct DaemonSpawnOptions {
     prompt_file_forward_arg: PromptFileForwardArg,
     no_fs_sandbox: bool,
     extra_writable: Vec<PathBuf>,
+    wait_for_pre_spawn_memory_admission: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -70,6 +71,7 @@ impl DaemonSpawnOptions {
         prompt_file: Option<&Path>,
         no_fs_sandbox: bool,
         extra_writable: &[PathBuf],
+        wait_for_pre_spawn_memory_admission: bool,
     ) -> Self {
         let run_stdin_prompt =
             if prompt_file.is_some_and(crate::run_helpers::is_prompt_file_stdin_sentinel) {
@@ -89,6 +91,7 @@ impl DaemonSpawnOptions {
             prompt_file_forward_arg: PromptFileForwardArg::PromptFile,
             no_fs_sandbox,
             extra_writable: extra_writable.to_vec(),
+            wait_for_pre_spawn_memory_admission,
             ..Default::default()
         }
     }
@@ -354,6 +357,13 @@ pub(crate) fn spawn_and_exit(
     };
 
     let result = csa_process::daemon::spawn_daemon(config)?;
+    if spawn_options.wait_for_pre_spawn_memory_admission {
+        crate::run_cmd_daemon_memory_wait::wait_for_daemon_pre_spawn_memory_admission(
+            &project_root,
+            &result.session_id,
+            &result.session_dir,
+        )?;
+    }
     verify_daemon_session_waitable(&project_root, &result.session_id)?;
     // stdout: machine-readable session ID (for script capture).
     println!("{}", result.session_id);

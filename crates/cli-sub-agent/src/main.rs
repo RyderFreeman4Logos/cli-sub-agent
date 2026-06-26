@@ -82,6 +82,7 @@ mod review_session_findings;
 mod run_cmd;
 mod run_cmd_caller_fork;
 mod run_cmd_daemon;
+mod run_cmd_daemon_memory_wait;
 mod run_cmd_fork;
 mod run_cmd_model_pin;
 mod run_cmd_post;
@@ -366,6 +367,7 @@ async fn run() -> Result<()> {
                     prompt_file.as_deref(),
                     no_fs_sandbox,
                     &extra_writable,
+                    wait,
                 ),
             )?;
 

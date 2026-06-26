@@ -72,6 +72,25 @@ pub(super) fn check_resources_before_spawn(
             },
         ));
     }
+    if let Err(err) = crate::resource_admission::persist_spawn_memory_admission_ready(
+        project_root,
+        &session.meta_session_id,
+        projected_spawn_mb,
+    ) {
+        return Err(persist_pipeline_pre_exec_failure(
+            project_root,
+            session,
+            executor.tool_name(),
+            err.context("Failed to persist pre-spawn memory admission readiness"),
+            cleanup_guard,
+            None,
+            PipelinePreExecFailureDetails {
+                config,
+                task_type,
+                resource_overrides,
+            },
+        ));
+    }
     if let Some(cfg) = config {
         resource_guard.check_health(
             resource_overrides.resolve_memory_max_mb(config, executor.tool_name()),
