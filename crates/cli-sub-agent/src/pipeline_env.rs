@@ -195,22 +195,24 @@ fn apply_rust_session_env_contract_inner(
     project_root: Option<&Path>,
     materialize_cargo_install_root: bool,
 ) {
-    let Some(home) = env_path(env, "HOME") else {
-        return;
-    };
-    let cargo_home = preferred_cargo_home(&home, project_root);
-    ensure_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, &cargo_home);
+    let home = env_path(env, "HOME");
+    let cargo_home = preferred_cargo_home(home.as_deref(), project_root);
+    if let Some(cargo_home) = cargo_home.as_deref() {
+        ensure_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, cargo_home);
+    }
 
     if materialize_cargo_install_root {
-        let effective_cargo_home =
-            env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).unwrap_or(cargo_home);
-        let cargo_install_root =
-            preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
-        ensure_rust_env_path(
-            env,
-            csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
-            &cargo_install_root,
-        );
+        if let Some(effective_cargo_home) =
+            env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).or(cargo_home)
+        {
+            let cargo_install_root =
+                preferred_cargo_install_root(project_root, effective_cargo_home.as_path());
+            ensure_rust_env_path(
+                env,
+                csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+                &cargo_install_root,
+            );
+        }
         materialize_existing_project_env_path(
             env,
             csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
@@ -218,6 +220,9 @@ fn apply_rust_session_env_contract_inner(
         );
     }
 
+    let Some(home) = home else {
+        return;
+    };
     let rustup_home = preferred_rustup_home(env, &home);
     ensure_rust_env_path(env, csa_core::env::RUSTUP_HOME_ENV_KEY, &rustup_home);
     let effective_rustup_home =
@@ -234,15 +239,15 @@ fn apply_rust_session_env_contract_inner(
     );
 }
 
-fn preferred_cargo_home(home: &Path, project_root: Option<&Path>) -> PathBuf {
+fn preferred_cargo_home(home: Option<&Path>, project_root: Option<&Path>) -> Option<PathBuf> {
     let shared = Path::new(SHARED_CARGO_HOME);
     if shared.is_dir() && !csa_core::env::rust_state_path_needs_session_override(shared) {
-        return shared.to_path_buf();
+        return Some(shared.to_path_buf());
     }
 
     project_root
         .map(|root| root.join(".cargo-local"))
-        .unwrap_or_else(|| home.join(".cargo"))
+        .or_else(|| home.map(|home| home.join(".cargo")))
 }
 
 fn preferred_cargo_install_root(

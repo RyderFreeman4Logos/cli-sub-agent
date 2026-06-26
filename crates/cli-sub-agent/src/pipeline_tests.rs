@@ -494,6 +494,9 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
 
 include!("pipeline_tests_env.rs");
 
+#[path = "pipeline_tests_cargo_home.rs"]
+mod cargo_home_tests;
+
 // --- enforce_tier regression tests ---
 
 fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectConfig {
