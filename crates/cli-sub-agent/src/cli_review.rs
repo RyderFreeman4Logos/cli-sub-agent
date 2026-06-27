@@ -28,7 +28,7 @@ impl std::fmt::Display for ReviewMode {
     }
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Clone)]
 #[command(group(
     ArgGroup::new("review_scope")
         .args(["diff", "commit", "range", "files"])

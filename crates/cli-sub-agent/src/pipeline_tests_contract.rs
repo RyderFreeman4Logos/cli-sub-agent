@@ -535,6 +535,33 @@ fn sa_pattern_and_workflow_dispatch_templates_propagate_sa_mode() {
 }
 
 #[test]
+fn dev2merge_docs_use_explicit_sa_mode_for_root_plan_run_examples() {
+    let pattern = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/dev2merge/PATTERN.md"
+    ));
+    let skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/dev2merge/skills/dev2merge/SKILL.md"
+    ));
+    let alias_skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/dev-to-merge/skills/dev-to-merge/SKILL.md"
+    ));
+
+    for doc in [pattern, skill, alias_skill] {
+        assert!(
+            doc.contains("csa plan run --sa-mode true patterns/dev2merge/workflow.toml"),
+            "dev2merge root plan-run docs must show explicit --sa-mode true"
+        );
+        assert!(
+            !doc.contains("csa plan run patterns/dev2merge/workflow.toml"),
+            "legacy dev2merge root plan-run example without --sa-mode must be removed"
+        );
+    }
+}
+
+#[test]
 fn split_project_docs_skill_uses_plain_git_commit() {
     let skill = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

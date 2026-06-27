@@ -59,6 +59,8 @@ mod multi_repo_write_audit;
 mod parent_artifacts;
 #[path = "review_cmd_post_review.rs"]
 mod post_review;
+#[path = "review_cmd_preflight.rs"]
+pub(crate) mod preflight;
 #[path = "review_cmd_prior_rounds.rs"]
 mod prior_rounds;
 #[path = "review_cmd_prose_findings.rs"]
@@ -112,10 +114,6 @@ use reviewers::resolve_effective_reviewer_selection_for_args;
 pub(crate) use { fix::persist_fix_final_artifacts_for_tests, output::persist_review_verdict_for_tests };
 
 pub(crate) use execute::compute_diff_fingerprint as compute_review_diff_fingerprint;
-pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
-    session_fix::validate_session_fix_before_daemon(args)?;
-    fix_finding::validate_fix_finding_before_daemon(args)
-}
 
 pub(crate) async fn handle_review(
     mut args: ReviewArgs,
