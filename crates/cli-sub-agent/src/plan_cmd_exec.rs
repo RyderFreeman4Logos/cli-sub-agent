@@ -136,6 +136,7 @@ async fn spawn_bash(
     startup_env: &StartupSubtreeEnv,
 ) -> std::io::Result<std::process::Output> {
     let workflow_dir = workflow_path.parent().unwrap_or(project_root);
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg("-c")
         .arg(script)
@@ -143,10 +144,8 @@ async fn spawn_bash(
         .env("CSA_PROJECT_ROOT", project_root)
         .env("CSA_WORKFLOW_PATH", workflow_path)
         .env("CSA_WORKFLOW_DIR", workflow_dir)
-        .env(
-            "CSA_BIN",
-            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa")),
-        );
+        .env("CSA_BIN", &current_exe);
+    prepend_current_exe_dir_to_path(&mut cmd, env_vars, &current_exe);
     // This bash step is a CSA-child boundary because it may run nested `csa`
     // commands. Reserve the protected contract keys before re-applying CSA's
     // trusted startup snapshot, so workflow/user env cannot spoof session
@@ -168,6 +167,37 @@ async fn spawn_bash(
         .stderr(std::process::Stdio::piped())
         .output()
         .await
+}
+
+fn prepend_current_exe_dir_to_path(
+    cmd: &mut tokio::process::Command,
+    env_vars: &HashMap<String, String>,
+    current_exe: &Path,
+) {
+    let Some(current_exe_dir) = current_exe_dir_for_path_prepend(current_exe) else {
+        return;
+    };
+    let inherited_path = env_vars
+        .get("PATH")
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    let mut path_entries = vec![current_exe_dir.to_path_buf()];
+    if let Some(path) = inherited_path {
+        path_entries.extend(
+            std::env::split_paths(&path).filter(|entry| entry.as_path() != current_exe_dir),
+        );
+    }
+    if let Ok(joined_path) = std::env::join_paths(path_entries) {
+        cmd.env("PATH", joined_path);
+    }
+}
+
+fn current_exe_dir_for_path_prepend(current_exe: &Path) -> Option<&Path> {
+    let current_exe_dir = current_exe.parent()?;
+    if current_exe_dir.as_os_str().is_empty() {
+        return None;
+    }
+    Some(current_exe_dir)
 }
 
 fn bash_step_depth_string(startup_env: &StartupSubtreeEnv) -> String {

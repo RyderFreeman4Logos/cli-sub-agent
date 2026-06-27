@@ -16,7 +16,7 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
         id: 1,
         title: "runtime env".into(),
         tool: Some("bash".into()),
-        prompt: "```bash\nprintf '%s\\n%s\\n%s\\n' \"$CSA_PROJECT_ROOT\" \"$CSA_WORKFLOW_PATH\" \"$CSA_WORKFLOW_DIR\" > runtime-env.txt\n```".into(),
+        prompt: "```bash\nprintf '%s\\n%s\\n%s\\n%s\\n' \"$CSA_PROJECT_ROOT\" \"$CSA_WORKFLOW_PATH\" \"$CSA_WORKFLOW_DIR\" \"$PATH\" > runtime-env.txt\n```".into(),
         tier: None,
         depends_on: vec![],
         on_fail: FailAction::Abort,
@@ -57,6 +57,16 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
     assert_eq!(
         Path::new(lines.next().expect("missing workflow dir env")),
         workflow_home.path()
+    );
+    let path = lines.next().expect("missing PATH env");
+    let current_exe = std::env::current_exe().expect("current test executable");
+    let current_exe_dir = current_exe.parent().expect("current executable directory");
+    let first_path = std::env::split_paths(path)
+        .next()
+        .expect("PATH should have at least one entry");
+    assert_eq!(
+        first_path, current_exe_dir,
+        "bash steps must prefer the launcher executable directory so nested csa/weave calls use the exact-head binaries"
     );
 }
 
