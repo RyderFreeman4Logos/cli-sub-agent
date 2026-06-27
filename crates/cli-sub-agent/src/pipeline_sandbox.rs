@@ -624,8 +624,8 @@ pub(crate) fn check_sandbox_permission_errors(
 }
 
 #[cfg(test)]
-#[path = "pipeline_sandbox_extra_writable_tests.rs"]
-mod extra_writable_tests;
+#[path = "pipeline_sandbox_writable_tests.rs"]
+mod writable_tests;
 
 #[cfg(test)]
 #[path = "pipeline_sandbox_cargo_target_tests.rs"]

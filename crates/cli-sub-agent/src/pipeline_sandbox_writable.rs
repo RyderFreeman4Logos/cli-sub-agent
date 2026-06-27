@@ -53,7 +53,11 @@ pub(crate) fn resolve_and_prepare_rust_env_writable_sources(
     project_root: &Path,
 ) -> Result<Vec<PathBuf>, String> {
     reject_readonly_usr_local_rust_state_paths(paths)?;
-    resolve_and_prepare_writable_sources(paths, project_root, "Rust state env writable paths")
+    resolve_and_prepare_required_writable_sources(
+        paths,
+        project_root,
+        "Rust state env writable paths",
+    )
 }
 
 pub(crate) fn resolve_config_extra_writable_sources(
@@ -107,6 +111,47 @@ fn resolve_paths_with_extra(
     Ok(resolved)
 }
 
+fn resolve_and_prepare_required_writable_sources(
+    paths: &[PathBuf],
+    project_root: &Path,
+    source_label: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let resolved = csa_resource::isolation_plan::resolve_writable_paths(paths, project_root)
+        .map_err(|e| format!("{source_label} validation failed: {e}"))?;
+
+    let mut prepared = Vec::with_capacity(resolved.len());
+    for (path, candidate) in paths.iter().zip(resolved.iter()) {
+        match candidate.try_exists() {
+            Ok(true) if candidate.is_dir() => prepared.push(candidate.clone()),
+            Ok(true) => {
+                return Err(format!(
+                    "{source_label} path '{}' resolved to '{}' is not a directory before session launch. \
+                     Rust state env values must point to writable directories.",
+                    path.display(),
+                    candidate.display()
+                ));
+            }
+            Ok(false) => {
+                prepare_missing_required_source_directory(
+                    path,
+                    candidate,
+                    source_label,
+                    &mut prepared,
+                )?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{source_label} path '{}' resolved to '{}' could not be checked before session launch: {error}. \
+                     Set Cargo/Rustup env to writable paths or grant the exact cache directory with --extra-writable.",
+                    path.display(),
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    Ok(prepared)
+}
+
 fn reject_readonly_usr_local_rust_state_paths(paths: &[PathBuf]) -> Result<(), String> {
     let rejected = paths
         .iter()
@@ -157,6 +202,29 @@ fn prepare_missing_source(
             "Skipping missing writable directory because it could not be created"
         ),
     }
+}
+
+fn prepare_missing_required_source_directory(
+    original: &Path,
+    candidate: &Path,
+    source_label: &str,
+    prepared: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    info!(
+        source = source_label,
+        path = %candidate.display(),
+        "Creating missing required writable directory before sandbox launch"
+    );
+    std::fs::create_dir_all(candidate).map_err(|error| {
+        format!(
+            "{source_label} path '{}' resolved to '{}' could not be created before session launch: {error}. \
+             Set Cargo/Rustup env to writable paths or grant the exact cache directory with --extra-writable.",
+            original.display(),
+            candidate.display()
+        )
+    })?;
+    prepared.push(candidate.to_path_buf());
+    Ok(())
 }
 
 fn path_looks_like_file(path: &Path) -> bool {
