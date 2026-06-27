@@ -143,6 +143,15 @@ fn reduce_bash_env_for_spawn_keeps_referenced_step_runtime_vars() {
 }
 
 #[test]
+fn current_exe_dir_for_path_prepend_ignores_relative_fallback_without_parent() {
+    assert!(current_exe_dir_for_path_prepend(std::path::Path::new("csa")).is_none());
+    assert_eq!(
+        current_exe_dir_for_path_prepend(std::path::Path::new("/tmp/csa")),
+        Some(std::path::Path::new("/tmp"))
+    );
+}
+
+#[test]
 fn extract_bash_code_block_ignores_markdown_fence_literals_inside_script() {
     let prompt = r#"Run this:
 ```bash
