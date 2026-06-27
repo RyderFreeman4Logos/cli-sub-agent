@@ -87,7 +87,7 @@ fn tier_bypass_gate_rejects_model_spec_and_force_by_default() {
         "tier-4-critical".to_string(),
         csa_config::TierConfig {
             description: "critical".to_string(),
-            models: vec!["gemini-cli/google/pro/high".to_string()],
+            models: vec!["opencode/openai/gpt-5/high".to_string()],
             strategy: Default::default(),
             token_budget: None,
             max_turns: None,
@@ -360,8 +360,8 @@ fn resolve_tool_and_model_force_ignore_tier_bypassed_when_model_spec_provided() 
 fn resolve_tool_and_model_allows_model_spec_when_global_tier_bypass_opted_in() {
     let cfg = config_with_tier(
         "tier-1",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let global = GlobalConfig {
         tier_policy: csa_config::TierPolicyConfig {
@@ -402,8 +402,8 @@ fn resolve_tool_and_model_uses_inherited_model_spec_when_gate_default() {
     let _guard = assume_tier_tools_available();
     let cfg = config_with_tier(
         "tier-1",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let global = GlobalConfig::default();
     let inherited_spec = "codex/openai/gpt-5.5/xhigh";
@@ -468,13 +468,13 @@ fn collect_preferred_tier_models_honors_preference_array_order() {
     let cfg = config_with_tier(
         "quality",
         vec![
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "codex/openai/gpt-5.4/high",
             "claude-code/anthropic/sonnet-4.5/high",
         ],
-        &["gemini-cli", "codex", "claude-code"],
+        &["opencode", "codex", "claude-code"],
     );
-    let preference_order = vec!["codex".to_string(), "gemini-cli".to_string()];
+    let preference_order = vec!["codex".to_string(), "opencode".to_string()];
 
     let candidates = super::collect_preferred_tier_models("quality", &cfg, &preference_order, &[]);
     let specs: Vec<&str> = candidates
@@ -486,7 +486,7 @@ fn collect_preferred_tier_models_honors_preference_array_order() {
         specs,
         vec![
             "codex/openai/gpt-5.4/high",
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/sonnet-4.5/high",
         ]
     );

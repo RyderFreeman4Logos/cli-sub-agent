@@ -108,7 +108,7 @@ pub struct ToolConfig {
     /// OpenAI-compat only: base URL for the API endpoint (e.g., "http://localhost:8317").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// API key for authentication. Used by openai-compat and gemini-cli (fallback).
+    /// API key for authentication where supported by the selected provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     /// Per-tool filesystem sandbox overrides. When set, replaces global

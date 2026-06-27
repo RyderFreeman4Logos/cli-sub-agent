@@ -16,8 +16,12 @@ pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Re
         .max_by_key(|(_, state)| &state.updated_at)
         .ok_or_else(|| anyhow::anyhow!("Session '{resolved_id}' has no tool history"))?;
 
+    if csa_core::types::is_removed_tool_name(tool_name) {
+        anyhow::bail!("{}", csa_core::types::removed_tool_error(tool_name));
+    }
+
     let compress_cmd = match tool_name.as_str() {
-        "gemini-cli" | "antigravity-cli" => "/compress",
+        "antigravity-cli" => "/compress",
         _ => "/compact",
     };
 

@@ -267,8 +267,52 @@ fn upsert_session_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::TEST_ENV_LOCK;
     use chrono::Utc;
+    use std::ffi::OsString;
     use tempfile::tempdir;
+
+    struct ScopedUserConfigEnv {
+        original_home: Option<OsString>,
+        original_xdg_config_home: Option<OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ScopedUserConfigEnv {
+        fn new(project_root: &std::path::Path) -> Self {
+            let lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
+            let config_home = project_root.join("xdg-config");
+            std::fs::create_dir_all(&config_home).expect("create test config home");
+            let original_home = std::env::var_os("HOME");
+            let original_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+            // SAFETY: test-scoped env mutation is guarded by TEST_ENV_LOCK.
+            unsafe {
+                std::env::set_var("HOME", project_root);
+                std::env::set_var("XDG_CONFIG_HOME", config_home);
+            }
+            Self {
+                original_home,
+                original_xdg_config_home,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ScopedUserConfigEnv {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env restoration is guarded by TEST_ENV_LOCK.
+            unsafe {
+                match self.original_home.take() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+                match self.original_xdg_config_home.take() {
+                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn manager_result_redaction_preserves_toml_datetime_values() {
@@ -564,6 +608,7 @@ mod tests {
     #[test]
     fn resolve_report_spill_threshold_uses_project_config_override() {
         let td = tempdir().expect("tempdir");
+        let _user_config_env = ScopedUserConfigEnv::new(td.path());
         let config_dir = td.path().join(".csa");
         std::fs::create_dir_all(&config_dir).expect("create config dir");
         std::fs::write(

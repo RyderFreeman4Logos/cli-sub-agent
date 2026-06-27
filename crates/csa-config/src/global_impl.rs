@@ -39,6 +39,13 @@ impl GlobalConfig {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read global config: {}", path.display()))?;
+        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
+            crate::validate::reject_removed_gemini_cli_in_raw_config(
+                &raw,
+                &path.display().to_string(),
+            )
+            .with_context(|| format!("Invalid global config: {}", path.display()))?;
+        }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse global config: {}", path.display()))?;
         Ok(config.sanitized(Some(&path)))
@@ -183,7 +190,7 @@ impl GlobalConfig {
         self.tools.get(tool).and_then(|t| t.api_key.as_deref())
     }
 
-    /// Whether gemini-cli may retry after stripping unhealthy MCP servers.
+    /// Whether a legacy provider may retry after stripping unhealthy MCP servers.
     ///
     /// Missing config defaults to `true` to keep MCP degradation non-fatal.
     pub fn allow_degraded_mcp(&self, tool: &str) -> bool {
@@ -282,7 +289,7 @@ impl GlobalConfig {
 
     /// List all known tool names (from config + static list).
     pub fn all_tool_slots(&self) -> Vec<(&str, u32)> {
-        let static_tools = ["gemini-cli", "opencode", "codex", "claude-code"];
+        let static_tools = ["opencode", "codex", "claude-code"];
         let mut result: Vec<(&str, u32)> = static_tools
             .iter()
             .map(|t| (*t, self.max_concurrent(t)))

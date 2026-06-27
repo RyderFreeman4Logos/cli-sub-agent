@@ -111,8 +111,8 @@ fn test_review_blocks_direct_tool_when_tiers_configured() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
@@ -147,8 +147,8 @@ fn test_review_allows_tier_flag() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = resolve_review_tool(
         None,
@@ -167,11 +167,8 @@ fn test_review_allows_tier_flag() {
         result.unwrap_err()
     );
     let (tool, model_spec) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -179,8 +176,8 @@ fn test_review_legacy_tier_4_hard_selector_suggests_critical_tier() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "tier-4-critical",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
 
     let err = resolve_review_tier_name(Some(&cfg), &global, Some("tier-4-hard"), false, false)
@@ -203,11 +200,11 @@ fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
     let cfg = review_config_with_tier(
         "quality",
         vec![
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "codex/openai/gpt-5.4/high",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
-        &["gemini-cli", "codex", "claude-code"],
+        &["opencode", "codex", "claude-code"],
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
@@ -237,11 +234,8 @@ fn test_review_tool_plus_tier_force_override_resolves_disabled_requested_tool() 
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
-        ],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/high"],
+        &["opencode"],
     );
     let selection = resolve_review_selection(
         Some(ToolName::Codex),
@@ -271,14 +265,11 @@ fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/high"],
+        &["opencode", "codex"],
     );
     let selection = resolve_review_selection(
-        Some(ToolName::GeminiCli),
+        Some(ToolName::Opencode),
         None,
         Some(&cfg),
         &global,
@@ -291,14 +282,14 @@ fn test_review_tool_plus_tier_keeps_full_tier_failover_chain() {
     )
     .expect("tool+tier should resolve requested review tool");
 
-    assert_eq!(selection.tool, ToolName::GeminiCli);
+    assert_eq!(selection.tool, ToolName::Opencode);
     assert_eq!(
         selection.model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
+        Some("opencode/openai/gpt-5/xhigh")
     );
     assert_eq!(
         selection.tier_preference_order,
-        vec!["gemini-cli"],
+        vec!["opencode"],
         "explicit review --tool chooses the first attempt but must not whitelist away tier fallback"
     );
 }
@@ -309,8 +300,8 @@ fn test_review_tool_plus_tier_rejects_tool_missing_from_tier() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     // Since #1994, non-candidate --tool pins fail fast instead of selecting another tier tool.
     let err = resolve_review_tool(
@@ -338,8 +329,8 @@ fn test_review_tier_preference_mismatch_uses_full_tier() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_whitelist(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
         &["codex"],
     );
     let result = resolve_review_tool(
@@ -355,11 +346,8 @@ fn test_review_tier_preference_mismatch_uses_full_tier() {
     );
 
     let (tool, model_spec) = result.expect("absent preferred tool should not hard-fail");
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -367,8 +355,8 @@ fn test_review_force_ignore_tier_allows_direct_tool() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
@@ -395,11 +383,8 @@ fn test_review_tool_plus_tier_and_force_ignore_errors_on_conflict() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/xhigh",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
@@ -455,8 +440,8 @@ fn test_review_tier_alias_resolves() {
     let global = GlobalConfig::default();
     let mut cfg = review_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     cfg.tier_mapping
         .insert("code_review".to_string(), "quality".to_string());
@@ -478,9 +463,6 @@ fn test_review_tier_alias_resolves() {
         result.unwrap_err()
     );
     let (tool, model_spec) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-    );
+    assert_eq!(tool, ToolName::Opencode);
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }

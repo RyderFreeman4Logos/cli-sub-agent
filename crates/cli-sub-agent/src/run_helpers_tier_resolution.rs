@@ -73,6 +73,14 @@ pub(crate) fn evaluate_tier_models_with_global_config(
             });
             continue;
         }
+        if !csa_config::global::routing_candidate_tools().contains(&tool) {
+            excluded.push(TierModelExclusion {
+                model_spec: spec.clone(),
+                tool: Some(tool),
+                kind: FailoverSkipKind::Disabled,
+            });
+            continue;
+        }
         if !config.is_tool_enabled(tool_str) {
             excluded.push(TierModelExclusion {
                 model_spec: spec.clone(),
@@ -254,6 +262,17 @@ pub(crate) fn resolve_preferred_tool_from_tier_with_global_config(
     if !config.tiers.contains_key(tier_name) {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     }
+    for preferred_tool in preference_order {
+        if let Ok(tool) = parse_tool_name(preferred_tool)
+            && !csa_config::global::routing_candidate_tools().contains(&tool)
+        {
+            anyhow::bail!(
+                "--tool {preferred_tool} is explicit-only and is not eligible for tier routing \
+                 or general fallback. For low-risk read-only exploration, omit --tier and use \
+                 --force-ignore-tier-setting with a complete explicit model selection."
+            );
+        }
+    }
     let (available, excluded) =
         evaluate_tier_models_with_global_config(tier_name, config, global_config, skip_specs);
 
@@ -413,8 +432,8 @@ mod tests {
             "claude-code",
             &[
                 TierToolResolution {
-                    tool: ToolName::GeminiCli,
-                    model_spec: "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                    tool: ToolName::Opencode,
+                    model_spec: "opencode/openrouter/qwen/qwen3-coder/xhigh".to_string(),
                 },
                 TierToolResolution {
                     tool: ToolName::Codex,
@@ -427,11 +446,8 @@ mod tests {
         assert!(warning.starts_with("warning:"), "{warning}");
         assert!(warning.contains("--tool claude-code ignored"), "{warning}");
         assert!(warning.contains("tier 'tier-4-critical'"), "{warning}");
-        assert!(
-            warning.contains("candidates: gemini-cli, codex"),
-            "{warning}"
-        );
-        assert!(warning.contains("proceeding with gemini-cli"), "{warning}");
+        assert!(warning.contains("candidates: opencode, codex"), "{warning}");
+        assert!(warning.contains("proceeding with opencode"), "{warning}");
     }
 
     #[test]
@@ -454,12 +470,12 @@ mod tests {
         use crate::review_cmd::tests::project_config_with_enabled_tools;
         use csa_config::{TierStrategy, config::TierConfig};
 
-        let mut config = project_config_with_enabled_tools(&["gemini-cli"]);
+        let mut config = project_config_with_enabled_tools(&["codex"]);
         config.tiers.insert(
             "test-tier".to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,

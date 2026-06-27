@@ -105,8 +105,8 @@ fn test_debate_blocks_direct_tool_when_tiers_configured() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_debate_tool(
         Some(ToolName::Codex),
@@ -141,8 +141,8 @@ fn test_debate_allows_tier_flag() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     let result = resolve_debate_tool(
         None,
@@ -161,12 +161,9 @@ fn test_debate_allows_tier_flag() {
         result.unwrap_err()
     );
     let (tool, mode, model_spec) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(tool, ToolName::Opencode);
     assert_eq!(mode, DebateMode::Heterogeneous);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-    );
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -176,11 +173,11 @@ fn test_debate_tool_plus_tier_resolves_requested_tool_from_tier() {
     let cfg = debate_config_with_tier(
         "quality",
         vec![
-            "gemini-cli/google/default/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "codex/openai/gpt-5.4/high",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
-        &["gemini-cli", "codex", "claude-code"],
+        &["opencode", "codex", "claude-code"],
     );
     let result = resolve_debate_tool(
         Some(ToolName::Codex),
@@ -211,8 +208,8 @@ fn test_debate_tool_plus_tier_rejects_tool_missing_from_tier() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     // Since #1994, non-candidate --tool pins fail fast instead of selecting another tier tool.
     let err = resolve_debate_tool(
@@ -240,8 +237,8 @@ fn test_debate_tier_preference_mismatch_uses_full_tier() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_whitelist(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
         &["codex"],
     );
     let result = resolve_debate_tool(
@@ -257,12 +254,9 @@ fn test_debate_tier_preference_mismatch_uses_full_tier() {
     );
 
     let (tool, mode, model_spec) = result.expect("absent preferred tool should not hard-fail");
-    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(tool, ToolName::Opencode);
     assert_eq!(mode, DebateMode::Heterogeneous);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/default/xhigh")
-    );
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -271,11 +265,8 @@ fn debate_resolution_prefers_configured_tool_without_narrowing_fallbacks() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_single_tool_whitelist(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/high"],
+        &["opencode", "codex"],
         "codex",
     );
 
@@ -304,11 +295,8 @@ fn debate_resolution_require_heterogeneous_passes_with_preference_plus_fallbacks
     global.debate.require_heterogeneous = true;
     let cfg = debate_config_with_single_tool_whitelist(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/high"],
+        &["opencode", "codex"],
         "codex",
     );
 
@@ -336,11 +324,8 @@ fn debate_resolution_passes_when_panel_stays_heterogeneous() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/high"],
+        &["opencode", "codex"],
     );
 
     let result = resolve_debate_tool(
@@ -356,9 +341,9 @@ fn debate_resolution_passes_when_panel_stays_heterogeneous() {
     )
     .expect("heterogeneous panel should resolve");
 
-    assert_eq!(result.0, ToolName::GeminiCli);
+    assert_eq!(result.0, ToolName::Opencode);
     assert_eq!(result.1, DebateMode::Heterogeneous);
-    assert_eq!(result.2.as_deref(), Some("gemini-cli/google/default/xhigh"));
+    assert_eq!(result.2.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }
 
 #[test]
@@ -366,8 +351,8 @@ fn test_debate_force_ignore_tier_allows_direct_tool() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "default",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_debate_tool(
         Some(ToolName::Codex),
@@ -395,11 +380,8 @@ fn test_debate_tool_plus_tier_and_force_ignore_errors_on_conflict() {
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
-        vec![
-            "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/xhigh",
-        ],
-        &["gemini-cli", "codex"],
+        vec!["opencode/openai/gpt-5/xhigh", "codex/openai/gpt-5.4/xhigh"],
+        &["opencode", "codex"],
     );
     let result = resolve_debate_tool(
         Some(ToolName::Codex),
@@ -455,8 +437,8 @@ fn test_debate_tier_alias_resolves() {
     let global = GlobalConfig::default();
     let mut cfg = debate_config_with_tier(
         "quality",
-        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
-        &["gemini-cli"],
+        vec!["opencode/openai/gpt-5/xhigh"],
+        &["opencode"],
     );
     cfg.tier_mapping
         .insert("security_audit".to_string(), "quality".to_string());
@@ -478,10 +460,7 @@ fn test_debate_tier_alias_resolves() {
         result.unwrap_err()
     );
     let (tool, mode, model_spec) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(tool, ToolName::Opencode);
     assert_eq!(mode, DebateMode::Heterogeneous);
-    assert_eq!(
-        model_spec.as_deref(),
-        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
-    );
+    assert_eq!(model_spec.as_deref(), Some("opencode/openai/gpt-5/xhigh"));
 }

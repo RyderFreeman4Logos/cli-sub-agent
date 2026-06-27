@@ -152,8 +152,8 @@ fn detect_tool_diagnostic_returns_quota_message_for_gemini_429() {
     let result = detect_tool_diagnostic("", stderr);
     assert!(result.is_some());
     let msg = result.unwrap();
-    assert!(msg.contains("OAuth quota exhausted"), "got: {msg}");
-    assert!(msg.contains("GEMINI_API_KEY"), "got: {msg}");
+    assert!(msg.contains("provider quota exhausted"), "got: {msg}");
+    assert!(msg.contains("supported provider API key"), "got: {msg}");
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn detect_tool_diagnostic_prefers_quota_over_mcp_when_both_present() {
     let result = detect_tool_diagnostic("", stderr);
     assert!(result.is_some());
     let msg = result.unwrap();
-    assert!(msg.contains("OAuth quota exhausted"), "got: {msg}");
+    assert!(msg.contains("provider quota exhausted"), "got: {msg}");
     assert!(
         !msg.contains("Run `csa doctor`"),
         "should not emit MCP guidance when quota is root cause; got: {msg}"
@@ -814,12 +814,12 @@ async fn handle_review_fix_clean_initial_persists_no_fix_attempt() {
 async fn handle_review_rejects_direct_tool_tier_before_session_creation() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let mut config = project_config_with_enabled_tools(&["opencode", "codex"]);
     config.tiers.insert(
         "default".to_string(),
         csa_config::config::TierConfig {
             description: "Test tier".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["opencode/openai/gpt-5/xhigh".to_string()],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
             max_turns: None,

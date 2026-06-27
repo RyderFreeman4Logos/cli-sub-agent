@@ -76,6 +76,7 @@ fn prepare_plan_session(project_root: &Path, description: &str) -> (String, Path
 #[tokio::test]
 async fn daemon_child_failed_mktd_persist_result_surfaces_validation_detail() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
+    let _user_config_env = crate::test_env_lock::isolate_user_config_locked(temp.path()).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);
@@ -152,6 +153,7 @@ on_fail = "abort"
 #[tokio::test]
 async fn daemon_child_failed_mktd_result_surfaces_underlying_command_failure() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
+    let _user_config_env = crate::test_env_lock::isolate_user_config_locked(temp.path()).await;
     let project_root = temp.path().join("repo");
     std::fs::create_dir_all(&project_root).expect("repo dir should be created");
     init_plan_test_repo(&project_root);

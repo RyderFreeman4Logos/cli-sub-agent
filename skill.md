@@ -165,7 +165,7 @@ commit-workflow) that automatically inject workflow reminders into every
 csa doctor
 ```
 
-This reports which AI tools (claude-code, codex, gemini-cli, opencode) are
+This reports which AI tools (claude-code, codex, opencode) are
 available and properly configured.
 
 ---
@@ -375,7 +375,7 @@ Create or edit `~/.config/cli-sub-agent/config.toml`:
 ```toml
 # Tool selection priority (first = most preferred)
 [preferences]
-tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
+tool_priority = ["claude-code", "codex", "opencode"]
 
 # Review tool (auto = heterogeneous selection)
 [review]
@@ -400,8 +400,8 @@ max_concurrent = 3
 | Setup | Recommended `tool_priority` |
 |-------|-----------------------------|
 | Claude Code + Codex | `["claude-code", "codex"]` |
-| Codex + Gemini CLI | `["codex", "gemini-cli"]` |
-| All tools available | `["claude-code", "codex", "gemini-cli", "opencode"]` |
+| Claude Code + OpenCode | `["claude-code", "opencode"]` |
+| All supported tools available | `["claude-code", "codex", "opencode"]` |
 | Single tool only | Set `[review] tool = "<tool>"` and `[debate] tool = "<tool>"` explicitly |
 
 ---
@@ -500,7 +500,7 @@ csa run --sa-mode false --fork-last "continue"          # Fork most recent sessi
 csa run --sa-mode false --fork-from <ULID> "continue"   # Fork specific session
 csa run --sa-mode false --fork-call "task"              # Fork-call (child returns to parent)
 csa run --sa-mode false --ephemeral "quick task"        # Ephemeral (no project files)
-csa run --sa-mode false --model-spec gemini-cli/google/gemini-2.5-pro/xhigh "task"  # Model spec
+csa run --sa-mode false --model-spec codex/openai/gpt-5.5/xhigh "task"  # Model spec
 csa review --sa-mode false --diff                       # Review uncommitted changes
 csa review --sa-mode false --range main...HEAD          # Review commit range
 csa review --sa-mode false --fix                        # Review-and-fix mode

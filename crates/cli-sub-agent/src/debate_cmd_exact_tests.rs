@@ -912,7 +912,7 @@ fn debate_finalize_non_success_omits_after_final_disabled_tier_spec() {
     .unwrap();
     let config: csa_config::ProjectConfig = toml::from_str(
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 enabled = false
 
 [tools.claude-code]
@@ -924,7 +924,7 @@ enabled = false
 [tiers.quality]
 description = "quality"
 models = [
-  "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+  "opencode/openai/gpt-5/xhigh",
   "claude-code/anthropic/claude-sonnet/high",
   "codex/openai/gpt-5/high",
 ]
@@ -978,7 +978,7 @@ Summary: Needs changes from terminal non-success verdict.
         .expect("saved result");
     let persisted_chain = saved.fallback_chain.expect("fallback_chain should persist");
     assert_eq!(persisted_chain.len(), 1);
-    assert_eq!(persisted_chain[0].tool, "gemini-cli");
+    assert_eq!(persisted_chain[0].tool, "opencode");
     assert_eq!(persisted_chain[0].skip_reason, "disabled");
     assert!(
         persisted_chain.iter().all(|attempt| attempt.tool != "codex"),

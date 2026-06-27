@@ -34,7 +34,7 @@ fn test_merge_tiers_deep_merge() {
         schema_version = 1
         [tiers.tier1]
         description = "User tier 1"
-        models = ["gemini-cli/google/flash/low"]
+        models = ["codex/openai/gpt-5.4-mini/low"]
         [tiers.tier2]
         description = "User tier 2"
         models = ["codex/openai/gpt/medium"]
@@ -116,7 +116,7 @@ fn test_merged_schema_version_defaults_when_both_omit() {
         r#"
         [tiers.tier1]
         description = "User tier"
-        models = ["gemini-cli/google/flash/low"]
+        models = ["codex/openai/gpt-5.4-mini/low"]
     "#,
     )
     .unwrap();
@@ -155,7 +155,7 @@ fn test_merged_schema_version_uses_max_when_explicit() {
         schema_version = 1
         [tiers.tier1]
         description = "User tier"
-        models = ["gemini-cli/google/flash/low"]
+        models = ["codex/openai/gpt-5.4-mini/low"]
     "#,
     )
     .unwrap();
@@ -291,8 +291,8 @@ config_dir = "/tmp/user-gh"
     );
 }
 
-/// Uses gemini-cli + acp as the still-invalid combination after #1128 flipped
-/// codex CLI to a legal value. gemini-cli has no ACP transport.
+/// Uses opencode + acp as the still-invalid combination after #1128 flipped
+/// codex CLI to a legal value. opencode has no ACP transport.
 #[test]
 fn test_invalid_user_transport_override_fails_before_merge() {
     let tmp = tempdir().unwrap();
@@ -303,7 +303,7 @@ fn test_invalid_user_transport_override_fails_before_merge() {
         &user_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -313,7 +313,7 @@ transport = "acp"
         &project_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 "#,
     )
@@ -332,13 +332,13 @@ transport = "auto"
         "error should include the user config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.gemini-cli.transport"),
+        rendered.contains("tools.opencode.transport"),
         "error should surface the invalid user transport key: {rendered}"
     );
 }
 
-/// Uses gemini-cli + acp as the still-invalid combination after #1128 flipped
-/// codex CLI to a legal value. gemini-cli has no ACP transport.
+/// Uses opencode + acp as the still-invalid combination after #1128 flipped
+/// codex CLI to a legal value. opencode has no ACP transport.
 #[test]
 fn test_invalid_project_transport_override_fails_before_merge() {
     let tmp = tempdir().unwrap();
@@ -349,7 +349,7 @@ fn test_invalid_project_transport_override_fails_before_merge() {
         &user_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 transport = "auto"
 "#,
     )
@@ -359,7 +359,7 @@ transport = "auto"
         &project_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -378,7 +378,7 @@ transport = "acp"
         "error should include the project config path: {rendered}"
     );
     assert!(
-        rendered.contains("tools.gemini-cli.transport"),
+        rendered.contains("tools.opencode.transport"),
         "error should surface the invalid project transport key: {rendered}"
     );
 }
@@ -536,8 +536,8 @@ liveness_dead_seconds = 120
 
 #[test]
 fn test_global_disable_wins_over_project_enable() {
-    // Global config disables gemini-cli; project config enables it.
-    // After merge, gemini-cli must remain disabled.
+    // Global config disables opencode; project config enables it.
+    // After merge, opencode must remain disabled.
     let tmp = tempfile::tempdir().unwrap();
     let user_path = tmp.path().join("user.toml");
     let project_path = tmp.path().join("project.toml");
@@ -546,7 +546,7 @@ fn test_global_disable_wins_over_project_enable() {
         &user_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 enabled = false
 suppress_notify = true
 [tools.codex]
@@ -560,7 +560,7 @@ suppress_notify = true
         &project_path,
         r#"
 schema_version = 1
-[tools.gemini-cli]
+[tools.opencode]
 enabled = true
 suppress_notify = true
 [tools.codex]
@@ -568,7 +568,7 @@ enabled = true
 suppress_notify = true
 [tiers.tier-1-quick]
 description = "Quick"
-models = ["gemini-cli/google/flash/xhigh"]
+models = ["opencode/openai/gpt-5/xhigh"]
 "#,
     )
     .unwrap();
@@ -577,16 +577,16 @@ models = ["gemini-cli/google/flash/xhigh"]
         .unwrap()
         .expect("Should load merged config");
 
-    // gemini-cli must be disabled (global wins)
+    // opencode must be disabled (global wins)
     assert!(
-        !config.is_tool_enabled("gemini-cli"),
+        !config.is_tool_enabled("opencode"),
         "globally-disabled tool must remain disabled after merge"
     );
     // codex stays enabled (both agree)
     assert!(config.is_tool_enabled("codex"));
-    // gemini-cli must not be auto-selectable
+    // opencode must not be auto-selectable
     assert!(
-        !config.is_tool_auto_selectable("gemini-cli"),
+        !config.is_tool_auto_selectable("opencode"),
         "globally-disabled tool must not be auto-selectable"
     );
 }

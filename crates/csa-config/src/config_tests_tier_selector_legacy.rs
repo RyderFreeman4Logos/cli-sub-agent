@@ -7,7 +7,7 @@ fn config_with_tier_4_critical() -> ProjectConfig {
         "tier-4-critical".to_string(),
         TierConfig {
             description: "test".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,

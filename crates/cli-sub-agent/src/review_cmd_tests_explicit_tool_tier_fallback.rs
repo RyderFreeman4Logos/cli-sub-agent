@@ -8,7 +8,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
         crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
         "1",
     );
-    let mut config = project_config_with_enabled_tools(&["codex", "gemini-cli"]);
+    let mut config = project_config_with_enabled_tools(&["codex", "opencode"]);
     config.tools.get_mut("codex").unwrap().transport = Some(csa_config::TransportKind::Cli);
     config.tiers.insert(
         "quality".to_string(),
@@ -17,7 +17,7 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
             models: vec![
                 "codex/openai/gpt-5.4/medium".to_string(),
                 "codex/openai/gpt-5/high".to_string(),
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "opencode/openai/gpt-5/xhigh".to_string(),
             ],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
@@ -46,8 +46,8 @@ async fn tier_fallback_advances_across_tool_variants_when_explicit_tool_and_tier
                 Some("codex/openai/gpt-5/high".to_string()),
             ),
             (
-                csa_core::types::ToolName::GeminiCli,
-                Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+                csa_core::types::ToolName::Opencode,
+                Some("opencode/openai/gpt-5/xhigh".to_string()),
             ),
         ]
     );

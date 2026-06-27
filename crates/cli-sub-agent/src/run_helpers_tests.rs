@@ -539,10 +539,6 @@ fn is_compress_command_partial_match_rejected() {
 fn parse_tool_name_all_valid() {
     use super::parse_tool_name;
     assert!(matches!(
-        parse_tool_name("gemini-cli").unwrap(),
-        ToolName::GeminiCli
-    ));
-    assert!(matches!(
         parse_tool_name("opencode").unwrap(),
         ToolName::Opencode
     ));
@@ -551,6 +547,14 @@ fn parse_tool_name_all_valid() {
         parse_tool_name("claude-code").unwrap(),
         ToolName::ClaudeCode
     ));
+}
+
+#[test]
+fn parse_tool_name_rejects_removed_gemini_cli() {
+    let err = super::parse_tool_name("gemini-cli").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("no longer supported"), "{msg}");
+    assert!(msg.contains("provider is discontinued"), "{msg}");
 }
 
 #[test]

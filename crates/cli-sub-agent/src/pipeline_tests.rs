@@ -104,7 +104,7 @@ fn load_and_validate_within_depth_returns_some() {
 }
 
 /// Pipeline must surface transport validation errors with the offending key path.
-/// Uses gemini-cli + ACP because it is still rejected post-#1128 (gemini-cli has
+/// Uses opencode + ACP because it is still rejected post-#1128 (gemini-cli has
 /// no ACP transport). The original codex+cli rejection became obsolete after the
 /// codex CLI default flip (#760 / #1128).
 #[test]
@@ -116,7 +116,7 @@ fn load_and_validate_rejects_invalid_tool_transport_override() {
     fs::write(
         config_dir.join("config.toml"),
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 transport = "acp"
 "#,
     )
@@ -126,7 +126,7 @@ transport = "acp"
     let message = format!("{err:#}");
 
     assert!(
-        message.contains("tools.gemini-cli.transport"),
+        message.contains("tools.opencode.transport"),
         "pipeline should surface the exact config key: {message}"
     );
     assert!(

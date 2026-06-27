@@ -23,12 +23,12 @@ fn install_pattern(project_root: &Path, name: &str) {
 async fn daemon_direct_tool_tier_rejection_persists_pre_exec_result_before_completion() {
     let project_dir = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
-    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let mut config = project_config_with_enabled_tools(&["opencode", "codex"]);
     config.tiers.insert(
         "default".to_string(),
         csa_config::config::TierConfig {
             description: "Test tier".to_string(),
-            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            models: vec!["opencode/openai/gpt-5/xhigh".to_string()],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
             max_turns: None,

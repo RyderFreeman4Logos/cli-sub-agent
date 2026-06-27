@@ -309,7 +309,7 @@ fn resolve_auto_tool(
     }
 
     // Fallback: first available in preference order
-    for preferred in &["codex", "claude-code", "opencode", "gemini-cli"] {
+    for preferred in &["codex", "claude-code", "opencode"] {
         if let Ok(tool) = crate::run_helpers::parse_tool_name(preferred)
             && available_tools.contains(&tool)
         {
@@ -326,7 +326,7 @@ fn get_auto_selectable_tools(
     _project_root: &Path,
 ) -> Vec<ToolName> {
     if let Some(cfg) = project_config {
-        csa_config::global::all_known_tools()
+        csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
             .copied()
@@ -358,7 +358,7 @@ fn select_any_available_tool(
     }
 
     anyhow::bail!(
-        "No tools available. Install at least one tool (codex, claude-code, opencode, gemini-cli)."
+        "No tools available. Install at least one supported routing tool (codex, claude-code, opencode)."
     )
 }
 

@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::Error;
 use csa_core::error::AppError;
 
-const HINT_INSTALL_GEMINI: &str = "hint: install gemini-cli: npm install -g @google/gemini-cli";
+const HINT_REMOVED_GEMINI: &str = "hint: gemini-cli support has been removed because the provider is discontinued; use codex or claude-code instead";
 const HINT_INSTALL_CODEX: &str = "hint: install codex CLI: npm install -g @openai/codex";
 const HINT_INSTALL_CODEX_ACP: &str =
     "hint: install codex ACP adapter: npm install -g @zed-industries/codex-acp";
@@ -22,7 +22,7 @@ const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa se
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
 const HINT_SKILL_NOT_FOUND: &str = "hint: list runnable skills with 'csa skill list' or install one with 'csa skill install <repo>'";
-const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; current builds pin TMPDIR to a writable sandbox temp dir (private /tmp in bwrap, session tmp elsewhere) and seed under CSA session state, but older builds may still need re-run with TMPDIR=/tmp";
+const HINT_GEMINI_RUNTIME_HOME: &str = HINT_REMOVED_GEMINI;
 const LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "core.hooksPath is set locally";
 const HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT: &str = "hint: lefthook blocked git commit because core.hooksPath is set locally. Staged work may be uncommitted. Run `git config --unset-all --local core.hooksPath`, then rerun the commit or continue the session.";
 const SANDBOX_FS_DENIAL_MARKERS: [&str; 7] = [
@@ -71,7 +71,7 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
 
     if has_not_installed_or_not_found {
         if chain_text.contains("gemini") {
-            return Some(HINT_INSTALL_GEMINI.to_string());
+            return Some(HINT_REMOVED_GEMINI.to_string());
         }
         if chain_text.contains("codex-acp") {
             return Some(HINT_INSTALL_CODEX_ACP.to_string());
@@ -235,7 +235,7 @@ fn tool_install_hint(tool_name: &str) -> Option<&'static str> {
         return Some(HINT_INSTALL_CODEX_ACP);
     }
     if tool.contains("gemini") {
-        return Some(HINT_INSTALL_GEMINI);
+        return Some(HINT_REMOVED_GEMINI);
     }
     if tool.contains("codex") {
         return Some(HINT_INSTALL_CODEX);
@@ -256,7 +256,9 @@ mod tests {
     #[test]
     fn test_tool_not_installed_gemini() {
         let err = Error::new(AppError::ToolNotInstalled("gemini-cli".into()));
-        assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_INSTALL_GEMINI));
+        let hint = suggest_fix(&err).expect("removed gemini should produce a hint");
+        assert!(hint.contains("support has been removed"), "{hint}");
+        assert!(!hint.contains("npm install"), "{hint}");
     }
 
     #[test]

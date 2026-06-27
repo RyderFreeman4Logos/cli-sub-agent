@@ -84,14 +84,14 @@ fn test_detect_installed_tools() {
     // We can't assert specific tools since it depends on the system
     // but we can verify the function returns valid tool names
     for tool in &tools {
-        assert!(["gemini-cli", "opencode", "codex", "claude-code"].contains(tool));
+        assert!(["opencode", "codex", "claude-code"].contains(tool));
     }
 }
 
 #[test]
 fn test_smart_tiers_with_multiple_tools() {
-    // Simulate a system with codex, gemini-cli, and claude-code installed
-    let installed = vec!["codex", "gemini-cli", "claude-code"];
+    // Simulate a system with codex and claude-code installed
+    let installed = vec!["codex", "claude-code"];
     let tiers = build_smart_tiers(&installed, &[]);
 
     // Verify all tiers are created
@@ -100,13 +100,10 @@ fn test_smart_tiers_with_multiple_tools() {
     assert!(tiers.contains_key("tier-2-standard"));
     assert!(tiers.contains_key("tier-3-complex"));
 
-    // tier-1-quick should prefer gemini-cli flash (fast, cheap)
+    // tier-1-quick should prefer fast codex
     let tier1 = tiers.get("tier-1-quick").unwrap();
     assert_eq!(tier1.models.len(), 1);
-    assert_eq!(
-        tier1.models[0],
-        "gemini-cli/google/gemini-3-flash-preview/xhigh"
-    );
+    assert_eq!(tier1.models[0], "codex/openai/gpt-5.4-mini/xhigh");
 
     // tier-2-standard should prefer codex frontier (balanced)
     let tier2 = tiers.get("tier-2-standard").unwrap();
@@ -121,46 +118,38 @@ fn test_smart_tiers_with_multiple_tools() {
         "claude-code/anthropic/claude-opus-4-6/default"
     );
 
-    // Verify tier diversity: different tiers use different tools
-    let tier1_tool = tier1.models[0].split('/').next().unwrap();
-    let tier2_tool = tier2.models[0].split('/').next().unwrap();
+    // Verify complex tier can still choose a different tool.
     let tier3_tool = tier3.models[0].split('/').next().unwrap();
 
     assert_ne!(
-        tier1_tool, tier2_tool,
-        "tier-1 and tier-2 should use different tools"
-    );
-    assert_ne!(
-        tier2_tool, tier3_tool,
-        "tier-2 and tier-3 should use different tools"
+        tier2.models[0].split('/').next().unwrap(),
+        tier3_tool,
+        "tier-2 and tier-3 should use different tools when claude-code is installed"
     );
 }
 
 #[test]
-fn test_smart_tiers_with_only_gemini() {
-    // Simulate a system with only gemini-cli installed
-    let installed = vec!["gemini-cli"];
+fn test_smart_tiers_with_only_codex() {
+    // Simulate a system with only codex installed
+    let installed = vec!["codex"];
     let tiers = build_smart_tiers(&installed, &[]);
 
     // Verify all tiers are created
     assert_eq!(tiers.len(), 3);
 
-    // All tiers should use gemini-cli
+    // All tiers should use codex
     let tier1 = tiers.get("tier-1-quick").unwrap();
-    assert!(tier1.models[0].starts_with("gemini-cli/"));
+    assert!(tier1.models[0].starts_with("codex/"));
 
     let tier2 = tiers.get("tier-2-standard").unwrap();
-    assert!(tier2.models[0].starts_with("gemini-cli/"));
+    assert!(tier2.models[0].starts_with("codex/"));
 
     let tier3 = tiers.get("tier-3-complex").unwrap();
-    assert!(tier3.models[0].starts_with("gemini-cli/"));
+    assert!(tier3.models[0].starts_with("codex/"));
 
-    // tier-1 should use flash variant
-    assert!(tier1.models[0].contains("flash"));
-
-    // tier-2 and tier-3 should use pro variant
-    assert!(tier2.models[0].contains("pro"));
-    assert!(tier3.models[0].contains("pro"));
+    assert!(tier1.models[0].contains("gpt-5.4-mini"));
+    assert!(tier2.models[0].contains("gpt-5.5"));
+    assert!(tier3.models[0].contains("gpt-5.5"));
 }
 
 #[test]
@@ -169,15 +158,15 @@ fn test_smart_tiers_with_no_tools() {
     let installed: Vec<&str> = vec![];
     let tiers = build_smart_tiers(&installed, &[]);
 
-    // Should still create all tiers with gemini-cli fallback
+    // Should still create all tiers with codex fallback
     assert_eq!(tiers.len(), 3);
 
-    // All should fallback to gemini-cli
+    // All should fallback to codex
     for tier_name in &["tier-1-quick", "tier-2-standard", "tier-3-complex"] {
         let tier = tiers.get(*tier_name).unwrap();
         assert!(
-            tier.models[0].starts_with("gemini-cli/"),
-            "Tier {tier_name} should fallback to gemini-cli"
+            tier.models[0].starts_with("codex/"),
+            "Tier {tier_name} should fallback to codex"
         );
     }
 }
@@ -221,7 +210,7 @@ fn test_build_smart_tiers_with_only_codex() {
 
     assert_eq!(tiers.len(), 3);
 
-    // tier-1-quick: codex (no gemini, so codex is first fallback)
+    // tier-1-quick: codex
     let tier1 = tiers.get("tier-1-quick").unwrap();
     assert!(tier1.models[0].starts_with("codex/"));
     assert!(tier1.models[0].contains("gpt-5.4-mini"));
@@ -283,14 +272,14 @@ fn test_build_smart_tiers_with_only_opencode() {
 }
 
 #[test]
-fn test_build_smart_tiers_with_gemini_and_codex() {
+fn test_build_smart_tiers_ignores_removed_gemini_with_codex() {
     let installed = vec!["gemini-cli", "codex"];
     let tiers = build_smart_tiers(&installed, &[]);
 
-    // tier-1-quick should use gemini flash (fastest/cheapest)
+    // tier-1-quick should use codex, not removed gemini-cli
     let tier1 = tiers.get("tier-1-quick").unwrap();
-    assert!(tier1.models[0].starts_with("gemini-cli/"));
-    assert!(tier1.models[0].contains("flash"));
+    assert!(tier1.models[0].starts_with("codex/"));
+    assert!(tier1.models[0].contains("gpt-5.4-mini"));
 
     // tier-2-standard should prefer codex
     let tier2 = tiers.get("tier-2-standard").unwrap();
@@ -304,7 +293,7 @@ fn test_build_smart_tiers_with_gemini_and_codex() {
 
 #[test]
 fn test_build_smart_tiers_each_tier_has_exactly_one_model() {
-    let installed = vec!["gemini-cli", "codex", "claude-code", "opencode"];
+    let installed = vec!["codex", "claude-code", "opencode"];
     let tiers = build_smart_tiers(&installed, &[]);
 
     for (name, tier) in &tiers {
@@ -320,7 +309,7 @@ fn test_build_smart_tiers_each_tier_has_exactly_one_model() {
 
 #[test]
 fn test_build_smart_tiers_descriptions_not_empty() {
-    let installed = vec!["gemini-cli"];
+    let installed = vec!["codex"];
     let tiers = build_smart_tiers(&installed, &[]);
 
     for (name, tier) in &tiers {
@@ -394,10 +383,10 @@ fn test_detect_installed_tools_with_mock_path() {
     let custom_path = std::ffi::OsStr::new(bin_dir.to_str().unwrap());
     let tools = detect_installed_tools_in_paths(custom_path);
 
-    // Should detect gemini-cli and codex (mapped from "gemini" and "codex" executables)
+    // Should detect codex but not removed gemini-cli.
     assert!(
-        tools.contains(&"gemini-cli"),
-        "Should detect gemini-cli from mock 'gemini' executable"
+        !tools.contains(&"gemini-cli"),
+        "Should not detect removed gemini-cli from mock 'gemini' executable"
     );
     assert!(
         tools.contains(&"codex"),
@@ -507,40 +496,40 @@ fn test_update_gitignore_no_trailing_newline() {
 
 #[test]
 fn test_build_smart_tiers_skips_globally_disabled() {
-    // gemini-cli and codex installed, but gemini-cli is globally disabled.
-    let installed = vec!["gemini-cli", "codex", "claude-code"];
-    let disabled = vec!["gemini-cli".to_string()];
+    // opencode and codex installed, but opencode is globally disabled.
+    let installed = vec!["opencode", "codex", "claude-code"];
+    let disabled = vec!["opencode".to_string()];
     let tiers = build_smart_tiers(&installed, &disabled);
 
-    // No tier should contain gemini-cli
+    // No tier should contain opencode
     for (name, tier) in &tiers {
         for model in &tier.models {
             assert!(
-                !model.starts_with("gemini-cli/"),
-                "tier '{name}' should not contain globally-disabled gemini-cli, found: {model}"
+                !model.starts_with("opencode/"),
+                "tier '{name}' should not contain globally-disabled opencode, found: {model}"
             );
         }
     }
 
-    // tier-1-quick should fall back to codex (next preference after gemini-cli)
+    // tier-1-quick should fall back to codex
     let tier1 = tiers.get("tier-1-quick").unwrap();
     assert!(
         tier1.models[0].starts_with("codex/"),
-        "tier-1-quick should use codex when gemini-cli is disabled"
+        "tier-1-quick should use codex when opencode is disabled"
     );
 }
 
 #[test]
 fn test_build_smart_tiers_all_disabled() {
     // All tools installed but all globally disabled.
-    let installed = vec!["gemini-cli", "codex", "claude-code"];
+    let installed = vec!["opencode", "codex", "claude-code"];
     let disabled = vec![
-        "gemini-cli".to_string(),
+        "opencode".to_string(),
         "codex".to_string(),
         "claude-code".to_string(),
     ];
     let tiers = build_smart_tiers(&installed, &disabled);
 
-    // Should fall back to gemini-cli defaults (existing behavior for no tools)
+    // Should fall back to codex defaults (existing behavior for no tools)
     assert_eq!(tiers.len(), 3);
 }

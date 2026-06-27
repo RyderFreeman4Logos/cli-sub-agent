@@ -84,7 +84,7 @@ pub(crate) fn build_reviewer_tools(
     let enabled_tools: Vec<ToolName> = if let Some(tools) = tier_tools {
         tools.to_vec()
     } else if let Some(cfg) = project_config {
-        let tools: Vec<_> = csa_config::global::all_known_tools()
+        let tools: Vec<_> = csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
             .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
@@ -96,14 +96,14 @@ pub(crate) fn build_reviewer_tools(
             tools
         }
     } else if let Some(gc) = global_config {
-        let available_tools: Vec<_> = csa_config::global::all_known_tools()
+        let available_tools: Vec<_> = csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
             .copied()
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&available_tools, project_config, gc)
     } else {
-        csa_config::global::all_known_tools()
+        csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| reviewer_tool_binary_available(t.as_str(), project_config))
             .copied()

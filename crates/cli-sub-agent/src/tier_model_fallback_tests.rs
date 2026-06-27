@@ -101,10 +101,10 @@ fn tier_fallback_prefers_original_tool_then_keeps_full_tier() {
         "quality",
         &[
             "codex/openai/gpt-5.4/high",
-            "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+            "opencode/openai/gpt-5/xhigh",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
-        &["codex", "gemini-cli", "claude-code"],
+        &["codex", "opencode", "claude-code"],
     );
 
     let candidates = ordered_tier_candidates(
@@ -125,8 +125,8 @@ fn tier_fallback_prefers_original_tool_then_keeps_full_tier() {
                 Some("codex/openai/gpt-5.4/high".to_string()),
             ),
             (
-                ToolName::GeminiCli,
-                Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string()),
+                ToolName::Opencode,
+                Some("opencode/openai/gpt-5/xhigh".to_string()),
             ),
             (
                 ToolName::ClaudeCode,
@@ -143,14 +143,14 @@ fn no_tier_fallback_uses_global_tool_priority() {
         "1",
     );
     let mut global = GlobalConfig::default();
-    global.preferences.tool_priority = vec!["claude-code".to_string(), "gemini-cli".to_string()];
+    global.preferences.tool_priority = vec!["claude-code".to_string(), "opencode".to_string()];
     let candidates =
         ordered_tier_candidates(ToolName::Codex, None, None, None, Some(&global), true, &[]);
 
     assert!(candidates.starts_with(&[
         (ToolName::Codex, None),
         (ToolName::ClaudeCode, None),
-        (ToolName::GeminiCli, None),
+        (ToolName::Opencode, None),
     ]));
 }
 

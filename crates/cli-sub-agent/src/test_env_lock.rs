@@ -1,5 +1,6 @@
 // NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
 use std::ffi::OsString;
+use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -42,6 +43,35 @@ impl ScopedEnvVarRestore {
         // private per-module env locks are forbidden because env is process-wide.
         unsafe { std::env::remove_var(key) };
         Self { key, original }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn isolate_user_config(
+    project_root: &Path,
+) -> (ScopedEnvVarRestore, ScopedEnvVarRestore) {
+    let config_home = project_root.join("xdg-config");
+    std::fs::create_dir_all(&config_home).expect("test config home should be created");
+    let home_guard = ScopedEnvVarRestore::set("HOME", project_root);
+    let config_guard = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", &config_home);
+    (home_guard, config_guard)
+}
+
+#[allow(dead_code)]
+pub(crate) struct ScopedUserConfigIsolation {
+    _config_guard: ScopedEnvVarRestore,
+    _home_guard: ScopedEnvVarRestore,
+    _lock: OwnedMutexGuard<()>,
+}
+
+#[allow(dead_code)]
+pub(crate) async fn isolate_user_config_locked(project_root: &Path) -> ScopedUserConfigIsolation {
+    let lock = TEST_ENV_LOCK.clone().lock_owned().await;
+    let (home_guard, config_guard) = isolate_user_config(project_root);
+    ScopedUserConfigIsolation {
+        _config_guard: config_guard,
+        _home_guard: home_guard,
+        _lock: lock,
     }
 }
 

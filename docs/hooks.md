@@ -35,7 +35,7 @@ Configure it in the global CSA config:
 command = "mempal timeline --language en --limit 30"
 enabled = true
 # Optional: only fire for these tool transports. Omit or use [] for all.
-transports = ["codex", "gemini-cli"]
+transports = ["codex", "opencode"]
 timeout_seconds = 10
 ```
 
@@ -44,7 +44,7 @@ timeout_seconds = 10
 | Channel | Name | Description |
 |---------|------|-------------|
 | env | `CSA_SESSION_ID` | CSA session ULID |
-| env | `CSA_TRANSPORT` | Resolved tool name (`codex`, `claude-code`, `gemini-cli`, `opencode`, etc.) |
+| env | `CSA_TRANSPORT` | Resolved tool name (`codex`, `claude-code`, `opencode`, etc.) |
 | env | `CSA_PROJECT_ROOT` | Project root path for the CSA session |
 | env | `CSA_WORKING_DIR` | Working directory where the hook runs |
 | stdin | user prompt | Original user prompt text |
@@ -207,7 +207,7 @@ prompt guards **capture stdout** and append it to the prompt as
 `<prompt-guard>` XML blocks.
 
 This enables "reverse prompt injection" -- reminding tools (including those
-without native hook systems like codex, opencode, gemini-cli) to follow
+without native hook systems like codex or opencode) to follow
 project rules such as branch protection and timely commits.
 
 ### How It Works
@@ -326,7 +326,7 @@ fi
 [hooks.pre_session]
 command = "mempal timeline --language en --limit 30"
 enabled = true
-transports = ["codex", "gemini-cli"]
+transports = ["codex", "opencode"]
 timeout_seconds = 10
 ```
 

@@ -214,7 +214,7 @@ fn build_post_review_output_preserves_existing_directive_without_duplication() {
 #[test]
 fn resolve_review_tool_prefers_cli_override() {
     let global = GlobalConfig::default();
-    let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    let cfg = project_config_with_enabled_tools(&["opencode", "codex"]);
     let tool = resolve_review_tool(
         Some(ToolName::Codex),
         None,
@@ -234,8 +234,8 @@ fn resolve_review_tool_prefers_cli_override() {
 fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
-    // Parent=claude-code; first heterogeneous default is gemini-cli.
-    let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    // Parent=claude-code; supported heterogeneous default follows routing priority.
+    let cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     let tool = resolve_review_tool(
         None,
         None,
@@ -248,15 +248,15 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
         false, // force_ignore_tier_setting
     )
     .unwrap();
-    assert!(matches!(tool.0, ToolName::GeminiCli));
+    assert!(matches!(tool.0, ToolName::Opencode));
 }
 
 #[test]
 fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
     let (_env_lock, _available_guard) = assume_review_tools_available();
     let global = GlobalConfig::default();
-    // Only gemini-cli enabled — auto-selection should still succeed.
-    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    // Only codex enabled — auto-selection should still succeed from a Claude parent.
+    let cfg = project_config_with_enabled_tools(&["codex"]);
     let tool = resolve_review_tool(
         None,
         None,
@@ -269,7 +269,7 @@ fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
         false, // force_ignore_tier_setting
     )
     .unwrap();
-    assert!(matches!(tool.0, ToolName::GeminiCli));
+    assert!(matches!(tool.0, ToolName::Codex));
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn resolve_review_tool_errors_without_parent_tool_context() {
 fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
     let mut global = GlobalConfig::default();
     global.review.tool = csa_config::ToolSelection::Single("invalid-tool".to_string());
-    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    let cfg = project_config_with_enabled_tools(&["codex"]);
     let err = resolve_review_tool(
         None,
         None,
@@ -702,8 +702,8 @@ fn review_cli_parses_allow_fallback_flag() {
 
 #[test]
 fn review_explicit_tool_keeps_failover_enabled_by_default() {
-    let args = parse_review_args(&["csa", "review", "--diff", "--tool", "gemini-cli"]);
-    assert_eq!(args.tool, Some(ToolName::GeminiCli));
+    let args = parse_review_args(&["csa", "review", "--diff", "--tool", "codex"]);
+    assert_eq!(args.tool, Some(ToolName::Codex));
     assert!(!args.no_failover);
 }
 

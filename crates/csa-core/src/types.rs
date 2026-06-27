@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// AI tool selection
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 pub enum ToolName {
+    #[value(skip)]
     GeminiCli,
     Opencode,
     Codex,
@@ -16,13 +17,31 @@ pub enum ToolName {
 }
 
 /// Primary CLI-backed tools surfaced by doctor and default tool listings.
-pub const PRIMARY_TOOL_NAMES: &[&str] = &[
-    "gemini-cli",
-    "opencode",
-    "codex",
-    "claude-code",
-    "antigravity-cli",
+pub const PRIMARY_TOOL_NAMES: &[&str] = &["opencode", "codex", "claude-code"];
+
+/// Tools eligible for general automatic routing and fallback.
+///
+/// `antigravity-cli` is intentionally omitted: it may still be invoked through
+/// explicit low-risk paths, but CSA must not use it as a general fallback for
+/// implementation, review, or long-context work.
+pub const ROUTING_CANDIDATE_TOOLS: &[ToolName] = &[
+    ToolName::Opencode,
+    ToolName::Codex,
+    ToolName::ClaudeCode,
+    ToolName::OpenaiCompat,
 ];
+
+pub fn is_removed_tool_name(name: &str) -> bool {
+    matches!(name, "gemini-cli" | "gemini")
+}
+
+pub fn removed_tool_error(name: &str) -> String {
+    format!(
+        "tool '{name}' is no longer supported: gemini-cli integration has been removed because \
+         the provider is discontinued. Remove it from CLI/config/tier mappings and use codex or \
+         claude-code instead. CSA will not route to antigravity-cli as a general fallback."
+    )
+}
 
 impl ToolName {
     /// Returns the CLI-facing name for this tool
@@ -106,10 +125,12 @@ impl std::fmt::Display for ModelFamily {
 
 /// Resolve the `ModelFamily` (quota-pool / provider grouping) for a CLI tool name.
 ///
-/// Tools that share an upstream provider quota pool — `gemini-cli` and
-/// `antigravity-cli` both consume the Google OAuth quota — map to the same
+/// Tools that share an upstream provider quota pool map to the same
 /// `ModelFamily` so that failover can skip same-provider alternatives after one
 /// of them exhausts the shared quota.
+///
+/// Legacy Gemini-family session records and `antigravity-cli` both consume the
+/// Google/Gemini quota pool.
 pub fn provider_for_tool_name(tool: &str) -> Option<ModelFamily> {
     match tool {
         "gemini-cli" | "antigravity-cli" | "antigravity" | "gemini" => Some(ModelFamily::Gemini),
@@ -125,9 +146,9 @@ pub fn provider_for_tool_name(tool: &str) -> Option<ModelFamily> {
 /// Written to `result.toml` under `[[fallback_chain]]` when failover occurred during `csa run`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FallbackAttempt {
-    /// Tool name that was attempted (e.g. "gemini-cli").
+    /// Tool name that was attempted (e.g. "codex").
     pub tool: String,
-    /// Full model spec that was attempted (e.g. "gemini-cli/google/gemini-3.1-pro-preview/xhigh").
+    /// Full model spec that was attempted (e.g. "codex/openai/gpt-5.5/xhigh").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_spec: Option<String>,
     /// Machine-readable reason the tool was skipped (matched pattern from stderr/stdout).
@@ -158,15 +179,14 @@ impl std::str::FromStr for ToolArg {
         match s {
             "auto" => Ok(Self::Auto),
             "any-available" => Ok(Self::AnyAvailable),
+            "gemini-cli" | "gemini" => Err(removed_tool_error(s)),
             // Canonical tool names
-            "gemini-cli" => Ok(Self::Specific(ToolName::GeminiCli)),
             "opencode" => Ok(Self::Specific(ToolName::Opencode)),
             "codex" => Ok(Self::Specific(ToolName::Codex)),
             "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
             "openai-compat" => Ok(Self::Specific(ToolName::OpenaiCompat)),
             "antigravity-cli" => Ok(Self::Specific(ToolName::AntigravityCli)),
             // Built-in aliases for common short names
-            "gemini" => Ok(Self::Specific(ToolName::GeminiCli)),
             "claude" => Ok(Self::Specific(ToolName::ClaudeCode)),
             "antigravity" => Ok(Self::Specific(ToolName::AntigravityCli)),
             // Unknown string — store for config-based resolution
@@ -191,14 +211,14 @@ impl ToolArg {
                     match resolved {
                         Self::Alias(ref inner) => Err(format!(
                             "tool alias '{alias}' maps to '{inner}' which is not a valid tool \
-                             name. Valid targets: gemini-cli, opencode, codex, claude-code, antigravity-cli"
+                             name. Valid targets: opencode, codex, claude-code, openai-compat, antigravity-cli"
                         )),
                         other => Ok(other),
                     }
                 } else {
                     Err(format!(
                         "unknown tool '{alias}'. Valid values: auto, any-available, \
-                         gemini-cli, opencode, codex, claude-code, openai-compat, antigravity-cli. \
+                         opencode, codex, claude-code, openai-compat, antigravity-cli. \
                          Or define it in [tool_aliases] in config."
                     ))
                 }
@@ -335,12 +355,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_arg_from_str_specific_gemini() {
-        let arg = ToolArg::from_str("gemini-cli").unwrap();
-        match arg {
-            ToolArg::Specific(ToolName::GeminiCli) => {}
-            _ => panic!("Expected Specific(GeminiCli)"),
-        }
+    fn test_tool_arg_from_str_rejects_removed_gemini_cli() {
+        let err = ToolArg::from_str("gemini-cli").unwrap_err();
+        assert!(err.contains("no longer supported"), "{err}");
+        assert!(err.contains("discontinued"), "{err}");
+        assert!(err.contains("codex"), "{err}");
     }
 
     #[test]
@@ -359,9 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_arg_from_str_builtin_alias_gemini() {
-        let arg = ToolArg::from_str("gemini").unwrap();
-        assert!(matches!(arg, ToolArg::Specific(ToolName::GeminiCli)));
+    fn test_tool_arg_from_str_rejects_removed_gemini_alias() {
+        let err = ToolArg::from_str("gemini").unwrap_err();
+        assert!(
+            err.contains("gemini-cli integration has been removed"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -373,16 +395,25 @@ mod tests {
     #[test]
     fn test_resolve_alias_with_config() {
         let mut aliases = HashMap::new();
-        aliases.insert("gem".to_string(), "gemini-cli".to_string());
+        aliases.insert("router".to_string(), "codex".to_string());
         aliases.insert("cc".to_string(), "claude-code".to_string());
 
-        let arg = ToolArg::from_str("gem").unwrap();
+        let arg = ToolArg::from_str("router").unwrap();
         let resolved = arg.resolve_alias(&aliases).unwrap();
-        assert!(matches!(resolved, ToolArg::Specific(ToolName::GeminiCli)));
+        assert!(matches!(resolved, ToolArg::Specific(ToolName::Codex)));
 
         let arg = ToolArg::from_str("cc").unwrap();
         let resolved = arg.resolve_alias(&aliases).unwrap();
         assert!(matches!(resolved, ToolArg::Specific(ToolName::ClaudeCode)));
+    }
+
+    #[test]
+    fn test_resolve_alias_rejects_removed_gemini_cli_target() {
+        let mut aliases = HashMap::new();
+        aliases.insert("gem".to_string(), "gemini-cli".to_string());
+        let arg = ToolArg::from_str("gem").unwrap();
+        let err = arg.resolve_alias(&aliases).unwrap_err();
+        assert!(err.contains("no longer supported"), "{err}");
     }
 
     #[test]
@@ -409,10 +440,10 @@ mod tests {
     fn test_resolve_alias_chained_builtin() {
         // Config alias pointing to a built-in alias name
         let mut aliases = HashMap::new();
-        aliases.insert("g".to_string(), "gemini".to_string());
-        let arg = ToolArg::from_str("g").unwrap();
+        aliases.insert("c".to_string(), "claude".to_string());
+        let arg = ToolArg::from_str("c").unwrap();
         let resolved = arg.resolve_alias(&aliases).unwrap();
-        assert!(matches!(resolved, ToolArg::Specific(ToolName::GeminiCli)));
+        assert!(matches!(resolved, ToolArg::Specific(ToolName::ClaudeCode)));
     }
 
     #[test]
@@ -498,10 +529,11 @@ mod tests {
         let cases = [
             ToolArg::Auto,
             ToolArg::AnyAvailable,
-            ToolArg::Specific(ToolName::GeminiCli),
             ToolArg::Specific(ToolName::Opencode),
             ToolArg::Specific(ToolName::Codex),
             ToolArg::Specific(ToolName::ClaudeCode),
+            ToolArg::Specific(ToolName::OpenaiCompat),
+            ToolArg::Specific(ToolName::AntigravityCli),
         ];
         for original in &cases {
             let s = original.to_string();

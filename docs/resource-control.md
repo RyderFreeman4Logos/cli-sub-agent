@@ -94,7 +94,6 @@ per tool in `usage_stats.toml`:
 
 ```toml
 [history]
-gemini-cli = [1024, 1152, 1088, 1920, 1200, ...]
 codex = [2048, 2304, 2176, 2560, ...]
 ```
 
@@ -200,7 +199,6 @@ Until P95 data is available, CSA uses configured initial estimates:
 
 | Tool | Recommended Initial (MB) |
 |------|-------------------------|
-| gemini-cli | 1024 |
 | codex | 4096 |
 | opencode | 1536 |
 | claude-code | 4096 |

@@ -105,7 +105,7 @@ Description of the workflow.
 
 Analyze the codebase for issues.
 
-Tool: gemini-cli
+Tool: codex
 Tier: tier-1-quick
 
 ## Step 2: Fix
@@ -160,7 +160,7 @@ version = "1.0.0"
 
 [[steps]]
 name = "Analyze"
-tool = "gemini-cli"
+tool = "codex"
 tier = "tier-1-quick"
 prompt = "Analyze the codebase for issues."
 

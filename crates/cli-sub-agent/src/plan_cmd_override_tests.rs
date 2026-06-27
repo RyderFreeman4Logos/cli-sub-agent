@@ -13,7 +13,6 @@ fn resolve_step_tool_all_explicit_tools() {
         ("await-user", false),  // AwaitUser
         ("claude-code", false), // CsaTool
         ("codex", false),       // CsaTool
-        ("gemini-cli", false),  // CsaTool
         ("opencode", false),    // CsaTool
         ("weave", false),       // WeaveInclude (not CsaTool, not DirectBash)
     ];
@@ -507,7 +506,7 @@ fn resolve_step_tool_respects_tool_override() {
     let step = PlanStep {
         id: 1,
         title: "test step".to_string(),
-        tool: Some("gemini-cli".to_string()), // Step explicitly asks for gemini-cli
+        tool: Some("opencode".to_string()), // Step explicitly asks for opencode
         tier: None,
         prompt: "test prompt".to_string(),
         depends_on: vec![],
@@ -518,17 +517,17 @@ fn resolve_step_tool_respects_tool_override() {
         workspace_access: None,
     };
 
-    // Without override: should resolve to gemini-cli as specified in step.tool
+    // Without override: should resolve to opencode as specified in step.tool
     let target_no_override = resolve_step_tool(&step, None, None, None).unwrap();
     assert!(matches!(
         target_no_override,
         StepTarget::CsaTool {
-            tool_name: ToolName::GeminiCli,
+            tool_name: ToolName::Opencode,
             ..
         }
     ));
 
-    // With tool override: should use codex instead of gemini-cli
+    // With tool override: should use codex instead of opencode
     let tool_override = ToolName::Codex;
     let target_with_override = resolve_step_tool(&step, None, Some(&tool_override), None).unwrap();
     assert!(matches!(
@@ -547,7 +546,7 @@ fn resolve_step_tool_respects_model_spec_override() {
     let step = PlanStep {
         id: 1,
         title: "test step".to_string(),
-        tool: Some("gemini-cli".to_string()),
+        tool: Some("opencode".to_string()),
         tier: None,
         prompt: "test prompt".to_string(),
         depends_on: vec![],
@@ -588,7 +587,7 @@ fn resolve_step_tool_model_spec_override_bypasses_step_tier() {
 
     let config: csa_config::ProjectConfig = toml::from_str(
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 enabled = true
 
 [tools.codex]
@@ -596,7 +595,7 @@ enabled = true
 
 [tiers.review]
 description = "review"
-models = ["gemini-cli/google/gemini-2.5-pro/high"]
+models = ["opencode/google/gemini-2.5-pro/high"]
 "#,
     )
     .unwrap();
@@ -636,12 +635,12 @@ models = ["gemini-cli/google/gemini-2.5-pro/high"]
 fn resolve_step_tool_interpolates_plan_tier_variable() {
     let config: csa_config::ProjectConfig = toml::from_str(
         r#"
-[tools.gemini-cli]
+[tools.opencode]
 enabled = true
 
 [tiers.tier-plan]
 description = "planning"
-models = ["gemini-cli/google/gemini-2.5-pro/high"]
+models = ["opencode/google/gemini-2.5-pro/high"]
 "#,
     )
     .unwrap();
@@ -681,10 +680,10 @@ models = ["gemini-cli/google/gemini-2.5-pro/high"]
             model_spec,
             tier_name,
         } => {
-            assert_eq!(tool_name, ToolName::GeminiCli);
+            assert_eq!(tool_name, ToolName::Opencode);
             assert_eq!(
                 model_spec.as_deref(),
-                Some("gemini-cli/google/gemini-2.5-pro/high")
+                Some("opencode/google/gemini-2.5-pro/high")
             );
             assert_eq!(tier_name.as_deref(), Some("tier-plan"));
         }

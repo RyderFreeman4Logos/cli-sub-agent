@@ -20,7 +20,7 @@ fn fixture(tool_aliases: HashMap<String, String>) -> ProjectConfig {
             name.to_string(),
             TierConfig {
                 description: "test".to_string(),
-                models: vec!["gemini-cli/google/default/xhigh".to_string()],
+                models: vec!["codex/openai/gpt-5.4/high".to_string()],
                 strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
@@ -82,10 +82,10 @@ fn compound_selector_parses_multi_hyphen_tool_suffix() {
 fn compound_selector_parses_builtin_alias_suffix() {
     let cfg = fixture(HashMap::new());
     let (tier, tool) =
-        apply_compound_tier_selector(Some("tier-4-critical-gemini".to_string()), None, Some(&cfg))
+        apply_compound_tier_selector(Some("tier-4-critical-claude".to_string()), None, Some(&cfg))
             .expect("compound parse should succeed");
     assert_eq!(tier.as_deref(), Some("tier-4-critical"));
-    assert_eq!(tool, Some(ToolName::GeminiCli));
+    assert_eq!(tool, Some(ToolName::ClaudeCode));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn compound_selector_errors_on_tool_conflict() {
     let cfg = fixture(HashMap::new());
     let err = apply_compound_tier_selector(
         Some("tier-4-critical-codex".to_string()),
-        Some(ToolName::GeminiCli),
+        Some(ToolName::Opencode),
         Some(&cfg),
     )
     .expect_err("conflicting --tool should error");
@@ -121,7 +121,7 @@ fn compound_selector_errors_on_tool_conflict() {
     let msg = format!("{err:#}");
     assert!(msg.contains("tier-4-critical-codex"), "msg: {msg}");
     assert!(msg.contains("codex"), "msg: {msg}");
-    assert!(msg.contains("gemini-cli"), "msg: {msg}");
+    assert!(msg.contains("opencode"), "msg: {msg}");
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn compound_selector_arg_errors_on_specific_conflict() {
     let cfg = fixture(HashMap::new());
     let err = apply_compound_tier_selector_arg(
         Some("tier-4-critical-codex".to_string()),
-        Some(ToolArg::Specific(ToolName::GeminiCli)),
+        Some(ToolArg::Specific(ToolName::Opencode)),
         Some(&cfg),
     )
     .expect_err("Specific(other) should error");

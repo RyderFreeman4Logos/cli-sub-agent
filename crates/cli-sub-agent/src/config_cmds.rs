@@ -194,7 +194,6 @@ max_recursion_depth = 5
 # liveness_dead_seconds = 600
 #
 # [resources.initial_estimates]
-# gemini-cli = 150
 # opencode = 500
 # codex = 800
 # claude-code = 1200
@@ -218,12 +217,6 @@ max_recursion_depth = 5
 # enabled = true
 # suppress_notify = true
 # setting_sources = ["project"]    # load only project-level settings
-#
-# [tools.gemini-cli]
-# enabled = true
-# suppress_notify = true
-# [tools.gemini-cli.restrictions]
-# allow_edit_existing_files = false
 #
 # [tools.opencode]
 # enabled = true

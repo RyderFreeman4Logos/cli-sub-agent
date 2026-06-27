@@ -21,7 +21,7 @@ fn test_validate_config_succeeds_on_valid() {
         "tier-1-quick".to_string(),
         TierConfig {
             description: "Quick tasks".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -320,7 +320,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         "tier-1-quick".to_string(),
         TierConfig {
             description: "Quick tasks".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -453,7 +453,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         "my-custom-tier".to_string(),
         TierConfig {
             description: "Custom tier name".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            models: vec!["codex/openai/gpt-5.5/xhigh".to_string()],
             strategy: TierStrategy::default(),
 
             token_budget: None,

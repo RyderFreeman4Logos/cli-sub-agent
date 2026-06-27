@@ -13,9 +13,8 @@ model family**:
 
 | Parent Tool | Auto-selected Tool | Reason |
 |-------------|--------------------|--------|
-| claude-code | codex or gemini-cli | Different model family |
-| codex | claude-code or gemini-cli | Different model family |
-| gemini-cli | claude-code or codex | Different model family |
+| claude-code | codex | Different model family |
+| codex | claude-code | Different model family |
 
 If no heterogeneous tool is available, CSA fails with an explicit error.
 It never silently degrades to the same model.

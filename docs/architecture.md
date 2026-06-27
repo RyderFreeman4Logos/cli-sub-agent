@@ -13,7 +13,7 @@ This creates a tree of independent Unix processes:
 ```
 csa run (depth=0, claude-code)
   +-- csa run (depth=1, codex)          # review sub-agent
-  |   +-- csa run (depth=2, gemini)     # deep analysis
+  |   +-- csa run (depth=2, opencode)   # deep analysis
   +-- csa run (depth=1, codex)          # debate sub-agent
       +-- csa run (depth=2, claude)     # adversary
 ```
@@ -43,12 +43,11 @@ nesting, and makes garbage collection straightforward.
 
 ### Closed Enum for Tools
 
-CSA uses a closed enum (`Executor`) for the four supported tools rather than
+CSA uses a closed enum (`Executor`) for the supported tools rather than
 trait-based polymorphism:
 
 ```rust
 pub enum Executor {
-    GeminiCli { model_override, thinking_budget },
     Opencode  { model_override, agent, thinking_budget },
     Codex     { model_override, thinking_budget },
     ClaudeCode { model_override, thinking_budget },
@@ -68,9 +67,8 @@ than silently degrading.
 
 | Parent Tool | Auto-selected Review Tool |
 |-------------|--------------------------|
-| claude-code | codex or gemini-cli |
-| codex | claude-code or gemini-cli |
-| gemini-cli | claude-code or codex |
+| claude-code | codex |
+| codex | claude-code |
 
 ## Crate Structure
 
@@ -160,7 +158,6 @@ User -> csa run "prompt"
 |------|-----------|----------------|
 | claude-code | ACP by default, CLI opt-in | `claude-code-acp` / `claude` |
 | codex | ACP by default; config currently accepts `auto` / `acp` | `codex-acp` |
-| gemini-cli | CLI only | `gemini` |
 | opencode | CLI only | `opencode` |
 
 The `Transport` trait abstracts both modes. `TransportFactory` routes based
@@ -172,8 +169,8 @@ plus `[tools.codex].transport`; the current build default is ACP, so the
 default path probes `codex-acp`. Config validation currently accepts codex
 `auto` and `acp` without checking whether the adapter binary is installed, and
 `csa doctor` surfaces missing adapters plus install hints. Project config
-still rejects codex `cli` overrides today. `gemini-cli` and `opencode` stay
-on their direct CLI binaries. ACP fallback to Legacy is allowed only during
+still rejects codex `cli` overrides today. `opencode` stays on its direct CLI
+binary. ACP fallback to Legacy is allowed only during
 connection initialization;
 during prompt execution, automatic fallback is forbidden.
 
@@ -218,7 +215,6 @@ All tools run with automatic approvals for non-interactive sub-agent execution:
 
 | Tool | Yolo Flag |
 |------|-----------|
-| gemini-cli | `-y` |
 | codex | `--dangerously-bypass-approvals-and-sandbox` |
 | claude-code | `--dangerously-skip-permissions` |
 | opencode | (non-interactive by design) |

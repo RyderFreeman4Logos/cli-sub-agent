@@ -137,7 +137,6 @@ through the standard config merge.
 min_free_memory_mb = 4096
 
 [resources.initial_estimates]
-gemini-cli = 1024       # MB, used until P95 data available
 codex = 4096
 opencode = 1536
 claude-code = 4096
@@ -148,9 +147,6 @@ See [Resource Control](resource-control.md) for P95 estimation details.
 ### `[tools.{name}]` -- Tool Configuration
 
 ```toml
-[tools.gemini-cli]
-enabled = true
-
 [tools.codex]
 enabled = true
 transport = "acp"                 # See codex-specific note below
@@ -159,14 +155,15 @@ transport = "acp"                 # See codex-specific note below
 enabled = true
 transport = "auto"                # Accepted: "auto", "acp", or "cli"
 
-[tools.gemini-cli.restrictions]
-allow_edit_existing_files = false    # Inject read-only restriction into prompt
+[tools.opencode]
+enabled = true
+transport = "cli"
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | Boolean | `true` | Whether this tool is available |
-| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`; `codex` currently accepts `auto` and `acp`; `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` and `cli` |
+| `transport` | String | tool-specific | Per-tool transport override. `claude-code` accepts `auto`, `acp`, `cli`, and `tmux`; `codex` currently accepts `auto` and `acp`; `opencode` accepts `auto` and `cli` |
 | `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
 Unconfigured tools default to enabled with no restrictions. Setting
@@ -183,8 +180,8 @@ Unconfigured tools default to enabled with no restrictions. Setting
   `acp` override probe `codex-acp`. Config validation checks only whether the
   value is legal for codex; missing binaries are surfaced separately by
   `csa doctor`. `cli` remains rejected in project config today.
-- `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` and `cli`,
-  stay on their direct CLI runtimes, and reject `acp`.
+- `opencode` accepts `auto` and `cli`, stays on its direct CLI runtime, and
+  rejects `acp`.
 
 When you change a tool transport, `csa doctor` reports the active transport
 and probed binary for that tool.
@@ -256,7 +253,7 @@ transport = "acp"
 
 ```toml
 [review]
-tool = "auto"    # or "codex", "claude-code", "gemini-cli", "antigravity-cli", "opencode"
+tool = "auto"    # or "codex", "claude-code", "opencode"
 ```
 
 Overrides the global review tool for this project. In `auto` mode, CSA
@@ -272,7 +269,7 @@ Tiers group models by quality/cost/speed for automatic selection:
 [tiers.tier-1-quick]
 description = "Quick tasks (low thinking budget)"
 models = [
-    "gemini-cli/google/gemini-3-flash-preview/low",
+    "codex/openai/gpt-5.4-mini/low",
     "opencode/google/gemini-2.5-pro/minimal",
 ]
 
@@ -280,7 +277,7 @@ models = [
 description = "Standard development work"
 models = [
     "codex/anthropic/claude-sonnet/medium",
-    "gemini-cli/google/gemini-3-pro-preview/medium",
+    "claude-code/anthropic/claude-sonnet-4-5-20250929/medium",
 ]
 
 [tiers.tier-3-complex]
@@ -319,7 +316,7 @@ then the rest of the tier remains available as fallback in tier order. Use
    `[tier_policy].allow_force_bypass` escape hatch.
 
 `[preferences].tool_priority` therefore reorders a tier's candidates (e.g.
-moving `gemini-cli` to the front) but does **not** override the tier's declared
+moving `codex` to the front) but does **not** override the tier's declared
 candidate set; this reordering behavior is intentional and unchanged (#1848). To
 make a specific model run first regardless of `tool_priority`, place it first in
 the tier's `models` list and select that tier explicitly.
@@ -362,7 +359,7 @@ Shorthand names for frequently used model specs:
 
 ```toml
 [aliases]
-fast = "gemini-cli/google/gemini-3-flash-preview/low"
+fast = "codex/openai/gpt-5.4-mini/low"
 smart = "codex/anthropic/claude-opus/xhigh"
 balanced = "codex/anthropic/claude-sonnet/medium"
 ```
@@ -388,12 +385,12 @@ CSA validates on load:
 
 1. **Model spec format:** Each model must be `tool/provider/model/budget`
 2. **Tier references:** All `tier_mapping` values must reference existing tiers
-3. **Tool names:** Must be one of `gemini-cli`, `antigravity-cli`, `codex`, `opencode`, `claude-code`
+3. **Tool names:** Must be one of `codex`, `opencode`, `claude-code`
 4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
 5. **Tool transport overrides:** validated per tool. In particular,
    `[tools.claude-code].transport` accepts `auto`, `acp`, or `cli`;
    `[tools.codex].transport` currently accepts `auto` or `acp` and defaults
-   to ACP; `gemini-cli`, `antigravity-cli`, and `opencode` accept `auto` or `cli`. Missing
+   to ACP; `opencode` accepts `auto` or `cli`. Missing
    runtime binaries are reported by `csa doctor`, not by config-value
    validation.
 
@@ -420,19 +417,14 @@ CSA prints a warning: `Run 'csa migrate' to update`.
 name = "research-analysis"
 max_recursion_depth = 3
 
-[tools.gemini-cli]
-enabled = true
-[tools.gemini-cli.restrictions]
-allow_edit_existing_files = false
-
 [tools.codex]
-enabled = false
+enabled = true
 [tools.claude-code]
 enabled = false
 
 [tiers.analysis]
 description = "Read-only analysis"
-models = ["gemini-cli/google/gemini-3-pro-preview/medium"]
+models = ["codex/openai/gpt-5.4/medium"]
 
 [tier_mapping]
 default = "analysis"
@@ -445,14 +437,14 @@ default = "analysis"
 name = "budget-project"
 
 [tools.codex]
-enabled = false        # Anthropic models disabled
+enabled = true
 [tools.claude-code]
 enabled = false
 
 [tiers.primary]
-description = "Google models only"
+description = "Lower-cost models"
 models = [
-    "gemini-cli/google/gemini-3-flash-preview/low",
+    "codex/openai/gpt-5.4-mini/low",
     "opencode/google/gemini-2.5-pro/medium",
 ]
 

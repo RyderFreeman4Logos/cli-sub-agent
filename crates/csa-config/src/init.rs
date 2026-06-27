@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::config::{
     CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
-    ToolConfig, ToolRestrictions,
+    ToolConfig,
 };
 
 /// Load tool names explicitly disabled (`enabled = false`) in the global config.
@@ -47,8 +47,8 @@ pub fn detect_installed_tools() -> Vec<&'static str> {
 /// This avoids relying on the process-global `PATH` environment variable,
 /// making it safe to call from parallel tests.
 fn detect_installed_tools_in_paths(paths: &OsStr) -> Vec<&'static str> {
-    let tools = ["gemini", "opencode", "codex", "claude"];
-    let names = ["gemini-cli", "opencode", "codex", "claude-code"];
+    let tools = ["opencode", "codex", "claude"];
+    let names = ["opencode", "codex", "claude-code"];
     tools
         .iter()
         .zip(names.iter())
@@ -60,14 +60,14 @@ fn detect_installed_tools_in_paths(paths: &OsStr) -> Vec<&'static str> {
 /// Build smart tier configuration based on installed tools.
 ///
 /// Assigns tools to tiers based on their characteristics:
-/// - tier-1-quick: Fast, cheap (gemini-cli flash > codex mini > opencode sonnet > claude-code sonnet)
-/// - tier-2-standard: Balanced (codex frontier > claude-code sonnet > opencode sonnet > gemini-cli pro)
-/// - tier-3-complex: Deep reasoning (claude-code opus > codex frontier > opencode opus > gemini-cli pro)
+/// - tier-1-quick: Fast, cheap (codex mini > opencode sonnet > claude-code sonnet)
+/// - tier-2-standard: Balanced (codex frontier > claude-code sonnet > opencode sonnet)
+/// - tier-3-complex: Deep reasoning (claude-code opus > codex frontier > opencode opus)
 ///
 /// Tools in `globally_disabled` are treated as unavailable even if their binary
 /// is installed, respecting the user's global `enabled = false` settings.
 ///
-/// If no tools are available, falls back to gemini-cli with all tiers disabled.
+/// If no tools are available, falls back to codex specs with all tools disabled.
 fn build_smart_tiers(
     installed: &[&str],
     globally_disabled: &[String],
@@ -79,17 +79,15 @@ fn build_smart_tiers(
         |name: &str| installed.contains(&name) && !globally_disabled.contains(&name.to_string());
 
     // tier-1-quick: Fast, cheap
-    let tier1_model = if has_tool("gemini-cli") {
-        "gemini-cli/google/gemini-3-flash-preview/xhigh"
-    } else if has_tool("codex") {
+    let tier1_model = if has_tool("codex") {
         "codex/openai/gpt-5.4-mini/xhigh"
     } else if has_tool("opencode") {
         "opencode/anthropic/claude-sonnet-4-5-20250929/default"
     } else if has_tool("claude-code") {
         "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
     } else {
-        // Fallback: gemini-cli (will be disabled)
-        "gemini-cli/google/gemini-3-flash-preview/xhigh"
+        // Fallback: codex (will be disabled)
+        "codex/openai/gpt-5.4-mini/xhigh"
     };
 
     tiers.insert(
@@ -111,11 +109,9 @@ fn build_smart_tiers(
         "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
     } else if has_tool("opencode") {
         "opencode/anthropic/claude-sonnet-4-5-20250929/default"
-    } else if has_tool("gemini-cli") {
-        "gemini-cli/google/gemini-3-pro-preview/xhigh"
     } else {
-        // Fallback: gemini-cli (will be disabled)
-        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+        // Fallback: codex (will be disabled)
+        "codex/openai/gpt-5.5/high"
     };
 
     tiers.insert(
@@ -137,11 +133,9 @@ fn build_smart_tiers(
         "codex/openai/gpt-5.5/xhigh"
     } else if has_tool("opencode") {
         "opencode/anthropic/claude-opus-4-6/default"
-    } else if has_tool("gemini-cli") {
-        "gemini-cli/google/gemini-3-pro-preview/xhigh"
     } else {
-        // Fallback: gemini-cli (will be disabled)
-        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+        // Fallback: codex (will be disabled)
+        "codex/openai/gpt-5.5/xhigh"
     };
 
     tiers.insert(
@@ -165,7 +159,7 @@ fn build_smart_tiers(
 /// Returns the generated config.
 pub fn init_project(
     project_root: &Path,
-    non_interactive: bool,
+    _non_interactive: bool,
     minimal: bool,
 ) -> Result<ProjectConfig> {
     let config_path = ProjectConfig::config_path(project_root);
@@ -186,25 +180,7 @@ pub fn init_project(
 
     let mut tools = HashMap::new();
 
-    // gemini-cli has special restrictions
-    if installed.contains(&"gemini-cli") || !non_interactive {
-        let is_usable =
-            installed.contains(&"gemini-cli") && !globally_disabled.contains(&"gemini-cli".into());
-        tools.insert(
-            "gemini-cli".to_string(),
-            ToolConfig {
-                enabled: is_usable,
-                restrictions: Some(ToolRestrictions {
-                    allow_edit_existing_files: false,
-                    allow_write_new_files: true,
-                }),
-                suppress_notify: true,
-                ..Default::default()
-            },
-        );
-    }
-
-    // Other tools with default config
+    // Supported tools with default config
     for tool_name in &["opencode", "codex", "claude-code"] {
         let is_usable =
             installed.contains(tool_name) && !globally_disabled.contains(&tool_name.to_string());

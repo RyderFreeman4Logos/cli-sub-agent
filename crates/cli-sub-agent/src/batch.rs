@@ -28,7 +28,7 @@ struct BatchTask {
     /// Task name (unique identifier)
     name: String,
 
-    /// Tool to use (gemini-cli, opencode, codex, claude-code)
+    /// Tool to use (opencode, codex, claude-code)
     tool: String,
 
     /// Task prompt
@@ -707,7 +707,9 @@ async fn execute_task(
 /// Parse tool name string to ToolName enum.
 fn parse_tool_name(tool: &str) -> Result<ToolName> {
     match tool {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "gemini-cli" | "gemini" => {
+            anyhow::bail!("{}", csa_core::types::removed_tool_error("gemini-cli"))
+        }
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),

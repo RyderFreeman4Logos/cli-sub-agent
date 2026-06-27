@@ -275,7 +275,7 @@ fn collect_enabled_tools(
     model_hint: Option<&str>,
 ) -> Vec<ToolName> {
     if let Some(cfg) = config {
-        let tools: Vec<_> = csa_config::global::all_known_tools()
+        let tools: Vec<_> = csa_config::global::routing_candidate_tools()
             .iter()
             .filter(|t| {
                 let extra_env = global_config

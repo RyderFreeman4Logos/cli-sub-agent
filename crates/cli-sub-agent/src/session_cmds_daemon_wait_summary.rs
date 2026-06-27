@@ -194,7 +194,7 @@ pub(crate) fn render_wait_result_summary(
 }
 
 /// Render the per-tool failover chain as a single line for the wait summary,
-/// e.g. `gemini-cli: rate-limit-429; antigravity-cli: disabled; codex: disabled
+/// e.g. `opencode: rate-limit-429; antigravity-cli: disabled; codex: disabled
 /// → claude-code` (#1714). Returns `None` when no failover was recorded.
 fn format_failover_chain_label(
     session_dir: &Path,

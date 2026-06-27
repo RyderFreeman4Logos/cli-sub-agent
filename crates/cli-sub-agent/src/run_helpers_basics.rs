@@ -12,7 +12,7 @@ pub(crate) fn is_compress_command(prompt: &str) -> bool {
 /// Parse a tool name string to ToolName enum.
 pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
     match name {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "gemini-cli" | "gemini" => anyhow::bail!("{}", csa_core::types::removed_tool_error(name)),
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
