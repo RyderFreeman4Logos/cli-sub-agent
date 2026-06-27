@@ -497,6 +497,9 @@ include!("pipeline_tests_env.rs");
 #[path = "pipeline_tests_cargo_home.rs"]
 mod cargo_home_tests;
 
+#[path = "pipeline_tests_cargo_cache.rs"]
+mod cargo_cache_tests;
+
 // --- enforce_tier regression tests ---
 
 fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectConfig {

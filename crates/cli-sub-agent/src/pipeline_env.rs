@@ -159,11 +159,20 @@ pub(crate) fn rust_session_writable_paths(env: &HashMap<String, String>) -> Vec<
             continue;
         };
         let path = PathBuf::from(value.as_str());
-        if path.is_absolute() && !paths.contains(&path) {
-            paths.push(path);
+        push_unique_absolute_path(&mut paths, path.clone());
+        if key == csa_core::env::CARGO_HOME_ENV_KEY {
+            for child in ["git", "registry"] {
+                push_unique_absolute_path(&mut paths, path.join(child));
+            }
         }
     }
     paths
+}
+
+fn push_unique_absolute_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.is_absolute() && !paths.contains(&path) {
+        paths.push(path);
+    }
 }
 
 fn materialize_ambient_rust_env_inputs(env: &mut HashMap<String, String>) {
