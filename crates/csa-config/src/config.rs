@@ -10,6 +10,9 @@ use crate::config_merge::{
     enforce_global_tool_disables, merge_toml_values, reject_project_tier_policy,
     strip_review_project_only_from_global, warn_deprecated_keys,
 };
+use crate::config_raw::{
+    prune_project_removed_refs, pruned_project_config_str, reject_removed_refs,
+};
 pub use crate::config_resources::ResourcesConfig;
 use crate::global::{
     GithubConfig, PreferencesConfig, PreflightConfig, ReviewConfig, SessionWaitConfig,
@@ -294,15 +297,8 @@ impl ProjectConfig {
     fn load_project_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
-        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
-            warn_deprecated_keys(&raw, &path.display().to_string());
-            reject_removed_refs(&raw, path, "")?;
-            reject_project_tier_policy(&raw, &path.display().to_string())
-                .with_context(|| format!("Invalid config: {}", path.display()))?;
-            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
-                .with_context(|| format!("Invalid config: {}", path.display()))?;
-        }
-        let mut config: Self = toml::from_str(&content)
+        let config_str = pruned_project_config_str(content, path)?;
+        let mut config: Self = toml::from_str(&config_str)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
         config.sanitize_filesystem_sandbox();
         crate::validate::validate_tool_transport_overrides(&config)?;
@@ -323,14 +319,14 @@ impl ProjectConfig {
 
         let base_val: toml::Value = toml::from_str(&base_str)
             .with_context(|| format!("Failed to parse user config: {}", base_path.display()))?;
-        let overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
+        let mut overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
             format!("Failed to parse project config: {}", overlay_path.display())
         })?;
 
         warn_deprecated_keys(&base_val, &base_path.display().to_string());
         warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
         reject_removed_refs(&base_val, base_path, "user ")?;
-        reject_removed_refs(&overlay_val, overlay_path, "project ")?;
+        prune_project_removed_refs(&mut overlay_val, overlay_path);
         reject_project_tier_policy(&overlay_val, &overlay_path.display().to_string())
             .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
@@ -741,11 +737,6 @@ pub(crate) fn read_optional_toml(path: &Path, source: &str) -> Option<toml::Valu
             None
         }
     }
-}
-
-fn reject_removed_refs(raw: &toml::Value, path: &Path, label: &str) -> Result<()> {
-    crate::validate::reject_removed_gemini_cli_in_raw_config(raw, &path.display().to_string())
-        .with_context(|| format!("Invalid {label}config"))
 }
 
 fn parse_session_wait_memory_warn_mb(raw: &toml::Value) -> Option<u64> {
