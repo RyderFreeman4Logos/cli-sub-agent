@@ -536,8 +536,8 @@ async fn run() -> Result<()> {
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
-            if !args.no_daemon && !args.daemon_child && args.session_id.is_none() {
-                review_cmd::validate_session_fix_before_daemon(&args)?;
+            if !args.daemon_child && args.session_id.is_none() {
+                review_cmd::preflight::validate_before_session(&args, &startup_env)?;
             }
             let review_daemon_options = if args.fix_finding {
                 run_cmd_daemon::DaemonSpawnOptions::for_review_fix_finding(

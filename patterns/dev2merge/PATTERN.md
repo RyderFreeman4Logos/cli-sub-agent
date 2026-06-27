@@ -39,7 +39,7 @@ emits `[CSA:<tier-or-tool>]` plus Step 8 `csa run` override flags.
 
 ```bash
 # tail-only run for already-implemented work
-csa plan run patterns/dev2merge/workflow.toml --var DEV2MERGE_MODE=resume
+csa plan run --sa-mode true patterns/dev2merge/workflow.toml --var DEV2MERGE_MODE=resume
 ```
 
 `resume` keeps ALL hard gates — version bump, self-review, cumulative review,
