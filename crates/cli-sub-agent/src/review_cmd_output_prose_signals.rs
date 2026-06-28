@@ -7,7 +7,7 @@ use csa_session::{ReviewFinding, Severity};
 use super::artifacts::has_blocking_severity;
 use super::clean_detection::{
     contains_clean_phrase, current_round_review_sections, detect_prose_clean_conclusion,
-    detect_prose_fail_conclusion,
+    detect_prose_fail_conclusion, detect_prose_uncertain_conclusion,
 };
 use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
@@ -21,6 +21,7 @@ pub(super) struct ReviewProseSignals {
     pub(super) severity_counts: BTreeMap<Severity, u32>,
     pub(super) blocking_summary: bool,
     pub(super) fail_conclusion: bool,
+    pub(super) uncertain_conclusion: bool,
     pub(super) parsed_findings_sections: bool,
     pub(super) unparseable_findings_sections: bool,
     pub(super) cross_dimension_blockers: bool,
@@ -32,6 +33,7 @@ impl ReviewProseSignals {
     pub(super) fn has_failure_evidence(&self) -> bool {
         has_blocking_severity(&self.severity_counts)
             || self.blocking_summary
+            || self.uncertain_conclusion
             || self.parsed_findings_sections
             || self.unparseable_findings_sections
             || self.cross_dimension_blockers
@@ -57,6 +59,7 @@ fn review_prose_signals_from_contents(
         severity_counts: zero_severity_counts(),
         blocking_summary: prose.blocking_summary,
         fail_conclusion: false,
+        uncertain_conclusion: false,
         parsed_findings_sections: false,
         unparseable_findings_sections: false,
         cross_dimension_blockers: false,
@@ -194,6 +197,7 @@ fn record_review_prose_signal(
     signals.cross_dimension_blockers |= cross_dimension_enumeration_has_blocker(content);
     signals.checklist_violation_findings |= checklist_violation_references_finding(content);
     signals.fail_conclusion |= detect_prose_fail_conclusion(content);
+    signals.uncertain_conclusion |= detect_prose_uncertain_conclusion(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
     let counts = severity_counts_from_review_findings(&findings);

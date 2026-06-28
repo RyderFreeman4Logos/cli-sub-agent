@@ -121,6 +121,8 @@ fn review_host_memory_admission_is_rejected_before_session_creation() {
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
     let _config_home =
         ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
     let mut config = project_config_with_quality_tier();
     config.resources.min_free_memory_mb = u64::MAX / 2;
     write_project_config(project_dir.path(), &config);

@@ -75,10 +75,10 @@ fn issue_1480_persist_verdict_skip_meta_zero_findings_json_emits_pass() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// Regression guard: Skip meta with non-zero (low) severity counts must still
-/// propagate as Skip — only the zero-evidence case converts to Pass.
+/// Regression guard: Skip meta with non-zero severity counts must fail closed —
+/// only the zero-evidence case converts to Pass.
 #[test]
-fn issue_1480_skip_meta_with_nonzero_low_counts_stays_skip() {
+fn issue_1480_skip_meta_with_nonzero_low_counts_fails_closed() {
     let mut counts = BTreeMap::new();
     counts.insert(Severity::Critical, 0u32);
     counts.insert(Severity::High, 0u32);
@@ -98,7 +98,7 @@ fn issue_1480_skip_meta_with_nonzero_low_counts_stays_skip() {
 
     assert_eq!(
         decision,
-        ReviewDecision::Skip,
-        "Skip meta with non-zero counts must propagate as Skip (only zero evidence converts to Pass)"
+        ReviewDecision::Fail,
+        "Skip meta with non-zero counts must fail closed; only zero evidence converts to Pass"
     );
 }

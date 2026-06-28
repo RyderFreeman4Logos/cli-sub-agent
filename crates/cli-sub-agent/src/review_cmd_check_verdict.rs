@@ -10,6 +10,12 @@ use tracing::debug;
 
 const REQUIRED_FULL_DIFF_SCOPE: &str = "range:main...HEAD";
 
+#[path = "review_cmd_check_verdict_format.rs"]
+mod verdict_format;
+use verdict_format::{
+    format_nonblocking_counts_suffix, has_review_severity_counts, zero_severity_counts,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReviewVerdictMatch {
     pub session_id: String,
@@ -620,6 +626,9 @@ fn review_session_acceptance_status(
             .with_context(|| format!("failed to parse {}", verdict_path.display()))?;
         accepted = acceptance_meta.accepts_clean_review_verdict(acceptance_artifact.decision);
     }
+    if accepted && has_review_severity_counts(&acceptance_artifact.severity_counts) {
+        accepted = false;
+    }
     debug!(
         session_id = %acceptance_meta.session_id,
         meta_decision = %acceptance_meta.decision,
@@ -661,38 +670,6 @@ fn format_review_verdict_pass_message(found: &ReviewVerdictMatch, branch: &str) 
     )
 }
 
-fn format_nonblocking_counts_suffix(counts: &BTreeMap<Severity, u32>) -> String {
-    let parts = [
-        (Severity::Critical, "critical"),
-        (Severity::High, "high"),
-        (Severity::Medium, "medium"),
-        (Severity::Low, "low"),
-    ]
-    .into_iter()
-    .filter_map(|(severity, label)| {
-        let count = *counts.get(&severity).unwrap_or(&0);
-        (count > 0).then(|| format!("{count} {label}"))
-    })
-    .collect::<Vec<_>>();
-
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!(" (non-blocking findings: {})", parts.join(", "))
-    }
-}
-
-fn zero_severity_counts() -> BTreeMap<Severity, u32> {
-    [
-        (Severity::Critical, 0),
-        (Severity::High, 0),
-        (Severity::Medium, 0),
-        (Severity::Low, 0),
-    ]
-    .into_iter()
-    .collect()
-}
-
 #[cfg(test)]
 #[path = "review_cmd_check_verdict_daemon_completion_tests.rs"]
 mod daemon_completion_tests;
@@ -714,5 +691,9 @@ mod issue_2236_blocking_legacy_tests;
 mod compound_legacy_tests;
 
 #[cfg(test)]
+#[path = "review_cmd_check_verdict_2425.rs"]
+mod review_cmd_check_verdict_2425;
+
+#[cfg(test)]
 #[path = "review_cmd_check_verdict_tests.rs"]
-mod tests;
+mod review_cmd_check_verdict_tests;

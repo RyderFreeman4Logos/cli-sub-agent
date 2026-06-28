@@ -409,6 +409,7 @@ fn persist_review_verdict_uncertain_meta_with_pass_prose_fails_closed_post_crash
     let mut meta = make_review_meta(session_id);
     meta.decision = ReviewDecision::Uncertain.as_str().to_string();
     meta.verdict = "UNCERTAIN".to_string();
+    meta.failure_reason = Some("reviewer process crashed before artifact finalization".to_string());
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict_path = session_dir.join("output").join("review-verdict.json");
@@ -545,3 +546,6 @@ fn persist_review_verdict_prose_clean_summary_respects_high_overall_risk_fail_cl
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[path = "review_cmd_output_prose_clean_2425_tests.rs"]
+mod issue_2425;

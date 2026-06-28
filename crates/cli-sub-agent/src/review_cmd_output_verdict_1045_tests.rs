@@ -151,9 +151,9 @@ fn issue_1045_medium_finding_emits_fail() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// Case 5: LOW finding only → decision=pass (LOWs don't block merge).
+/// Case 5: LOW finding only → decision=fail; any review finding prevents a clean gate.
 #[test]
-fn issue_1045_low_finding_only_emits_pass() {
+fn issue_1045_low_finding_only_emits_fail() {
     let session_id = "01TEST1045LOWFINDING0000000";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1045-low-finding", session_id);
@@ -183,10 +183,10 @@ fn issue_1045_low_finding_only_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "LOW findings don't block"
+        ReviewDecision::Fail,
+        "LOW findings still mean the review found an issue and must not be clean"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(artifact.severity_counts.get(&Severity::Low), Some(&1));
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
@@ -536,11 +536,7 @@ fn issue_1217_synthetic_empty_toml_empty_full_md_preserves_meta_pass() {
 
 // ─── #1048 MEDIUM regression tests ──────────────────────────────────────
 
-/// #1048 M1: empty findings.toml + review-findings.json with ONLY low
-/// findings → verdict must report severity_counts.low = 1 and decision = pass.
-///
-/// Bug: cross_check_json_for_blocking() returned None for low-only JSON,
-/// so the caller rebuilt from zero TOML counts, dropping the low count.
+/// #1048 M1: low-only JSON counts are preserved but fail closed.
 #[test]
 fn issue_1048_m1_low_only_json_preserves_severity_counts_low() {
     let session_id = "01TEST1048M1LOWONLYJSON0000";
@@ -577,14 +573,14 @@ fn issue_1048_m1_low_only_json_preserves_severity_counts_low() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1048 M1: low-only JSON must not block"
+        ReviewDecision::Fail,
+        "#1048 M1: low-only JSON fails closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(
         artifact.severity_counts.get(&Severity::Low),
         Some(&1),
-        "#1048 M1: low count from JSON must be preserved in verdict"
+        "#1048 M1: preserve low count"
     );
     assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&0));
     assert_eq!(artifact.severity_counts.get(&Severity::Medium), Some(&0));
@@ -593,12 +589,9 @@ fn issue_1048_m1_low_only_json_preserves_severity_counts_low() {
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
 
-/// #1048 M2: full.md transcript with only [info]/[p4] advisory findings
-/// → decision = pass, not fail.
-///
-/// Bug: derive_decision_from_text() treated any non-zero count as blocking.
+/// #1048 M2: info/P4 transcript findings are preserved but fail closed.
 #[test]
-fn issue_1048_m2_info_only_full_md_transcript_emits_pass() {
+fn issue_1048_m2_info_only_full_md_transcript_emits_fail() {
     let session_id = "01TEST1048M2INFOONLYFULLMD0";
     let (_env_lock, project_root, session_dir) =
         lock_test_session("issue-1048-m2-info-only-full-md", session_id);
@@ -625,14 +618,14 @@ fn issue_1048_m2_info_only_full_md_transcript_emits_pass() {
             .expect("parse verdict");
     assert_eq!(
         artifact.decision,
-        ReviewDecision::Pass,
-        "#1048 M2: [info]/[p4]-only transcript must not block"
+        ReviewDecision::Fail,
+        "#1048 M2: parsed finding fails closed"
     );
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
+    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
     assert_eq!(
         artifact.severity_counts.get(&Severity::Low),
         Some(&2),
-        "#1048 M2: two advisory findings should map to low count"
+        "#1048 M2: preserve low count"
     );
 
     fs::remove_dir_all(project_root).expect("remove temp project root");

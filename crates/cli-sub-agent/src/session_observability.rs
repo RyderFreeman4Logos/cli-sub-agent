@@ -92,6 +92,9 @@ pub(crate) fn refresh_and_repair_result_from_dir(
     if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, &mut result)? {
         changed = true;
     }
+    if review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, &mut result)? {
+        changed = true;
+    }
 
     if changed && let Ok(serialized) = toml::to_string_pretty(&result) {
         let tmp = result_path.with_extension("toml.tmp");
@@ -143,6 +146,9 @@ pub(crate) fn enrich_result_from_session_dir(
 
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, result)? {
+        changed = true;
+    }
+    if review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, result)? {
         changed = true;
     }
 

@@ -19,6 +19,8 @@ mod diagnostics;
 mod exit_code;
 #[path = "review_cmd_output_fail_closed.rs"]
 mod fail_closed;
+#[path = "review_cmd_output_meta.rs"]
+mod meta;
 #[path = "review_cmd_output_no_provider.rs"]
 mod no_provider;
 #[path = "review_cmd_output_prose_signals.rs"]
@@ -53,6 +55,8 @@ pub(super) use diagnostics::{ReviewerOutcome, print_reviewer_outcomes};
 pub(super) use exit_code::{persist_review_result_exit_code, persisted_review_verdict_exit_code};
 pub(super) use fail_closed::fail_closed_review_meta;
 use fail_closed::fail_closed_review_verdict_artifact;
+use meta::apply_review_meta_to_artifact;
+pub(super) use meta::review_meta_for_verdict_artifact;
 use no_provider::attach_no_provider_launch_diagnostic;
 use prose_signals::{reconcile_counts_with_prose, review_prose_signals};
 use refresh::refresh_structured_output_before_verdict;
@@ -121,10 +125,7 @@ pub(super) fn persist_review_verdict_artifact(
                     }
                 }
             };
-            artifact.routed_to = meta.routed_to.clone();
-            artifact.primary_failure = meta.primary_failure.clone();
-            artifact.failure_reason = meta.failure_reason.clone().or(artifact.failure_reason);
-            artifact.review_mode = meta.review_mode.clone();
+            apply_review_meta_to_artifact(&mut artifact, meta);
             attach_no_provider_launch_diagnostic(&session_dir, meta, &mut artifact);
             if let Err(error) = enforce_final_verdict_consistency(&session_dir, &mut artifact) {
                 warn!(
@@ -156,18 +157,6 @@ pub(super) fn persist_review_verdict_artifact(
             None
         }
     }
-}
-
-pub(super) fn review_meta_for_verdict_artifact(
-    meta: &ReviewSessionMeta,
-    artifact: &ReviewVerdictArtifact,
-) -> ReviewSessionMeta {
-    let mut final_meta = meta.clone();
-    final_meta.decision = artifact.decision.as_str().to_string();
-    final_meta.verdict = artifact.verdict_legacy.clone();
-    final_meta.exit_code =
-        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision);
-    final_meta
 }
 
 #[cfg(test)]
@@ -446,8 +435,8 @@ fn full_output_is_effectively_empty(session_dir: &Path) -> Result<bool, anyhow::
 
 /// Derive the review decision from structured severity counts, not summary-text
 /// keywords or stale `meta.decision` values (#1045).
-/// Blocking severities fail; low-only findings pass; zero findings and zero
-/// severity counts defer to the explicit tie-break rules below.
+/// Any nonzero severity count fails; zero findings and zero severity counts
+/// defer to the explicit tie-break rules below.
 fn derive_decision_from_severity_counts(
     severity_counts: &std::collections::BTreeMap<Severity, u32>,
     findings_empty: bool,
@@ -457,21 +446,8 @@ fn derive_decision_from_severity_counts(
     prose_clean_check: impl FnOnce() -> Result<bool, anyhow::Error>,
     prose_fail_check: impl FnOnce() -> Result<bool, anyhow::Error>,
 ) -> Result<ReviewDecision, anyhow::Error> {
-    // Blocking findings (critical/high/medium) always fail.
-    if has_blocking_severity(severity_counts) {
-        return Ok(ReviewDecision::Fail);
-    }
-
-    if meta_decision == Some(ReviewDecision::Skip) && !severity_counts_are_zero(severity_counts) {
-        return Ok(ReviewDecision::Skip);
-    }
-
-    // Non-blocking findings (low only) → pass. Explicit low-only severity
-    // counts beat summary wording; the summary heuristic only elevates
-    // otherwise ambiguous zero-count output.
     if !severity_counts_are_zero(severity_counts) {
-        // Only low-severity findings present — non-blocking.
-        return Ok(ReviewDecision::Pass);
+        return Ok(ReviewDecision::Fail);
     }
     if prose_blocking_check()? {
         return Ok(ReviewDecision::Fail);
