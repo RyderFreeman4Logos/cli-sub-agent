@@ -250,6 +250,13 @@ pub struct MemorySoftLimitRecoveryDiagnostic {
     /// Number of additional dirty paths omitted from `changed_paths`.
     #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub changed_paths_truncated: usize,
+    /// Bounded `git status --short` entries captured after the kill. These
+    /// preserve staged-vs-unstaged status codes such as `MM path`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_status_short: Vec<String>,
+    /// Number of additional status entries omitted from `git_status_short`.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub git_status_short_truncated: usize,
     /// Current HEAD commit, when a clean committed outcome can be evidenced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_oid: Option<String>,
@@ -258,6 +265,9 @@ pub struct MemorySoftLimitRecoveryDiagnostic {
     pub head_summary: Option<String>,
     /// Stable recovery action code for callers.
     pub suggested_recovery_action: String,
+    /// Optional retry profile for callers that can safely plan a follow-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_profile: Option<String>,
 }
 
 pub const NO_PROVIDER_LAUNCH_ARTIFACT_PATH: &str = "output/no-verdict.json";
