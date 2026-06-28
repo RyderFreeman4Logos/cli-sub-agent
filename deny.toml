@@ -3,9 +3,11 @@
 
 [advisories]
 version = 2
-# Keep the advisory database in the repo's git dir so sandboxed runs can
-# take the lock without writing to system-managed cargo directories.
-db-path = ".git/cargo-deny-advisory-dbs"
+# Keep the advisory database under the workspace target directory so linked
+# worktrees (where .git is a file) and sandboxed runs both use the repo's
+# external-SSD-backed target symlink instead of writing build/cache state into
+# .git or the checkout root.
+db-path = "target/cargo-deny-advisory-dbs"
 ignore = [
     # Transitive from agent-teams -> cc-sdk -> reqwest.
     # rustls-pemfile is archived; no non-breaking safe upgrade is available yet.

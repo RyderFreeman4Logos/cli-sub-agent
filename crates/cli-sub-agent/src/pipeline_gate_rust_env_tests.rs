@@ -65,7 +65,7 @@ async fn test_gate_command_normalizes_readonly_usr_local_rust_env() {
 
 #[tokio::test]
 #[serial]
-async fn test_gate_command_preserves_safe_ambient_cargo_paths() {
+async fn test_gate_command_pins_safe_ambient_cargo_paths_to_project_target() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
     let _depth = ScopedEnvVarRestore::set("CSA_DEPTH", "0");
     let dir = tempfile::tempdir().unwrap();
@@ -101,8 +101,14 @@ async fn test_gate_command_preserves_safe_ambient_cargo_paths() {
     let captured = std::fs::read_to_string(&capture).unwrap();
     let lines = captured.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0], ambient_target.to_str().unwrap());
-    assert_eq!(lines[1], ambient_install_root.to_str().unwrap());
+    assert_eq!(lines[0], dir.path().join("target").to_str().unwrap());
+    assert_eq!(
+        lines[1],
+        dir.path()
+            .join("target/cargo-install-root")
+            .to_str()
+            .unwrap()
+    );
 }
 
 #[tokio::test]
