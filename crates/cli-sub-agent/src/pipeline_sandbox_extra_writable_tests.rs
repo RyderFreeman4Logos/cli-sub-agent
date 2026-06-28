@@ -176,7 +176,7 @@ fn test_rust_env_writable_preserves_explicit_safe_values() {
 }
 
 #[test]
-fn test_rust_env_writable_materializes_ambient_cargo_dirs_for_sandbox() {
+fn test_rust_env_writable_pins_ambient_cargo_dirs() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let home = project_root.path().join("home");
@@ -210,18 +210,29 @@ fn test_rust_env_writable_materializes_ambient_cargo_dirs_for_sandbox() {
         resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
 
     let SandboxResolution::Ok(opts) = result else {
-        panic!("Expected ambient Cargo dirs to be granted writable sandbox access");
+        panic!("expected sandbox");
     };
-    let sandbox = opts.sandbox.expect("expected sandbox context");
-    for path in [&cargo_target_dir, &cargo_install_root] {
+    let sandbox = opts.sandbox.expect("sandbox context");
+    let expected_target = project_root.path().join("target");
+    let expected_install_root = expected_target.join("cargo-install-root");
+    for path in [&expected_target, &expected_install_root] {
         assert!(
             sandbox
                 .isolation_plan
                 .writable_paths
                 .contains(&path.canonicalize().unwrap()),
-            "{} should be writable, got: {:?}",
-            path.display(),
-            sandbox.isolation_plan.writable_paths
+            "missing {}",
+            path.display()
+        );
+    }
+    for path in [&cargo_target_dir, &cargo_install_root] {
+        assert!(
+            !sandbox
+                .isolation_plan
+                .writable_paths
+                .contains(&path.canonicalize().unwrap()),
+            "unexpected {}",
+            path.display()
         );
     }
 }

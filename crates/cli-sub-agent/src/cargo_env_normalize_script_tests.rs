@@ -56,11 +56,13 @@ fn read_capture(path: &Path) -> HashMap<String, String> {
 fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
     let repo = TempDir::new().expect("create temp repo");
     let repo_root = repo.path().canonicalize().expect("canonical temp repo");
+    let home = repo.path().join("home");
     let capture = repo.path().join("capture.env");
     let mise_data = repo.path().join("mise-data");
     let mise_rust = mise_data.join("installs/rust/stable");
     let toolchain_bin = mise_rust.join("toolchains/stable-x86_64-unknown-linux-gnu/bin");
     let fake_cargo = toolchain_bin.join("cargo");
+    fs::create_dir_all(&home).expect("create fake home");
     fs::create_dir_all(&toolchain_bin).expect("create fake toolchain bin");
     fs::write(mise_rust.join("settings.toml"), "version = \"12\"\n")
         .expect("write fake rustup settings");
@@ -77,6 +79,7 @@ fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
         .arg("metadata")
         .current_dir(repo.path())
         .env("CSA_CAPTURE_ENV", &capture)
+        .env("HOME", &home)
         .env("MISE_DATA_DIR", &mise_data)
         .env("CARGO_HOME", "/usr/local")
         .env("CARGO_INSTALL_ROOT", "/usr/local")
@@ -96,6 +99,16 @@ fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
     assert!(
         !csa_core::env::rust_state_path_needs_session_override(&cargo_home),
         "CARGO_HOME should not target read-only /usr/local: {}",
+        cargo_home.display()
+    );
+    assert_ne!(
+        cargo_home,
+        repo_root.join(".cargo-local"),
+        "normalizer must not create a repo-local Cargo cache fallback"
+    );
+    assert!(
+        cargo_home == Path::new("/usr/local/share/cargo") || cargo_home == home.join(".cargo"),
+        "CARGO_HOME should be shared cache or HOME/.cargo, got {}",
         cargo_home.display()
     );
     assert_eq!(
@@ -123,8 +136,9 @@ fn cargo_env_normalize_replaces_readonly_usr_local_rust_state() {
 
 #[test]
 #[cfg(unix)]
-fn cargo_env_normalize_preserves_explicit_writable_rust_state() {
+fn cargo_env_normalize_preserves_explicit_writable_rust_state_except_target_dir() {
     let repo = TempDir::new().expect("create temp repo");
+    let repo_root = repo.path().canonicalize().expect("canonical temp repo");
     let capture = repo.path().join("capture.env");
     let fake_bin = repo.path().join("fake-bin");
     let fake_cargo = fake_bin.join("cargo");
@@ -178,7 +192,7 @@ fn cargo_env_normalize_preserves_explicit_writable_rust_state() {
     );
     assert_eq!(
         captured.get("CARGO_TARGET_DIR").map(String::as_str),
-        Some(cargo_target_dir.to_str().unwrap())
+        Some(repo_root.join("target").to_str().unwrap())
     );
     assert_eq!(
         captured.get("RUSTUP_HOME").map(String::as_str),

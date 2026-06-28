@@ -37,9 +37,12 @@ rust_state_needs_override() {
 if rust_state_needs_override "${CARGO_HOME:-}"; then
     if ensure_writable_dir "/usr/local/share/cargo"; then
         export CARGO_HOME="/usr/local/share/cargo"
+    elif [ -n "${HOME:-}" ] && ensure_writable_dir "${HOME}/.cargo"; then
+        export CARGO_HOME="${HOME}/.cargo"
     else
-        export CARGO_HOME="${repo_root}/.cargo-local"
-        mkdir -p "$CARGO_HOME"
+        echo "error: no writable Cargo home available; refusing to create repo-local .cargo-local fallback" >&2
+        echo "hint: make /usr/local/share/cargo or HOME/.cargo writable, or set CARGO_HOME to an explicit writable shared cache" >&2
+        exit 1
     fi
 fi
 
@@ -48,9 +51,7 @@ if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
     mkdir -p "$CARGO_INSTALL_ROOT"
 fi
 
-if [ -z "${CARGO_TARGET_DIR:-}" ]; then
-    export CARGO_TARGET_DIR="${repo_root}/target"
-fi
+export CARGO_TARGET_DIR="${repo_root}/target"
 
 mise_rust_home="${MISE_DATA_DIR:-/usr/local/share/mise}/installs/rust/stable"
 if rust_state_needs_override "${RUSTUP_HOME:-}" \

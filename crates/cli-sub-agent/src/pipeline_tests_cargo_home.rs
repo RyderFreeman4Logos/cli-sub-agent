@@ -34,4 +34,15 @@ fn build_merged_env_normalizes_readonly_cargo_home_without_home() {
         "normalized CARGO_HOME must be writable or outside read-only /usr/local: {}",
         cargo_home.display()
     );
+    assert!(
+        cargo_home == std::path::Path::new("/usr/local/share/cargo")
+            || cargo_home == temp.path().join("target/cargo-home"),
+        "without HOME, CARGO_HOME should use shared cache or target-backed workspace state, got {}",
+        cargo_home.display()
+    );
+    assert_ne!(
+        cargo_home,
+        temp.path().join(".cargo-local"),
+        "normalization must not reintroduce hidden repo-local Cargo state"
+    );
 }

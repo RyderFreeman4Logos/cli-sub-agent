@@ -201,7 +201,7 @@ async fn post_exec_gate_normalizes_readonly_usr_local_rust_env() {
 }
 
 #[tokio::test]
-async fn post_exec_gate_preserves_safe_ambient_cargo_paths() {
+async fn post_exec_gate_pins_safe_ambient_cargo_paths_to_project_target() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
@@ -217,6 +217,8 @@ async fn post_exec_gate_preserves_safe_ambient_cargo_paths() {
 
     let config = project_config_with_gate(PostExecGateConfig::default());
     let changed_paths = vec!["tracked.txt".to_string()];
+    let expected_target = project_dir.path().join("target");
+    let expected_install_root = expected_target.join("cargo-install-root");
     let outcome = maybe_run_post_exec_gate_with_runner(
         project_dir.path(),
         "Modify tracked.txt",
@@ -228,19 +230,23 @@ async fn post_exec_gate_preserves_safe_ambient_cargo_paths() {
             "1".to_string(),
         )])),
         move |_command, _cwd, _timeout_seconds, extra_env| {
-            let ambient_target = ambient_target.clone();
-            let ambient_install_root = ambient_install_root.clone();
+            let expected_target = expected_target.clone();
+            let expected_install_root = expected_install_root.clone();
             Box::pin(async move {
                 let extra_env = extra_env.expect("gate should receive temp index env");
                 assert!(extra_env.contains_key("GIT_INDEX_FILE"));
                 assert_eq!(extra_env.get("CARGO_BUILD_JOBS"), Some(&"1".to_string()));
-                assert!(
-                    !extra_env.contains_key(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
-                    "safe ambient CARGO_TARGET_DIR must not be overridden"
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_target.to_str().unwrap())
                 );
-                assert!(
-                    !extra_env.contains_key(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY),
-                    "safe ambient CARGO_INSTALL_ROOT must not be overridden"
+                assert_eq!(
+                    extra_env
+                        .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+                        .map(String::as_str),
+                    Some(expected_install_root.to_str().unwrap())
                 );
                 let output = std::process::Command::new("sh")
                     .arg("-c")
@@ -256,8 +262,8 @@ async fn post_exec_gate_preserves_safe_ambient_cargo_paths() {
                 let captured = String::from_utf8_lossy(&output.stdout);
                 let lines = captured.lines().collect::<Vec<_>>();
                 assert_eq!(lines.len(), 2);
-                assert_eq!(lines[0], ambient_target.to_str().unwrap());
-                assert_eq!(lines[1], ambient_install_root.to_str().unwrap());
+                assert_eq!(lines[0], expected_target.to_str().unwrap());
+                assert_eq!(lines[1], expected_install_root.to_str().unwrap());
                 Ok(PostExecGateCommandOutcome::exited(Some(0)))
             })
         },

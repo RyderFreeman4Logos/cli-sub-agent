@@ -179,13 +179,27 @@ async fn fix_finding_2348_harness_covers_env_identity_amend_and_residual_gate() 
         pattern_internal: false,
         allow_git_push: false,
     });
-    for key in [
-        csa_core::env::CARGO_HOME_ENV_KEY,
-        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
-        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
-    ] {
-        assert_eq!(merged_env.get(key), explicit_env.get(key), "{key}");
-    }
+    assert_eq!(
+        merged_env.get(csa_core::env::CARGO_HOME_ENV_KEY),
+        explicit_env.get(csa_core::env::CARGO_HOME_ENV_KEY),
+        "CARGO_HOME"
+    );
+    let expected_target = project_root.join("target");
+    let expected_install_root = expected_target.join("cargo-install-root");
+    assert_eq!(
+        merged_env
+            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(expected_target.to_str().expect("target utf8")),
+        "CARGO_TARGET_DIR"
+    );
+    assert_eq!(
+        merged_env
+            .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
+            .map(String::as_str),
+        Some(expected_install_root.to_str().expect("install root utf8")),
+        "CARGO_INSTALL_ROOT"
+    );
 
     let sandbox = match resolve_sandbox_options_with_overrides(
         SandboxResolveInput {
@@ -210,13 +224,24 @@ async fn fix_finding_2348_harness_covers_env_identity_amend_and_residual_gate() 
             panic!("sandbox should be available for #2348 harness: {message}")
         }
     };
-    for path in [&cargo_home, &cargo_target_dir, &cargo_install_root] {
+    for path in [&cargo_home, &expected_target, &expected_install_root] {
         assert!(
             sandbox
                 .isolation_plan
                 .writable_paths
                 .contains(&path.canonicalize().unwrap()),
             "{} must be in writable sandbox contract: {:?}",
+            path.display(),
+            sandbox.isolation_plan.writable_paths
+        );
+    }
+    for path in [&cargo_target_dir, &cargo_install_root] {
+        assert!(
+            !sandbox
+                .isolation_plan
+                .writable_paths
+                .contains(&path.canonicalize().unwrap()),
+            "explicit ambient target path {} must not be writable: {:?}",
             path.display(),
             sandbox.isolation_plan.writable_paths
         );

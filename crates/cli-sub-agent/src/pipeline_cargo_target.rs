@@ -89,12 +89,14 @@ pub(crate) fn apply_runtime_task_target_dir_guards(
     if matches!(task_type, Some("review")) {
         apply_review_target_dir(project_root, tool_name);
     }
+    let preserve_existing_target_env = matches!(task_type, Some("run"))
+        && restore_caller_cargo_target_override(caller_env, merged_env);
     apply_run_target_dir_guard_inner(
         task_type,
         tool_name,
         project_root,
         merged_env,
-        caller_preserved_cargo_target_override(caller_env, merged_env),
+        preserve_existing_target_env,
     )
 }
 
@@ -213,43 +215,31 @@ fn explicit_cargo_target_override(merged_env: &HashMap<String, String>) -> Optio
     Some(PathBuf::from(value))
 }
 
-fn caller_preserved_cargo_target_override(
+fn restore_caller_cargo_target_override(
     caller_env: Option<&HashMap<String, String>>,
-    merged_env: &HashMap<String, String>,
+    merged_env: &mut HashMap<String, String>,
 ) -> bool {
-    if let Some(caller_value) = caller_env
+    let caller_target = if let Some(caller_value) = caller_env
         .and_then(|env| env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY))
         .filter(|value| !value.trim().is_empty())
     {
-        return cargo_target_override_was_preserved(caller_value, merged_env);
-    }
-
-    std::env::var_os(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|caller_value| {
-            if csa_core::env::rust_state_path_needs_session_override(Path::new(&caller_value)) {
-                return false;
-            }
-            let caller_path = PathBuf::from(caller_value);
-            merged_env
-                .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-                .filter(|value| !value.trim().is_empty())
-                .is_some_and(|merged_value| Path::new(merged_value) == caller_path.as_path())
-        })
-}
-
-fn cargo_target_override_was_preserved(
-    caller_value: &str,
-    merged_env: &HashMap<String, String>,
-) -> bool {
-    if csa_core::env::rust_state_path_needs_session_override(Path::new(caller_value)) {
+        PathBuf::from(caller_value.as_str())
+    } else if let Some(caller_value) =
+        std::env::var_os(csa_core::env::CARGO_TARGET_DIR_ENV_KEY).filter(|value| !value.is_empty())
+    {
+        PathBuf::from(caller_value)
+    } else {
+        return false;
+    };
+    if csa_core::env::rust_state_path_needs_session_override(&caller_target) {
         return false;
     }
 
-    merged_env
-        .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-        .filter(|value| !value.trim().is_empty())
-        .is_some_and(|merged_value| Path::new(merged_value) == Path::new(caller_value))
+    merged_env.insert(
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY.to_string(),
+        caller_target.to_string_lossy().into_owned(),
+    );
+    true
 }
 
 enum WorkspaceTargetWriteability {

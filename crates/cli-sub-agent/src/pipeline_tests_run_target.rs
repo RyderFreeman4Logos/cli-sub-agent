@@ -314,11 +314,13 @@ fn runtime_guard_replaces_config_normalized_workspace_target_for_unwritable_targ
 
 #[cfg(unix)]
 #[test]
-fn runtime_guard_preserves_caller_supplied_workspace_target_override() {
+fn runtime_guard_preserves_external_caller_supplied_target_override() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let project = tempdir().expect("tempdir");
     let home = project.path().join("home");
+    let explicit_target_path = project.path().join("explicit-cargo-target");
     std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&explicit_target_path).expect("create explicit target");
     let _home = crate::test_env_lock::ScopedEnvVarRestore::set("HOME", &home);
     let _state_home = crate::test_env_lock::ScopedEnvVarRestore::set(
         "XDG_STATE_HOME",
@@ -327,7 +329,7 @@ fn runtime_guard_preserves_caller_supplied_workspace_target_override() {
     let _cargo_target_dir =
         crate::test_env_lock::ScopedEnvVarRestore::unset(csa_core::env::CARGO_TARGET_DIR_ENV_KEY);
     make_unwritable_target(project.path());
-    let explicit_target = project.path().join("target").to_string_lossy().into_owned();
+    let explicit_target = explicit_target_path.to_string_lossy().into_owned();
     let caller_env = HashMap::from([(
         csa_core::env::CARGO_TARGET_DIR_ENV_KEY.to_string(),
         explicit_target.clone(),
@@ -342,6 +344,13 @@ fn runtime_guard_preserves_caller_supplied_workspace_target_override() {
         pattern_internal: false,
         allow_git_push: false,
     });
+    let synthesized_target = project.path().join("target").to_string_lossy().into_owned();
+    assert_eq!(
+        env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
+            .map(String::as_str),
+        Some(synthesized_target.as_str()),
+        "env merge pins Cargo target before the runtime guard restores caller intent"
+    );
 
     let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
         Some("run"),
