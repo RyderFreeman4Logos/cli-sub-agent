@@ -25,6 +25,8 @@ use tracing::{debug, error, warn};
 pub(crate) mod output;
 pub(crate) use output::clean_detection::detect_bounded_clean_verdict_token;
 use output::{is_worktree_submodule, persist_review_result_exit_code};
+#[path = "review_cmd_artifact_consistency.rs"]
+mod artifact_consistency;
 #[path = "review_cmd_artifact_parse.rs"]
 mod artifact_parse;
 #[path = "review_cmd_bug_class.rs"]
@@ -65,6 +67,8 @@ pub(crate) mod preflight;
 mod prior_rounds;
 #[path = "review_cmd_prose_findings.rs"]
 mod prose_findings;
+#[path = "review_cmd_prose_resolution.rs"]
+mod prose_resolution;
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
 #[path = "review_cmd_result.rs"]

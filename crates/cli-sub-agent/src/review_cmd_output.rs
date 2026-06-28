@@ -245,6 +245,23 @@ fn derive_review_verdict_artifact(
             {
                 return Ok(artifact);
             }
+            // #2516 fail-closed: even non-blocking (low-only) JSON findings must
+            // not be silently dropped by the synthetic-empty fast path.
+            if let Some(json_counts) =
+                json_severity_counts_if_present(session_dir, zero_severity_counts)?
+                && !severity_counts_are_zero(&json_counts)
+            {
+                let decision = derive_decision_from_severity_counts(
+                    &json_counts,
+                    false,
+                    None,
+                    ReviewDecision::from_str(&meta.decision).ok(),
+                    || Ok(prose_signals.blocking_summary),
+                    || review_contains_prose_clean_conclusion(session_dir),
+                    || review_contains_prose_fail_conclusion(session_dir),
+                )?;
+                return Ok(verdict_from_meta(meta, decision, json_counts));
+            }
             synthetic_empty_findings_counts = Some(raw_severity_counts.clone());
             // Synthetic-empty + no blocking JSON → fall through to full.md chain.
             debug!(

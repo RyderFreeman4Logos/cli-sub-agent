@@ -377,6 +377,89 @@ fn issue_2425_prior_finding_fixed_prose_does_not_create_blocking_finding() {
 }
 
 #[test]
+fn issue_2516_pass_remediation_evidence_paths_do_not_flip_to_fail() {
+    let session_id = "01TEST2516PASSEVIDENCE";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2516-pass-remediation-evidence", session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nVerdict: PASS\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nThe prior high finding is fixed. No blocking findings remain.\n\nVerification:\n- crates/cli-sub-agent/src/review_cmd_output_consistency.rs:139 confirms the remediation path.\n- crates/cli-sub-agent/src/review_cmd_check_verdict.rs:601 verifies exact-head acceptance.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist clean review sections");
+
+    let mut meta = make_review_meta(session_id);
+    meta.decision = ReviewDecision::Uncertain.as_str().to_string();
+    meta.verdict = "UNCERTAIN".to_string();
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+    let findings = read_output_findings(&session_dir);
+    assert!(
+        findings.findings.is_empty(),
+        "positive verification path bullets must not become blocking findings"
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_2516_synthetic_empty_with_low_json_counts_fails_closed() {
+    use crate::review_cmd::persist_review_sidecars_if_session_exists;
+    let session_id = "01TEST2516SYNLOWJS0";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2516-synthetic-low-json", session_id);
+    initialize_git_project(&project_root);
+
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nFAIL: one low-severity finding.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nNo blocking findings.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist clean review sections");
+
+    let mut meta = make_review_meta(session_id);
+    meta.decision = ReviewDecision::Fail.as_str().to_string();
+    meta.verdict = "HAS_ISSUES".to_string();
+    meta.scope = "diff".to_string();
+
+    // Create synthetic-empty findings.toml + marker to trigger the synthetic-empty path
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir).expect("create output dir");
+    fs::write(output_dir.join("findings.toml"), "").expect("write empty findings.toml");
+    fs::write(output_dir.join(".findings.toml.synthetic"), "").expect("write synthetic marker");
+
+    // Persist a review-findings.json with a low-only finding at session_dir root
+    let json_content = serde_json::json!({
+        "findings": [{
+            "severity": "low",
+            "fid": "L1",
+            "file": "src/lib.rs",
+            "line": 1,
+            "rule_id": "rule.low",
+            "summary": "low severity test finding",
+            "engine": "codex"
+        }],
+        "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 1 },
+        "overall_risk": "low"
+    });
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_string(&json_content).expect("serialize artifact json"),
+    )
+    .expect("write review-findings.json");
+
+    let exit = persist_review_sidecars_if_session_exists(&project_root, &meta, Some(session_id))
+        .expect("sidecars should persist");
+
+    // Even with a synthetic-empty findings.toml, low-only JSON counts should fail closed
+    assert_ne!(exit, 0, "low-only JSON counts must fail closed, not pass");
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_2425_uncertain_crash_evidence_does_not_recover_to_pass() {
     let session_id = "01TEST2425CRASHUNCERT0";
     let (_env_lock, project_root, session_dir) =

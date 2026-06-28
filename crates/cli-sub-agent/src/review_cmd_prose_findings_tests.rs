@@ -87,3 +87,71 @@ fn severity_prefixed_bullet_with_description_still_becomes_prose_finding() {
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].severity, Severity::High);
 }
+
+#[test]
+fn issue_2516_resolved_high_finding_prose_is_not_blocking_signal() {
+    assert!(!contains_blocking_review_signal(
+        "The prior high finding is fixed and no blocking findings remain."
+    ));
+    assert!(contains_blocking_review_signal(
+        "One high severity finding remains in the review output parser."
+    ));
+}
+
+#[test]
+fn issue_2516_positive_verification_paths_do_not_become_medium_findings() {
+    let findings = extract_review_findings_from_prose(
+        r#"PASS: no blocking findings remain.
+Verification:
+- crates/cli-sub-agent/src/review_cmd_output.rs:139 confirms the prior high finding is fixed.
+- tests/review.rs:42 verifies the remediation path.
+"#,
+    );
+
+    assert!(
+        findings.is_empty(),
+        "positive verification path bullets must not become findings: {findings:?}"
+    );
+}
+
+#[test]
+fn issue_2516_no_longer_describes_regression_not_resolution() {
+    use super::finding_text_describes_resolved_issue;
+
+    assert!(
+        !finding_text_describes_resolved_issue("crates/foo.rs:42 no longer validates user input"),
+        "'no longer validates' is a regression description, not a resolution"
+    );
+    assert!(
+        !finding_text_describes_resolved_issue("crates/foo.rs:42 no longer checks for overflow"),
+        "'no longer checks' is a regression description, not a resolution"
+    );
+    assert!(
+        finding_text_describes_resolved_issue(
+            "The prior high finding is addressed and no longer present"
+        ),
+        "'no longer present' after a resolution word should be classified as resolved"
+    );
+}
+
+#[test]
+fn issue_2516_mixed_resolution_and_active_problem_stays_blocking() {
+    use super::review_signal_describes_resolved_issue;
+
+    let tokens: Vec<String> = "fixed high finding still remains"
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let signal_index = tokens
+        .iter()
+        .position(|t| t == "fixed")
+        .expect("find signal token");
+    let noun_index = tokens
+        .iter()
+        .position(|t| t == "finding")
+        .expect("find noun token");
+    assert!(
+        !review_signal_describes_resolved_issue(&tokens, signal_index, noun_index),
+        "sentence with 'still remains' must not be classified as resolved"
+    );
+}
