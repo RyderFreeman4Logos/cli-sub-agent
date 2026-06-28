@@ -41,7 +41,10 @@ pub(super) fn fail_closed_review_verdict_artifact(
     );
     artifact.routed_to = meta.routed_to.clone();
     artifact.primary_failure = meta.primary_failure.clone();
-    artifact.failure_reason = meta.failure_reason.clone();
+    artifact.failure_reason = meta
+        .failure_reason
+        .clone()
+        .or_else(|| meta.status_reason.clone());
     artifact.review_mode = meta.review_mode.clone();
     artifact
 }

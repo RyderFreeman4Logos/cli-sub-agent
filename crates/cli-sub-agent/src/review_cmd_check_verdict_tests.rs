@@ -355,7 +355,7 @@ fn check_verdict_finds_pass_for_current_branch_head_and_full_diff() {
 }
 
 #[test]
-fn issue_1696_check_verdict_pass_message_surfaces_nonblocking_counts() {
+fn issue_1696_check_verdict_rejects_low_only_counts_in_pass_artifact() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let temp = setup_git_repo();
     let state_home = TempDir::new().unwrap();
@@ -364,12 +364,11 @@ fn issue_1696_check_verdict_pass_message_surfaces_nonblocking_counts() {
     let branch = run_git(temp.path(), &["branch", "--show-current"]);
     let head_sha = csa_session::detect_git_head(temp.path()).unwrap();
     let findings = vec![
-        finding_with_severity(Severity::Medium, "FID-MEDIUM"),
         finding_with_severity(Severity::Low, "FID-LOW-1"),
         finding_with_severity(Severity::Low, "FID-LOW-2"),
         finding_with_severity(Severity::Low, "FID-LOW-3"),
     ];
-    let session_id = write_review_session_with_findings(
+    let _session_id = write_review_session_with_findings(
         temp.path(),
         &branch,
         &head_sha,
@@ -387,25 +386,15 @@ fn issue_1696_check_verdict_pass_message_surfaces_nonblocking_counts() {
         None,
         None,
     )
-    .unwrap()
-    .expect("expected matching verdict");
-    assert_eq!(found.session_id, session_id);
-    assert_eq!(found.severity_counts.get(&Severity::Medium), Some(&1));
-    assert_eq!(found.severity_counts.get(&Severity::Low), Some(&3));
-
-    let message = format_review_verdict_pass_message(&found, &branch);
+    .unwrap();
     assert!(
-        message.contains("PASS/CLEAN"),
-        "pass verdict must remain visible: {message}"
-    );
-    assert!(
-        message.contains("non-blocking findings: 1 medium, 3 low"),
-        "non-blocking findings must be surfaced: {message}"
+        found.is_none(),
+        "PASS artifact with any severity count must not satisfy --check-verdict"
     );
 
     let args = parse_review_args(&["csa", "review", "--check-verdict"]);
     let exit = handle_check_verdict(temp.path(), &args).unwrap();
-    assert_eq!(exit, 0);
+    assert_eq!(exit, 1);
 }
 
 #[test]

@@ -280,7 +280,11 @@ pub(crate) fn handle_session_wait_with_emitters(
                     }
                 }
             }
-            if let Some(result) = loaded_result {
+            if let Some(mut result) = loaded_result {
+                super::summary::reconcile_repaired_review_pass_result_status(
+                    result_session_dir,
+                    &mut result,
+                );
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
                     display_session_id,
@@ -334,7 +338,11 @@ pub(crate) fn handle_session_wait_with_emitters(
                 result_uses_direct_session_dir,
             )?
         };
-        if let Some(result) = completed_result {
+        if let Some(mut result) = completed_result {
+            super::summary::reconcile_repaired_review_pass_result_status(
+                result_session_dir,
+                &mut result,
+            );
             let streamed_output = (emitters.emit_terminal_output)(
                 result_session_dir,
                 display_session_id,
@@ -380,7 +388,11 @@ pub(crate) fn handle_session_wait_with_emitters(
             } else {
                 None
             };
-            if let Some(result) = reconciled_result {
+            if let Some(mut result) = reconciled_result {
+                super::summary::reconcile_repaired_review_pass_result_status(
+                    result_session_dir,
+                    &mut result,
+                );
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
                     display_session_id,
@@ -409,12 +421,16 @@ pub(crate) fn handle_session_wait_with_emitters(
         }
 
         if !session_live {
-            if let Some(result) = load_completed_daemon_result_with_fallback(
+            if let Some(mut result) = load_completed_daemon_result_with_fallback(
                 effective_root,
                 result_session_id,
                 result_session_dir,
                 result_uses_direct_session_dir,
             )? {
+                super::summary::reconcile_repaired_review_pass_result_status(
+                    result_session_dir,
+                    &mut result,
+                );
                 let streamed_output = (emitters.emit_terminal_output)(
                     result_session_dir,
                     display_session_id,

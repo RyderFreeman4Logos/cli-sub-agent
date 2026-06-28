@@ -1,15 +1,18 @@
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::Result;
 use csa_core::types::ReviewDecision;
-use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact};
 
 use super::SessionWaitOutputMode;
 use crate::tier_model_fallback::opaque_total_exhaustion_message;
 
 const WAIT_OUTPUT_MAX_BYTES: u64 = 1024 * 1024;
+
+#[path = "session_cmds_daemon_wait_review_label.rs"]
+mod review_label;
 
 fn stream_wait_output(session_dir: &Path) -> Result<bool> {
     let stdout_log = session_dir.join("stdout.log");
@@ -106,6 +109,8 @@ pub(crate) fn render_wait_result_summary(
     session_id: &str,
     result: &csa_session::SessionResult,
 ) -> String {
+    let effective_result = effective_wait_result(session_dir, result);
+    let result = effective_result.as_ref();
     let provider_quota =
         crate::session_provider_quota::provider_quota_display_for_result(session_dir, result);
     let mut lines = vec![format!("Session: {session_id}")];
@@ -127,7 +132,7 @@ pub(crate) fn render_wait_result_summary(
         lines.push(format!("Tokens: {}", tokens.render_text()));
     }
 
-    if let Some(verdict) = read_review_verdict_label(session_dir, result) {
+    if let Some(verdict) = review_label::read_review_verdict_label(session_dir, result) {
         lines.push(format!("Review verdict: {verdict}"));
     }
 
@@ -211,7 +216,7 @@ fn format_failover_chain_label(
     session_dir: &Path,
     result: &csa_session::SessionResult,
 ) -> Option<String> {
-    if let Some(artifact) = read_review_verdict_artifact(session_dir)
+    if let Some(artifact) = review_label::read_review_verdict_artifact(session_dir)
         && artifact.decision == ReviewDecision::Unavailable
     {
         if let Some(message) = opaque_total_exhaustion_message(
@@ -252,6 +257,8 @@ fn render_wait_result_json(
     session_id: &str,
     result: &csa_session::SessionResult,
 ) -> Result<String> {
+    let effective_result = effective_wait_result(session_dir, result);
+    let result = effective_result.as_ref();
     let provider_quota =
         crate::session_provider_quota::provider_quota_display_for_result(session_dir, result);
     let tokens = extract_wait_token_summary(result).map(|usage| {
@@ -273,7 +280,7 @@ fn render_wait_result_json(
         "tool": wait_result_tool_label(result),
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
-        "review_verdict": read_review_verdict_label(session_dir, result),
+        "review_verdict": review_label::read_review_verdict_label(session_dir, result),
         "unavailable_reason": crate::session_unavailable_reason::review_unavailable_reason_label(session_dir),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
@@ -291,6 +298,38 @@ fn render_wait_result_json(
     serde_json::to_string_pretty(&value).map_err(Into::into)
 }
 
+pub(super) fn reconcile_repaired_review_pass_result_status(
+    session_dir: &Path,
+    result: &mut csa_session::SessionResult,
+) -> bool {
+    if result.post_exec_gate.is_some() {
+        return false;
+    }
+    if review_label::read_review_verdict_label(session_dir, result).as_deref() != Some("PASS") {
+        return false;
+    }
+    if review_label::review_pass_summary_override(session_dir, result).is_none() {
+        return false;
+    }
+
+    let changed = result.exit_code != 0 || !result.status.trim().eq_ignore_ascii_case("success");
+    result.exit_code = 0;
+    result.status = "success".to_string();
+    changed
+}
+
+fn effective_wait_result<'a>(
+    session_dir: &Path,
+    result: &'a csa_session::SessionResult,
+) -> Cow<'a, csa_session::SessionResult> {
+    let mut effective = result.clone();
+    if reconcile_repaired_review_pass_result_status(session_dir, &mut effective) {
+        Cow::Owned(effective)
+    } else {
+        Cow::Borrowed(result)
+    }
+}
+
 fn wait_display_summary(
     session_dir: &Path,
     result: &csa_session::SessionResult,
@@ -298,6 +337,12 @@ fn wait_display_summary(
 ) -> Option<String> {
     if let Some(report) = result.post_exec_gate.as_ref() {
         return compact_wait_summary_text(&csa_session::post_exec_gate_failure_summary(report));
+    }
+    if let Some(summary) = review_label::review_pass_summary_override(session_dir, result) {
+        return Some(summary);
+    }
+    if let Some(summary) = review_label::review_failure_summary_override(session_dir, result) {
+        return Some(summary);
     }
     if let Some(text) =
         crate::session_summary_text::human_session_summary(session_dir, &result.summary)
@@ -506,113 +551,6 @@ fn compact_wait_summary_text(summary: &str) -> Option<String> {
     Some(compact)
 }
 
-fn read_review_verdict_label(
-    session_dir: &Path,
-    result: &csa_session::SessionResult,
-) -> Option<String> {
-    let summary_requires_failed_gate =
-        crate::session_observability::human_review_summary_requires_failed_gate(
-            session_dir,
-            &result.summary,
-        );
-    if let Some(artifact) = read_review_verdict_artifact(session_dir) {
-        let meta = read_review_meta_for_label(session_dir);
-        if let Some(label) = meta
-            .as_ref()
-            .and_then(|meta| format_fix_loop_noop_label(meta.failure_reason.as_deref()))
-            .or_else(|| format_fix_loop_noop_label(artifact.failure_reason.as_deref()))
-        {
-            return Some(label);
-        }
-        if summary_requires_failed_gate {
-            return Some("FAIL".to_string());
-        }
-        if artifact.decision == ReviewDecision::Pass {
-            if !wait_result_allows_pass_verdict(result) {
-                return Some("UNAVAILABLE".to_string());
-            }
-            if meta.as_ref().is_some_and(|meta| {
-                meta.requires_fail_closed_verdict() || !meta.fix_clean_converged()
-            }) {
-                return Some("UNAVAILABLE".to_string());
-            }
-            return Some("PASS".to_string());
-        }
-        if artifact.decision == ReviewDecision::Unavailable
-            && let Some(primary_failure) = artifact.primary_failure.as_deref()
-            && !primary_failure.trim().is_empty()
-        {
-            return Some(format!("UNAVAILABLE ({})", primary_failure.trim()));
-        }
-        return Some(normalize_review_verdict_label(
-            artifact.decision.as_str(),
-            result,
-        ));
-    }
-
-    let meta_path = session_dir.join("review_meta.json");
-    if meta_path.is_file()
-        && let Ok(raw) = std::fs::read_to_string(&meta_path)
-        && let Ok(meta) = serde_json::from_str::<ReviewSessionMeta>(&raw)
-    {
-        if let Some(label) = format_fix_loop_noop_label(meta.failure_reason.as_deref()) {
-            return Some(label);
-        }
-        if summary_requires_failed_gate {
-            return Some("FAIL".to_string());
-        }
-        if meta.fix_attempted && !meta.fix_clean_converged() {
-            return Some("UNAVAILABLE".to_string());
-        }
-        return Some(normalize_review_verdict_label(&meta.decision, result));
-    }
-
-    if summary_requires_failed_gate {
-        return Some("FAIL".to_string());
-    }
-
-    None
-}
-
-fn format_fix_loop_noop_label(reason: Option<&str>) -> Option<String> {
-    let reason = reason?.strip_prefix("fix_loop_noop:")?.trim();
-    if reason.is_empty() {
-        return None;
-    }
-    Some(format!("FIX-LOOP-NO-OP ({reason})"))
-}
-
-fn read_review_verdict_artifact(session_dir: &Path) -> Option<ReviewVerdictArtifact> {
-    let verdict_path = session_dir.join("output").join("review-verdict.json");
-    if !verdict_path.is_file() {
-        return None;
-    }
-    let raw = std::fs::read_to_string(&verdict_path).ok()?;
-    serde_json::from_str::<ReviewVerdictArtifact>(&raw).ok()
-}
-
-fn read_review_meta_for_label(session_dir: &Path) -> Option<ReviewSessionMeta> {
-    let meta_path = session_dir.join("review_meta.json");
-    if !meta_path.is_file() {
-        return None;
-    }
-    let raw = std::fs::read_to_string(&meta_path).ok()?;
-    serde_json::from_str::<ReviewSessionMeta>(&raw).ok()
-}
-
-fn wait_result_allows_pass_verdict(result: &csa_session::SessionResult) -> bool {
-    result.exit_code == 0 && result.status.trim().eq_ignore_ascii_case("success")
-}
-
-fn normalize_review_verdict_label(value: &str, result: &csa_session::SessionResult) -> String {
-    match value.trim().to_ascii_uppercase().as_str() {
-        "PASS" | "CLEAN" if !wait_result_allows_pass_verdict(result) => "UNAVAILABLE".to_string(),
-        "PASS" | "CLEAN" => "PASS".to_string(),
-        "FAIL" | "FAILED" | "HAS_ISSUES" => "FAIL".to_string(),
-        other => other.to_string(),
-    }
-}
-
 struct WaitOutputLog {
     raw: Vec<u8>,
     truncated: bool,
@@ -672,8 +610,11 @@ fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "session_cmds_daemon_wait_summary_alias_tests.rs"]
-mod wait_alias_tests;
+#[path = "session_cmds_daemon_wait_summary_2425.rs"]
+mod session_cmds_daemon_wait_summary_2425;
 #[cfg(test)]
 #[path = "session_cmds_daemon_wait_summary_tests.rs"]
-mod wait_output_tests;
+mod session_cmds_daemon_wait_summary_tests;
+#[cfg(test)]
+#[path = "session_cmds_daemon_wait_summary_alias_tests.rs"]
+mod wait_alias_tests;

@@ -130,7 +130,7 @@ fn derive_decision_fail_meta_with_zero_severity_and_pass_prose_emits_pass() {
         Some(ReviewDecision::Fail),
         || Ok(false),
         || Ok(true),
-        || Ok(false), // prose has no affirmative FAIL token (#1675)
+        || Ok(false),
     )
     .expect("derive decision");
 
@@ -679,7 +679,7 @@ fn persist_review_verdict_empty_structured_findings_uncertain_meta_fails_closed(
 }
 
 #[path = "review_cmd_output_prose_clean_tests.rs"]
-mod prose_clean_tests;
+mod review_cmd_output_prose_clean_tests;
 
 #[test]
 fn persist_review_verdict_json_transcript_without_review_message_emits_uncertain_verdict() {
