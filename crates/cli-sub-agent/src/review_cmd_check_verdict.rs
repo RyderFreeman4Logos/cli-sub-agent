@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use super::artifact_consistency::review_findings_toml_has_findings;
 use crate::cli::ReviewArgs;
 use anyhow::{Context, Result};
 use csa_session::state::{MetaSessionState, ReviewSessionMeta};
@@ -629,6 +630,9 @@ fn review_session_acceptance_status(
     if accepted && has_review_severity_counts(&acceptance_artifact.severity_counts) {
         accepted = false;
     }
+    if accepted && review_findings_toml_has_findings(session_dir)? {
+        accepted = false;
+    }
     debug!(
         session_id = %acceptance_meta.session_id,
         meta_decision = %acceptance_meta.decision,
@@ -693,6 +697,10 @@ mod compound_legacy_tests;
 #[cfg(test)]
 #[path = "review_cmd_check_verdict_2425.rs"]
 mod review_cmd_check_verdict_2425;
+
+#[cfg(test)]
+#[path = "review_cmd_check_verdict_2516_tests.rs"]
+mod issue_2516_tests;
 
 #[cfg(test)]
 #[path = "review_cmd_check_verdict_tests.rs"]

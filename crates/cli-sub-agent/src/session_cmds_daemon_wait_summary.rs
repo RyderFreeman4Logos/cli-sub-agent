@@ -135,6 +135,9 @@ pub(crate) fn render_wait_result_summary(
     if let Some(verdict) = review_label::read_review_verdict_label(session_dir, result) {
         lines.push(format!("Review verdict: {verdict}"));
     }
+    lines.extend(crate::review_failure_context::review_failure_context_lines(
+        session_dir,
+    ));
 
     if let Some(reason) =
         crate::session_unavailable_reason::review_unavailable_reason_label(session_dir)
@@ -281,6 +284,7 @@ fn render_wait_result_json(
         "elapsed_seconds": wait_elapsed_seconds(result),
         "tokens": tokens,
         "review_verdict": review_label::read_review_verdict_label(session_dir, result),
+        "review_failure_context": crate::review_failure_context::review_failure_context_json(session_dir),
         "unavailable_reason": crate::session_unavailable_reason::review_unavailable_reason_label(session_dir),
         "failover": format_failover_chain_label(session_dir, result),
         "kill_hint": result.kill_hint.as_deref(),
@@ -612,6 +616,9 @@ fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
 #[cfg(test)]
 #[path = "session_cmds_daemon_wait_summary_2425.rs"]
 mod session_cmds_daemon_wait_summary_2425;
+#[cfg(test)]
+#[path = "session_cmds_daemon_wait_summary_2516_tests.rs"]
+mod session_cmds_daemon_wait_summary_2516_tests;
 #[cfg(test)]
 #[path = "session_cmds_daemon_wait_summary_tests.rs"]
 mod session_cmds_daemon_wait_summary_tests;

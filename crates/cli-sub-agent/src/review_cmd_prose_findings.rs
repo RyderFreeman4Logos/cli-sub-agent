@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use super::prose_resolution::{
+    finding_text_describes_resolved_issue, review_signal_describes_resolved_issue,
+};
 use csa_session::{FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity};
 
 pub(in crate::review_cmd) fn findings_file_from_prose(text: &str) -> Option<FindingsFile> {
@@ -309,6 +312,9 @@ fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
     rest = rest
         .trim_start_matches(|ch: char| ch == ':' || ch == '-' || ch.is_whitespace())
         .trim_start();
+    if finding_text_describes_resolved_issue(rest) {
+        return None;
+    }
     Some(ParsedProseFinding {
         severity,
         file_range: parse_embedded_file_range(rest),
@@ -330,6 +336,9 @@ fn parse_severity_prefixed_finding(
     let severity = severity_from_label(label).or_else(|| leading_severity_from_title(label))?;
     let rest = rest.trim();
     if severity_prefixed_rest_is_zero_count(rest) {
+        return None;
+    }
+    if finding_text_describes_resolved_issue(&format!("{label}: {rest}")) {
         return None;
     }
     if let Some((file_range, description)) = parse_leading_file_range(rest) {
@@ -536,6 +545,9 @@ fn blocking_review_clause_has_signal(clause: &str) -> bool {
         if review_issue_noun_is_followed_by_zero_count(&tokens, noun_index) {
             continue;
         }
+        if review_signal_describes_resolved_issue(&tokens, index, noun_index) {
+            continue;
+        }
         return true;
     }
 
@@ -568,6 +580,9 @@ fn severe_review_clause_has_signal(clause: &str) -> bool {
             continue;
         };
         if review_issue_noun_is_followed_by_zero_count(&tokens, noun_index) {
+            continue;
+        }
+        if review_signal_describes_resolved_issue(&tokens, index, noun_index) {
             continue;
         }
         return true;

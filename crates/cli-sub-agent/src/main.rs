@@ -74,6 +74,7 @@ mod review_cmd;
 mod review_consensus;
 mod review_context;
 mod review_design_anchor;
+mod review_failure_context;
 mod review_findings;
 mod review_gate;
 mod review_prior_rounds;
