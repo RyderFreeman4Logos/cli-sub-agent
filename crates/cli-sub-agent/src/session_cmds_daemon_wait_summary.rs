@@ -151,6 +151,17 @@ pub(crate) fn render_wait_result_summary(
         );
     }
     if let Some(recovery) = result.memory_soft_limit_recovery.as_ref() {
+        if recovery.dirty_worktree {
+            lines.push(format!(
+                "Parent wait process exit code {}",
+                result.exit_code
+            ));
+            lines.extend(
+                crate::memory_soft_limit_recovery_display::format_memory_soft_limit_context_lines(
+                    session_dir,
+                ),
+            );
+        }
         lines.extend(
             crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines(
                 recovery,

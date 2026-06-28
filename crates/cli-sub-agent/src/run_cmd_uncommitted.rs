@@ -215,6 +215,7 @@ fn record_writer_uncommitted_changes_with_config(
                 changes.as_ref(),
                 record.changed_paths,
                 record.commit_created,
+                record.require_commit,
             );
             let recovery = require_commit_contract_failure.then(|| {
                 build_require_commit_recovery_diagnostic_for_state(

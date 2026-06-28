@@ -175,9 +175,12 @@ fn test_session_result_memory_soft_limit_recovery_roundtrip() {
             dirty_worktree: false,
             changed_paths: vec!["src/lib.rs".to_string()],
             changed_paths_truncated: 1,
+            git_status_short: Vec::new(),
+            git_status_short_truncated: 0,
             head_oid: Some("1234567890abcdef".to_string()),
             head_summary: Some("fix session recovery".to_string()),
             suggested_recovery_action: "inspect_head_commit_then_continue".to_string(),
+            retry_profile: None,
         }),
         ..Default::default()
     };
@@ -197,6 +200,9 @@ fn test_session_result_memory_soft_limit_recovery_roundtrip() {
     assert!(!recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["src/lib.rs".to_string()]);
     assert_eq!(recovery.changed_paths_truncated, 1);
+    assert!(recovery.git_status_short.is_empty());
+    assert_eq!(recovery.git_status_short_truncated, 0);
+    assert!(recovery.retry_profile.is_none());
     assert_eq!(
         recovery.head_summary.as_deref(),
         Some("fix session recovery")

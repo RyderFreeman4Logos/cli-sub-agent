@@ -65,10 +65,14 @@ fn build_result_json_payload_includes_memory_soft_limit_recovery() {
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string()],
                 changed_paths_truncated: 0,
+                git_status_short: vec![" M src/lib.rs".to_string()],
+                git_status_short_truncated: 0,
                 head_oid: None,
                 head_summary: None,
-                suggested_recovery_action: "inspect_changed_paths_then_salvage_or_revert"
-                    .to_string(),
+                suggested_recovery_action:
+                    "inspect_git_status_preserve_changes_then_rerun_with_memory_headroom"
+                        .to_string(),
+                retry_profile: None,
             }),
             ..Default::default()
         },
@@ -85,5 +89,9 @@ fn build_result_json_payload_includes_memory_soft_limit_recovery() {
     assert_eq!(
         payload["memory_soft_limit_recovery"]["changed_paths"][0],
         "src/lib.rs"
+    );
+    assert_eq!(
+        payload["memory_soft_limit_recovery"]["git_status_short"][0],
+        " M src/lib.rs"
     );
 }
