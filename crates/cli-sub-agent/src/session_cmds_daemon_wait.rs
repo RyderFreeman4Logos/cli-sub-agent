@@ -456,6 +456,9 @@ fn check_session_stale_before_wait(
                 {
                     return Ok(());
                 }
+                if csa_process::ToolLiveness::is_alive(session_dir) {
+                    return Ok(());
+                }
                 match csa_session::load_result(project_root, session_id) {
                     Ok(Some(_)) => return Ok(()),
                     Err(_) => return Ok(()), // result file exists but unparseable
