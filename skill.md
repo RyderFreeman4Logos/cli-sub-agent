@@ -255,6 +255,8 @@ patterns to install. Use checkboxes or a numbered menu.
 
 > These patterns enforce strict commit discipline with security audit, test
 > verification, and heterogeneous model review.
+> CSA-Codex writers and reviewers should also load
+> `docs/writer-anti-patterns.md` before review-driven implementation or fixes.
 
 | Pattern | What it does |
 |---------|--------------|
