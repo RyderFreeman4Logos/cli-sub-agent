@@ -160,12 +160,10 @@ impl HttpEndpoint {
                 move || Ok(hub_service.clone())
             },
             session_manager,
-            StreamableHttpServerConfig {
-                cancellation_token: shutdown.clone(),
-                stateful_mode: false,
-                sse_keep_alive: None,
-                ..Default::default()
-            },
+            StreamableHttpServerConfig::default()
+                .with_cancellation_token(shutdown.clone())
+                .with_stateful_mode(false)
+                .with_sse_keep_alive(None),
         );
 
         let app = axum::Router::new()

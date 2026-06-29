@@ -26,7 +26,7 @@ start = 42
     .expect("findings.toml should be written");
     std::fs::write(
         output_dir.join("suggestion.toml"),
-        "[suggestion]\naction = \"confirm_then_fix_finding\"\ncommand_template = \"csa review --fix-finding --session 01TEST2516FAILSUMMARY --prompt-file <path>\"\n",
+        "[suggestion]\naction = \"confirm_then_fix_finding\"\ncommand_template = \"csa review --fix-finding --session 01TEST2516FAILSUMMARY --prompt-file FIX_PROMPT.md\"\n",
     )
     .expect("suggestion.toml should be written");
     let now = Utc::now();

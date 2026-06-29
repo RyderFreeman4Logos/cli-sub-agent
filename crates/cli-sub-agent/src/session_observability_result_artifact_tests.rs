@@ -244,6 +244,94 @@ fn refresh_and_repair_result_from_dir_ignores_stale_gate_failure_log_for_unrelat
 }
 
 #[test]
+fn issue_2440_clean_pass_repair_does_not_override_summary_gate() {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let _state_guard =
+        crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", temp.path().join("state"));
+    let project_root = temp.path().join("project");
+    fs::create_dir_all(&project_root).expect("create project");
+    let session = csa_session::create_session(
+        &project_root,
+        Some("issue 2440 clean pass repair regression"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir =
+        csa_session::get_session_dir(&project_root, &session_id).expect("session dir");
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir).expect("create output dir");
+
+    let summary = "No blocking findings in `main...HEAD`.\nHigh-severity: 1 finding remains in `crates/cli-sub-agent/src/session_observability.rs`.";
+    fs::write(output_dir.join("summary.md"), summary).expect("write summary");
+    let now = chrono::Utc::now();
+    csa_session::write_review_meta(
+        &session_dir,
+        &csa_session::ReviewSessionMeta {
+            session_id: session_id.clone(),
+            head_sha: "issue-2440-head".to_string(),
+            decision: csa_core::types::ReviewDecision::Pass.as_str().to_string(),
+            verdict: "CLEAN".to_string(),
+            review_mode: None,
+            status_reason: None,
+            routed_to: None,
+            primary_failure: None,
+            failure_reason: None,
+            tool: "codex".to_string(),
+            scope: "range:main...HEAD".to_string(),
+            exit_code: 0,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 1,
+            timestamp: now,
+            diff_fingerprint: None,
+            fix_convergence: None,
+        },
+    )
+    .expect("write review meta");
+    csa_session::write_review_verdict(
+        &session_dir,
+        &csa_session::ReviewVerdictArtifact::from_parts(
+            session_id.clone(),
+            csa_core::types::ReviewDecision::Pass,
+            "CLEAN",
+            &[],
+            vec![],
+        ),
+    )
+    .expect("write pass verdict artifact");
+    csa_session::save_result(
+        &project_root,
+        &session_id,
+        &SessionResult {
+            status: SessionResult::status_from_exit_code(1),
+            exit_code: 1,
+            summary: summary.to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            ..Default::default()
+        },
+    )
+    .expect("save failing result");
+
+    let refreshed = refresh_and_repair_result_from_dir(&session_dir)
+        .expect("refresh result")
+        .expect("result should exist");
+
+    assert_eq!(refreshed.exit_code, 1);
+    assert_eq!(refreshed.status, SessionResult::status_from_exit_code(1));
+    let persisted: SessionResult = toml::from_str(
+        &fs::read_to_string(session_dir.join(csa_session::result::RESULT_FILE_NAME))
+            .expect("read persisted result"),
+    )
+    .expect("parse persisted result");
+    assert_eq!(persisted.exit_code, 1);
+    assert_eq!(persisted.status, SessionResult::status_from_exit_code(1));
+}
+
+#[test]
 fn enrich_result_from_session_dir_ignores_stale_gate_failure_log_for_unrelated_failure() {
     let fixture = create_stale_gate_log_failure_fixture();
     let mut result = csa_session::load_result(&fixture.project_root, &fixture.session_id)

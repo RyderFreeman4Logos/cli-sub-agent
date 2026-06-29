@@ -171,8 +171,11 @@ pub(crate) fn render_wait_result_summary(
             );
         }
         lines.extend(
-            crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines(
+            crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines_for_display_session(
+                session_dir,
+                session_id,
                 recovery,
+                result.kill_diagnostics.as_ref(),
             ),
         );
     }
@@ -292,6 +295,14 @@ fn render_wait_result_json(
         "kill_diagnostics": result.kill_diagnostics.as_ref(),
         "require_commit_recovery": result.require_commit_recovery.as_ref(),
         "memory_soft_limit_recovery": result.memory_soft_limit_recovery.as_ref(),
+        "memory_soft_limit_recovery_guidance": result.memory_soft_limit_recovery.as_ref().map(|recovery| {
+            crate::memory_soft_limit_recovery_display::build_memory_soft_limit_recovery_guidance_for_display_session(
+                session_dir,
+                session_id,
+                recovery,
+                result.kill_diagnostics.as_ref(),
+            ).to_json()
+        }),
         "fix_finding_recovery": crate::session_fix_finding_recovery::read_recovery_sidecar(session_dir),
         "post_exec_gate": result.post_exec_gate.as_ref(),
         "large_diff_warning": result.large_diff_warning.as_ref(),

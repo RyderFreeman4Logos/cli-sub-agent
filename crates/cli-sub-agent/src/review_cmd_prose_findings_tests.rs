@@ -115,6 +115,18 @@ Verification:
 }
 
 #[test]
+fn issue_2440_verified_word_does_not_trigger_resolution() {
+    use super::finding_text_describes_resolved_issue;
+
+    assert!(
+        !finding_text_describes_resolved_issue(
+            "High: verified reviewer-auth credential disclosure in summary"
+        ),
+        "'verified' in an active finding title is not explicit resolution language"
+    );
+}
+
+#[test]
 fn issue_2516_no_longer_describes_regression_not_resolution() {
     use super::finding_text_describes_resolved_issue;
 
