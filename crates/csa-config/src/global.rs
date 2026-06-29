@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub use crate::global_env::ExecutionEnvOptions;
 pub use crate::global_kv_cache::{
     DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig,
-    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, ResolvedKvCacheValue,
+    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, ProviderTtls, ResolvedKvCacheValue,
 };
 use crate::mcp::McpServerConfig;
 use crate::memory::MemoryConfig;

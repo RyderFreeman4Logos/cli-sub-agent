@@ -95,11 +95,17 @@ task_pool_workers = 1
 
 # KV cache-aware polling defaults.
 # `frequent_poll_seconds`: fast external state (GitHub API, bot responses).
-# `long_poll_seconds`: long waits that return control before the caller cache goes cold.
-# Max-tier Opus users can raise `long_poll_seconds` to 3000 (~50 min on a 1h TTL).
+# `default_ttl_seconds`: fallback when caller model provider detection is unavailable.
+# `long_poll_seconds` is a deprecated alias for `default_ttl_seconds`.
 [kv_cache]
 frequent_poll_seconds = 60
-long_poll_seconds = 240
+default_ttl_seconds = 240
+
+[kv_cache.provider_ttls]
+claude = 3300
+openai = 1700
+glm = 540
+other = 270
 
 # Parent-tool caller hints.
 # Codex callers should prefer the CSA MCP `csa_session_wait` tool with a long
