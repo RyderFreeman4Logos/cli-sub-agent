@@ -36,6 +36,17 @@ pub struct SpawnMemoryAdmission {
     pub sampled_session_count: u64,
 }
 
+/// Upper-bound inputs for a retry after host-memory admission denial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryAdmissionRetryBounds {
+    /// Upper bound from physical MemAvailable after preserving the configured reserve.
+    pub physical_upper_mb: u64,
+    /// Upper bound from already-active CSA session pressure, when total RAM is known.
+    pub active_session_upper_mb: Option<u64>,
+    /// Effective upper bound that satisfies both physical and active-session gates.
+    pub combined_upper_mb: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryAdmissionKind {
     Reserve,
@@ -66,6 +77,9 @@ pub struct MemoryAdmissionError {
     pub active_session_projected_mb: Option<u64>,
     pub active_session_count: Option<u64>,
     pub sampled_session_count: Option<u64>,
+    pub retry_physical_upper_mb: Option<u64>,
+    pub retry_active_session_upper_mb: Option<u64>,
+    pub retry_combined_upper_mb: Option<u64>,
 }
 
 impl MemoryAdmissionError {
@@ -84,6 +98,11 @@ impl MemoryAdmissionError {
             active_session_projected_mb: snapshot.active_session_projected_mb,
             active_session_count: snapshot.active_session_count,
             sampled_session_count: snapshot.sampled_session_count,
+            retry_physical_upper_mb: snapshot.retry_bounds.map(|bounds| bounds.physical_upper_mb),
+            retry_active_session_upper_mb: snapshot
+                .retry_bounds
+                .and_then(|bounds| bounds.active_session_upper_mb),
+            retry_combined_upper_mb: snapshot.retry_bounds.map(|bounds| bounds.combined_upper_mb),
         }
     }
 }
@@ -109,6 +128,7 @@ struct MemoryAdmissionSnapshot {
     active_session_projected_mb: Option<u64>,
     active_session_count: Option<u64>,
     sampled_session_count: Option<u64>,
+    retry_bounds: Option<MemoryAdmissionRetryBounds>,
 }
 
 /// Guards resource availability before launching tools.
@@ -220,21 +240,47 @@ fn evaluate_memory_availability(
     reserve_mb: u64,
     admission: Option<SpawnMemoryAdmission>,
 ) -> Result<()> {
+    let admission_retry = admission.map(|admission| {
+        let retry_bounds = retry_bounds_for(available_phys_mb, total_ram_mb, reserve_mb, admission);
+        (
+            admission,
+            retry_bounds,
+            format_retry_upper_bound(retry_bounds),
+        )
+    });
     let base_snapshot = MemoryAdmissionSnapshot {
         available_phys_mb,
         available_swap_mb,
         available_combined_mb,
         total_ram_mb,
         reserve_mb,
+        projected_spawn_mb: admission.map(|admission| admission.projected_spawn_mb),
+        active_session_rss_mb: admission.map(|admission| admission.active_session_rss_mb),
+        active_session_projected_mb: admission
+            .map(|admission| admission.active_session_projected_mb),
+        active_session_count: admission.map(|admission| admission.active_session_count),
+        sampled_session_count: admission.map(|admission| admission.sampled_session_count),
+        retry_bounds: admission_retry
+            .as_ref()
+            .map(|(_, retry_bounds, _)| *retry_bounds),
         ..Default::default()
     };
 
     if available_phys_mb < reserve_mb {
+        let retry_note = admission_retry
+            .as_ref()
+            .map(|(_, _, note)| {
+                format!(
+                    " Pre-exec memory admission is infrastructure/session-unavailable before \
+                     provider launch, not a product/test/review failure. {note}"
+                )
+            })
+            .unwrap_or_default();
         let message = format!(
             "CSA: low memory — available={available_phys_mb}MB < required={reserve_mb}MB. \
              Refusing to spawn tool scopes. actual_available_mb={available_phys_mb} \
              required_mb={reserve_mb} physical_available_mb={available_phys_mb} \
-             swap_available_mb={available_swap_mb} combined_available_mb={available_combined_mb}"
+             swap_available_mb={available_swap_mb} combined_available_mb={available_combined_mb}{retry_note}"
         );
         eprintln!("{message}");
         let error = MemoryAdmissionError::new(
@@ -265,19 +311,20 @@ fn evaluate_memory_availability(
         );
     }
 
-    if let Some(admission) = admission
+    if let Some((admission, retry_bounds, retry_note)) = admission_retry
         && admission.projected_spawn_mb > 0
     {
         let required_available_mb = reserve_mb.saturating_add(admission.projected_spawn_mb);
         if available_phys_mb < required_available_mb {
-            let host_cap_upper_mb = available_phys_mb.saturating_sub(reserve_mb);
             let message = format!(
                 "CSA: host memory admission denied — available={available_phys_mb}MB < \
                  required={required_available_mb}MB (reserve={reserve_mb}MB + \
                  projected_spawn={projected_spawn_mb}MB). active_sessions={active_sessions} \
                  sampled_sessions={sampled_sessions} active_session_rss_mb={active_rss} \
                  active_session_projected_mb={active_projected} swap_available_mb={available_swap_mb} \
-                 combined_available_mb={available_combined_mb}",
+                 combined_available_mb={available_combined_mb}. Pre-exec memory admission is \
+                 infrastructure/session-unavailable before provider launch, not a \
+                 product/test/review failure. {retry_note}",
                 projected_spawn_mb = admission.projected_spawn_mb,
                 active_sessions = admission.active_session_count,
                 sampled_sessions = admission.sampled_session_count,
@@ -292,10 +339,9 @@ fn evaluate_memory_availability(
                      MemAvailable only; swap and combined memory are reported for diagnostics but \
                      do not satisfy this pre-spawn gate. For one csa run, pass \
                      --memory-max-mb <MB> to lower projected_spawn or --min-free-memory-mb <MB> \
-                     to lower the reserve. Current host-only retry upper bound is \
-                     memory_max_mb <= {host_cap_upper_mb}MB with reserve={reserve_mb}MB; \
-                     role-specific soft-limit lower bounds may require a higher cap, so choose \
-                     a value inside both bounds or free memory/lower reserve. Persistent config \
+                     to lower the reserve. Choose a memory_max_mb inside the printed retry \
+                     upper bound and the role/tool soft-limit floor; if no such window exists, \
+                     wait/free memory or reduce active CSA-session pressure. Persistent config \
                      keys: resources.memory_max_mb, tools.<tool>.memory_max_mb, \
                      resources.min_free_memory_mb."
                 ),
@@ -307,6 +353,7 @@ fn evaluate_memory_availability(
                     active_session_projected_mb: Some(admission.active_session_projected_mb),
                     active_session_count: Some(admission.active_session_count),
                     sampled_session_count: Some(admission.sampled_session_count),
+                    retry_bounds: Some(retry_bounds),
                     ..base_snapshot
                 },
             );
@@ -324,7 +371,9 @@ fn evaluate_memory_availability(
                  > host_safe_limit={host_safe_limit_mb}MB ({safe_num}/{safe_den} of total_ram={total_ram_mb}MB). \
                  active_sessions={active_sessions} sampled_sessions={sampled_sessions} \
                  active_session_rss_mb={active_rss} active_session_projected_mb={active_projected} \
-                 projected_spawn_mb={projected_spawn_mb} available_mb={available_phys_mb}",
+                 projected_spawn_mb={projected_spawn_mb} available_mb={available_phys_mb}. \
+                 Pre-exec memory admission is infrastructure/session-unavailable before provider \
+                 launch, not a product/test/review failure. {retry_note}",
                 safe_num = ACTIVE_SESSION_SAFE_FRACTION_NUM,
                 safe_den = ACTIVE_SESSION_SAFE_FRACTION_DEN,
                 active_sessions = admission.active_session_count,
@@ -338,7 +387,10 @@ fn evaluate_memory_availability(
                 format!(
                     "{message}. CSA is refusing to launch work that could collectively exhaust host RAM. \
                      For one csa run, pass --memory-max-mb <MB> to lower projected_spawn. \
-                     Persistent config keys: resources.memory_max_mb or tools.<tool>.memory_max_mb."
+                     Choose a memory_max_mb inside the printed retry upper bound and the \
+                     role/tool soft-limit floor; if no such window exists, wait for active CSA \
+                     sessions to finish or use a different configured tool. Persistent config \
+                     keys: resources.memory_max_mb or tools.<tool>.memory_max_mb."
                 ),
                 MemoryAdmissionKind::ActiveSession,
                 MemoryAdmissionSnapshot {
@@ -348,6 +400,7 @@ fn evaluate_memory_availability(
                     active_session_projected_mb: Some(admission.active_session_projected_mb),
                     active_session_count: Some(admission.active_session_count),
                     sampled_session_count: Some(admission.sampled_session_count),
+                    retry_bounds: Some(retry_bounds),
                     ..base_snapshot
                 },
             );
@@ -377,219 +430,49 @@ fn evaluate_memory_availability(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn retry_bounds_for(
+    available_phys_mb: u64,
+    total_ram_mb: u64,
+    reserve_mb: u64,
+    admission: SpawnMemoryAdmission,
+) -> MemoryAdmissionRetryBounds {
+    let physical_upper_mb = available_phys_mb.saturating_sub(reserve_mb);
+    let active_session_upper_mb = active_session_retry_upper_mb(total_ram_mb, admission);
+    let combined_upper_mb = active_session_upper_mb.map_or(physical_upper_mb, |active_upper| {
+        physical_upper_mb.min(active_upper)
+    });
 
-    #[test]
-    fn test_resource_guard_new_default_limits() {
-        let limits = ResourceLimits::default();
-        let _guard = ResourceGuard::new(limits);
-        assert_eq!(ResourceLimits::default().min_free_memory_mb, 4096);
-    }
-
-    #[test]
-    fn test_check_availability_succeeds_with_enough_memory() {
-        let limits = ResourceLimits {
-            min_free_memory_mb: 1,
-        };
-        let mut guard = ResourceGuard::new(limits);
-        let result = guard.check_availability("test_tool");
-        // 1 MB reserve — any running system has this.
-        assert!(result.is_ok(), "check_availability failed: {result:?}");
-    }
-
-    #[test]
-    fn test_check_availability_fails_with_impossible_limits() {
-        let limits = ResourceLimits {
-            min_free_memory_mb: u64::MAX / 2,
-        };
-        let mut guard = ResourceGuard::new(limits);
-        let result = guard.check_availability("any_tool");
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("CSA: low memory"),
-            "Expected memory error, got: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn test_check_availability_simple_threshold() {
-        // Verify the simple threshold: available_mem + available_swap >= reserve
-        // With reserve = 2 MB, any system should pass.
-        let limits = ResourceLimits {
-            min_free_memory_mb: 2,
-        };
-        let mut guard = ResourceGuard::new(limits);
-        let result = guard.check_availability("threshold_tool");
-        assert!(
-            result.is_ok(),
-            "2 MB reserve should pass on any system: {result:?}",
-        );
-    }
-
-    #[test]
-    fn test_check_availability_reports_swap_without_requiring_it() {
-        // With a very small reserve, the check must pass even if
-        // swap is present. The hard gate is based on physical MemAvailable.
-        let limits = ResourceLimits {
-            min_free_memory_mb: 1,
-        };
-        let mut guard = ResourceGuard::new(limits);
-
-        // Refresh and verify the host reports physical memory.
-        guard.sys.refresh_memory();
-        let phys = guard.sys.available_memory() / 1024 / 1024;
-        let swap = guard.sys.free_swap() / 1024 / 1024;
-
-        let result = guard.check_availability("swap_tool");
-        assert!(
-            result.is_ok(),
-            "physical {phys} MB with swap {swap} MB should be >= 1 MB"
-        );
-    }
-
-    // --- Pure function tests (deterministic, no sysinfo dependency) ---
-
-    #[test]
-    fn test_evaluate_hard_block_when_available_below_reserve() {
-        let result =
-            evaluate_memory_availability("test_tool", 3000, 1000, 4000, 32_000, 4096, None);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("CSA: low memory"),
-            "Expected hard block, got: {msg}"
-        );
-        assert!(
-            msg.contains("actual_available_mb=3000"),
-            "Should show available: {msg}"
-        );
-        assert!(
-            msg.contains("required_mb=4096"),
-            "Should show reserve: {msg}"
-        );
-        assert!(msg.contains("--min-free-memory-mb <MB>"));
-    }
-
-    #[test]
-    fn test_evaluate_warning_when_available_between_100_and_150_percent() {
-        // reserve=4096, 150% = 6144. available=5000 is between 4096..6144.
-        let result =
-            evaluate_memory_availability("test_tool", 5000, 1000, 6000, 32_000, 4096, None);
-        // Should succeed (warning only, no error).
-        assert!(result.is_ok(), "Should warn but not block: {result:?}");
-    }
-
-    #[test]
-    fn test_evaluate_blocks_when_memavailable_below_reserve_even_with_swap() {
-        let result =
-            evaluate_memory_availability("test_tool", 3900, 4096, 7996, 32_000, 4096, None);
-        assert!(
-            result.is_err(),
-            "swap must not satisfy min_free_memory_mb when MemAvailable is low"
-        );
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("actual_available_mb=3900"));
-        assert!(msg.contains("swap_available_mb=4096"));
-        assert!(msg.contains("combined_available_mb=7996"));
-    }
-
-    #[test]
-    fn test_evaluate_no_warning_when_available_above_150_percent() {
-        // reserve=4096, 150% = 6144. available=7000 is above 6144.
-        let result =
-            evaluate_memory_availability("test_tool", 7000, 1000, 8000, 32_000, 4096, None);
-        assert!(result.is_ok(), "Should pass without warning: {result:?}");
-    }
-
-    #[test]
-    fn test_evaluate_exact_boundary_at_reserve() {
-        // Exactly at reserve — should pass (not strictly less than).
-        let result =
-            evaluate_memory_availability("test_tool", 4096, 1096, 5192, 32_000, 4096, None);
-        assert!(result.is_ok(), "Exact reserve should pass: {result:?}");
-    }
-
-    #[test]
-    fn test_evaluate_exact_boundary_at_warning_threshold() {
-        // reserve=4096, 150% = 6144. available=6144 is exactly at warning threshold.
-        let result =
-            evaluate_memory_availability("test_tool", 6144, 1144, 7288, 32_000, 4096, None);
-        // 6144 is NOT < 6144, so no warning.
-        assert!(
-            result.is_ok(),
-            "Exact warning threshold should pass: {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_evaluate_blocks_when_spawn_projection_exceeds_available_headroom() {
-        let admission = SpawnMemoryAdmission {
-            projected_spawn_mb: 8192,
-            active_session_rss_mb: 2048,
-            active_session_projected_mb: 4096,
-            active_session_count: 1,
-            sampled_session_count: 1,
-        };
-
-        let result =
-            evaluate_memory_availability("codex", 10_000, 0, 10_000, 32_000, 4096, Some(admission));
-
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("host memory admission denied"));
-        assert!(msg.contains("projected_spawn=8192MB"));
-        assert!(msg.contains("Host admission uses physical MemAvailable only"));
-        assert!(msg.contains("swap and combined memory are reported for diagnostics"));
-        assert!(msg.contains("--memory-max-mb <MB>"));
-        assert!(msg.contains("--min-free-memory-mb <MB>"));
-        assert!(msg.contains("memory_max_mb <= 5904MB"));
-        assert!(msg.contains("tools.<tool>.memory_max_mb"));
-    }
-
-    #[test]
-    fn test_evaluate_blocks_when_active_projection_exceeds_host_safe_limit() {
-        let admission = SpawnMemoryAdmission {
-            projected_spawn_mb: 8192,
-            active_session_rss_mb: 16_000,
-            active_session_projected_mb: 20_000,
-            active_session_count: 3,
-            sampled_session_count: 2,
-        };
-
-        let result =
-            evaluate_memory_availability("codex", 20_000, 0, 20_000, 32_000, 4096, Some(admission));
-
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("active-session memory admission denied"));
-        assert!(msg.contains("projected_active=28192MB"));
-        assert!(msg.contains("--memory-max-mb <MB>"));
-        assert!(msg.contains("resources.memory_max_mb"));
-    }
-
-    #[test]
-    fn test_evaluate_allows_safe_spawn_projection() {
-        let admission = SpawnMemoryAdmission {
-            projected_spawn_mb: 4096,
-            active_session_rss_mb: 2048,
-            active_session_projected_mb: 4096,
-            active_session_count: 1,
-            sampled_session_count: 1,
-        };
-
-        let result = evaluate_memory_availability(
-            "claude-code",
-            12_000,
-            0,
-            12_000,
-            32_000,
-            4096,
-            Some(admission),
-        );
-
-        assert!(result.is_ok(), "safe projection should pass: {result:?}");
+    MemoryAdmissionRetryBounds {
+        physical_upper_mb,
+        active_session_upper_mb,
+        combined_upper_mb,
     }
 }
+
+fn active_session_retry_upper_mb(
+    total_ram_mb: u64,
+    admission: SpawnMemoryAdmission,
+) -> Option<u64> {
+    let host_safe_limit_mb = total_ram_mb.saturating_mul(ACTIVE_SESSION_SAFE_FRACTION_NUM)
+        / ACTIVE_SESSION_SAFE_FRACTION_DEN;
+    (host_safe_limit_mb > 0)
+        .then(|| host_safe_limit_mb.saturating_sub(admission.active_session_projected_mb))
+}
+
+fn format_retry_upper_bound(bounds: MemoryAdmissionRetryBounds) -> String {
+    let active_upper = bounds
+        .active_session_upper_mb
+        .map(|upper| format!("{upper}MB"))
+        .unwrap_or_else(|| "unknown".to_string());
+    format!(
+        "Retry upper bound: memory_max_mb <= {combined}MB \
+         (physical/reserve upper={physical}MB; active-session upper={active}).",
+        combined = bounds.combined_upper_mb,
+        physical = bounds.physical_upper_mb,
+        active = active_upper,
+    )
+}
+
+#[cfg(test)]
+#[path = "guard_tests.rs"]
+mod tests;

@@ -235,7 +235,8 @@ fn format_failover_chain_label(
             && let Some(primary_failure) = artifact.primary_failure.as_deref()
             && !primary_failure.trim().is_empty()
         {
-            return Some(primary_failure.trim().to_string());
+            let redacted = csa_session::redact_text_content(primary_failure.trim());
+            return Some(redacted);
         }
     }
 

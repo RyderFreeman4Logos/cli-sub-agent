@@ -331,6 +331,16 @@ pub struct NoProviderLaunchMemoryDiagnostic {
     pub active_session_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampled_session_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_physical_upper_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_active_session_upper_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_combined_upper_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_lower_bound_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_feasible: Option<bool>,
 }
 
 pub fn write_no_provider_launch_diagnostic(

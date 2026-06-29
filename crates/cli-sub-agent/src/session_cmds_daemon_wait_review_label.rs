@@ -47,7 +47,10 @@ pub(super) fn read_review_verdict_label(
             && let Some(primary_failure) = artifact.primary_failure.as_deref()
             && !primary_failure.trim().is_empty()
         {
-            return Some(format!("UNAVAILABLE ({})", primary_failure.trim()));
+            let redacted = csa_session::redact_text_content(primary_failure.trim());
+            let compacted = super::compact_wait_summary_text(&redacted);
+            let label = compacted.unwrap_or_else(|| redacted.clone());
+            return Some(format!("UNAVAILABLE ({label})"));
         }
         let normalized = normalize_review_verdict_label(artifact.decision.as_str(), result);
         if matches!(
