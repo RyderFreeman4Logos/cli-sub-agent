@@ -92,7 +92,9 @@ pub(crate) fn refresh_and_repair_result_from_dir(
     if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, &mut result)? {
         changed = true;
     }
-    if review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, &mut result)? {
+    if !force_review_failure
+        && review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, &mut result)?
+    {
         changed = true;
     }
 
@@ -148,7 +150,9 @@ pub(crate) fn enrich_result_from_session_dir(
     if gate::infer_post_exec_gate_failure_from_log(session_dir, &result_path, result)? {
         changed = true;
     }
-    if review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, result)? {
+    if !force_review_failure
+        && review_verdict::sync_clean_pass_result_status_from_sidecars(session_dir, result)?
+    {
         changed = true;
     }
 

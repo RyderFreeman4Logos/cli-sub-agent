@@ -1,4 +1,6 @@
-const RESOLUTION_WORDS: &[&str] = &[
+// Keep this to resolved-state predicates; verification verbs are ambiguous in
+// active finding titles unless the surrounding prose states the issue is fixed.
+const RESOLUTION_STATE_WORDS: &[&str] = &[
     "addressed",
     "cleared",
     "closed",
@@ -10,7 +12,9 @@ const RESOLUTION_WORDS: &[&str] = &[
     "removed",
     "repaired",
     "resolved",
-    "verified",
+];
+const RESOLUTION_AUXILIARY_WORDS: &[&str] = &[
+    "am", "are", "be", "been", "being", "had", "has", "have", "is", "was", "were",
 ];
 const REQUIRED_FIX_WORDS: &[&str] = &[
     "must", "need", "needed", "needs", "require", "required", "requires", "should",
@@ -91,8 +95,29 @@ fn resolution_token_applies(tokens: &[String], index: usize) -> bool {
     let Some(token) = tokens.get(index) else {
         return false;
     };
-    RESOLUTION_WORDS.contains(&token.as_str())
+    RESOLUTION_STATE_WORDS.contains(&token.as_str())
         && !resolution_token_is_negated_or_required(tokens, index)
+        && resolution_token_has_explicit_state_context(tokens, index)
+}
+
+fn resolution_token_has_explicit_state_context(tokens: &[String], index: usize) -> bool {
+    resolution_token_has_auxiliary(tokens, index)
+        || token_before(tokens, index).is_some_and(|token| token == "as")
+}
+
+fn resolution_token_has_auxiliary(tokens: &[String], index: usize) -> bool {
+    tokens[..index]
+        .iter()
+        .rev()
+        .take(3)
+        .any(|candidate| RESOLUTION_AUXILIARY_WORDS.contains(&candidate.as_str()))
+}
+
+fn token_before(tokens: &[String], index: usize) -> Option<&str> {
+    index
+        .checked_sub(1)
+        .and_then(|previous| tokens.get(previous))
+        .map(String::as_str)
 }
 
 fn resolution_token_is_negated_or_required(tokens: &[String], index: usize) -> bool {

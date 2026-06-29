@@ -4,8 +4,8 @@ use csa_session::{SessionResultView, TokenUsage};
 use std::fs;
 use std::path::Path;
 
+use super::memory_soft_limit_result_display::{insert, lines};
 use super::{StructuredOutputOpts, TranscriptSummary};
-use crate::memory_soft_limit_recovery_display::format_memory_soft_limit_recovery_lines;
 use crate::require_commit_recovery_display::format_require_commit_recovery_lines;
 use crate::review_failure_context as rfc;
 use crate::session_display_alias;
@@ -100,7 +100,7 @@ pub(super) fn display_result_text(
         }
     }
     if let Some(recovery) = envelope.memory_soft_limit_recovery.as_ref() {
-        for line in format_memory_soft_limit_recovery_lines(recovery) {
+        for line in lines(session_id, session_dir, envelope, recovery) {
             println!("{line}");
         }
     }
@@ -269,6 +269,7 @@ pub(super) fn build_result_json_payload_with_identity(
     let mut payload =
         build_result_json_payload(result, transcript_summary, review_meta, token_usage)?;
     session_display_alias::apply_json_identity(&mut payload, session_dir, session_id);
+    insert(&mut payload, session_id, session_dir, &result.envelope);
     rfc::insert_json(&mut payload, session_dir);
     Ok(payload)
 }
@@ -358,7 +359,6 @@ pub(super) fn display_pre_exec_summary_if_present(session_dir: &Path, json: bool
     pre_exec_summary::display_if_present(session_dir, unavailable_reason.as_deref(), json)
 }
 
-/// Display structured output sections based on the requested mode.
 pub(super) fn display_structured_output(
     session_dir: &Path,
     session_id: &str,

@@ -181,6 +181,12 @@ last_accessed = "2026-06-01T00:00:00Z"
     assert!(summary.contains("soft_limit_percent=90"));
     assert!(summary.contains("MM crates/verbatim-daemon/src/main.rs"));
     assert!(summary.contains("Retry profile: lightweight_commit_only_recovery"));
+    assert!(summary.contains(
+        "Continuation command: csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --build-jobs 1 --prompt-file CONTINUATION_PROMPT.md"
+    ));
+    assert!(summary.contains("preserve existing staged and unstaged work"));
+    assert!(summary.contains("low-RSS commit-only salvage"));
+    assert!(summary.contains("avoid blind retry under the same memory cap"));
     assert!(summary.contains("git status --short"));
     assert!(summary.contains("preserve staged and unstaged changes"));
     assert!(summary.contains("lighter commit-only/require-commit recovery"));
@@ -188,4 +194,28 @@ last_accessed = "2026-06-01T00:00:00Z"
     assert!(!summary.contains("git checkout --"));
     assert!(!summary.contains("git stash"));
     assert!(!summary.contains("git clean"));
+
+    let rendered = render_wait_result_json(&session_dir, "01KW641KP78VR43SCKJVN6HGDN", &result)
+        .expect("wait result JSON should render");
+    let value: serde_json::Value =
+        serde_json::from_str(&rendered).expect("wait result JSON should parse");
+    assert_eq!(value["status"], "failure");
+    assert_eq!(value["exit_code"], 1);
+    assert_eq!(
+        value["require_commit_recovery"]["termination_status"],
+        "signal"
+    );
+    assert_eq!(
+        value["memory_soft_limit_recovery"]["git_status_short"][0],
+        "MM crates/verbatim-daemon/src/main.rs"
+    );
+    assert_eq!(
+        value["memory_soft_limit_recovery_guidance"]["continuation_command"],
+        "csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --build-jobs 1 --prompt-file CONTINUATION_PROMPT.md"
+    );
+    assert!(
+        value["memory_soft_limit_recovery_guidance"]["retry_guidance"]
+            .as_str()
+            .is_some_and(|text| text.contains("avoid blind retry under the same memory cap"))
+    );
 }

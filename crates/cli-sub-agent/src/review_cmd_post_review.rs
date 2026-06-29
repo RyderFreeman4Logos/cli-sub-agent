@@ -122,7 +122,7 @@ pub(super) fn build_review_failure_suggestion(
     }
 
     let command_template =
-        format!("csa review --fix-finding --session {session_id} --prompt-file <path>");
+        format!("csa review --fix-finding --session {session_id} --prompt-file FIX_PROMPT.md");
     let suggestion = ReviewSuggestionFile {
         suggestion: ReviewFailureSuggestion {
             action: CONFIRM_THEN_FIX_FINDING_ACTION,
@@ -248,7 +248,8 @@ pub(super) fn suggest_review_failure_fix(
 }
 
 pub(super) fn build_review_failure_caller_hint(session_id: &str) -> String {
-    let command = format!("csa review --fix-finding --session {session_id} --prompt-file <path>");
+    let command =
+        format!("csa review --fix-finding --session {session_id} --prompt-file FIX_PROMPT.md");
     let escaped_command = crate::daemon_caller_hints::escape_structured_comment_attr(&command);
     format!(
         "<!-- CSA:CALLER_HINT action=\"review_confirm_fix_finding\" \
@@ -318,7 +319,7 @@ mod tests {
 
         assert_eq!(
             rendered,
-            "[suggestion]\naction = \"confirm_then_fix_finding\"\nsession_id = \"01HREVIEWSESSION0000000000\"\nrequires_confirmation = true\ncommand_template = \"csa review --fix-finding --session 01HREVIEWSESSION0000000000 --prompt-file <path>\"\nhint = \"Confirm the review finding is not a false positive, then run --fix-finding. The fix pass resumes the reviewer session for KV-cache reuse; use a NEW review session for the next review round.\"\ntool = \"codex\"\nmodel_spec = \"codex/openai/gpt-5.5/xhigh\"\nprovider_session_id = \"provider-123\"\n"
+            "[suggestion]\naction = \"confirm_then_fix_finding\"\nsession_id = \"01HREVIEWSESSION0000000000\"\nrequires_confirmation = true\ncommand_template = \"csa review --fix-finding --session 01HREVIEWSESSION0000000000 --prompt-file FIX_PROMPT.md\"\nhint = \"Confirm the review finding is not a false positive, then run --fix-finding. The fix pass resumes the reviewer session for KV-cache reuse; use a NEW review session for the next review round.\"\ntool = \"codex\"\nmodel_spec = \"codex/openai/gpt-5.5/xhigh\"\nprovider_session_id = \"provider-123\"\n"
         );
     }
 

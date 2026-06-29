@@ -14,6 +14,8 @@ use crate::session_cmds::{
 mod artifacts;
 #[path = "session_cmds_result_display.rs"]
 mod display;
+#[path = "session_cmds_result_memory_soft_limit.rs"]
+mod memory_soft_limit_result_display;
 #[path = "session_cmds_result_tool_output.rs"]
 mod tool_output;
 
@@ -395,6 +397,8 @@ use display::{
     gate_summary_employee_section, load_structured_post_exec_gate_report,
     render_result_sidecar_for_text, render_token_usage_lines, structured_sections_with_gate_first,
 };
+#[cfg(test)]
+use memory_soft_limit_result_display::lines;
 pub(crate) use tool_output::handle_session_tool_output;
 
 #[cfg(test)]
@@ -403,6 +407,9 @@ mod identity_tests;
 #[cfg(test)]
 #[path = "session_cmds_result_post_exec_gate_tests.rs"]
 mod post_exec_gate_tests;
+#[cfg(test)]
+#[path = "session_cmds_result_display_tests.rs"]
+mod session_cmds_result_display_tests;
 #[cfg(test)]
 #[path = "session_cmds_result_tests.rs"]
 mod tests;

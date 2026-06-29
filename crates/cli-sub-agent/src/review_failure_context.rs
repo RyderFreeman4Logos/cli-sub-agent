@@ -309,7 +309,7 @@ fn fix_route_label(session_dir: &Path, session_id: &str) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| {
-            format!("csa review --fix-finding --session {session_id} --prompt-file <path>")
+            format!("csa review --fix-finding --session {session_id} --prompt-file FIX_PROMPT.md")
         });
     format!("confirm the finding, then run `{command}`; next review must be a fresh session")
 }
@@ -400,7 +400,7 @@ mod tests {
         .expect("write findings");
         std::fs::write(
             temp.path().join("output").join("suggestion.toml"),
-            "[suggestion]\naction = \"confirm_then_fix_finding\"\ncommand_template = \"csa review --fix-finding --session 01TESTFAILCTX --prompt-file <path>\"\n",
+            "[suggestion]\naction = \"confirm_then_fix_finding\"\ncommand_template = \"csa review --fix-finding --session 01TESTFAILCTX --prompt-file FIX_PROMPT.md\"\n",
         )
         .expect("write suggestion");
 
