@@ -23,7 +23,8 @@ pub use cgroup::{
 };
 pub use filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 pub use guard::{
-    MemoryAdmissionError, MemoryAdmissionKind, ResourceGuard, ResourceLimits, SpawnMemoryAdmission,
+    MemoryAdmissionError, MemoryAdmissionKind, MemoryAdmissionRetryBounds, ResourceGuard,
+    ResourceLimits, SpawnMemoryAdmission,
 };
 pub use isolation_plan::{EnforcementMode, IsolationPlan, IsolationPlanBuilder};
 pub use landlock::apply_landlock_rules;

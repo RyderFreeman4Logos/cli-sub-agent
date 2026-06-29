@@ -137,6 +137,8 @@ fn review_host_memory_admission_is_rejected_before_session_creation() {
     let msg = format!("{err:#}");
     assert!(msg.contains("CSA: low memory"), "{msg}");
     assert!(msg.contains("review preflight for tool 'codex'"), "{msg}");
+    assert!(msg.contains("host memory retry guidance"), "{msg}");
+    assert!(msg.contains("Retry feasibility:"), "{msg}");
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
     assert!(
         sessions.is_empty(),

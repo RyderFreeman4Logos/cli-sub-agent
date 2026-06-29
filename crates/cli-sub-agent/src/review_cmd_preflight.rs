@@ -249,7 +249,25 @@ fn validate_host_memory_before_session(
         REVIEW_PREFLIGHT_SESSION_ID,
         projected_spawn_mb,
     );
-    resource_guard.check_availability_with_admission(tool.as_str(), Some(admission))
+    resource_guard
+        .check_availability_with_admission(tool.as_str(), Some(admission))
+        .map_err(|err| {
+            let guidance = crate::no_provider_launch::host_memory_guidance_from_error(
+                Some(REVIEWER_SUB_SESSION_TASK_TYPE),
+                tool.as_str(),
+                project_config,
+                resource_overrides,
+                &err,
+            );
+            if let Some(guidance) = guidance {
+                err.context(format!(
+                    "host memory retry guidance:\n- {}",
+                    guidance.join("\n- ")
+                ))
+            } else {
+                err
+            }
+        })
 }
 
 #[cfg(test)]

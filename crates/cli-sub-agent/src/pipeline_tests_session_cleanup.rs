@@ -357,6 +357,7 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
     assert_eq!(result.status, "failure");
     assert!(result.summary.starts_with("pre-exec:"));
     assert!(result.summary.contains("CSA: low memory"));
+    assert!(result.summary.contains("Retry feasibility:"));
     assert!(
         result
             .artifacts
@@ -382,6 +383,14 @@ async fn low_memory_pre_spawn_failure_sets_termination_reason() {
         Some(config.resources.min_free_memory_mb)
     );
     assert_eq!(no_provider.memory.effective_memory_max_mb, Some(1024));
+    assert_eq!(no_provider.memory.retry_lower_bound_mb, Some(256));
+    assert!(no_provider.memory.retry_combined_upper_mb.is_some());
+    assert!(
+        no_provider
+            .guidance
+            .iter()
+            .any(|item| item.contains("Retry feasibility:"))
+    );
 }
 
 #[tokio::test]
