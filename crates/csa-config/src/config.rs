@@ -660,7 +660,12 @@ stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5
 [kv_cache]
 frequent_poll_seconds = 60
-long_poll_seconds = 240
+default_ttl_seconds = 240
+[kv_cache.provider_ttls]
+claude = 3300
+openai = 1700
+glm = 540
+other = 270
 [gc]
 transcript_max_age_days = 30
 transcript_max_size_mb = 500

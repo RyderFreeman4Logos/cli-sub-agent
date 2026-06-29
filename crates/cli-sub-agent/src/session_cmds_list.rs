@@ -15,7 +15,7 @@ const NO_LIVE_PID_STATUS: &str = "NoLivePID";
 
 /// Threshold (seconds) after which an `Active`-phase session whose `last_accessed`
 /// has not advanced is considered stale (#1118 part D). The threshold is `2 *
-/// kv_cache.long_poll_seconds` because an alive `csa session wait` re-stamps
+/// kv_cache.default_ttl_seconds` because an alive `csa session wait` re-stamps
 /// `last_accessed` on each long-poll wake; missing two consecutive wakes is a
 /// strong signal that the daemon hung or its child sub-sessions are runaway.
 fn stale_threshold_seconds() -> u64 {
@@ -214,7 +214,7 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
             // Stale detection (#1118 part D): the dead-active reconciler above
             // catches sessions whose process has exited; this branch catches
             // sessions whose process is still alive but has not made progress
-            // for >= 2 * kv_cache.long_poll_seconds. These are the runaway
+            // for >= 2 * kv_cache.default_ttl_seconds. These are the runaway
             // sub-sessions from #1118 — surface them as `Stale` so operators
             // can `csa session kill` them instead of fighting the kill path.
             if is_session_stale(session, stale_threshold_seconds(), Utc::now()) {

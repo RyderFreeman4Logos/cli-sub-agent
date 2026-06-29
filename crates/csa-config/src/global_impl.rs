@@ -51,10 +51,11 @@ impl GlobalConfig {
         Ok(config.sanitized(Some(&path)))
     }
 
-    /// Resolve the `csa session wait` long-poll cap from the global config.
+    /// Resolve the `csa session wait` fallback TTL from the global config.
     ///
     /// Missing or invalid config falls back to the documented KV cache default.
-    /// Once `[kv_cache]` exists, `long_poll_seconds` still defaults to 240 if omitted.
+    /// Once `[kv_cache]` exists, `default_ttl_seconds` still defaults to 240 if omitted.
+    /// Deprecated `long_poll_seconds` remains a config-file alias.
     pub fn resolve_session_wait_long_poll_seconds() -> u64 {
         Self::resolve_session_wait_long_poll_seconds_with_source().seconds
     }
@@ -120,9 +121,18 @@ impl GlobalConfig {
             return ResolvedKvCacheValue::documented_default();
         };
 
-        match kv_cache.get("long_poll_seconds") {
+        let configured_value = kv_cache
+            .get("default_ttl_seconds")
+            .map(|value| ("kv_cache.default_ttl_seconds", value))
+            .or_else(|| {
+                kv_cache
+                    .get("long_poll_seconds")
+                    .map(|value| ("kv_cache.long_poll_seconds", value))
+            });
+
+        match configured_value {
             None => ResolvedKvCacheValue::section_default(),
-            Some(value) => match value.as_integer() {
+            Some((key, value)) => match value.as_integer() {
                 Some(seconds) if seconds > 0 => match u64::try_from(seconds) {
                     Ok(seconds) => ResolvedKvCacheValue {
                         seconds,
@@ -131,7 +141,7 @@ impl GlobalConfig {
                     Err(_) => {
                         tracing::warn!(
                             path = %path.display(),
-                            key = "kv_cache.long_poll_seconds",
+                            key,
                             value = seconds,
                             fallback = DEFAULT_KV_CACHE_LONG_POLL_SECS,
                             "Ignoring out-of-range KV cache interval; using section default"
@@ -142,7 +152,7 @@ impl GlobalConfig {
                 _ => {
                     tracing::warn!(
                         path = %path.display(),
-                        key = "kv_cache.long_poll_seconds",
+                        key,
                         fallback = DEFAULT_KV_CACHE_LONG_POLL_SECS,
                         "Ignoring invalid KV cache interval; using section default"
                     );

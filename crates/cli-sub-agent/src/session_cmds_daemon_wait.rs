@@ -1,6 +1,5 @@
 use super::*;
 use chrono::Utc;
-use csa_config::GlobalConfig;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
@@ -463,8 +462,7 @@ fn check_session_stale_before_wait(
                     Ok(None) => {}           // no result yet
                 }
 
-                let stale_threshold_seconds =
-                    GlobalConfig::resolve_session_wait_long_poll_seconds().saturating_mul(2);
+                let stale_threshold_seconds = wait_behavior.wait_timeout_secs.saturating_mul(2);
                 let now = Utc::now();
                 let elapsed = now.signed_duration_since(session.last_accessed);
 

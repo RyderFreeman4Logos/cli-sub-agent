@@ -293,8 +293,8 @@ pub enum SessionCommands {
     },
 
     /// Wait for a daemon session to report a terminal result.
-    /// Timeout comes from `~/.config/cli-sub-agent/config.toml` `[kv_cache].long_poll_seconds`
-    /// with a legacy 250s fallback when `[kv_cache]` is absent.
+    /// Timeout comes from the caller model provider TTL when detectable, otherwise
+    /// `~/.config/cli-sub-agent/config.toml` `[kv_cache].default_ttl_seconds`.
     ///
     /// Optional memory early-exit: `--memory-warn-mb <N>` (or config
     /// `[session_wait].memory_warn_mb`) samples the watched session's process-tree RSS
@@ -317,6 +317,11 @@ pub enum SessionCommands {
         /// `0` disables the sampler for this wait command.
         #[arg(long)]
         memory_warn_mb: Option<u64>,
+
+        /// Override the auto-detected caller provider for wait TTL selection.
+        /// Accepted values: claude, openai, glm, other.
+        #[arg(long, value_parser = csa_config::parse_model_provider)]
+        model_provider: Option<csa_config::ModelProvider>,
 
         /// Print the full stdout.log content instead of the compact result summary.
         /// Also enabled when CSA_WAIT_VERBOSE=1 is set.

@@ -26,6 +26,7 @@ pub mod migrate;
 pub mod paths;
 pub mod project_profile;
 mod project_prune;
+pub mod provider_detection;
 pub mod tool_selection;
 pub mod validate;
 pub mod weave_lock;
@@ -52,9 +53,9 @@ pub use global::{
     AiConfigSymlinkCheckConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,
     DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, ExperimentalConfig, GateMode, GateStep,
     GithubConfig, GlobalConfig, GlobalHooksConfig, GlobalMcpConfig, KvCacheConfig,
-    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ResolvedKvCacheValue,
-    ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed, TierPolicyConfig,
-    ToolSelection,
+    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ProviderTtls,
+    ResolvedKvCacheValue, ReviewConfig, SessionWaitConfig, StateDirConfig, StateDirOnExceed,
+    TierPolicyConfig, ToolSelection,
 };
 pub use global_caller_hints::{
     CallerHintsConfig, DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC,
@@ -66,5 +67,8 @@ pub use memory::{MemoryBackend, MemoryConfig, MemoryEphemeralConfig, MemoryLlmCo
 pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_registry};
 pub use paths::{APP_NAME, LEGACY_APP_NAME};
 pub use project_profile::{ProjectProfile, detect_project_profile};
+pub use provider_detection::{
+    ModelProvider, detect_model_provider, parse_model_provider, provider_ttl,
+};
 pub use validate::validate_config;
 pub use weave_lock::{VersionCheckResult, WeaveLock, check_version};
