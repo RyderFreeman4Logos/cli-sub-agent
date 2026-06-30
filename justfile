@@ -186,14 +186,22 @@ clippy-p package:
 
 # Security audit (requires cargo-deny)
 deny:
-    # Hide the inclusion graph to keep duplicate-crate warnings bounded.
-    # The full graph is useful interactively, but in AI-driven commit workflows
-    # it can explode into gigabytes of output and crash ACP-backed tools.
-    deny_args="--hide-inclusion-graph"; \
+    @# Hide the inclusion graph to keep duplicate-crate warnings bounded.
+    @# The full graph is useful interactively, but in AI-driven commit workflows
+    @# it can explode into gigabytes of output and crash ACP-backed tools.
+    @deny_args="--hide-inclusion-graph"; \
     if [ "${CARGO_DENY_DISABLE_FETCH:-}" = "1" ] || [ "${CARGO_DENY_OFFLINE:-}" = "1" ]; then \
         deny_args="$deny_args --disable-fetch"; \
     fi; \
-    {{_cargo}} deny check $deny_args
+    deny_output="$(mktemp "${TMPDIR:-/tmp}/csa-deny-output.XXXXXX")"; \
+    trap 'rm -f "$deny_output"' EXIT; \
+    if {{_cargo}} deny check $deny_args >"$deny_output" 2>&1; then \
+        echo "cargo deny check passed (success output suppressed)"; \
+    else \
+        status=$?; \
+        cat "$deny_output"; \
+        exit "$status"; \
+    fi
 
 # ==============================================================================
 # 🧪 Testing

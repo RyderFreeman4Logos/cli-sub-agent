@@ -150,6 +150,16 @@ fn derive_findings_toml_artifact(
     }
 }
 
+/// Returns true when the review text explicitly states there are no findings.
+/// This covers "Findings: none" and "Findings: none." as standalone lines.
+pub(in crate::review_cmd) fn review_explicitly_states_no_findings(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.eq_ignore_ascii_case("Findings: none")
+            || trimmed.eq_ignore_ascii_case("Findings: none.")
+    })
+}
+
 /// Load the canonical review prose for a session.
 ///
 /// Resolves the authoritative review text by unioning current prose sources:
@@ -165,17 +175,6 @@ fn derive_findings_toml_artifact(
 /// the other ignores — the root cause of the #1675 review rounds (a verdict in
 /// `details`, then `output.log`, that the detector did not scan). Returns `None`
 /// when no review text can be located.
-
-/// Returns true when the review text explicitly states there are no findings.
-/// This covers "Findings: none" and "Findings: none." as standalone lines.
-pub(in crate::review_cmd) fn review_explicitly_states_no_findings(text: &str) -> bool {
-    text.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.eq_ignore_ascii_case("Findings: none")
-            || trimmed.eq_ignore_ascii_case("Findings: none.")
-    })
-}
-
 pub(in crate::review_cmd) fn load_canonical_review_text(
     session_dir: &Path,
 ) -> Result<Option<String>, anyhow::Error> {
