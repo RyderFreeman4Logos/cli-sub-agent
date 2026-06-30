@@ -471,3 +471,36 @@ fn assert_no_reclaim_artifacts(lock_path: &Path) {
         );
     }
 }
+
+
+#[test]
+fn issue_2528_stale_lock_with_dead_holder_is_recovered() {
+    let temp = tempdir().unwrap();
+    let project = temp.path();
+
+    // Simulate a stale lock: acquire with a holder PID that doesn't exist
+    let (lock_path, _lock_name, _canonical_root) =
+        crate::project_resource_lock_path(project, "worktree-write", "exclusive").unwrap();
+    std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+
+    // Write a diagnostic with a PID that is guaranteed to not exist
+    let stale_diag = serde_json::json!({
+        "pid": 999999,
+        "pid_start_time_ticks": null,
+        "tool_name": "worktree-write:exclusive",
+        "acquired_at": "2026-06-30T00:00:00Z",
+        "reason": "stale lock test",
+        "holder_session_id": "STALE_SESSION",
+        "resource_path": project.display().to_string()
+    });
+    std::fs::write(&lock_path, stale_diag.to_string()).unwrap();
+
+    // The lock file exists but the PID is dead — acquisition should succeed
+    let lock = crate::acquire_worktree_write_lock(
+        project,
+        "NEW_SESSION",
+        &[],
+        |_| false,
+    );
+    assert!(lock.is_ok(), "should recover stale lock with dead holder PID: {:?}", lock.err());
+}

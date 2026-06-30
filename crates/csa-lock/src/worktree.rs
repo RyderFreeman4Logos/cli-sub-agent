@@ -242,6 +242,48 @@ pub fn acquire_worktree_write_lock(
                 });
             }
 
+            // Stale lock recovery: if the holder PID is dead AND the flock is
+            // actually free (no live process holds it), the lock file is stale
+            // (the holder process died without running its Drop). Probe flock
+            // liveness before reclaiming to avoid stealing a live unrelated
+            // lock. (#2528)
+            if let Some(diag) = diagnostic.as_ref()
+                && is_pid_dead(diag.pid, diag.pid_start_time_ticks)
+                && is_flock_available(&lock_path)
+            {
+                tracing::warn!(
+                    lock_path = %lock_path.display(),
+                    holder_pid = diag.pid,
+                    holder_session = ?diag.holder_session_id,
+                    "removing stale worktree write lock (holder PID is dead, flock is free)"
+                );
+                match acquire_lock_at_path_with_metadata(
+                    &lock_path,
+                    &lock_name,
+                    &reason,
+                    Some(session_id),
+                    Some(&canonical_root),
+                ) {
+                    Ok(lock) => {
+                        return Ok(WorktreeWriteLock {
+                            inner: WorktreeWriteLockKind::Acquired {
+                                _lock: lock,
+                                owner_session_id: session_id.to_string(),
+                            },
+                            lock_path,
+                        });
+                    }
+                    Err(retry_error) => {
+                        anyhow::bail!(
+                            "concurrent write session blocked: stale lock detected but retry \
+                             failed: {}. {}",
+                            retry_error,
+                            lock_error
+                        );
+                    }
+                }
+            }
+
             let holder = diagnostic
                 .as_ref()
                 .and_then(|diag| diag.holder_session_id.as_deref())
@@ -255,6 +297,52 @@ pub fn acquire_worktree_write_lock(
                 lock_error
             )
         }
+    }
+}
+
+
+/// Check whether a PID is dead by sending signal 0 (no-op probe).
+/// Returns true if the PID does not exist or its start time no longer
+/// matches (recycled PID). On platforms where start-time detection is
+/// unavailable, uses only the signal-0 probe.
+fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
+    // SAFETY: `kill(pid, 0)` sends no signal; it only checks existence.
+    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+    if !alive {
+        // ESRCH = no such process
+        return true;
+    }
+    // Process exists — check if PID was recycled by comparing start time.
+    if let Some(expected_ticks) = pid_start_time_ticks {
+        if let Some(current_ticks) = crate::process_start_time_ticks(pid) {
+            return current_ticks != expected_ticks;
+        }
+    }
+    // Can't verify start time; assume the process is alive (conservative).
+    false
+}
+
+/// Probe whether the flock on `lock_path` is actually available (not held
+/// by any live process). Opens the file read-write and attempts a
+/// non-blocking exclusive lock. If it succeeds, the lock is free; we
+/// immediately release it so the caller can retry the normal acquisition.
+fn is_flock_available(lock_path: &Path) -> bool {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(lock_path)
+    {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    // SAFETY: `file` owns a valid fd; LOCK_EX | LOCK_NB is non-blocking.
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if ret == 0 {
+        // SAFETY: same valid fd; release the probe lock.
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN); }
+        true
+    } else {
+        false
     }
 }
 
