@@ -160,6 +160,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         None,
         false,
         false,
+        false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // no_hook_bypass_scan (#1824)
         false,

@@ -114,6 +114,12 @@ fn parse_or_validate_review_error(argv: &[&str]) -> clap::Error {
 }
 
 #[test]
+fn review_parses_allow_user_daemon_ipc_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--allow-user-daemon-ipc"]);
+    assert!(args.allow_user_daemon_ipc);
+}
+
+#[test]
 fn review_cli_accepts_resource_override_flags() {
     let args = parse_review_args(&[
         "csa",

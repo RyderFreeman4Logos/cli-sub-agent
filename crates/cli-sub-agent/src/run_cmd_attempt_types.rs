@@ -67,6 +67,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub(crate) task_needs_edit: Option<bool>,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) allow_user_daemon_ipc: bool,
     pub(crate) allow_git_push: bool,
     /// Resolved CLI override for the #1652 fatal-error-marker silent-hang scan
     /// (#1745): `Some(true)` force-enables, `Some(false)` force-disables, `None`

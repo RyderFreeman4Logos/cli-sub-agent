@@ -4,15 +4,17 @@
 //! and first-turn telemetry recording.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
 use csa_executor::{ExecuteOptions, SandboxContext};
 use csa_process::StreamMode;
 use csa_resource::isolation_plan::{
-    EnforcementMode as ResourceEnforcementMode, IsolationPlanBuilder,
+    EnforcementMode as ResourceEnforcementMode, IsolationPlan, IsolationPlanBuilder,
 };
 use csa_session::MetaSessionState;
+use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::run_resource_overrides::RunResourceOverrides;
@@ -49,6 +51,7 @@ pub(crate) struct SandboxResolveInput<'a> {
     pub(crate) liveness_dead_seconds: u64,
     pub(crate) initial_response_timeout_seconds: Option<u64>,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) allow_user_daemon_ipc: bool,
     pub(crate) readonly_project_root: bool,
     pub(crate) extra_writable: &'a [PathBuf],
     pub(crate) extra_readable: &'a [PathBuf],
@@ -127,6 +130,7 @@ pub(crate) fn resolve_sandbox_options(
             liveness_dead_seconds,
             initial_response_timeout_seconds,
             no_fs_sandbox,
+            allow_user_daemon_ipc: false,
             readonly_project_root,
             extra_writable,
             extra_readable,
@@ -150,6 +154,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         liveness_dead_seconds,
         initial_response_timeout_seconds,
         no_fs_sandbox,
+        allow_user_daemon_ipc,
         readonly_project_root,
         extra_writable,
         extra_readable,
@@ -234,6 +239,9 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
                 Some(&tool_state_dirs),
             )
             .with_readonly_project_root(readonly_project_root);
+        if allow_user_daemon_ipc {
+            builder = builder.with_user_daemon_ipc();
+        }
 
         // CSA runtime writable paths.
         if !no_fs_sandbox {
@@ -283,6 +291,11 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
             .expect("BestEffort IsolationPlan should never fail");
         if let Some(message) =
             memory_override::plan_error_if_unenforced(tool_name, has_run_memory_override, &plan)
+        {
+            return SandboxResolution::RequiredButUnavailable(message);
+        }
+        if allow_user_daemon_ipc
+            && let Err(message) = write_user_daemon_ipc_audit_artifact(&session_dir, &plan)
         {
             return SandboxResolution::RequiredButUnavailable(message);
         }
@@ -428,6 +441,9 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         .with_readonly_project_root(effective_readonly)
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
+    if allow_user_daemon_ipc {
+        builder = builder.with_user_daemon_ipc();
+    }
 
     // CSA runtime paths must survive per-tool REPLACE semantics so fork-call
     // session creation and slot locks still work.
@@ -527,6 +543,11 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     {
         return SandboxResolution::RequiredButUnavailable(message);
     }
+    if allow_user_daemon_ipc
+        && let Err(message) = write_user_daemon_ipc_audit_artifact(&session_dir, &plan)
+    {
+        return SandboxResolution::RequiredButUnavailable(message);
+    }
 
     info!(
         tool = %tool_name,
@@ -545,6 +566,59 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     });
 
     SandboxResolution::Ok(Box::new(execute_options))
+}
+
+#[derive(Serialize)]
+struct SandboxCapabilityAudit {
+    capability: &'static str,
+    exposed_paths: Vec<String>,
+    reason: &'static str,
+    timestamp: String,
+}
+
+fn write_user_daemon_ipc_audit_artifact(
+    session_dir: &Path,
+    plan: &IsolationPlan,
+) -> Result<(), String> {
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir).map_err(|err| {
+        format!(
+            "Failed to create sandbox capability audit output directory '{}': {err}",
+            output_dir.display()
+        )
+    })?;
+    let audit = SandboxCapabilityAudit {
+        capability: "user-daemon-ipc",
+        exposed_paths: user_daemon_ipc_exposed_paths(plan),
+        reason: "verification session requested user daemon restart capability",
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+    let payload = serde_json::to_string_pretty(&audit)
+        .map_err(|err| format!("Failed to serialize sandbox capability audit artifact: {err}"))?;
+    let audit_path = output_dir.join("sandbox-capability-audit.json");
+    fs::write(&audit_path, format!("{payload}\n")).map_err(|err| {
+        format!(
+            "Failed to write sandbox capability audit artifact '{}': {err}",
+            audit_path.display()
+        )
+    })
+}
+
+fn user_daemon_ipc_exposed_paths(plan: &IsolationPlan) -> Vec<String> {
+    let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    [runtime_dir.join("bus"), runtime_dir.join("systemd/private")]
+        .into_iter()
+        .filter(|expected| {
+            plan.readable_paths.iter().any(|path| path == expected)
+                || plan
+                    .writable_paths
+                    .iter()
+                    .any(|path| expected.starts_with(path))
+        })
+        .map(|path| path.display().to_string())
+        .collect()
 }
 
 /// Record sandbox telemetry in session state (first turn only).

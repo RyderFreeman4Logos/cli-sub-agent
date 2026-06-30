@@ -239,6 +239,11 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub no_fs_sandbox: bool,
 
+    /// Enables D-Bus user bus and systemd private socket access inside the sandbox.
+    /// Use for verification sessions that need to restart user daemons. All usage is audit-logged.
+    #[arg(long)]
+    pub allow_user_daemon_ipc: bool,
+
     /// Append extra writable paths to the filesystem sandbox (comma-separated)
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_writable: Vec<PathBuf>,

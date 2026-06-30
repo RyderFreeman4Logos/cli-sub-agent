@@ -95,6 +95,7 @@ pub(crate) async fn handle_skill_run(
         tier: None,
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
+        allow_user_daemon_ipc: false,
         // Defer to the CSA_PATTERN_INTERNAL marker / config: a skill run spawned
         // by a pattern-internal `csa plan run` bash step inherits the marker and
         // disables the scan by default (#1847).

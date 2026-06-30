@@ -204,6 +204,7 @@ fn validate_review_candidate_resources_before_session(
         liveness_dead_seconds,
         initial_response_timeout_seconds,
         no_fs_sandbox: args.no_fs_sandbox,
+        allow_user_daemon_ipc: false,
         readonly_project_root,
         extra_writable: &args.extra_writable,
         extra_readable: &args.extra_readable,

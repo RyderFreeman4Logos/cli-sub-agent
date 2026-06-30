@@ -5,6 +5,7 @@ use csa_config::{
     GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig,
 };
 use csa_core::types::{ToolName, ToolSelectionStrategy};
+use std::collections::HashMap;
 use std::path::Path;
 
 const PINNED_SPEC: &str = "codex/openai/gpt-5.5/xhigh";

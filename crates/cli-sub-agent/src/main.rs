@@ -324,6 +324,7 @@ async fn run() -> Result<()> {
             tier,
             force_ignore_tier_setting,
             no_fs_sandbox,
+            allow_user_daemon_ipc,
             extra_writable,
             extra_readable,
             daemon: _daemon,
@@ -439,6 +440,7 @@ async fn run() -> Result<()> {
                 tier,
                 force_ignore_tier_setting,
                 no_fs_sandbox,
+                allow_user_daemon_ipc,
                 error_marker_scan_override: crate::error_marker_scan::override_from_flags(
                     error_marker_scan,
                     no_error_marker_scan,

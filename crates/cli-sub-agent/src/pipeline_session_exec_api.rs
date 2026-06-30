@@ -144,6 +144,7 @@ pub(crate) async fn execute_with_session_and_meta(
         SessionCreationMode::DaemonManaged,
         RunResourceOverrides::default(),
         no_fs_sandbox,
+        false,
         readonly_project_root,
         extra_writable,
         extra_readable,

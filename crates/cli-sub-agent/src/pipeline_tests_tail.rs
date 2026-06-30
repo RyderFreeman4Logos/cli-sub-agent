@@ -763,6 +763,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         Default::default(),
         false,
         false,
+        false,
         &[],
         &[],
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)

@@ -79,6 +79,19 @@ fn run_accepts_valid_codex_model_at_clap_parse() {
 }
 
 #[test]
+fn run_parses_allow_user_daemon_ipc_flag() {
+    let cli = try_parse_cli(&["csa", "run", "--allow-user-daemon-ipc", "prompt"])
+        .expect("run cli should parse");
+    match cli.command {
+        crate::cli::Commands::Run {
+            allow_user_daemon_ipc,
+            ..
+        } => assert!(allow_user_daemon_ipc),
+        _ => panic!("expected run subcommand"),
+    }
+}
+
+#[test]
 fn run_cli_parses_fast_but_more_cost_flag() {
     let cli = try_parse_cli(&["csa", "run", "--fast-but-more-cost", "x"]).unwrap();
 

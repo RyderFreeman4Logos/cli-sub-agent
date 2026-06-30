@@ -356,6 +356,7 @@ pub(super) async fn execute_csa_step(
             SessionCreationMode::FreshChild,
             options.resources,
             options.no_fs_sandbox,
+            false,
             options.readonly_project_root,
             &[],   // extra_writable
             &[],   // extra_readable

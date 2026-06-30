@@ -62,6 +62,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub build_jobs: Option<u32>,
     pub fast_but_more_cost: bool,
     pub no_fs_sandbox: bool,
+    pub allow_user_daemon_ipc: bool,
     /// #1652 scan override (#1745, #1847).
     pub error_marker_scan_override: Option<bool>,
     pub resource_overrides: RunResourceOverrides,
@@ -159,6 +160,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.fast_but_more_cost,
             false,
             ctx.no_fs_sandbox,
+            ctx.allow_user_daemon_ipc,
             false, // fix pass must write — override readonly_project_root
             ctx.extra_writable,
             ctx.extra_readable,

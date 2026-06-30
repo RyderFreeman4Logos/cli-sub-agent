@@ -128,6 +128,7 @@ async fn run_preflight_fixture(project_root: &Path, no_preflight: bool) -> anyho
         None,
         false,
         false,
+        false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false, // no_hook_bypass_scan (#1824)
         no_preflight,
@@ -194,6 +195,7 @@ async fn handle_run_persists_model_spec_tier_bypass_pre_exec_result() {
         OutputFormat::Text,
         csa_process::StreamMode::BufferOnly,
         Some("default".to_string()),
+        false,
         false,
         false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
@@ -366,6 +368,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         Some("default".to_string()),
         false,
         false,
+        false,
         None, // error_marker_scan_override: defer to marker/config (#1745/#1847)
         false,
         true,
@@ -447,6 +450,7 @@ async fn handle_run_does_not_persist_result_for_non_conflict_pre_exec_error() {
         OutputFormat::Text,
         csa_process::StreamMode::BufferOnly,
         None,
+        false,
         false,
         false,
         None,  // error_marker_scan_override: defer to marker/config (#1745/#1847)
