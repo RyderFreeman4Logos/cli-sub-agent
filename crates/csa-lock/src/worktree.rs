@@ -300,7 +300,6 @@ pub fn acquire_worktree_write_lock(
     }
 }
 
-
 /// Check whether a PID is dead by sending signal 0 (no-op probe).
 /// Returns true if the PID does not exist or its start time no longer
 /// matches (recycled PID). On platforms where start-time detection is
@@ -313,10 +312,10 @@ fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
         return true;
     }
     // Process exists — check if PID was recycled by comparing start time.
-    if let Some(expected_ticks) = pid_start_time_ticks {
-        if let Some(current_ticks) = crate::process_start_time_ticks(pid) {
-            return current_ticks != expected_ticks;
-        }
+    if let Some(expected_ticks) = pid_start_time_ticks
+        && let Some(current_ticks) = crate::process_start_time_ticks(pid)
+    {
+        return current_ticks != expected_ticks;
     }
     // Can't verify start time; assume the process is alive (conservative).
     false
@@ -327,11 +326,7 @@ fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
 /// non-blocking exclusive lock. If it succeeds, the lock is free; we
 /// immediately release it so the caller can retry the normal acquisition.
 fn is_flock_available(lock_path: &Path) -> bool {
-    let file = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(lock_path)
-    {
+    let file = match OpenOptions::new().read(true).write(true).open(lock_path) {
         Ok(file) => file,
         Err(_) => return false,
     };
@@ -339,7 +334,9 @@ fn is_flock_available(lock_path: &Path) -> bool {
     let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if ret == 0 {
         // SAFETY: same valid fd; release the probe lock.
-        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN); }
+        unsafe {
+            libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+        }
         true
     } else {
         false

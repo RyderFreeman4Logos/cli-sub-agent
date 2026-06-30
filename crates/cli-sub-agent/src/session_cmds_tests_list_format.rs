@@ -1,9 +1,12 @@
 use super::super::list::{
     decode_ulid_created_at, format_compact_duration, format_elapsed, session_created_at,
+    session_outcome_indicator,
 };
-use super::{sample_session_state, session_to_json};
+use super::{make_result, sample_session_state, session_to_json};
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::{Duration, Utc};
-use csa_session::{SessionPhase, TokenUsage};
+use csa_session::{SessionPhase, TokenUsage, create_session, save_result};
+use tempfile::tempdir;
 
 #[test]
 fn format_compact_duration_basics() {
@@ -102,4 +105,30 @@ fn session_to_json_includes_token_cache_derived_fields() {
     assert_eq!(usage["total_tokens"], 1_250);
     assert_eq!(usage["uncached_input_tokens"], 250);
     assert_eq!(usage["cache_read_ratio"], serde_json::json!(0.75));
+}
+
+#[test]
+fn session_outcome_indicator_uses_result_exit_code() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path();
+    let session = create_session(project, Some("outcome"), None, Some("codex")).unwrap();
+
+    assert_eq!(session_outcome_indicator(&session), "-");
+
+    save_result(
+        project,
+        &session.meta_session_id,
+        &make_result("success", 0),
+    )
+    .unwrap();
+    assert_eq!(session_outcome_indicator(&session), "\u{2713}");
+
+    save_result(
+        project,
+        &session.meta_session_id,
+        &make_result("failure", 9),
+    )
+    .unwrap();
+    assert_eq!(session_outcome_indicator(&session), "\u{2717}");
 }
