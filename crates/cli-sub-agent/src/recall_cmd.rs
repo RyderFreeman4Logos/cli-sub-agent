@@ -49,7 +49,7 @@ pub(crate) fn handle_recall(cmd: RecallCommands) -> Result<()> {
     );
     match cmd {
         RecallCommands::List { limit, all } => handle_recall_list(limit, all),
-        RecallCommands::Read { session, page } => handle_recall_read(&session, page),
+        RecallCommands::Read { session, page } => handle_recall_read(&session, page, None),
         RecallCommands::Search { query } => handle_recall_search(&query),
         RecallCommands::Pages { session } => handle_recall_pages(&session),
     }
@@ -59,8 +59,24 @@ pub(crate) fn handle_recall_list_cmd(limit: usize, all: bool) -> Result<()> {
     handle_recall_list(limit, all)
 }
 
+pub(crate) fn handle_recall_list_for_provider_cmd(
+    provider: xurl_core::ProviderKind,
+    limit: usize,
+    all: bool,
+) -> Result<()> {
+    handle_recall_provider_list(provider, limit, all)
+}
+
 pub(crate) fn handle_recall_read_cmd(session: &str, page: Option<u32>) -> Result<()> {
-    handle_recall_read(session, page)
+    handle_recall_read(session, page, None)
+}
+
+pub(crate) fn handle_recall_read_for_provider_cmd(
+    provider: xurl_core::ProviderKind,
+    session: &str,
+    page: Option<u32>,
+) -> Result<()> {
+    handle_recall_read(session, page, Some(provider))
 }
 
 fn recall_allowed_at_depth(depth: u32) -> bool {
@@ -215,12 +231,78 @@ fn handle_recall_list(limit: usize, all: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_recall_read(session: &str, page: Option<u32>) -> Result<()> {
+fn handle_recall_provider_list(
+    provider: xurl_core::ProviderKind,
+    limit: usize,
+    all: bool,
+) -> Result<()> {
+    if limit == 0 {
+        anyhow::bail!("--limit must be greater than 0");
+    }
+
     let project_root = crate::pipeline::determine_project_root(None)?;
-    let session_ref = resolve_session_ref(session, &project_root)?;
+    let roots = provider_roots()?;
+    let query = xurl_core::ThreadQuery {
+        uri: format!("{provider}://"),
+        provider,
+        role: None,
+        q: None,
+        limit,
+        ignored_params: Vec::new(),
+    };
+    let mut items = xurl_core::query_threads(&query, &roots)
+        .with_context(|| format!("Failed to query {provider} threads"))?
+        .items;
+
+    if !all {
+        items
+            .retain(|item| thread_belongs_to_project(&item.thread_source, &project_root, provider));
+    }
+
+    if items.is_empty() {
+        let scope = if all {
+            "any project".to_string()
+        } else {
+            format!("project {}", project_root.display())
+        };
+        println!("No {provider} sessions found in {scope}.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<6} {:<25} {:<12} {:<36} SOURCE",
+        "INDEX", "UPDATED", "PROVIDER", "SESSION"
+    );
+    println!("{}", "-".repeat(120));
+    for (offset, item) in items.iter().enumerate() {
+        println!(
+            "{:<6} {:<25} {:<12} {:<36} {}",
+            offset + 1,
+            truncate_display(item.updated_at.as_deref().unwrap_or("-"), 25),
+            truncate_display(&provider.to_string(), 12),
+            truncate_display(&item.thread_id, 36),
+            truncate_display(&item.thread_source, 40),
+        );
+    }
+    println!("\nTotal {provider} sessions: {}", items.len());
+    Ok(())
+}
+
+fn handle_recall_read(
+    session: &str,
+    page: Option<u32>,
+    provider_filter: Option<xurl_core::ProviderKind>,
+) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_ref = if let Some(provider) = provider_filter {
+        resolve_session_ref_for_provider(session, &project_root, provider)?
+    } else {
+        resolve_session_ref(session, &project_root)?
+    };
     let content = render_session_markdown(&session_ref)?;
 
-    let Some(page_n) = page else {
+    let effective_page = page.or(provider_filter.map(|_| 0));
+    let Some(page_n) = effective_page else {
         if std::io::stdout().is_terminal()
             && let Some(message) = output_guard_message(&session_ref.sid, &content)
         {
@@ -231,7 +313,7 @@ fn handle_recall_read(session: &str, page: Option<u32>) -> Result<()> {
         return Ok(());
     };
 
-    let page_list = pages::split_markdown_pages(&content);
+    let page_list = pages::split_markdown_pages_bounded(&content);
     let total = page_list.len();
     let idx = pages::resolve_page_index(page_n, total).with_context(|| {
         format!(
@@ -249,7 +331,7 @@ fn handle_recall_pages(session: &str) -> Result<()> {
     let session_ref = resolve_session_ref(session, &project_root)?;
     let (resolved, content) = resolve_session_thread(&session_ref)?;
 
-    let page_list = pages::split_markdown_pages(&content);
+    let page_list = pages::split_markdown_pages_bounded(&content);
     if page_list.is_empty() {
         println!("No content found in session {}.", session_ref.sid);
         return Ok(());
@@ -358,7 +440,17 @@ pub(crate) fn handle_recall_keyword(
     all: bool,
     limit: usize,
 ) -> Result<()> {
-    keyword::handle_recall_keyword(keyword, session, all, limit)
+    keyword::handle_recall_keyword(keyword, session, all, limit, None)
+}
+
+pub(crate) fn handle_recall_keyword_for_provider(
+    provider: xurl_core::ProviderKind,
+    keyword: &str,
+    session: Option<&str>,
+    all: bool,
+    limit: usize,
+) -> Result<()> {
+    keyword::handle_recall_keyword(keyword, session, all, limit, Some(provider))
 }
 
 fn latest_session_ref(project_root: &Path) -> Result<SessionRef> {
@@ -446,6 +538,68 @@ pub(super) fn resolve_session_ref(selector: &str, project_root: &Path) -> Result
     })
 }
 
+pub(super) fn resolve_session_ref_for_provider(
+    selector: &str,
+    project_root: &Path,
+    provider: xurl_core::ProviderKind,
+) -> Result<SessionRef> {
+    let trimmed = selector.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Session selector must not be empty");
+    }
+
+    let provider_name = provider.to_string();
+    let entries = load_history_entries(&history_path()?)?;
+    let current_project = project_root.display().to_string();
+
+    if trimmed.eq_ignore_ascii_case("latest") {
+        if let Some(session_ref) = live_query_main_session_for_provider(project_root, provider) {
+            return Ok(session_ref);
+        }
+        let filtered_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.project == current_project && entry.provider == provider_name)
+            .collect();
+        if let Some(entry) = latest_history_entry(&filtered_entries) {
+            return Ok(entry_to_session_ref(entry));
+        }
+        anyhow::bail!(
+            "No {provider} recall history for project {}. Use `csa xurl recall --provider {provider} --list --all` to see all {provider} sessions.",
+            current_project
+        );
+    }
+
+    if let Ok(index) = trimmed.parse::<usize>() {
+        if index == 0 {
+            anyhow::bail!("History index is 1-based; use 1 for the most recent session");
+        }
+        let filtered_entries: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.project == current_project && entry.provider == provider_name)
+            .collect();
+        let entry = filtered_entries
+            .iter()
+            .rev()
+            .nth(index - 1)
+            .with_context(|| {
+                if filtered_entries.is_empty() {
+                    format!(
+                        "No {provider} recall history for project {}. Use `csa xurl recall --provider {provider} --list --all` to see all {provider} sessions.",
+                        current_project
+                    )
+                } else {
+                    format!("History index {index} is out of range for {provider} in this project")
+                }
+            })?;
+        return Ok(entry_to_session_ref(entry));
+    }
+
+    Ok(SessionRef {
+        sid: trimmed.to_string(),
+        provider: provider_name,
+    })
+}
+
 /// Live-query xurl for the current project's main-agent session.
 ///
 /// This bypasses the history file entirely, probing each provider for
@@ -459,24 +613,45 @@ const LIVE_QUERY_SCAN_LIMIT: usize = 20;
 fn live_query_main_session(project_root: &Path) -> Option<SessionRef> {
     let roots = provider_roots().ok()?;
     for &provider in RECALL_PROVIDERS {
-        let query = xurl_core::ThreadQuery {
-            uri: format!("{}://", provider),
-            provider,
-            role: Some("main".to_string()),
-            q: None,
-            limit: LIVE_QUERY_SCAN_LIMIT,
-            ignored_params: Vec::new(),
-        };
-        let Ok(result) = xurl_core::query_threads(&query, &roots) else {
-            continue;
-        };
-        for thread in &result.items {
-            if thread_belongs_to_project(&thread.thread_source, project_root, provider) {
-                return Some(SessionRef {
-                    sid: thread.thread_id.clone(),
-                    provider: provider.to_string(),
-                });
-            }
+        if let Some(session_ref) =
+            live_query_main_session_for_provider_with_roots(project_root, provider, &roots)
+        {
+            return Some(session_ref);
+        }
+    }
+    None
+}
+
+fn live_query_main_session_for_provider(
+    project_root: &Path,
+    provider: xurl_core::ProviderKind,
+) -> Option<SessionRef> {
+    let roots = provider_roots().ok()?;
+    live_query_main_session_for_provider_with_roots(project_root, provider, &roots)
+}
+
+fn live_query_main_session_for_provider_with_roots(
+    project_root: &Path,
+    provider: xurl_core::ProviderKind,
+    roots: &xurl_core::ProviderRoots,
+) -> Option<SessionRef> {
+    let query = xurl_core::ThreadQuery {
+        uri: format!("{}://", provider),
+        provider,
+        role: Some("main".to_string()),
+        q: None,
+        limit: LIVE_QUERY_SCAN_LIMIT,
+        ignored_params: Vec::new(),
+    };
+    let Ok(result) = xurl_core::query_threads(&query, roots) else {
+        return None;
+    };
+    for thread in &result.items {
+        if thread_belongs_to_project(&thread.thread_source, project_root, provider) {
+            return Some(SessionRef {
+                sid: thread.thread_id.clone(),
+                provider: provider.to_string(),
+            });
         }
     }
     None

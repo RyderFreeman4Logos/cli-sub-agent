@@ -15,7 +15,7 @@ use tracing::debug;
 
 use super::{
     RECALL_PROVIDERS, SessionRef, provider_roots, render_session_markdown, resolve_session_ref,
-    thread_belongs_to_project, truncate_display,
+    resolve_session_ref_for_provider, thread_belongs_to_project, truncate_display,
 };
 
 /// Width of the context snippet shown in the PREVIEW column (chars).
@@ -42,6 +42,7 @@ pub(super) fn handle_recall_keyword(
     session: Option<&str>,
     all: bool,
     limit: usize,
+    provider_filter: Option<xurl_core::ProviderKind>,
 ) -> Result<()> {
     let trimmed = keyword.trim();
     if trimmed.is_empty() {
@@ -56,12 +57,19 @@ pub(super) fn handle_recall_keyword(
     }
 
     if let Some(sel) = session {
-        return handle_in_session_search(sel, &keywords);
+        return handle_in_session_search(sel, &keywords, provider_filter);
     }
 
     let project_root = crate::pipeline::determine_project_root(None)?;
     let roots = provider_roots()?;
-    let mut hits = collect_hits(&keywords, all, limit, &project_root, &roots);
+    let mut hits = collect_hits(
+        &keywords,
+        all,
+        limit,
+        provider_filter,
+        &project_root,
+        &roots,
+    );
 
     if hits.is_empty() {
         let scope = if all {
@@ -83,6 +91,7 @@ fn collect_hits(
     keywords: &[&str],
     all: bool,
     limit: usize,
+    provider_filter: Option<xurl_core::ProviderKind>,
     project_root: &Path,
     roots: &xurl_core::ProviderRoots,
 ) -> Vec<Hit> {
@@ -96,7 +105,10 @@ fn collect_hits(
     };
 
     let mut hits: Vec<Hit> = Vec::new();
-    for &provider in RECALL_PROVIDERS {
+    let providers: Vec<xurl_core::ProviderKind> = provider_filter
+        .map(|provider| vec![provider])
+        .unwrap_or_else(|| RECALL_PROVIDERS.to_vec());
+    for provider in providers {
         let query = xurl_core::ThreadQuery {
             uri: format!("{provider}://"),
             provider,
@@ -123,12 +135,13 @@ fn collect_hits(
             // Render the session once when we need (a) AND-filter validation or
             // (b) a clean snippet because the upstream preview truncated away
             // the primary keyword.
-            let need_render_for_and = !extras.is_empty();
+            let force_visible_preview = provider == xurl_core::ProviderKind::Codex;
+            let need_render_for_and = !extras.is_empty() || force_visible_preview;
             let upstream_preview = item.matched_preview.as_deref();
             let upstream_has_keyword = upstream_preview
                 .map(|p| contains_ci(p, primary))
                 .unwrap_or(false);
-            let need_render_for_snippet = !upstream_has_keyword;
+            let need_render_for_snippet = force_visible_preview || !upstream_has_keyword;
             let rendered = if need_render_for_and || need_render_for_snippet {
                 let session_ref = SessionRef {
                     sid: item.thread_id.clone(),
@@ -155,11 +168,18 @@ fn collect_hits(
             if need_render_for_and {
                 // Safe: we only reach here when render succeeded (errors `continue`).
                 let content = rendered.as_deref().unwrap_or("");
+                if force_visible_preview && !contains_ci(content, primary) {
+                    continue;
+                }
                 if !all_keywords_present(content, extras) {
                     continue;
                 }
             }
-            let preview = build_preview(rendered.as_deref(), upstream_preview, primary);
+            let preview = if force_visible_preview {
+                build_preview(rendered.as_deref(), None, primary)
+            } else {
+                build_preview(rendered.as_deref(), upstream_preview, primary)
+            };
             hits.push(Hit {
                 provider,
                 thread_id: item.thread_id,
@@ -234,9 +254,17 @@ fn print_hits(hits: &[Hit]) {
     println!("\nTotal matches: {}", hits.len());
 }
 
-fn handle_in_session_search(session: &str, keywords: &[&str]) -> Result<()> {
+fn handle_in_session_search(
+    session: &str,
+    keywords: &[&str],
+    provider_filter: Option<xurl_core::ProviderKind>,
+) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(None)?;
-    let session_ref = resolve_session_ref(session, &project_root)?;
+    let session_ref = if let Some(provider) = provider_filter {
+        resolve_session_ref_for_provider(session, &project_root, provider)?
+    } else {
+        resolve_session_ref(session, &project_root)?
+    };
     let content = render_session_markdown(&session_ref)?;
     let lines: Vec<&str> = content.lines().collect();
     let ranges = matching_ranges_any(&lines, keywords, SEARCH_CONTEXT_LINES);
