@@ -124,18 +124,29 @@ pub(crate) fn handle_session_wait_with_emitters(
         .filter(|limit| *limit > 0);
     let mut next_memory_sample_at =
         memory_warn_mb.map(|_| start + wait_options.behavior.timing.memory_sample_interval);
+    let handoff_blocks_initial_stale_precheck = resume_handoff_blocks_target_reconcile(
+        wait_target.follows_resume_target,
+        &session_dir,
+        &wait_target.session_dir,
+    );
 
     // Check if the session is Stale before entering the polling loop.
     // This prevents indefinite polling of sessions that have no live daemon process
     // and no progress for an extended period.
-    if let Err(stale_err) = super::check_session_stale_before_wait(
-        effective_root,
-        &wait_target.session_id,
-        &wait_target.session_dir,
-        wait_options.behavior,
-        worktree_lock_root.as_deref(),
-        &[resolved.session_id.as_str(), &wait_target.session_id],
-    ) {
+    //
+    // A resume wrapper may write resume-target.toml before the target session has
+    // target-local liveness. While the wrapper daemon is still alive, its process
+    // owns that bootstrap window, so target-local silence is not stale yet.
+    if !handoff_blocks_initial_stale_precheck
+        && let Err(stale_err) = super::check_session_stale_before_wait(
+            effective_root,
+            &wait_target.session_id,
+            &wait_target.session_dir,
+            wait_options.behavior,
+            worktree_lock_root.as_deref(),
+            &[resolved.session_id.as_str(), &wait_target.session_id],
+        )
+    {
         if !crate::session_observability::emit_session_registry_state_loss_diagnostic(
             effective_root,
             &wait_target.session_id,

@@ -34,8 +34,8 @@ Treat the run as executor ONLY when initial prompt contains:
 Execute the complete development lifecycle as a **deterministic weave workflow**.
 Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by the LLM.
 
-Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
-(FAST_PATH: commit → bump → review) or (Full: mktd → mktsk [direct, TaskCreate] → bump → cumulative review) →
+Pipeline: Branch Validation → FAST_PATH Detection → Cheap Repo Preconditions →
+(FAST_PATH: commit → bump → L1/L2 gates → review) or (Full: mktd → mktsk [direct, TaskCreate] → bump → cumulative review) →
 Push Gate → Pre-PR Verdict Check → PR Creation → pr-bot Hard Gate → Post-Merge Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
@@ -121,8 +121,8 @@ csa plan run --sa-mode true patterns/dev2merge/workflow.toml --var DEV2MERGE_MOD
 
 `DEV2MERGE_MODE` defaults to `full` (the complete pipeline). `resume` skips
 only planning (Step 7 mktd, Step 8 mktsk); Step 9 (Resume Commit) commits any
-uncommitted remainder after the L2 test gate, then **every hard gate still
-runs**: version bump, self-review, cumulative review, push, verdict check, PR
+uncommitted remainder, then **every hard gate still runs**: version bump,
+self-review, cumulative review, push, verdict check, PR
 creation, pr-bot, and post-merge sync. Resume fails closed when the branch has
 no work (clean tree with 0 commits ahead of the default branch). A docs-only
 resume run still follows the FAST_PATH branch.
@@ -187,15 +187,15 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 |------|------|------|------|
 | 1 | Validate Branch | Not default branch/dev | bash |
 | 2 | FAST_PATH Detection | Diff-stat heuristic | bash |
-| 3 | L1/L2 Quality Gates | language-aware lint/test gate | bash |
+| 3 | Cheap Repo Preconditions | staged-scope ownership + optional version check, no build/review | bash |
 | **IF FAST_PATH** | | | |
-| 4 | Simplified Commit | `just test && git commit` | bash |
+| 4 | Simplified Commit | stage, staged-diff check, commit | bash |
 | 5 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
-| 6 | Pre-PR Review | cumulative review helper runs `csa review --range` and owns exact-head verdict check when review runs | bash |
+| 6 | Pre-PR Review | L1/L2 gates, then cumulative review helper runs `csa review --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run --pattern mktd` by default, `MKTD_WORKFLOW_PATH` override allowed (skipped in resume mode) | bash |
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
-| 9 | Resume Commit | resume mode only: L2 tests + commit uncommitted remainder | bash |
+| 9 | Resume Commit | resume mode only: stage, staged-diff check, commit uncommitted remainder | bash |
 | 10 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
 | 11 | Self-Review Gate | Main agent checks and fixes the full branch diff before CSA review | main agent |
 | 12 | Pre-PR Cumulative Review Gate | cumulative review helper runs `csa review --range ${DEFAULT_BRANCH}...HEAD` and owns exact-head verdict check when review runs | bash |

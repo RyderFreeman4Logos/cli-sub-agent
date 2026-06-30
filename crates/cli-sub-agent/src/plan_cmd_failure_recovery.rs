@@ -104,6 +104,11 @@ impl PlanFailureRecoverySnapshot {
             );
         };
         if !initial_status.is_empty() {
+            let pre_existing = initial_status
+                .iter()
+                .map(|line| line.trim_start())
+                .collect::<Vec<_>>()
+                .join("; ");
             return PlanFailureRecoveryReport::manual(
                 initial_ref_label.clone(),
                 current_ref_before,
@@ -112,6 +117,7 @@ impl PlanFailureRecoverySnapshot {
                         "Automatic recovery skipped because the worktree was already dirty before {} started.",
                         self.workflow_name
                     ),
+                    format!("Pre-existing dirty paths: {pre_existing}"),
                     format!(
                         "Resolve the pre-existing changes before retrying {}.",
                         self.workflow_name
