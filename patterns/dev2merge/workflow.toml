@@ -545,13 +545,48 @@ title = "Self-Review Gate"
 tool = "bash"
 prompt = '''
 Full and resume paths run the deterministic L1/L2 quality gate before
-cumulative CSA review.
+cumulative CSA review. Language-appropriate checks are run based on project type (#2539).
 
 ```bash
 set -euo pipefail
-just fmt
-just clippy
-just test
+if [ -f Cargo.toml ]; then
+  just fmt
+  just clippy
+  just test
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then
+    just lint
+  elif command -v ruff >/dev/null 2>&1; then
+    ruff check .
+    ruff format --check .
+  fi
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v pytest >/dev/null 2>&1; then
+    pytest
+  fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then
+    just lint
+  elif command -v biome >/dev/null 2>&1; then
+    biome check .
+  fi
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v vitest >/dev/null 2>&1; then
+    vitest run
+  fi
+elif [ -f go.mod ]; then
+  go vet ./...
+  if command -v golangci-lint >/dev/null 2>&1; then
+    golangci-lint run
+  fi
+  go test ./...
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
+  just pre-commit
+else
+  echo "WARNING: No recognized project type; skipping L1/L2 gate."
+fi
 ```
 '''
 on_fail = "abort"
