@@ -21,6 +21,7 @@ use super::resume::{emit_run_timeout, resolve_remaining_run_timeout};
 use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, pre_create_native_fork_session, resolve_fork};
 use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
+use crate::run_helpers::parse_token_usage;
 
 #[path = "run_cmd_attempt_types.rs"]
 mod types;
@@ -52,7 +53,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
 }
 
 async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion> {
-    let max_failover_attempts = max_failovers(request.no_failover, request.config);
+    let max_failover_attempts =
+        max_failovers(request.no_failover, request.config, request.global_config);
 
     let slots_dir = GlobalConfig::slots_dir()?;
     let mut current_tool = request.initial_tool;
@@ -62,10 +64,11 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
     let mut tried_specs: Vec<String> = Vec::new();
     let mut fallback_chain: csa_scheduler::FallbackChain = Vec::new();
     let mut attempts = 0;
+    let mut issue_tokens_used = 0u64;
     let runtime_fallback_enabled = runtime_fallback(&request.strategy, request.no_failover);
     let mut runtime_fallback_candidates = request.runtime_fallback_candidates;
     let mut runtime_fallback_attempts = 0u8;
-    let max_runtime_fallback_attempts = 1u8;
+    let max_runtime_fallback_attempts = request.global_config.retry.resolved_max_retries();
     let cross_tool_failover_enabled = allow_cross_tool_failover(
         request.strategy.clone(),
         request.resolved_tier_name,
@@ -482,11 +485,17 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 },
             },
         };
+        if let Some(tokens) =
+            parse_token_usage(&exec_result.output).and_then(|usage| usage.total_tokens)
+        {
+            issue_tokens_used = issue_tokens_used.saturating_add(tokens);
+        }
 
         match evaluate_post_attempt_retry(
             PostAttemptRequest {
                 exec_result: &mut exec_result,
                 exec_changed_paths,
+                issue_tokens_used,
                 runtime_fallback_enabled,
                 max_runtime_fallback_attempts,
                 current_tool,

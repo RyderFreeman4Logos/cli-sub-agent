@@ -31,6 +31,12 @@ pub struct GlobalConfig {
     pub debate: DebateConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
+    /// Retry-loop stop policy shared by run/review/debate orchestration.
+    #[serde(default)]
+    pub retry: RetryConfig,
+    /// Token budget defaults for issue-scoped sessions.
+    #[serde(default)]
+    pub budget: BudgetConfig,
     /// Global-only tier bypass policy.
     #[serde(default)]
     pub tier_policy: TierPolicyConfig,
@@ -122,6 +128,72 @@ pub fn default_max_goal_tokens() -> u64 {
 
 pub fn default_task_pool_workers() -> u32 {
     1
+}
+
+pub fn default_retry_max_attempts() -> u8 {
+    3
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetryConfig {
+    /// Maximum total attempts before retry loops stop.
+    #[serde(default = "default_retry_max_attempts")]
+    pub max_attempts: u8,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: default_retry_max_attempts(),
+        }
+    }
+}
+
+impl RetryConfig {
+    pub fn resolved_max_attempts(&self) -> usize {
+        usize::from(self.max_attempts.clamp(1, 20))
+    }
+
+    pub fn resolved_max_retries(&self) -> u8 {
+        self.max_attempts.clamp(1, 20).saturating_sub(1)
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.max_attempts == default_retry_max_attempts()
+    }
+}
+
+pub fn default_max_tokens_per_issue() -> u64 {
+    5_000_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BudgetConfig {
+    /// Maximum total tokens allocated to one issue/session chain.
+    #[serde(default = "default_max_tokens_per_issue")]
+    pub max_tokens_per_issue: u64,
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_tokens_per_issue: default_max_tokens_per_issue(),
+        }
+    }
+}
+
+impl BudgetConfig {
+    pub fn resolved_max_tokens_per_issue(&self) -> u64 {
+        self.max_tokens_per_issue.max(1)
+    }
+
+    pub fn is_exhausted(&self, used_tokens: u64) -> bool {
+        used_tokens >= self.resolved_max_tokens_per_issue()
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.max_tokens_per_issue == default_max_tokens_per_issue()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

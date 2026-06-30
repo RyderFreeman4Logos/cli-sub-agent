@@ -79,6 +79,15 @@ same_model_fallback = true
 [fallback]
 cloud_review_exhausted = "ask-user"
 
+# Retry loops stop after this many total attempts.
+[retry]
+max_attempts = 3
+
+# Issue/session token budget. New sessions inherit this unless a tighter tier
+# token_budget applies.
+[budget]
+max_tokens_per_issue = 5000000
+
 # Global-only emergency escape hatch for exact-model and force tier bypasses.
 # Keep false by default: when a project has [tiers], use --tier <name>.
 # Set true only in ~/.config/cli-sub-agent/config.toml when you need to allow

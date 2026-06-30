@@ -116,19 +116,27 @@ pub(super) async fn bootstrap_session(
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),
         };
-        if let (Some(cfg), Some(tier)) = (config, tier_name)
-            && let Some(tier_cfg) = cfg.tiers.get(tier)
-            && (tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some())
-        {
-            let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
+        let tier_budget = tier_token_budget(config, tier_name);
+        let max_turns = tier_max_turns(config, tier_name);
+        let issue_budget = global_config.map(|cfg| cfg.budget.resolved_max_tokens_per_issue());
+        let allocated_budget = match (tier_budget, issue_budget) {
+            (Some(tier), Some(issue)) => Some(tier.min(issue)),
+            (Some(tier), None) => Some(tier),
+            (None, Some(issue)) => Some(issue),
+            (None, None) => None,
+        };
+        if allocated_budget.is_some() || max_turns.is_some() {
+            let allocated = allocated_budget.unwrap_or(u64::MAX);
             let mut budget = csa_session::state::TokenBudget::new(allocated);
-            budget.max_turns = tier_cfg.max_turns;
+            budget.max_turns = max_turns;
             new_session.token_budget = Some(budget);
             info!(
                 session = %new_session.meta_session_id,
-                allocated = ?tier_cfg.token_budget,
-                max_turns = ?tier_cfg.max_turns,
-                "Initialized token budget from tier config"
+                allocated = allocated,
+                tier_budget = ?tier_budget,
+                issue_budget = ?issue_budget,
+                max_turns = ?max_turns,
+                "Initialized token budget"
             );
         }
         new_session
@@ -175,6 +183,20 @@ pub(super) async fn bootstrap_session(
         session,
         resolved_provider_session_id,
     })
+}
+
+fn tier_token_budget(config: Option<&ProjectConfig>, tier_name: Option<&str>) -> Option<u64> {
+    config
+        .zip(tier_name)
+        .and_then(|(cfg, tier)| cfg.tiers.get(tier))
+        .and_then(|tier| tier.token_budget)
+}
+
+fn tier_max_turns(config: Option<&ProjectConfig>, tier_name: Option<&str>) -> Option<u32> {
+    config
+        .zip(tier_name)
+        .and_then(|(cfg, tier)| cfg.tiers.get(tier))
+        .and_then(|tier| tier.max_turns)
 }
 
 fn inherited_parent_session_id_for_new_session(startup_env: &StartupSubtreeEnv) -> Option<&str> {
