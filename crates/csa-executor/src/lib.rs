@@ -6,6 +6,8 @@ pub mod codex_runtime;
 pub mod context_loader;
 pub mod design_context;
 pub mod executor;
+#[cfg(feature = "acp")]
+pub mod hermes_config;
 pub mod install_hints;
 mod lefthook_guard;
 pub mod logging;
@@ -29,9 +31,12 @@ pub use csa_process::ExecutionResult;
 pub use design_context::{extract_design_sections, format_design_context};
 pub use executor::executor_env::STRIPPED_ENV_VARS as CHILD_PROCESS_STRIPPED_ENV_VARS;
 pub use executor::{ExecuteOptions, Executor, SandboxContext};
+#[cfg(feature = "acp")]
+pub use hermes_config::HermesRunConfig;
 pub use install_hints::{
     CLAUDE_CODE_ACP_INSTALL_HINT, CLAUDE_CODE_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT,
-    OPENAI_COMPAT_INSTALL_HINT, OPENCODE_INSTALL_HINT, install_hint_for_known_tool,
+    HERMES_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT, OPENCODE_INSTALL_HINT,
+    install_hint_for_known_tool,
 };
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};

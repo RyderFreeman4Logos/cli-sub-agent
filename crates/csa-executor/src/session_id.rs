@@ -20,6 +20,8 @@ pub fn extract_session_id(tool: &ToolName, output: &str) -> Option<String> {
         ToolName::ClaudeCode => extract_claude_session_id(output),
         // OpenAI-compat is HTTP-only; session ID comes from API response, not output parsing.
         ToolName::OpenaiCompat => None,
+        // Hermes ACP reports provider session IDs through transport metadata.
+        ToolName::Hermes => None,
         // AntigravityCli: same pattern as gemini-cli (no known session ID output).
         ToolName::AntigravityCli => extract_gemini_session_id(output),
     }
@@ -216,6 +218,10 @@ mod tests {
 
         let gemini_output = "gemini output";
         let result = extract_session_id(&ToolName::GeminiCli, gemini_output);
+        assert_eq!(result, None);
+
+        let hermes_output = r#"{"session_id":"hermes_should_not_parse"}"#;
+        let result = extract_session_id(&ToolName::Hermes, hermes_output);
         assert_eq!(result, None);
     }
 

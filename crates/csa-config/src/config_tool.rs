@@ -30,6 +30,7 @@ pub fn default_transport_for_tool(tool_name: &str) -> Option<TransportKind> {
         // server-side cache reuse (#760 / #1128). ACP is still reachable via
         // explicit config + the `codex-acp` cargo feature on `csa-executor`.
         "codex" => Some(TransportKind::Cli),
+        "hermes" => Some(TransportKind::Acp),
         "gemini-cli" | "opencode" | "antigravity-cli" => Some(TransportKind::Cli),
         _ => None,
     }
@@ -332,6 +333,10 @@ transport = "cli"
             config.resolve_transport("gemini-cli"),
             Some(TransportKind::Cli)
         );
+        assert_eq!(
+            config.resolve_transport("hermes"),
+            Some(TransportKind::Acp)
+        );
     }
 
     #[test]
@@ -343,6 +348,10 @@ transport = "cli"
         assert_eq!(
             config.resolve_transport("opencode"),
             Some(TransportKind::Cli)
+        );
+        assert_eq!(
+            config.resolve_transport("hermes"),
+            Some(TransportKind::Acp)
         );
     }
 

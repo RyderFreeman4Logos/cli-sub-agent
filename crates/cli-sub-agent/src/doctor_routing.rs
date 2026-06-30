@@ -5,10 +5,8 @@
 
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig, TierStrategy};
-use csa_core::types::OutputFormat;
+use csa_core::types::{OutputFormat, PRIMARY_TOOL_NAMES};
 use std::{env, fmt::Write as _, path::Path};
-
-const BUILTIN_TOOLS: &[&str] = &["opencode", "codex", "claude-code"];
 
 /// Map tool name (from model spec) to its executable binary name.
 fn tool_exe_name(tool: &str, config: &ProjectConfig) -> String {
@@ -213,7 +211,7 @@ fn build_routing_report(
         ),
     };
     let context = RoutingContext {
-        built_in_tools: BUILTIN_TOOLS
+        built_in_tools: PRIMARY_TOOL_NAMES
             .iter()
             .map(|tool| (*tool).to_string())
             .collect(),
@@ -549,6 +547,7 @@ mod tests {
         // the CLI binary is `claude`, not `claude-code-acp`.
         assert_eq!(tool_exe_name("claude-code", &config), "claude");
         assert_eq!(tool_exe_name("opencode", &config), "opencode");
+        assert_eq!(tool_exe_name("hermes", &config), "hermes");
         assert_eq!(tool_exe_name("antigravity-cli", &config), "antigravity");
         assert_eq!(tool_exe_name("unknown-tool", &config), "unknown-tool");
     }

@@ -10,6 +10,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "codex",
     "claude-code",
     "openai-compat",
+    "hermes",
     "antigravity-cli",
 ];
 const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli, tmux";
@@ -375,6 +376,15 @@ fn validate_tool_transport_override_with_raw(
                 bail!("Invalid {key} = \"{raw_transport}\": codex does not support tmux transport.")
             }
         },
+        "hermes" => match transport {
+            TransportKind::Auto | TransportKind::Acp => Ok(()),
+            TransportKind::Cli => bail!(
+                "Invalid {key} = \"{raw_transport}\": hermes currently supports ACP transport only."
+            ),
+            TransportKind::Tmux => bail!(
+                "Invalid {key} = \"{raw_transport}\": hermes does not support tmux transport."
+            ),
+        },
         "gemini-cli" | "opencode" | "antigravity-cli" => match transport {
             TransportKind::Auto | TransportKind::Cli => Ok(()),
             TransportKind::Acp => bail!(
@@ -553,6 +563,7 @@ fn warn_unknown_tool_priority(config: &ProjectConfig) {
         "codex",
         "claude-code",
         "openai-compat",
+        "hermes",
         "antigravity-cli",
     ];
     if let Some(prefs) = &config.preferences {

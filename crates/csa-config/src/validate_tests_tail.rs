@@ -333,7 +333,13 @@ fn test_validate_all_known_tools_accepted() {
     let dir = tempdir().unwrap();
 
     let mut tools = HashMap::new();
-    for name in &["opencode", "codex", "claude-code", "antigravity-cli"] {
+    for name in &[
+        "opencode",
+        "codex",
+        "claude-code",
+        "hermes",
+        "antigravity-cli",
+    ] {
         tools.insert(name.to_string(), ToolConfig::default());
     }
 

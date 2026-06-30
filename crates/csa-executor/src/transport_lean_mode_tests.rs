@@ -1,13 +1,15 @@
 use serde_json::json;
 
 use super::AcpTransport;
-use crate::{AcpMcpServerConfig as McpServerConfig, SessionConfig};
+use crate::{AcpMcpServerConfig as McpServerConfig, HermesRunConfig, SessionConfig};
+use crate::model_spec::ThinkingBudget;
 use std::collections::HashMap;
 
 #[test]
 fn test_build_session_meta_with_empty_sources() {
     let sources: Vec<String> = vec![];
-    let meta = AcpTransport::build_session_meta(Some(&sources), None).expect("meta should exist");
+    let meta =
+        AcpTransport::build_session_meta(Some(&sources), None, None).expect("meta should exist");
     assert_eq!(
         serde_json::Value::Object(meta),
         json!({"claudeCode": {"options": {"settingSources": []}}})
@@ -17,7 +19,8 @@ fn test_build_session_meta_with_empty_sources() {
 #[test]
 fn test_build_session_meta_with_project_source() {
     let sources = vec!["project".to_string()];
-    let meta = AcpTransport::build_session_meta(Some(&sources), None).expect("meta should exist");
+    let meta =
+        AcpTransport::build_session_meta(Some(&sources), None, None).expect("meta should exist");
     assert_eq!(
         serde_json::Value::Object(meta),
         json!({"claudeCode": {"options": {"settingSources": ["project"]}}})
@@ -27,7 +30,7 @@ fn test_build_session_meta_with_project_source() {
 #[test]
 fn test_build_session_meta_none_returns_none() {
     assert!(
-        AcpTransport::build_session_meta(None, None).is_none(),
+        AcpTransport::build_session_meta(None, None, None).is_none(),
         "meta should be absent when setting_sources is None"
     );
 }
@@ -44,7 +47,7 @@ fn test_build_session_meta_includes_direct_mcp_servers() {
         ..Default::default()
     };
 
-    let meta = AcpTransport::build_session_meta(None, Some(&session_config))
+    let meta = AcpTransport::build_session_meta(None, Some(&session_config), None)
         .expect("meta should include mcpServers");
     assert_eq!(
         serde_json::Value::Object(meta),
@@ -75,9 +78,29 @@ fn test_build_session_meta_prefers_proxy_when_socket_exists() {
         ..Default::default()
     };
 
-    let meta = AcpTransport::build_session_meta(None, Some(&session_config))
+    let meta = AcpTransport::build_session_meta(None, Some(&session_config), None)
         .expect("meta should include proxy mcpServers");
     let mcp_servers = &serde_json::Value::Object(meta)["claudeCode"]["options"]["mcpServers"];
     assert!(mcp_servers.get("csa-mcp-hub").is_some());
     assert!(mcp_servers.get("memory").is_none());
+}
+
+#[test]
+fn test_build_session_meta_includes_hermes_options() {
+    let hermes = HermesRunConfig::from_model_spec(
+        "openai".to_string(),
+        "gpt-5.5".to_string(),
+        ThinkingBudget::Xhigh,
+    );
+    let meta = AcpTransport::build_session_meta(None, None, Some(&hermes))
+        .expect("meta should include Hermes options");
+
+    assert_eq!(
+        serde_json::Value::Object(meta),
+        json!({"hermes": {"options": {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "thinking": "xhigh"
+        }}})
+    );
 }

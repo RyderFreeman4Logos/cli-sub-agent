@@ -51,11 +51,12 @@ pub(crate) fn parse_cli_tool_name(
         "codex" => Ok(csa_core::types::ToolName::Codex),
         "claude-code" => Ok(csa_core::types::ToolName::ClaudeCode),
         "openai-compat" => Ok(csa_core::types::ToolName::OpenaiCompat),
+        "hermes" => Ok(csa_core::types::ToolName::Hermes),
         "antigravity-cli" => Ok(csa_core::types::ToolName::AntigravityCli),
         "claude" => Ok(csa_core::types::ToolName::ClaudeCode),
         "antigravity" => Ok(csa_core::types::ToolName::AntigravityCli),
         _ => Err(format!(
-            "unknown tool '{tool}'. Valid values: opencode, codex, claude-code, openai-compat, antigravity-cli"
+            "unknown tool '{tool}'. Valid values: opencode, codex, claude-code, openai-compat, hermes, antigravity-cli"
         )),
     }
 }
@@ -161,5 +162,12 @@ mod tests {
 
         assert!(err.contains("no longer supported"), "{err}");
         assert!(err.contains("provider is discontinued"), "{err}");
+    }
+
+    #[test]
+    fn parse_cli_tool_name_accepts_hermes() {
+        let tool = parse_cli_tool_name("hermes").unwrap();
+
+        assert_eq!(tool, csa_core::types::ToolName::Hermes);
     }
 }

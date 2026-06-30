@@ -56,6 +56,12 @@ impl Executor {
                     cmd.arg("-p").arg(prompt);
                 }
             }
+            Self::Hermes { .. } => {
+                cmd.arg("run");
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg(prompt);
+                }
+            }
             Self::OpenaiCompat { .. } => {} // HTTP-only
             Self::AntigravityCli { .. } => {
                 if matches!(prompt_transport, PromptTransport::Argv) {
@@ -95,6 +101,7 @@ impl Executor {
             Self::Codex { .. } => ToolName::Codex,
             Self::ClaudeCode { .. } => ToolName::ClaudeCode,
             Self::OpenaiCompat { .. } => ToolName::OpenaiCompat,
+            Self::Hermes { .. } => ToolName::Hermes,
             Self::AntigravityCli { .. } => ToolName::AntigravityCli,
         }
     }

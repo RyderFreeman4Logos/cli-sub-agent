@@ -46,7 +46,7 @@ impl ExecutorAgentBackend {
 
     fn backend_type_for_executor(executor: &Executor) -> BackendType {
         match executor {
-            Executor::ClaudeCode { .. } => BackendType::ClaudeCode,
+            Executor::ClaudeCode { .. } | Executor::Hermes { .. } => BackendType::ClaudeCode,
             Executor::GeminiCli { .. } | Executor::AntigravityCli { .. } => BackendType::GeminiCli,
             Executor::Codex { .. } | Executor::Opencode { .. } | Executor::OpenaiCompat { .. } => {
                 BackendType::Codex
@@ -77,6 +77,9 @@ impl ExecutorAgentBackend {
                 Executor::OpenaiCompat {
                     model_override: m, ..
                 } => *m = Some(model_override.clone()),
+                Executor::Hermes {
+                    model_override: m, ..
+                } => *m = Some(model_override.clone()),
                 Executor::AntigravityCli {
                     model_override: m, ..
                 } => *m = Some(model_override),
@@ -104,6 +107,9 @@ impl ExecutorAgentBackend {
                     thinking_budget, ..
                 } => *thinking_budget = Some(budget.clone()),
                 Executor::OpenaiCompat {
+                    thinking_budget, ..
+                } => *thinking_budget = Some(budget.clone()),
+                Executor::Hermes {
                     thinking_budget, ..
                 } => *thinking_budget = Some(budget.clone()),
                 Executor::AntigravityCli {
@@ -351,6 +357,14 @@ mod tests {
                 thinking_budget: None,
             }),
             BackendType::Codex
+        );
+        assert_eq!(
+            ExecutorAgentBackend::backend_type_for_executor(&Executor::Hermes {
+                provider_override: None,
+                model_override: None,
+                thinking_budget: None,
+            }),
+            BackendType::ClaudeCode
         );
     }
 

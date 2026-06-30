@@ -25,12 +25,24 @@ impl Transport for AcpTransport {
     ) -> Result<TransportResult> {
         let is_gemini = self.tool_name == "gemini-cli";
 
-        // Non-gemini tools: ACP crash retry count is configured at execution time.
-        if !is_gemini {
+        if self.tool_name == "codex" {
             return execute_with_crash_retry(
                 self, prompt, tool_state, session, extra_env, &options,
             )
             .await;
+        }
+        if !is_gemini {
+            let resume_session_id = tool_state.and_then(|s| s.provider_session_id.as_deref());
+            return self
+                .execute_acp_attempt(
+                    prompt,
+                    session,
+                    extra_env,
+                    &options,
+                    &self.acp_args,
+                    resume_session_id,
+                )
+                .await;
         }
 
         // Gemini-cli: 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)

@@ -114,12 +114,13 @@ task_pool_workers = 4
 #[test]
 fn test_all_known_tools() {
     let tools = all_known_tools();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 6);
     assert!(!tools.contains(&ToolName::GeminiCli));
     assert!(tools.contains(&ToolName::Opencode));
     assert!(tools.contains(&ToolName::Codex));
     assert!(tools.contains(&ToolName::ClaudeCode));
     assert!(tools.contains(&ToolName::OpenaiCompat));
+    assert!(tools.contains(&ToolName::Hermes));
     assert!(tools.contains(&ToolName::AntigravityCli));
 }
 
@@ -131,6 +132,7 @@ fn test_routing_candidate_tools_exclude_explicit_only_tools() {
     assert!(tools.contains(&ToolName::Codex));
     assert!(tools.contains(&ToolName::ClaudeCode));
     assert!(tools.contains(&ToolName::Opencode));
+    assert!(tools.contains(&ToolName::Hermes));
 }
 
 #[test]
