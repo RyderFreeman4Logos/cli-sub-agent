@@ -202,7 +202,7 @@ fn apply_run_target_dir_guard_preserves_relative_workspace_target_override() {
 
 #[cfg(unix)]
 #[test]
-fn runtime_guard_replaces_synthesized_workspace_target_for_unwritable_target() {
+fn runtime_guard_replaces_readonly_ambient_target_for_unwritable_target() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let project = tempdir().expect("tempdir");
     let home = project.path().join("home");
@@ -235,11 +235,11 @@ fn runtime_guard_replaces_synthesized_workspace_target_for_unwritable_target() {
         pattern_internal: false,
         allow_git_push: false,
     });
-    let synthesized_target = project.path().join("target").to_string_lossy().into_owned();
     assert_eq!(
         env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
             .map(String::as_str),
-        Some(synthesized_target.as_str())
+        Some("/usr/local"),
+        "normal env merge must preserve the ambient target before the runtime guard decides"
     );
 
     let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
@@ -261,7 +261,7 @@ fn runtime_guard_replaces_synthesized_workspace_target_for_unwritable_target() {
 
 #[cfg(unix)]
 #[test]
-fn runtime_guard_replaces_config_normalized_workspace_target_for_unwritable_target() {
+fn runtime_guard_replaces_readonly_caller_target_for_unwritable_target() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let project = tempdir().expect("tempdir");
     let home = project.path().join("home");
@@ -288,11 +288,11 @@ fn runtime_guard_replaces_config_normalized_workspace_target_for_unwritable_targ
         pattern_internal: false,
         allow_git_push: false,
     });
-    let synthesized_target = project.path().join("target").to_string_lossy().into_owned();
     assert_eq!(
         env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
             .map(String::as_str),
-        Some(synthesized_target.as_str())
+        Some("/usr/local"),
+        "normal env merge must preserve the caller target before the runtime guard decides"
     );
 
     let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
@@ -344,12 +344,11 @@ fn runtime_guard_preserves_external_caller_supplied_target_override() {
         pattern_internal: false,
         allow_git_push: false,
     });
-    let synthesized_target = project.path().join("target").to_string_lossy().into_owned();
     assert_eq!(
         env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
             .map(String::as_str),
-        Some(synthesized_target.as_str()),
-        "env merge pins Cargo target before the runtime guard restores caller intent"
+        Some(explicit_target.as_str()),
+        "normal env merge must preserve caller CARGO_TARGET_DIR"
     );
 
     let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(

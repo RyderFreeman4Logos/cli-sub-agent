@@ -96,8 +96,7 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
     let _rustup_home = ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
     let _cargo_install_root =
         ScopedEnvVarRestore::set(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/usr/local");
-    let _cargo_target_dir =
-        ScopedEnvVarRestore::set(csa_core::env::CARGO_TARGET_DIR_ENV_KEY, "/usr/local");
+    let _cargo_target_dir = ScopedEnvVarRestore::unset(csa_core::env::CARGO_TARGET_DIR_ENV_KEY);
     let _mise_config =
         ScopedEnvVarRestore::set(csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "/usr/local");
     let _mise_data = ScopedEnvVarRestore::set(
@@ -142,16 +141,9 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
                 .expect("cargo install root utf8")
         )
     );
-    assert_eq!(
-        merged
-            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-            .map(String::as_str),
-        Some(
-            temp.path()
-                .join("target")
-                .to_str()
-                .expect("cargo target dir utf8")
-        )
+    assert!(
+        !merged.contains_key(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+        "normal child env must not invent a CARGO_TARGET_DIR fallback"
     );
     assert_eq!(
         merged
@@ -234,12 +226,9 @@ fn build_merged_env_defaults_missing_rust_state_to_known_good_paths() {
                 .expect("cargo install root utf8")
         )
     );
-    assert_eq!(
-        merged
-            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-            .map(String::as_str),
-        Some(temp.path().join("target").to_str().expect("target utf8")),
-        "missing CARGO_TARGET_DIR must be pinned to the project target symlink"
+    assert!(
+        !merged.contains_key(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+        "missing CARGO_TARGET_DIR must preserve Cargo's default ./target"
     );
     assert_eq!(
         merged
@@ -256,7 +245,7 @@ fn build_merged_env_defaults_missing_rust_state_to_known_good_paths() {
 }
 
 #[test]
-fn build_merged_env_pins_ambient_cargo_target_to_project_target_for_sandbox() {
+fn build_merged_env_preserves_ambient_cargo_target_for_sandbox() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -309,8 +298,6 @@ fn build_merged_env_pins_ambient_cargo_target_to_project_target_for_sandbox() {
         allow_git_push: false,
     });
 
-    let expected_target = temp.path().join("target");
-    let expected_install_root = expected_target.join("cargo-install-root");
     assert_eq!(
         merged.get(csa_core::env::CARGO_HOME_ENV_KEY).map(String::as_str),
         Some(cargo_home.to_str().expect("cargo home utf8"))
@@ -323,13 +310,13 @@ fn build_merged_env_pins_ambient_cargo_target_to_project_target_for_sandbox() {
         merged
             .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
             .map(String::as_str),
-        Some(expected_install_root.to_str().expect("cargo install root utf8"))
+        Some(cargo_install_root.to_str().expect("cargo install root utf8"))
     );
     assert_eq!(
         merged
             .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
             .map(String::as_str),
-        Some(expected_target.to_str().expect("cargo target dir utf8"))
+        Some(cargo_target_dir.to_str().expect("cargo target dir utf8"))
     );
     assert_eq!(
         merged
@@ -341,15 +328,13 @@ fn build_merged_env_pins_ambient_cargo_target_to_project_target_for_sandbox() {
     let writable_paths = crate::pipeline_env::rust_session_writable_paths(&merged);
     assert!(writable_paths.contains(&cargo_home));
     assert!(writable_paths.contains(&rustup_home));
-    assert!(writable_paths.contains(&expected_install_root));
-    assert!(writable_paths.contains(&expected_target));
-    assert!(!writable_paths.contains(&cargo_install_root));
-    assert!(!writable_paths.contains(&cargo_target_dir));
+    assert!(writable_paths.contains(&cargo_install_root));
+    assert!(writable_paths.contains(&cargo_target_dir));
     assert!(writable_paths.contains(&mise_config));
 }
 
 #[test]
-fn build_merged_env_pins_ambient_cargo_dirs_without_home_to_project_target() {
+fn build_merged_env_preserves_ambient_cargo_dirs_without_home() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let cargo_install_root = temp.path().join("ambient-install-root");
@@ -381,29 +366,25 @@ fn build_merged_env_pins_ambient_cargo_dirs_without_home_to_project_target() {
         allow_git_push: false,
     });
 
-    let expected_target = temp.path().join("target");
-    let expected_install_root = expected_target.join("cargo-install-root");
     assert_eq!(
         merged
             .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
             .map(String::as_str),
-        Some(expected_install_root.to_str().expect("cargo install root utf8"))
+        Some(cargo_install_root.to_str().expect("cargo install root utf8"))
     );
     assert_eq!(
         merged
             .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
             .map(String::as_str),
-        Some(expected_target.to_str().expect("cargo target dir utf8"))
+        Some(cargo_target_dir.to_str().expect("cargo target dir utf8"))
     );
     let writable_paths = crate::pipeline_env::rust_session_writable_paths(&merged);
-    assert!(writable_paths.contains(&expected_install_root));
-    assert!(writable_paths.contains(&expected_target));
-    assert!(!writable_paths.contains(&cargo_install_root));
-    assert!(!writable_paths.contains(&cargo_target_dir));
+    assert!(writable_paths.contains(&cargo_install_root));
+    assert!(writable_paths.contains(&cargo_target_dir));
 }
 
 #[test]
-fn build_merged_env_preserves_explicit_writable_rust_state_except_project_target_dirs() {
+fn build_merged_env_preserves_explicit_writable_rust_state() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -462,8 +443,6 @@ fn build_merged_env_preserves_explicit_writable_rust_state_except_project_target
         allow_git_push: false,
     });
 
-    let expected_target = temp.path().join("target");
-    let expected_install_root = expected_target.join("cargo-install-root");
     assert_eq!(
         merged.get(csa_core::env::CARGO_HOME_ENV_KEY),
         extra_env.get(csa_core::env::CARGO_HOME_ENV_KEY)
@@ -473,16 +452,12 @@ fn build_merged_env_preserves_explicit_writable_rust_state_except_project_target
         extra_env.get(csa_core::env::RUSTUP_HOME_ENV_KEY)
     );
     assert_eq!(
-        merged
-            .get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
-            .map(String::as_str),
-        Some(expected_install_root.to_str().expect("cargo install root utf8"))
+        merged.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY),
+        extra_env.get(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY)
     );
     assert_eq!(
-        merged
-            .get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
-            .map(String::as_str),
-        Some(expected_target.to_str().expect("cargo target dir utf8"))
+        merged.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY),
+        extra_env.get(csa_core::env::CARGO_TARGET_DIR_ENV_KEY)
     );
     assert_eq!(
         merged.get(csa_core::env::MISE_CONFIG_DIR_ENV_KEY),
