@@ -85,9 +85,13 @@ impl DaemonSpawnOptions {
             } else {
                 RunStdinPrompt::None
             };
+        let prompt_file_to_capture = prompt_file
+            .filter(|path| !crate::run_helpers::is_prompt_file_stdin_sentinel(path))
+            .map(Path::to_path_buf);
 
         Self {
             run_stdin_prompt,
+            prompt_file_to_capture,
             prompt_file_forward_arg: PromptFileForwardArg::PromptFile,
             no_fs_sandbox,
             extra_writable: extra_writable.to_vec(),
