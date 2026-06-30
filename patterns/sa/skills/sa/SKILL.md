@@ -352,7 +352,7 @@ DONE WHEN:
 PLAN_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
-scripts/csa/session-wait-until-done.sh "$SID"
+csa session wait --session "$SID"
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Layer 1)
@@ -395,7 +395,7 @@ DONE WHEN:
 IMPL_EOF
 
 SID=$(csa run --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
-scripts/csa/session-wait-until-done.sh "$SID"
+csa session wait --session "$SID"
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -431,7 +431,7 @@ DONE WHEN:
 VERIFY_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
-scripts/csa/session-wait-until-done.sh "$SID"
+csa session wait --session "$SID"
 ```
 
 ### Canonical LLM dispatch form

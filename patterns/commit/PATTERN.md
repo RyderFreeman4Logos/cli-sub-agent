@@ -509,7 +509,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
 set -euo pipefail
-bash scripts/csa/cumulative-review-batch.sh --default-branch main -- \
+bash "${CSA_WORKFLOW_DIR:-patterns/commit}/scripts/csa/cumulative-review-batch.sh" --default-branch main -- \
   csa review --sa-mode true --range main...HEAD
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 22)" required=true -->'
