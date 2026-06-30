@@ -176,6 +176,17 @@ pub(crate) use sa_mode::validate_sa_mode;
 
 #[tokio::main]
 async fn main() {
+    // Restore SIGPIPE to default (terminate) so that piping output into a closed
+    // reader exits cleanly instead of panicking with "failed printing to stdout:
+    // Broken pipe" (issue #2408). Rust resets SIGPIPE to SIG_IGN at startup.
+    #[cfg(unix)]
+    // SAFETY: `signal()` is an async-signal-safe POSIX call that installs a
+    // signal handler. We set SIGPIPE to SIG_DFL (the OS default: terminate the
+    // process), which is safe at process start before any threads or locks exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     if let Err(err) = run().await {
         eprintln!("{}", error_report::render_user_facing_error(&err));
         if let Some(hint) = error_hints::suggest_fix(&err) {
