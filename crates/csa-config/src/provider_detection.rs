@@ -44,6 +44,10 @@ pub fn detect_model_provider() -> Option<ModelProvider> {
     detect_model_provider_from_env().or_else(detect_model_provider_from_hermes_config)
 }
 
+/// Maximum allowed wait TTL in seconds (#2538).
+/// Provider TTLs exceeding this cap are clamped to prevent excessively long waits.
+pub const MAX_WAIT_TTL_SECONDS: u64 = 3000;
+
 pub fn provider_ttl(provider: ModelProvider, config: &KvCacheConfig) -> u64 {
     let provider_seconds = match provider {
         ModelProvider::Claude => config.provider_ttls.claude,
@@ -51,11 +55,12 @@ pub fn provider_ttl(provider: ModelProvider, config: &KvCacheConfig) -> u64 {
         ModelProvider::Glm => config.provider_ttls.glm,
         ModelProvider::Other => config.provider_ttls.other,
     };
-    if provider_seconds > 0 {
+    let resolved = if provider_seconds > 0 {
         provider_seconds
     } else {
         fallback_default_ttl(config)
-    }
+    };
+    resolved.min(MAX_WAIT_TTL_SECONDS)
 }
 
 fn detect_model_provider_from_env() -> Option<ModelProvider> {
@@ -225,4 +230,24 @@ model:
 
         assert_eq!(provider_ttl(ModelProvider::Glm, &config), 123);
     }
+
+    #[test]
+    fn issue_2538_provider_ttl_clamped_to_max_cap() {
+        let config = KvCacheConfig {
+            default_ttl_seconds: 540,
+            long_poll_seconds: 540,
+            frequent_poll_seconds: 30,
+            provider_ttls: crate::ProviderTtls {
+                claude: 5000,
+                openai: 0,
+                glm: 0,
+                other: 0,
+            },
+        };
+        // Claude TTL 5000 > 3000 cap → clamped to 3000
+        assert_eq!(provider_ttl(ModelProvider::Claude, &config), 3000);
+        // OpenAI falls back to default 540 < 3000 → not clamped
+        assert_eq!(provider_ttl(ModelProvider::OpenAI, &config), 540);
+    }
+
 }
