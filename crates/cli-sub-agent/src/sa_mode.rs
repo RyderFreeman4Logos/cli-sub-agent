@@ -32,6 +32,31 @@ pub(crate) fn command_sa_mode_arg(command: &Commands) -> Option<Option<bool>> {
     }
 }
 
+pub(crate) fn sa_mode_caller_guard_context(command: &Commands) -> (Option<String>, Option<String>) {
+    match command {
+        Commands::Run { tool, tier, .. } => (
+            tier.clone(),
+            tool.as_ref().map(std::string::ToString::to_string),
+        ),
+        Commands::Review(args) => (
+            args.tier.clone(),
+            args.tool.as_ref().map(std::string::ToString::to_string),
+        ),
+        Commands::Debate(args) => (
+            args.tier.clone(),
+            args.tool.as_ref().map(std::string::ToString::to_string),
+        ),
+        Commands::Plan {
+            cmd: PlanCommands::Run { tool, .. },
+        } => (None, tool.as_ref().map(std::string::ToString::to_string)),
+        Commands::ClaudeSubAgent(args) => (
+            None,
+            args.tool.as_ref().map(std::string::ToString::to_string),
+        ),
+        _ => (None, None),
+    }
+}
+
 pub(crate) fn validate_sa_mode(
     command: &Commands,
     current_depth: u32,
@@ -66,6 +91,7 @@ pub(crate) fn apply_sa_mode_prompt_guard(
 
     let sa_mode_enabled = validate_sa_mode(command, current_depth, internal_invocation)?;
     let value = if sa_mode_enabled { "true" } else { "false" };
+    let (tier, tool) = sa_mode_caller_guard_context(command);
 
     // SAFETY: process-level env updated once during startup before async work begins.
     unsafe {
@@ -74,6 +100,10 @@ pub(crate) fn apply_sa_mode_prompt_guard(
             value,
         )
     };
+    crate::pipeline::prompt_guard::set_sa_mode_caller_guard_context(
+        tier.as_deref(),
+        tool.as_deref(),
+    );
 
     // Emit SA mode caller guard to stdout (pre-session constraint).
     // Only for Text output — JSON mode must not be corrupted by guard XML.

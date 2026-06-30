@@ -1,4 +1,7 @@
 pub(crate) const PROMPT_GUARD_CALLER_INJECTION_ENV: &str = "CSA_EMIT_CALLER_GUARD_INJECTION";
+pub(crate) const COMPACT_SA_GUARD_ENV: &str = "CSA_SAY_COMPACT";
+const SA_GUARD_TIER_ENV: &str = "CSA_SA_GUARD_TIER";
+const SA_GUARD_TOOL_ENV: &str = "CSA_SA_GUARD_TOOL";
 
 pub(super) fn should_emit_prompt_guard_to_caller(current_depth: u32) -> bool {
     // Prompt-guard reverse injection is only for the top-level caller.
@@ -129,6 +132,82 @@ ALL implementation work MUST be delegated to CSA sub-agents.
 Decisions MUST be based on result.toml reports, not direct code inspection.
 </csa-caller-sa-guard>";
 
+pub(crate) fn set_sa_mode_caller_guard_context(tier: Option<&str>, tool: Option<&str>) {
+    set_optional_env(SA_GUARD_TIER_ENV, tier);
+    set_optional_env(SA_GUARD_TOOL_ENV, tool);
+}
+
+fn set_optional_env(key: &str, value: Option<&str>) {
+    // SAFETY: process-level env is updated during CLI startup before async work begins.
+    unsafe {
+        match value {
+            Some(value) if !value.trim().is_empty() => std::env::set_var(key, value),
+            _ => std::env::remove_var(key),
+        }
+    }
+}
+
+fn env_flag_enabled(key: &str) -> bool {
+    match std::env::var(key) {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            !normalized.is_empty() && !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
+        }
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn compact_sa_guard_enabled() -> bool {
+    env_flag_enabled(COMPACT_SA_GUARD_ENV)
+}
+
+pub(crate) fn format_compact_sa_mode_caller_guard(
+    tier: Option<&str>,
+    tool: Option<&str>,
+) -> String {
+    let mut line = String::from("<csa-caller-sa-guard:compact");
+    push_compact_attr(&mut line, "tier", tier);
+    push_compact_attr(&mut line, "tool", tool);
+    line.push_str(" sa-mode=true contract=delegate-only-read-result-toml-no-direct-code/>");
+    line
+}
+
+fn compact_sa_mode_caller_guard_from_env() -> String {
+    let tier = std::env::var(SA_GUARD_TIER_ENV).ok();
+    let tool = std::env::var(SA_GUARD_TOOL_ENV).ok();
+    format_compact_sa_mode_caller_guard(tier.as_deref(), tool.as_deref())
+}
+
+fn push_compact_attr(line: &mut String, key: &str, value: Option<&str>) {
+    let Some(value) = value.and_then(sanitize_compact_attr_value) else {
+        return;
+    };
+    line.push(' ');
+    line.push_str(key);
+    line.push('=');
+    line.push_str(&value);
+}
+
+fn sanitize_compact_attr_value(value: &str) -> Option<String> {
+    let sanitized = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized)
+    }
+}
+
 /// Emit SA mode caller guard to stdout.
 ///
 /// Returns `true` if the guard was emitted. The guard is only emitted when
@@ -140,6 +219,10 @@ pub(crate) fn emit_sa_mode_caller_guard(sa_mode: bool, depth: u32, text_mode: bo
     if !sa_mode || depth > 0 || !text_mode {
         return false;
     }
-    println!("{SA_MODE_CALLER_GUARD}");
+    if compact_sa_guard_enabled() {
+        println!("{}", compact_sa_mode_caller_guard_from_env());
+    } else {
+        println!("{SA_MODE_CALLER_GUARD}");
+    }
     true
 }

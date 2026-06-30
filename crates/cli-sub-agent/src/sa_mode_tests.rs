@@ -301,6 +301,62 @@ mod tests {
     }
 
     #[test]
+    fn sa_mode_caller_guard_context_extracts_run_tier_and_tool() {
+        let cli = Cli::try_parse_from([
+            "csa",
+            "run",
+            "--sa-mode",
+            "true",
+            "--tier",
+            "tier-4-critical",
+            "--tool",
+            "codex",
+            "prompt",
+        ])
+        .expect("run cli should parse");
+
+        let (tier, tool) = crate::sa_mode::sa_mode_caller_guard_context(&cli.command);
+
+        assert_eq!(tier.as_deref(), Some("tier-4-critical"));
+        assert_eq!(tool.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_compact_line_keeps_contract_one_line() {
+        let line = crate::pipeline::prompt_guard::format_compact_sa_mode_caller_guard(
+            Some("tier-4-critical"),
+            Some("codex"),
+        );
+
+        assert_eq!(
+            line,
+            "<csa-caller-sa-guard:compact tier=tier-4-critical tool=codex sa-mode=true contract=delegate-only-read-result-toml-no-direct-code/>"
+        );
+        assert!(!line.contains('\n'), "compact guard must stay one line");
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_compact_env_enables_only_truthy_values() {
+        let _env_lock = SA_MODE_ENV_LOCK.lock().expect("sa-mode env lock poisoned");
+        let key = crate::pipeline::prompt_guard::COMPACT_SA_GUARD_ENV;
+        let original = std::env::var(key).ok();
+
+        // SAFETY: test-scoped env mutation guarded by process-wide mutex.
+        unsafe {
+            std::env::set_var(key, "1");
+        }
+        assert!(crate::pipeline::prompt_guard::compact_sa_guard_enabled());
+
+        // SAFETY: test-scoped env mutation guarded by process-wide mutex.
+        unsafe {
+            std::env::set_var(key, "false");
+        }
+        assert!(!crate::pipeline::prompt_guard::compact_sa_guard_enabled());
+
+        restore_env_var(key, original);
+    }
+
+    #[test]
     fn sa_mode_caller_guard_content_has_required_markers() {
         // Verify the guard constant contains key structural markers.
         let guard = crate::pipeline::prompt_guard::SA_MODE_CALLER_GUARD;
