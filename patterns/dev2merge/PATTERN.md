@@ -498,13 +498,25 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 Tool: bash
 OnFail: abort
 Full and resume paths run the deterministic L1/L2 quality gate before
-cumulative CSA review.
+cumulative CSA review. Language-appropriate checks are run based on project type (#2539).
 
 ```bash
 set -euo pipefail
-just fmt
-just clippy
-just test
+if [ -f Cargo.toml ]; then
+  just fmt && just clippy && just test
+elif [ -f pyproject.toml ]; then
+  (just lint 2>/dev/null || ruff check . && ruff format --check .)
+  (just test 2>/dev/null || pytest)
+elif [ -f package.json ]; then
+  (just lint 2>/dev/null || biome check .)
+  (just test 2>/dev/null || vitest run)
+elif [ -f go.mod ]; then
+  go vet ./... && go test ./...
+elif just --summary 2>/dev/null | grep -q pre-commit; then
+  just pre-commit
+else
+  echo "WARNING: No recognized project type; skipping L1/L2 gate."
+fi
 ```
 
 ## Step 12: Pre-PR Cumulative Review Gate

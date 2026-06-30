@@ -197,7 +197,7 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
 | 9 | Resume Commit | resume mode only: stage, staged-diff check, commit uncommitted remainder | bash |
 | 10 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
-| 11 | Self-Review Gate | Bash-enforced L1/L2 gate runs `just fmt`, `just clippy`, and `just test` before CSA review | bash |
+| 11 | Self-Review Gate | Language-aware L1/L2 gate: Rust (just fmt/clippy/test), Python (ruff/pytest), Node (biome/vitest), Go (go vet/test); skips gracefully for unrecognized projects (#2539) | bash |
 | 12 | Pre-PR Cumulative Review Gate | cumulative review helper runs `csa review --range ${DEFAULT_BRANCH}...HEAD` and owns exact-head verdict check when review runs | bash |
 | **ENDIF** | | | |
 | 13 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
@@ -248,7 +248,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 
 1. Feature branch validated (not default branch/dev).
 2. FAST_PATH detection completed (heuristic applied).
-3. L1/L2 gates exit 0 (`just fmt`, `just clippy`, and `just test` on the full/resume path).
+3. L1/L2 gates exit 0 (language-appropriate: Rust→just fmt/clippy/test, Python→ruff/pytest, etc.; #2539).
 4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
 6. Rust repos with local version recipes bump if needed; non-Rust repos or repos missing those optional recipes skip without aborting.
