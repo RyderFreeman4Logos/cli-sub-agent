@@ -386,6 +386,38 @@ fn test_tool_defaults_codex_honors_codex_home_env() {
 }
 
 #[test]
+fn test_tool_defaults_codex_honors_tool_state_dirs_config() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    let configured = PathBuf::from("~/.state/codex");
+    let expected = home.join(".state/codex");
+    let tool_state_dirs = std::collections::HashMap::from([("codex".to_string(), configured)]);
+
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults_and_state_dirs("codex", &project, &session, Some(&tool_state_dirs))
+        .build()
+        .expect("configured codex state dir should build");
+
+    assert!(
+        expected.is_dir(),
+        "configured codex state dir should be pre-created"
+    );
+    assert!(
+        plan.writable_paths.contains(&expected),
+        "codex defaults should include configured tool_state_dirs.codex"
+    );
+    assert!(
+        !plan.writable_paths.contains(&home.join(".codex")),
+        "configured codex state dir should replace the hardcoded default"
+    );
+}
+
+#[test]
 fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();

@@ -228,6 +228,33 @@ impl IsolationPlanBuilder {
         project_root: &Path,
         session_dir: &Path,
     ) -> Self {
+        self.apply_tool_defaults(tool_name, project_root, session_dir, None);
+        self
+    }
+
+    /// Apply per-tool defaults with optional configured tool state dirs.
+    ///
+    /// `tool_state_dirs` maps canonical state names such as `"codex"` and
+    /// `"claude"` to host paths.  Environment variables recognized by the
+    /// underlying tools still take precedence over this table.
+    pub fn with_tool_defaults_and_state_dirs(
+        mut self,
+        tool_name: &str,
+        project_root: &Path,
+        session_dir: &Path,
+        tool_state_dirs: Option<&HashMap<String, PathBuf>>,
+    ) -> Self {
+        self.apply_tool_defaults(tool_name, project_root, session_dir, tool_state_dirs);
+        self
+    }
+
+    fn apply_tool_defaults(
+        &mut self,
+        tool_name: &str,
+        project_root: &Path,
+        session_dir: &Path,
+        tool_state_dirs: Option<&HashMap<String, PathBuf>>,
+    ) {
         self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
@@ -318,6 +345,7 @@ impl IsolationPlanBuilder {
             codex_paths::add_codex_home_for_tool(
                 tool_name,
                 &home,
+                tool_state_dirs,
                 &mut self.writable_paths,
                 &mut self.required_writable_dirs,
             );
@@ -331,6 +359,7 @@ impl IsolationPlanBuilder {
             claude_paths::add_claude_home_for_tool(
                 tool_name,
                 &home,
+                tool_state_dirs,
                 &mut self.writable_paths,
                 &mut self.required_writable_dirs,
             );
@@ -350,7 +379,6 @@ impl IsolationPlanBuilder {
                 _ => {}
             }
         }
-        self
     }
 
     /// Consume the builder and produce an [`IsolationPlan`].
@@ -410,6 +438,8 @@ impl IsolationPlanBuilder {
             );
         }
 
+        self.add_runtime_daemon_socket_readable_paths();
+
         codex_paths::validate_required_writable_dirs(
             self.filesystem,
             &self.required_writable_dirs,
@@ -432,6 +462,49 @@ impl IsolationPlanBuilder {
             memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
         })
     }
+
+    fn add_runtime_daemon_socket_readable_paths(&mut self) {
+        if self.filesystem != FilesystemCapability::Bwrap {
+            return;
+        }
+        let Some(runtime_root) = runtime_path::xdg_runtime_root() else {
+            return;
+        };
+        if !self.has_writable_runtime_child(&runtime_root) {
+            return;
+        }
+
+        for socket_path in runtime_daemon_socket_paths(&runtime_root) {
+            if !socket_path.exists() || self.path_already_exposed(&socket_path) {
+                continue;
+            }
+            self.readable_paths.push(socket_path);
+        }
+    }
+
+    fn has_writable_runtime_child(&self, runtime_root: &Path) -> bool {
+        self.writable_paths.iter().any(|path| {
+            let comparable = runtime_path::canonicalize_or_fallback(path);
+            comparable.starts_with(runtime_root) && comparable != runtime_root
+        })
+    }
+
+    fn path_already_exposed(&self, path: &Path) -> bool {
+        self.readable_paths
+            .iter()
+            .any(|candidate| path == candidate)
+            || self
+                .writable_paths
+                .iter()
+                .any(|candidate| path.starts_with(candidate))
+    }
+}
+
+fn runtime_daemon_socket_paths(runtime_root: &Path) -> [PathBuf; 2] {
+    [
+        runtime_root.join("bus"),
+        runtime_root.join("systemd/private"),
+    ]
 }
 
 fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: &Path) -> PathBuf {

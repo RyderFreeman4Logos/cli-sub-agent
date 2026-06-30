@@ -124,6 +124,48 @@ fn test_xdg_runtime_child_helper_keeps_run_user_scope_narrow() {
     assert!(!is_xdg_runtime_child_path(Path::new("/run/user/1002/just")));
 }
 
+#[test]
+fn test_runtime_writable_child_exposes_user_daemon_sockets_readonly() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime_root = tmp.path().join("run/user/1001");
+    let runtime_child = runtime_root.join("cli-sub-agent");
+    let bus_socket = runtime_root.join("bus");
+    let systemd_socket = runtime_root.join("systemd/private");
+    std::fs::create_dir_all(&runtime_child).expect("create runtime child");
+    std::fs::create_dir_all(systemd_socket.parent().unwrap()).expect("create systemd dir");
+    std::fs::write(&bus_socket, "").expect("create bus socket placeholder");
+    std::fs::write(&systemd_socket, "").expect("create systemd socket placeholder");
+    let _runtime_env = ScopedEnvVar::set("XDG_RUNTIME_DIR", &runtime_root);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_writable_path(runtime_child)
+        .build()
+        .expect("runtime child scope should build");
+
+    assert!(plan.readable_paths.contains(&bus_socket));
+    assert!(plan.readable_paths.contains(&systemd_socket));
+}
+
+#[test]
+fn test_user_daemon_sockets_not_exposed_without_runtime_writable_child() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime_root = tmp.path().join("run/user/1001");
+    let bus_socket = runtime_root.join("bus");
+    std::fs::create_dir_all(&runtime_root).expect("create runtime root");
+    std::fs::write(&bus_socket, "").expect("create bus socket placeholder");
+    let _runtime_env = ScopedEnvVar::set("XDG_RUNTIME_DIR", &runtime_root);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .build()
+        .expect("plan should build without runtime scope");
+
+    assert!(!plan.readable_paths.contains(&bus_socket));
+}
+
 #[cfg(unix)]
 #[test]
 fn test_writable_validation_error_includes_original_and_resolved_path() {

@@ -513,6 +513,7 @@ fn write_project_config_with_tier(project_root: &Path) {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     config.tiers.insert(

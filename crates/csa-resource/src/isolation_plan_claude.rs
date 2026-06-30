@@ -26,6 +26,7 @@
 //! ONLY for the owning tool (`claude-code`); peers get a writable bind but no
 //! probe.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -40,8 +41,7 @@ const CLAUDE_DEFAULT_HOME_REL: &str = ".claude";
 /// its own writable entry. Under `CLAUDE_CONFIG_DIR` the config file lives
 /// inside the (already writable) override dir, so no separate entry is needed.
 const CLAUDE_LEGACY_STATE_REL: &str = ".claude.json";
-const CLAUDE_SANDBOX_CONFIG_HINT: &str =
-    "[tools.claude-code].filesystem_sandbox.writable_paths or [filesystem_sandbox].extra_writable";
+const CLAUDE_SANDBOX_CONFIG_HINT: &str = "[tool_state_dirs].claude, [tools.claude-code].filesystem_sandbox.writable_paths, or [filesystem_sandbox].extra_writable";
 
 /// Expose the claude home (`~/.claude` or `$CLAUDE_CONFIG_DIR`) writable so that
 /// a nested claude-code CSA child can create `~/.claude/session-env/<id>`
@@ -58,10 +58,11 @@ const CLAUDE_SANDBOX_CONFIG_HINT: &str =
 pub(super) fn add_claude_home_for_tool(
     tool_name: &str,
     home: &Path,
+    tool_state_dirs: Option<&HashMap<String, PathBuf>>,
     writable_paths: &mut Vec<PathBuf>,
     required_writable_dirs: &mut Vec<RequiredWritableDir>,
 ) {
-    let (claude_home, claude_home_source) = claude_home_dir(home);
+    let (claude_home, claude_home_source) = claude_home_dir(home, tool_state_dirs);
     if tool_name == "claude-code" {
         if claude_home.is_absolute() {
             super::add_dir_or_creatable_parent(writable_paths, &claude_home);
@@ -71,7 +72,7 @@ pub(super) fn add_claude_home_for_tool(
         // entry. Push it raw: it must stay a file, never a pre-created
         // directory (see isolation_plan_path_tests.rs). Under CLAUDE_CONFIG_DIR
         // the config file lives inside the override dir already covered above.
-        if !claude_config_dir_overridden() {
+        if claude_uses_default_legacy_sibling(home, &claude_home) {
             writable_paths.push(home.join(CLAUDE_LEGACY_STATE_REL));
         }
         required_writable_dirs.push(RequiredWritableDir {
@@ -92,16 +93,29 @@ pub(super) fn add_claude_home_for_tool(
 
 /// Resolve the canonical claude home, honoring `CLAUDE_CONFIG_DIR` when set
 /// (mirrors [`super::codex_paths::codex_home_dir`]'s `CODEX_HOME` nuance).
-pub(super) fn claude_home_dir(home: &Path) -> (PathBuf, &'static str) {
+fn claude_home_dir(
+    home: &Path,
+    tool_state_dirs: Option<&HashMap<String, PathBuf>>,
+) -> (PathBuf, String) {
     match std::env::var_os(CLAUDE_CONFIG_DIR_ENV) {
-        Some(value) if !value.is_empty() => (PathBuf::from(value), CLAUDE_CONFIG_DIR_ENV),
-        _ => (home.join(CLAUDE_DEFAULT_HOME_REL), "HOME/.claude"),
+        Some(value) if !value.is_empty() => {
+            (PathBuf::from(value), CLAUDE_CONFIG_DIR_ENV.to_string())
+        }
+        _ => super::codex_paths::tool_state_dir(tool_state_dirs, "claude", home).unwrap_or_else(
+            || {
+                (
+                    home.join(CLAUDE_DEFAULT_HOME_REL),
+                    "HOME/.claude".to_string(),
+                )
+            },
+        ),
     }
 }
 
 /// Whether `CLAUDE_CONFIG_DIR` relocates the claude home away from the default.
-fn claude_config_dir_overridden() -> bool {
-    std::env::var_os(CLAUDE_CONFIG_DIR_ENV).is_some_and(|value| !value.is_empty())
+fn claude_uses_default_legacy_sibling(home: &Path, claude_home: &Path) -> bool {
+    std::env::var_os(CLAUDE_CONFIG_DIR_ENV).is_none_or(|value| value.is_empty())
+        && claude_home == home.join(CLAUDE_DEFAULT_HOME_REL)
 }
 
 /// Check whether any claude-code binary (`claude` CLI or the `claude-code-acp`

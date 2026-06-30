@@ -38,6 +38,7 @@ fn test_resolve_tier_selector_direct_tier() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -86,6 +87,7 @@ fn test_resolve_tier_selector_alias() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -146,6 +148,7 @@ fn test_resolve_tier_selector_direct_wins_on_collision() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -180,6 +183,7 @@ fn test_resolve_tier_selector_nonexistent() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -213,6 +217,7 @@ fn test_resolve_tier_selector_alias_to_nonexistent_tier() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -266,6 +271,7 @@ fn test_resolve_tier_selector_prefix_unique() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -340,6 +346,7 @@ fn test_resolve_tier_selector_prefix_ambiguous() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -391,6 +398,7 @@ fn test_resolve_tier_selector_exact_wins_over_prefix() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -443,6 +451,7 @@ fn test_suggest_tier_prefix() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -494,6 +503,7 @@ fn test_suggest_tier_substring() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -535,6 +545,7 @@ fn test_suggest_tier_no_match() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -581,6 +592,7 @@ fn test_resolve_tier_selector_empty_string_rejected() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -631,6 +643,7 @@ fn compound_tier_fixture(tool_aliases: HashMap<String, String>) -> ProjectConfig
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

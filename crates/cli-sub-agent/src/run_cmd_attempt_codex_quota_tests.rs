@@ -49,6 +49,7 @@ fn make_config(tier_name: &str, models: &[&str]) -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

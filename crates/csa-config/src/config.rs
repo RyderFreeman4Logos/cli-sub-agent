@@ -16,6 +16,7 @@ use crate::config_raw::{
 pub use crate::config_resources::ResourcesConfig;
 use crate::global::{
     GithubConfig, PreferencesConfig, PreflightConfig, ReviewConfig, SessionWaitConfig,
+    default_tool_state_dirs, ensure_default_tool_state_dirs,
 };
 use crate::memory::MemoryConfig;
 use crate::paths;
@@ -113,6 +114,19 @@ pub struct ProjectConfig {
     /// Memory system configuration.
     #[serde(default, skip_serializing_if = "MemoryConfig::is_default")]
     pub memory: MemoryConfig,
+    /// Per-tool state directories exposed writable to sandboxed tool processes.
+    ///
+    /// Example:
+    /// ```toml
+    /// [tool_state_dirs]
+    /// codex = "~/.codex"
+    /// claude = "~/.claude"
+    /// ```
+    #[serde(
+        default = "default_tool_state_dirs",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    pub tool_state_dirs: HashMap<String, PathBuf>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, ToolConfig>,
     /// Optional per-project override for `csa review` tool selection.
@@ -377,6 +391,7 @@ impl ProjectConfig {
     }
 
     fn sanitize_filesystem_sandbox(&mut self) {
+        ensure_default_tool_state_dirs(&mut self.tool_state_dirs);
         self.filesystem_sandbox.sanitize_legacy_xdg_runtime_root();
         for (tool, config) in &mut self.tools {
             let Some(sandbox) = &mut config.filesystem_sandbox else {

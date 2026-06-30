@@ -492,6 +492,47 @@ models = ["codex/openai/o3/high"]
 }
 
 #[test]
+fn test_tool_state_dirs_inherit_from_global_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tool_state_dirs]
+codex = "/srv/codex-state"
+claude = "/srv/claude-state"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[project]
+name = "state-dir-merge"
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    assert_eq!(
+        config.tool_state_dirs.get("codex"),
+        Some(&PathBuf::from("/srv/codex-state"))
+    );
+    assert_eq!(
+        config.tool_state_dirs.get("claude"),
+        Some(&PathBuf::from("/srv/claude-state"))
+    );
+}
+
+#[test]
 fn test_liveness_dead_seconds_priority_project_over_user_over_default() {
     let tmp = tempfile::tempdir().unwrap();
     let user_path = tmp.path().join("user.toml");

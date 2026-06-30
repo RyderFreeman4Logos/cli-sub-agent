@@ -45,6 +45,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -95,6 +96,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -146,6 +148,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -216,6 +219,7 @@ pub(super) fn config_with_tier(
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }
@@ -608,6 +612,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     let result = super::resolve_tool_and_model(super::RoutingRequest {

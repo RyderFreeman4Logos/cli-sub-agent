@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -6,8 +7,7 @@ use crate::filesystem_sandbox::FilesystemCapability;
 
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_DEFAULT_HOME_REL: &str = ".codex";
-const CODEX_SANDBOX_CONFIG_HINT: &str =
-    "[tools.codex].filesystem_sandbox.writable_paths or [filesystem_sandbox].extra_writable";
+const CODEX_SANDBOX_CONFIG_HINT: &str = "[tool_state_dirs].codex, [tools.codex].filesystem_sandbox.writable_paths, or [filesystem_sandbox].extra_writable";
 
 /// A directory that MUST be writable before spawning a tool, validated
 /// fail-fast in `IsolationPlanBuilder::build`.
@@ -20,7 +20,7 @@ const CODEX_SANDBOX_CONFIG_HINT: &str =
 #[derive(Debug, Clone)]
 pub(super) struct RequiredWritableDir {
     pub(super) path: PathBuf,
-    pub(super) source: &'static str,
+    pub(super) source: String,
     pub(super) purpose: &'static str,
     pub(super) config_hint: &'static str,
     /// Lowercase tool identifier ("codex" / "claude") used in error wording.
@@ -30,10 +30,11 @@ pub(super) struct RequiredWritableDir {
 pub(super) fn add_codex_home_for_tool(
     tool_name: &str,
     home: &Path,
+    tool_state_dirs: Option<&HashMap<String, PathBuf>>,
     writable_paths: &mut Vec<PathBuf>,
     required_writable_dirs: &mut Vec<RequiredWritableDir>,
 ) {
-    let (codex_home, codex_home_source) = codex_home_dir(home);
+    let (codex_home, codex_home_source) = codex_home_dir(home, tool_state_dirs);
     if tool_name == "codex" {
         if codex_home.is_absolute() {
             super::add_dir_or_creatable_parent(writable_paths, &codex_home);
@@ -69,11 +70,38 @@ pub(super) fn validate_required_writable_dirs(
     Ok(())
 }
 
-pub(super) fn codex_home_dir(home: &Path) -> (PathBuf, &'static str) {
+pub(super) fn codex_home_dir(
+    home: &Path,
+    tool_state_dirs: Option<&HashMap<String, PathBuf>>,
+) -> (PathBuf, String) {
     match std::env::var_os(CODEX_HOME_ENV) {
-        Some(value) if !value.is_empty() => (PathBuf::from(value), CODEX_HOME_ENV),
-        _ => (home.join(CODEX_DEFAULT_HOME_REL), "HOME/.codex"),
+        Some(value) if !value.is_empty() => (PathBuf::from(value), CODEX_HOME_ENV.to_string()),
+        _ => tool_state_dir(tool_state_dirs, "codex", home)
+            .unwrap_or_else(|| (home.join(CODEX_DEFAULT_HOME_REL), "HOME/.codex".to_string())),
     }
+}
+
+pub(super) fn tool_state_dir(
+    tool_state_dirs: Option<&HashMap<String, PathBuf>>,
+    key: &str,
+    home: &Path,
+) -> Option<(PathBuf, String)> {
+    let configured = tool_state_dirs?.get(key)?;
+    Some((
+        expand_home_prefix(configured, home),
+        format!("tool_state_dirs.{key}"),
+    ))
+}
+
+fn expand_home_prefix(path: &Path, home: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    path.to_path_buf()
 }
 
 /// Check whether any codex binary (`codex` or `codex-acp`) is on `PATH`.

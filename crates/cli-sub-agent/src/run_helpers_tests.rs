@@ -195,6 +195,7 @@ fn mutating_skill_contract_routes_default_tier_away_from_restricted_tool() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -379,6 +380,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -421,6 +423,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -469,6 +472,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -693,6 +697,7 @@ fn build_executor_model_spec_overrides_both() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

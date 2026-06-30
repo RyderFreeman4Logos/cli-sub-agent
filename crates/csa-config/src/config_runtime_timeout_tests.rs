@@ -30,6 +30,7 @@ fn empty_config() -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: VcsConfig::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: FilesystemSandboxConfig::default(),
     }
 }

@@ -46,6 +46,7 @@ fn project_config_with_codex() -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

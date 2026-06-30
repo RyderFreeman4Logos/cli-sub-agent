@@ -46,6 +46,7 @@ fn tier_validate_rejects_cross_provider_opencode_spec() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

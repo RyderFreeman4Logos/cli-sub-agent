@@ -58,6 +58,7 @@ fn test_validate_config_succeeds_on_valid() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -98,6 +99,7 @@ fn test_validate_config_fails_on_empty_name() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -142,6 +144,7 @@ fn test_validate_config_fails_on_unknown_tool() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -187,6 +190,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -236,6 +240,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -295,6 +300,7 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -357,6 +363,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -428,6 +435,7 @@ fn test_validate_config_fails_on_empty_models() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -490,6 +498,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -533,6 +542,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -579,6 +589,7 @@ fn test_validate_max_recursion_depth_boundary_20() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -618,6 +629,7 @@ fn test_validate_max_recursion_depth_boundary_21() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

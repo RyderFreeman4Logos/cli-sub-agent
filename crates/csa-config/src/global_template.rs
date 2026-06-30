@@ -9,6 +9,12 @@ pub(crate) fn default_template() -> String {
 max_concurrent = 3  # Default max parallel instances per tool
 # tool = "codex"  # Default tool when auto-detection fails
 
+# Per-tool host state directories exposed writable to sandboxed tool processes.
+# Environment variables such as CODEX_HOME and CLAUDE_CONFIG_DIR still win.
+[tool_state_dirs]
+codex = "~/.codex"
+claude = "~/.claude"
+
 # Per-tool overrides. Uncomment and configure as needed.
 #
 # [tools.claude-code]

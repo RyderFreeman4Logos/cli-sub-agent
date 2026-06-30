@@ -68,6 +68,7 @@ fn test_validate_multiple_tiers_all_valid() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -123,6 +124,7 @@ fn test_validate_tier_with_multiple_models_all_valid() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -178,6 +180,7 @@ fn test_validate_tier_with_one_bad_model_in_list() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -236,6 +239,7 @@ fn test_validate_tier_token_budget_zero_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -289,6 +293,7 @@ fn test_validate_tier_max_turns_zero_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -342,6 +347,7 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -394,6 +400,7 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -451,6 +458,7 @@ fn test_validate_tier_model_spec_unknown_provider_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -510,6 +518,7 @@ fn test_validate_tier_model_spec_unknown_model_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -569,6 +578,7 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -620,6 +630,7 @@ fn tier_validate_rejects_invalid_thinking_budget() {
             session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
         }
     }
@@ -675,6 +686,7 @@ fn test_validate_review_tier_unknown_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -722,6 +734,7 @@ fn test_validate_debate_tier_unknown_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -782,6 +795,7 @@ fn test_validate_review_tier_valid_accepted() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 

@@ -1,5 +1,6 @@
 use crate::config::CURRENT_SCHEMA_VERSION;
 use crate::{ProjectConfig, ProjectMeta};
+use std::collections::HashMap;
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -116,6 +117,7 @@ fn test_resolved_github_config_dir_preserves_trimmed_override() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

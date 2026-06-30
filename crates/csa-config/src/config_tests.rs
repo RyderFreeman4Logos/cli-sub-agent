@@ -42,6 +42,7 @@ fn test_save_and_load_roundtrip() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -61,6 +62,61 @@ fn test_save_and_load_roundtrip() {
     assert!(codex.enabled);
     assert_eq!(codex.default_model.as_deref(), Some("gpt-5.4"));
     assert_eq!(codex.default_thinking.as_deref(), Some("xhigh"));
+}
+
+#[test]
+fn test_tool_state_dirs_roundtrip() {
+    let dir = tempdir().unwrap();
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "state-dir-test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tool_state_dirs: HashMap::from([
+            ("codex".to_string(), PathBuf::from("~/.codex")),
+            ("claude".to_string(), PathBuf::from("~/.claude")),
+        ]),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        github: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        run: Default::default(),
+        execution: Default::default(),
+        session_wait: None,
+        preflight: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let saved = std::fs::read_to_string(&project_path).unwrap();
+    assert!(saved.contains("[tool_state_dirs]"));
+    assert!(saved.contains(r#"codex = "~/.codex""#));
+
+    let loaded = ProjectConfig::load_with_paths(None, &project_path)
+        .unwrap()
+        .expect("config should load");
+    assert_eq!(
+        loaded.tool_state_dirs.get("codex"),
+        Some(&PathBuf::from("~/.codex"))
+    );
+    assert_eq!(
+        loaded.tool_state_dirs.get("claude"),
+        Some(&PathBuf::from("~/.claude"))
+    );
 }
 
 #[test]
@@ -94,6 +150,7 @@ fn test_is_tool_enabled_configured_enabled() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -139,6 +196,7 @@ fn test_is_tool_enabled_configured_disabled() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -173,6 +231,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -223,6 +282,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -287,6 +347,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -337,6 +398,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -374,6 +436,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -408,6 +471,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -496,6 +560,7 @@ fn test_max_recursion_depth_override() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -631,6 +696,7 @@ fn test_schema_version_current_is_ok() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -666,6 +732,7 @@ fn test_schema_version_older_is_ok() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -700,6 +767,7 @@ fn test_schema_version_newer_fails() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -765,6 +833,7 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
