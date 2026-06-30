@@ -12,7 +12,7 @@ End-to-end development workflow enforced as a weave workflow. Every stage has
 hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Already-Resolved Check → Branch Validation → FAST_PATH Detection → mktd (planning) →
-mktsk N*(implement → commit) → Self-Review Gate → Pre-PR Cumulative Review → Push →
+mktsk N*(implement → commit) → Bash L1/L2 Self-Review Gate → Pre-PR Cumulative Review → Push →
 Pre-PR Verdict Check → PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
 
 **CRITICAL PIPELINE INVARIANT**: Step 15 PR creation and Step 16 pr-bot are
@@ -495,17 +495,17 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 
 ## Step 11: Self-Review Gate
 
-Tool: manual (main agent action)
+Tool: bash
 OnFail: abort
-Before triggering `csa review`, the implementing agent MUST self-check the
-entire branch diff and fix any issues it finds.
+Full and resume paths run the deterministic L1/L2 quality gate before
+cumulative CSA review.
 
-Required actions:
-1. Run the project's lint command (Rust: `just clippy`, Python: `just lint` or `ruff check`, Go: `go vet`, JS/TS: `just lint` or `biome check`) and fix every warning.
-2. Run the project's test command (Rust: `just test`, Python: `pytest`, Go: `go test ./...`, JS/TS: `vitest run`) and fix every failure.
-3. If `.csa/review-checklist.md` exists, inspect `git diff "${DEFAULT_BRANCH}...HEAD"` against that checklist for known anti-patterns.
-4. Fix any issues found during this self-review.
-5. Only after completing all checks and fixes, continue to the cumulative `csa review` step.
+```bash
+set -euo pipefail
+just fmt
+just clippy
+just test
+```
 
 ## Step 12: Pre-PR Cumulative Review Gate
 Tool: bash

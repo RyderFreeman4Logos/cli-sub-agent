@@ -212,15 +212,10 @@ fn apply_rust_session_env_contract_inner(
 
     if materialize_cargo_install_root {
         if let Some(project_root) = project_root {
-            force_project_env_path(
+            ensure_rust_env_path(
                 env,
                 csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
                 &project_root.join("target/cargo-install-root"),
-            );
-            force_project_env_path(
-                env,
-                csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
-                &project_root.join("target"),
             );
         } else if let Some(effective_cargo_home) =
             env_path(env, csa_core::env::CARGO_HOME_ENV_KEY).or(cargo_home)
