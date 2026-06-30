@@ -74,6 +74,8 @@ pub(crate) fn apply_post_run_commit_policy(
 
     let commit_ref_update_failed =
         git_commit_attempted && commit_guard.workspace_mutated && !commit_guard.head_changed;
+    let head_externally_raced =
+        commit_guard.head_changed && !git_commit_attempted && commit_guard.workspace_mutated;
     let enforce_closed_policy = commit_guard.workspace_mutated
         && !commit_guard.head_changed
         && (require_commit_on_mutation || commit_ref_update_failed);
@@ -81,6 +83,7 @@ pub(crate) fn apply_post_run_commit_policy(
         commit_guard,
         enforce_closed_policy,
         commit_ref_update_failed,
+        head_externally_raced,
         recovery_tool,
     );
 
@@ -300,6 +303,7 @@ pub(crate) fn format_post_run_commit_guard_message(
     guard: &PostRunCommitGuard,
     enforce_closed_policy: bool,
     commit_ref_update_failed: bool,
+    head_externally_raced: bool,
     recovery_tool: Option<&str>,
 ) -> String {
     let severity = if enforce_closed_policy {
@@ -307,8 +311,11 @@ pub(crate) fn format_post_run_commit_guard_message(
     } else {
         "WARNING"
     };
+    let head_externally_raced = head_externally_raced || guard.head_externally_raced;
     let reason = if commit_ref_update_failed {
         "git commit was attempted but HEAD did not advance; work remains uncommitted"
+    } else if head_externally_raced {
+        "HEAD was moved by an external process during this session (worktree race detected, #2556/#2557)"
     } else if guard.head_changed {
         "run created commit(s) but still left uncommitted workspace mutations"
     } else {

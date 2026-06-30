@@ -116,6 +116,7 @@ fn evaluate_post_run_commit_guard_detects_mutation_without_commit() {
     let guard = evaluate_post_run_commit_guard(Some(&before), Some(&after))
         .expect("dirty workspace should produce guard");
     assert!(guard.workspace_mutated);
+    assert!(!guard.head_externally_raced);
     assert_eq!(
         guard.changed_paths,
         vec!["crates/cli-sub-agent/src/run_cmd.rs".to_string()]
@@ -138,6 +139,7 @@ fn evaluate_post_run_commit_guard_detects_mutation_when_head_changed() {
     let guard = evaluate_post_run_commit_guard(Some(&before), Some(&after))
         .expect("dirty workspace should produce guard");
     assert!(guard.workspace_mutated);
+    assert!(!guard.head_externally_raced);
 }
 
 #[test]
@@ -162,13 +164,14 @@ fn format_post_run_commit_guard_message_includes_next_step_and_paths() {
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: false,
+        head_externally_raced: false,
         changed_paths: vec![
             "Cargo.lock".to_string(),
             "crates/cli-sub-agent/src/run_cmd.rs".to_string(),
         ],
     };
 
-    let message = format_post_run_commit_guard_message(&guard, false, false, Some("codex"));
+    let message = format_post_run_commit_guard_message(&guard, false, false, false, Some("codex"));
     assert!(message.contains("WARNING"));
     assert!(message.contains("csa run --tool codex --skill commit"));
     assert!(message.contains("lineage-scoped child sessions"));
@@ -194,6 +197,7 @@ fn evaluate_post_run_commit_guard_detects_dirty_file_mutation_when_status_text_i
     let guard = evaluate_post_run_commit_guard(Some(&before), Some(&after))
         .expect("dirty workspace should produce guard");
     assert!(guard.workspace_mutated);
+    assert!(!guard.head_externally_raced);
 }
 
 #[test]
@@ -209,6 +213,7 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: false,
+        head_externally_raced: false,
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
@@ -248,6 +253,7 @@ fn apply_post_run_commit_policy_keeps_success_when_policy_disabled() {
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: false,
+        head_externally_raced: false,
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
@@ -278,6 +284,7 @@ fn apply_post_run_commit_policy_fails_when_commit_attempt_left_head_unchanged() 
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: false,
+        head_externally_raced: false,
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
@@ -306,6 +313,87 @@ fn apply_post_run_commit_policy_fails_when_commit_attempt_left_head_unchanged() 
         result
             .stderr_output
             .contains("git commit was attempted but HEAD did not advance"),
+        "{}",
+        result.stderr_output
+    );
+}
+
+#[test]
+fn apply_post_run_commit_policy_warns_when_head_externally_raced() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let guard = PostRunCommitGuard {
+        workspace_mutated: true,
+        head_changed: true,
+        head_externally_raced: false,
+        changed_paths: vec!["src/lib.rs".to_string()],
+    };
+
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        false,
+        Some(&guard),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert!(result.csa_gate_failure.is_none());
+    assert!(
+        result.stderr_output.contains(
+            "HEAD was moved by an external process during this session (worktree race detected, #2556/#2557)"
+        ),
+        "{}",
+        result.stderr_output
+    );
+}
+
+#[test]
+fn apply_post_run_commit_policy_does_not_report_external_race_for_normal_commit() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let guard = PostRunCommitGuard {
+        workspace_mutated: true,
+        head_changed: true,
+        head_externally_raced: false,
+        changed_paths: vec!["src/lib.rs".to_string()],
+    };
+
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        true,
+        Some(&guard),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert!(result.csa_gate_failure.is_none());
+    assert!(
+        result
+            .stderr_output
+            .contains("run created commit(s) but still left uncommitted workspace mutations"),
+        "{}",
+        result.stderr_output
+    );
+    assert!(
+        !result
+            .stderr_output
+            .contains("HEAD was moved by an external process"),
         "{}",
         result.stderr_output
     );

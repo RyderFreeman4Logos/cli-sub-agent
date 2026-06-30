@@ -17,6 +17,9 @@ pub(crate) struct GitWorkspaceSnapshot {
 pub(crate) struct PostRunCommitGuard {
     pub(crate) workspace_mutated: bool,
     pub(crate) head_changed: bool,
+    /// True when HEAD changed but no git commit was attempted by the child session,
+    /// indicating an external process mutated the worktree during the session (#2556/#2557).
+    pub(crate) head_externally_raced: bool,
     pub(crate) changed_paths: Vec<String>,
 }
 
@@ -318,6 +321,7 @@ pub(crate) fn evaluate_post_run_commit_guard(
     Some(PostRunCommitGuard {
         workspace_mutated,
         head_changed: before.head != after.head,
+        head_externally_raced: false,
         changed_paths: changed_paths_from_status(&after.status, 8),
     })
 }
