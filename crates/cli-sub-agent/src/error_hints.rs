@@ -175,9 +175,26 @@ pub(crate) fn lefthook_core_hookspath_conflict_hint(
     stderr: &str,
     stdout: &str,
 ) -> Option<&'static str> {
-    if stderr.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
-        || stdout.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
-    {
+    // Only emit the hint when the session actually attempted a commit.
+    // Without commit context (e.g. a --fork-from session told not to commit),
+    // the hint is noise. Require both the marker and commit-related evidence.
+    let has_hookspath = stderr.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
+        || stdout.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT);
+    if !has_hookspath {
+        return None;
+    }
+    // Require evidence of an actual commit attempt. The lefthook error message
+    // always includes `git config --unset-all` when it blocks a commit, so we
+    // match that specific command rather than the generic word "unset" which
+    // could appear in unrelated output. We also accept `git commit`,
+    // `lefthook run`, and standard hook names.
+    let combined = format!("{}\n{}", stderr, stdout).to_ascii_lowercase();
+    let has_commit_context = combined.contains("git commit")
+        || combined.contains("lefthook run")
+        || combined.contains("pre-commit")
+        || combined.contains("commit-msg")
+        || combined.contains("git config --unset-all --local core.hookspath");
+    if has_commit_context {
         return Some(HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT);
     }
     None
@@ -377,6 +394,31 @@ hint:   git config --unset-all --local core.hooksPath
         let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
         assert!(hint.is_none(), "got: {hint:?}");
     }
+
+    #[test]
+    fn lefthook_core_hookspath_conflict_hint_suppressed_without_commit_context() {
+        // Session output mentions hooksPath but no commit attempt — should NOT emit hint (#2055)
+        let stderr = "core.hooksPath is set locally\noutput generated successfully";
+        let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
+        assert!(hint.is_none(), "hint should be suppressed when no commit context exists");
+    }
+
+    #[test]
+    fn lefthook_core_hookspath_conflict_hint_suppressed_with_generic_unset_text() {
+        // Lefthook diagnostic text contains "Unset it" and ".git/hooks" but no
+        // actual commit attempt — should NOT emit hint (#2055 R2)
+        let stderr = "Error: core.hooksPath is set locally to '/x/.git/hooks'\nhint: Unset it:\nhint:   git config --unset-all --local core.hooksPath\n";
+        // This stderr DOES contain the unset-all command, so it DOES match.
+        // Verify the hint fires correctly here (this is a real commit failure).
+        let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
+        assert!(hint.is_some(), "hint should fire when git config --unset-all appears");
+
+        // But stderr with just "Unset it" without the full command should NOT fire
+        let stderr2 = "core.hooksPath is set locally\nhint: Unset it\nsome other output";
+        let hint2 = lefthook_core_hookspath_conflict_hint(stderr2, "");
+        assert!(hint2.is_none(), "hint should be suppressed for generic 'Unset it' without commit command");
+    }
+
 
     #[test]
     fn sandbox_fs_denial_hint_fires_on_read_only_error() {
