@@ -56,6 +56,11 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
 
     for (title, heading) in [
         (
+            "Cheap Repo Preconditions",
+            "## Step 3: Cheap Repo Preconditions",
+        ),
+        ("FAST_PATH Commit", "## Step 4: FAST_PATH Commit"),
+        (
             "FAST_PATH Version Bump",
             "## Step 5: FAST_PATH Version Bump",
         ),
@@ -64,6 +69,7 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             "## Step 6: FAST_PATH Pre-PR Review",
         ),
         ("Plan with mktd", "## Step 7: Plan with mktd"),
+        ("Resume Commit", "## Step 9: Resume Commit"),
         ("Ensure Version Bumped", "## Step 10: Ensure Version Bumped"),
         (
             "Pre-PR Cumulative Review Gate",
@@ -80,6 +86,68 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             "dev2merge PATTERN.md and workflow.toml {heading} bash blocks must stay synced"
         );
     }
+}
+
+#[test]
+fn dev2merge_cheap_preconditions_run_before_expensive_gates() {
+    let workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/dev2merge/workflow.toml")).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    let step_id = |title: &str| {
+        plan.steps
+            .iter()
+            .find(|step| step.title == title)
+            .unwrap_or_else(|| panic!("missing dev2merge step: {title}"))
+            .id
+    };
+
+    assert!(
+        step_id("FAST_PATH Version Bump") < step_id("FAST_PATH Pre-PR Review"),
+        "FAST_PATH version bump must run before build/review work"
+    );
+    assert!(
+        step_id("Ensure Version Bumped") < step_id("Self-Review Gate"),
+        "full/resume version bump must run before expensive self-review/review gates"
+    );
+
+    let cheap = dev2merge_workflow_step_bash("Cheap Repo Preconditions");
+    assert!(
+        cheap.contains("STAGED_FILES=")
+            && cheap.contains("staged-scope precondition failed")
+            && cheap.contains("check-version-bumped"),
+        "cheap precondition step must cover staged scope and version detection: {cheap}"
+    );
+    for forbidden in ["just clippy", "just test", "csa review", "cargo build"] {
+        assert!(
+            !cheap.contains(forbidden),
+            "cheap precondition step must not run expensive gate {forbidden}: {cheap}"
+        );
+    }
+
+    let fast_commit = dev2merge_workflow_step_bash("FAST_PATH Commit");
+    assert!(
+        fast_commit.contains("git diff --cached --check"),
+        "FAST_PATH commit must run staged-scope checks before downstream gates"
+    );
+    assert!(
+        !fast_commit.contains("just test"),
+        "FAST_PATH commit must stay cheap; tests move to Step 6 after version bump"
+    );
+
+    let fast_review = dev2merge_workflow_step_bash("FAST_PATH Pre-PR Review");
+    let version_gate = step_id("FAST_PATH Version Bump");
+    let review_gate = step_id("FAST_PATH Pre-PR Review");
+    assert!(version_gate < review_gate);
+    let clippy_index = fast_review
+        .find("just clippy")
+        .expect("FAST_PATH review step should run L1 gate before review");
+    let review_index = fast_review
+        .find("cumulative-review-batch.sh")
+        .expect("FAST_PATH review step should run cumulative review");
+    assert!(
+        clippy_index < review_index,
+        "FAST_PATH L1/L2 gates must execute before cumulative review"
+    );
 }
 
 #[test]

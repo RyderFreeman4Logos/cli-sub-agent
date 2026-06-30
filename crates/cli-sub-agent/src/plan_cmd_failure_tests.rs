@@ -244,6 +244,51 @@ fn failure_summary_surfaces_todo_persist_validation_detail() {
 }
 
 #[test]
+fn failure_summary_surfaces_mktd_invalid_field_recovery_action() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 7,
+        title: "Plan with mktd".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some("Exit code 1".to_string()),
+        output: None,
+        session_id: None,
+        command: Some("timeout -k 30 1800 csa plan run --sa-mode true --pattern mktd".to_string()),
+        stderr: Some(
+            [
+                "RECON validation failed",
+                "invalid field [spec.criteria.done_when]: expected non-empty string",
+                "recovery action: regenerate spec.toml with a mechanically-verifiable DONE WHEN",
+                "Spec artifact path: /tmp/mktd-save/spec.toml",
+            ]
+            .join("\n"),
+        ),
+    }];
+    let report = PlanFailureReport::from_results(
+        "dev2merge",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/dev2merge/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    for rendered in [&summary_line, &summary_section] {
+        assert!(
+            rendered.contains("invalid field [spec.criteria.done_when]")
+                && rendered.contains("Spec artifact path: /tmp/mktd-save/spec.toml")
+                && rendered.contains("recovery action: regenerate spec.toml"),
+            "parent-visible mktd failure should name the invalid field, recovery action, and artifact path: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn failure_summary_prefers_underlying_command_failure_over_spec_contract_noise() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let workflow_path = temp.path().join("workflow.toml");

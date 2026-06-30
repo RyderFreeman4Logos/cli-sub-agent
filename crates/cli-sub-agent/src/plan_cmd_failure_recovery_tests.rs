@@ -121,6 +121,35 @@ fn dev2merge_recovery_snapshot_declares_weave_lock_drift() {
 }
 
 #[test]
+fn dev2merge_recovery_snapshot_names_pre_existing_dirty_paths() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let project_root = temp.path().join("repo");
+    init_recovery_test_repo(&project_root, true);
+    std::fs::write(project_root.join("README.md"), "dirty before workflow\n")
+        .expect("write pre-existing dirt");
+    let snapshot = capture_failure_recovery_snapshot("dev2merge", &project_root)
+        .expect("dev2merge should capture a failure recovery snapshot");
+
+    std::fs::write(project_root.join(WEAVE_LOCK), "lock = 1\nplan drift\n")
+        .expect("write post-snapshot weave.lock change");
+
+    let recovery = snapshot.recover_after_failure(&project_root);
+    let mut rendered = String::new();
+    recovery.render_markdown_into(&mut rendered);
+
+    assert_eq!(recovery.status.as_str(), "manual-required");
+    assert!(
+        rendered.contains("worktree was already dirty before dev2merge started")
+            && rendered.contains("Pre-existing dirty paths: M README.md"),
+        "pre-existing user dirtiness must be distinguished from later workflow side effects: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Preserved dirty weave.lock"),
+        "pre-existing dirt path should not be reported as workflow-introduced lockfile-only recovery: {rendered}"
+    );
+}
+
+#[test]
 fn recovery_ignores_untracked_plan_journal_after_snapshot() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let project_root = temp.path().join("repo");

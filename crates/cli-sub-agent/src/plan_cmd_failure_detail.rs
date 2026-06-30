@@ -83,11 +83,8 @@ fn select_todo_persist_failure_detail(lines: &[&str]) -> Option<String> {
         .copied()
         .find(|line| is_todo_persist_wrapper(line))?;
 
-    let diagnostic = lines
-        .iter()
-        .rev()
-        .copied()
-        .find(|line| is_todo_persist_diagnostic(line));
+    let diagnostic = select_todo_validation_diagnostic_line(lines)
+        .filter(|line| is_todo_persist_diagnostic(line));
 
     let mut parts = Vec::new();
     if let Some(diagnostic) = diagnostic {
@@ -101,23 +98,58 @@ fn select_todo_persist_failure_detail(lines: &[&str]) -> Option<String> {
             parts.push(line);
         }
     }
+    for line in todo_recovery_action_lines(lines) {
+        if !parts.contains(&line) {
+            parts.push(line);
+        }
+    }
 
     Some(truncate_failure_detail(&parts.join(" | ")))
 }
 
 fn select_todo_validation_failure_detail(lines: &[&str]) -> Option<String> {
-    let diagnostic = lines
-        .iter()
-        .rev()
-        .copied()
-        .find(|line| is_todo_validation_diagnostic(line))?;
+    let diagnostic = select_todo_validation_diagnostic_line(lines)?;
     let mut parts = vec![diagnostic];
     for line in prioritized_todo_context_lines(lines) {
         if !parts.contains(&line) {
             parts.push(line);
         }
     }
+    for line in todo_recovery_action_lines(lines) {
+        if !parts.contains(&line) {
+            parts.push(line);
+        }
+    }
     Some(truncate_failure_detail(&parts.join(" | ")))
+}
+
+fn select_todo_validation_diagnostic_line<'a>(lines: &'a [&str]) -> Option<&'a str> {
+    lines
+        .iter()
+        .rev()
+        .copied()
+        .find(|line| is_todo_field_or_section_diagnostic(line))
+        .or_else(|| {
+            lines
+                .iter()
+                .rev()
+                .copied()
+                .find(|line| is_todo_validation_diagnostic(line) && !is_todo_recovery_action(line))
+        })
+        .or_else(|| {
+            lines
+                .iter()
+                .rev()
+                .copied()
+                .find(|line| is_todo_recovery_action(line))
+        })
+}
+
+fn todo_recovery_action_lines<'a>(lines: &'a [&str]) -> impl Iterator<Item = &'a str> {
+    lines
+        .iter()
+        .copied()
+        .filter(|line| is_todo_recovery_action(line))
 }
 
 fn prioritized_todo_context_lines<'a>(lines: &'a [&str]) -> Vec<&'a str> {
@@ -175,6 +207,22 @@ fn is_todo_persist_diagnostic(line: &str) -> bool {
     !is_todo_persist_wrapper(line) && is_todo_validation_diagnostic(line)
 }
 
+fn is_todo_field_or_section_diagnostic(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized.contains("invalid field")
+        || normalized.contains("invalid section")
+        || normalized.contains("missing field")
+        || normalized.contains("missing section")
+        || normalized.contains("unknown field")
+        || normalized.contains("unknown section")
+        || normalized.contains("expected field")
+        || normalized.contains("expected section")
+}
+
+fn is_todo_recovery_action(line: &str) -> bool {
+    line.to_ascii_lowercase().contains("recovery action")
+}
+
 fn is_todo_validation_diagnostic(line: &str) -> bool {
     let normalized = line.to_ascii_lowercase();
     normalized.contains("failed to parse spec file")
@@ -191,6 +239,15 @@ fn is_todo_validation_diagnostic(line: &str) -> bool {
         || normalized.contains("spec plan_ulid")
         || normalized.contains("without a mechanically-verifiable")
         || normalized.contains("invalid criterion")
+        || normalized.contains("invalid field")
+        || normalized.contains("invalid section")
+        || normalized.contains("missing field")
+        || normalized.contains("missing section")
+        || normalized.contains("unknown field")
+        || normalized.contains("unknown section")
+        || normalized.contains("expected field")
+        || normalized.contains("expected section")
+        || normalized.contains("recovery action")
         || normalized.contains("no non-empty checkbox tasks")
         || normalized.contains("summary lacks han")
         || normalized.contains("todo han chars")

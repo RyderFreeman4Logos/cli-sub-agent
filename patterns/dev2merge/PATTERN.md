@@ -201,37 +201,29 @@ else
 fi
 ```
 
-## Step 3: L1/L2 Quality Gates (Always Run)
+## Step 3: Cheap Repo Preconditions
 Tool: bash
 OnFail: abort
-Formatters and linters run regardless of FAST_PATH.
-Language detection: Cargo.toml → Rust, pyproject.toml → Python, package.json → JS/TS, go.mod → Go.
-Falls back to `just pre-commit` when available, skip otherwise.
-
+Cheap repo-local checks run before any cargo build, test, or review gate: staged-scope ownership and optional version-bump detection.
 ```bash
 set -euo pipefail
-if [ -f Cargo.toml ]; then
-  just fmt
-  just clippy
-elif [ -f pyproject.toml ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
-  elif command -v ruff >/dev/null 2>&1; then ruff check .; ruff format --check .;
-  else echo "WARNING: Python project detected but no linter (just lint or ruff) found."; fi
-elif [ -f package.json ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
-  elif command -v biome >/dev/null 2>&1; then biome check .;
-  else echo "WARNING: JS/TS project detected but no linter (just lint or biome) found."; fi
-elif [ -f go.mod ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then just lint
-  else
-    go vet ./...
-    if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; fi
-  fi
-elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
-  just pre-commit
-else
-  echo "WARNING: No recognized project type; skipping L1 lint gate."
+STAGED_FILES="$(git diff --cached --name-only)"
+if [ -n "${STAGED_FILES}" ]; then
+  echo "ERROR: staged-scope precondition failed — staged files exist before dev2merge owns staging." >&2
+  printf '%s\n' "${STAGED_FILES}" >&2
+  echo "Commit or unstage pre-existing staged work before retrying." >&2
+  exit 1
 fi
+if [ -f Cargo.toml ] && just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "check-version-bumped"; then
+  if just check-version-bumped; then
+    echo "Version precondition: already bumped."
+  else
+    echo "Version precondition: bump required; version bump step will run before expensive review gates."
+  fi
+else
+  echo "Version precondition: optional check-version-bumped recipe absent."
+fi
+echo "Cheap preconditions passed before build/review gates."
 ```
 
 ## IF ${FAST_PATH}
@@ -244,16 +236,6 @@ stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
 ```bash
 set -euo pipefail
-if [ -f Cargo.toml ]; then just test
-elif [ -f pyproject.toml ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-  elif command -v pytest >/dev/null 2>&1; then pytest; fi
-elif [ -f package.json ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-  elif command -v vitest >/dev/null 2>&1; then vitest run; fi
-elif [ -f go.mod ]; then go test ./...
-elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-else echo "WARNING: No recognized test runner; skipping L2 test gate."; fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
@@ -271,6 +253,7 @@ if ! git diff --cached --name-only | grep -q .; then
   echo "ERROR: No staged files after staging dirty working tree."
   exit 1
 fi
+git diff --cached --check
 COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "docs: update documentation")"
 git commit -m "${COMMIT_MSG}"
 echo "CSA_VAR:FAST_PATH_COMMITTED=true"
@@ -299,10 +282,47 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 ## Step 6: FAST_PATH Pre-PR Review
 Tool: bash
 OnFail: abort
-Even FAST_PATH runs cumulative review before push.
-
+FAST_PATH runs L1/L2 gates and cumulative review before push.
 ```bash
 set -euo pipefail
+if [ -f Cargo.toml ]; then
+  just fmt
+  just clippy
+  just test
+elif [ -f pyproject.toml ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then
+    just lint
+  elif command -v ruff >/dev/null 2>&1; then
+    ruff check .
+    ruff format --check .
+  fi
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v pytest >/dev/null 2>&1; then
+    pytest
+  fi
+elif [ -f package.json ]; then
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "lint"; then
+    just lint
+  elif command -v biome >/dev/null 2>&1; then
+    biome check .
+  fi
+  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then
+    just test
+  elif command -v vitest >/dev/null 2>&1; then
+    vitest run
+  fi
+elif [ -f go.mod ]; then
+  go vet ./...
+  if command -v golangci-lint >/dev/null 2>&1; then
+    golangci-lint run
+  fi
+  go test ./...
+elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "pre-commit"; then
+  just pre-commit
+else
+  echo "WARNING: No recognized project type; skipping FAST_PATH L1/L2 gate."
+fi
 bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/cumulative-review-batch.sh" --default-branch "${DEFAULT_BRANCH}" -- \
   csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
@@ -430,22 +450,9 @@ wins, else tier-*→`--tier`, other→`--tool`.
 Tool: bash
 OnFail: abort
 Condition: ${RESUME_MODE}
-Resume mode skips mktd/mktsk because the work is already on the branch. Run the
-L2 test gate, then commit any uncommitted remainder so review/push see the full
-diff. Mirrors the FAST_PATH commit (Step 4); fails closed when there is no work.
-
+Resume mode skips mktd/mktsk because the work is already on the branch. Commit any uncommitted remainder so the version, review, and push gates see the full diff. Mirrors the FAST_PATH commit (Step 4); fails closed when there is no work.
 ```bash
 set -euo pipefail
-if [ -f Cargo.toml ]; then just test
-elif [ -f pyproject.toml ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-  elif command -v pytest >/dev/null 2>&1; then pytest; fi
-elif [ -f package.json ]; then
-  if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-  elif command -v vitest >/dev/null 2>&1; then vitest run; fi
-elif [ -f go.mod ]; then go test ./...
-elif just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "test"; then just test
-else echo "WARNING: No recognized test runner; skipping L2 test gate."; fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
 if [ -z "$(git status --porcelain)" ]; then
   COMMITS_AHEAD="$(git rev-list --count "${DEFAULT_BRANCH}..HEAD" 2>/dev/null || echo 0)"
@@ -461,6 +468,7 @@ if ! git diff --cached --name-only | grep -q .; then
   echo "ERROR: No staged files after staging dirty working tree."
   exit 1
 fi
+git diff --cached --check
 COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "chore: commit resumed work")"
 git commit -m "${COMMIT_MSG}"
 ```

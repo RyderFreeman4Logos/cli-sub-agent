@@ -11,8 +11,15 @@ fn completed_facts() -> Dev2MergeCompletionFacts {
         pr_bot_completed: true,
         post_merge_sync_completed: true,
         branch: Some("fix/issue".to_string()),
+        default_branch: Some("main".to_string()),
+        issue_number: None,
         pr_number: Some("42".to_string()),
         pr_bot_done_marker: Some(PathBuf::from("/tmp/pr-bot.done")),
+        review_completed: true,
+        review_verdict_checked: true,
+        pushed: true,
+        already_resolved_message: None,
+        initial_head: Some("0000000000000000000000000000000000000000".to_string()),
     }
 }
 
@@ -26,6 +33,7 @@ fn verify_dev2merge_completion_without_publish_steps_returns_structured_failure_
     let completed_steps = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
     let snapshot = PlanCompletionSnapshot {
         initial_branch: Some("fix/issue".to_string()),
+        initial_head: None,
     };
 
     let err = verify_plan_completion(PlanCompletionInput {
@@ -80,6 +88,7 @@ fn verify_dev2merge_completion_allows_already_resolved_skip_from_step_zero() {
     }];
     let snapshot = PlanCompletionSnapshot {
         initial_branch: Some("fix/issue".to_string()),
+        initial_head: None,
     };
 
     let summary = verify_plan_completion(PlanCompletionInput {
@@ -95,7 +104,8 @@ fn verify_dev2merge_completion_allows_already_resolved_skip_from_step_zero() {
     .expect("already-resolved skip should produce completion context");
 
     assert!(
-        summary.contains("already-resolved check declared an explicit no-op"),
+        summary.contains("already-resolved no-op")
+            && summary.contains("state=dev2merge: issue is already CLOSED"),
         "summary should distinguish explicit no-op from transport success: {summary}"
     );
 }
@@ -107,6 +117,14 @@ fn dev2merge_completion_passes_when_publish_side_effects_are_complete() {
         pr_bot_marker_exists: Some(true),
         pr_state: Some("MERGED".to_string()),
         pr_state_error: None,
+        current_branch: Some("main".to_string()),
+        current_head: Some("1111111111111111111111111111111111111111".to_string()),
+        branch_head: Some("2222222222222222222222222222222222222222".to_string()),
+        branch_moved: Some(true),
+        implementation_commits_ahead: Some(2),
+        implementation_commits_created: Some(1),
+        implementation_diff_paths: Some(3),
+        implementation_diff_empty: Some(false),
     };
 
     let failures = evaluate_dev2merge_completion(&facts, &observed);
@@ -125,6 +143,14 @@ fn dev2merge_completion_fails_when_pr_was_not_captured() {
         pr_bot_marker_exists: Some(true),
         pr_state: None,
         pr_state_error: None,
+        current_branch: None,
+        current_head: None,
+        branch_head: None,
+        branch_moved: None,
+        implementation_commits_ahead: None,
+        implementation_commits_created: None,
+        implementation_diff_paths: None,
+        implementation_diff_empty: None,
     };
 
     let failures = evaluate_dev2merge_completion(&facts, &observed);
@@ -144,6 +170,14 @@ fn dev2merge_completion_fails_when_pr_is_not_merged() {
         pr_bot_marker_exists: Some(true),
         pr_state: Some("OPEN".to_string()),
         pr_state_error: None,
+        current_branch: None,
+        current_head: None,
+        branch_head: None,
+        branch_moved: None,
+        implementation_commits_ahead: None,
+        implementation_commits_created: None,
+        implementation_diff_paths: None,
+        implementation_diff_empty: None,
     };
 
     let failures = evaluate_dev2merge_completion(&facts, &observed);
@@ -163,6 +197,14 @@ fn dev2merge_completion_fails_when_pr_bot_marker_is_missing() {
         pr_bot_marker_exists: Some(false),
         pr_state: Some("MERGED".to_string()),
         pr_state_error: None,
+        current_branch: None,
+        current_head: None,
+        branch_head: None,
+        branch_moved: None,
+        implementation_commits_ahead: None,
+        implementation_commits_created: None,
+        implementation_diff_paths: None,
+        implementation_diff_empty: None,
     };
 
     let failures = evaluate_dev2merge_completion(&facts, &observed);
@@ -183,6 +225,14 @@ fn dev2merge_completion_fails_when_publish_step_was_skipped() {
         pr_bot_marker_exists: Some(true),
         pr_state: Some("MERGED".to_string()),
         pr_state_error: None,
+        current_branch: None,
+        current_head: None,
+        branch_head: None,
+        branch_moved: None,
+        implementation_commits_ahead: None,
+        implementation_commits_created: None,
+        implementation_diff_paths: None,
+        implementation_diff_empty: None,
     };
 
     let failures = evaluate_dev2merge_completion(&facts, &observed);
@@ -192,6 +242,83 @@ fn dev2merge_completion_fails_when_publish_step_was_skipped() {
             .iter()
             .any(|failure| failure.contains("Push Gate (Step 13) did not complete")),
         "skipped publish step must be named: {failures:?}"
+    );
+}
+
+#[test]
+fn dev2merge_success_summary_names_side_effects_and_next_action() {
+    let facts = completed_facts();
+    let observed = Dev2MergeObservedState {
+        pr_bot_marker_exists: Some(true),
+        pr_state: Some("MERGED".to_string()),
+        pr_state_error: None,
+        current_branch: Some("main".to_string()),
+        current_head: Some("1111111111111111111111111111111111111111".to_string()),
+        branch_head: Some("2222222222222222222222222222222222222222".to_string()),
+        branch_moved: Some(true),
+        implementation_commits_ahead: Some(0),
+        implementation_commits_created: Some(1),
+        implementation_diff_paths: Some(0),
+        implementation_diff_empty: Some(true),
+    };
+
+    let summary = dev2merge_success_summary(&facts, &observed);
+
+    for required in [
+        "dev2merge side effects verified",
+        "branch=fix/issue",
+        "checkout=main",
+        "branch_moved=true",
+        "implementation_commits_created=1",
+        "review_completed=true",
+        "review_verdict_checked=true",
+        "pushed=true",
+        "pr=#42 state=MERGED",
+        "pr_bot_marker=present",
+        "next=none",
+    ] {
+        assert!(
+            summary.contains(required),
+            "success summary must include {required}: {summary}"
+        );
+    }
+}
+
+#[test]
+fn dev2merge_completion_fails_empty_diff_without_side_effect() {
+    let mut facts = completed_facts();
+    facts.pr_number = None;
+    facts.pr_bot_done_marker = None;
+    facts.review_completed = true;
+    facts.review_verdict_checked = true;
+    facts.pushed = false;
+    let observed = Dev2MergeObservedState {
+        pr_bot_marker_exists: None,
+        pr_state: None,
+        pr_state_error: None,
+        current_branch: Some("fix/issue".to_string()),
+        current_head: Some("1111111111111111111111111111111111111111".to_string()),
+        branch_head: Some("1111111111111111111111111111111111111111".to_string()),
+        branch_moved: Some(false),
+        implementation_commits_ahead: Some(0),
+        implementation_commits_created: Some(0),
+        implementation_diff_paths: Some(0),
+        implementation_diff_empty: Some(true),
+    };
+
+    let failures = evaluate_dev2merge_completion(&facts, &observed);
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("no dev2merge side effect was observed")),
+        "empty no-op must fail with missing side-effect detail: {failures:?}"
+    );
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("cumulative diff main...fix/issue is empty")),
+        "empty diff must be named explicitly: {failures:?}"
     );
 }
 
@@ -271,6 +398,7 @@ fn verify_dev2merge_completion_missing_pr_returns_structured_failure_report() {
     let completed_steps = vec![13, 14, 15, 16, 17];
     let snapshot = PlanCompletionSnapshot {
         initial_branch: Some("fix/issue".to_string()),
+        initial_head: None,
     };
 
     let err = verify_plan_completion(PlanCompletionInput {

@@ -39,6 +39,9 @@ use plan_cmd_exec::{extract_bash_code_block, truncate};
 #[path = "plan_cmd_flow.rs"]
 mod plan_cmd_flow;
 
+#[path = "plan_cmd_repo.rs"]
+mod plan_cmd_repo;
+
 #[path = "plan_cmd_failure.rs"]
 pub(crate) mod plan_cmd_failure;
 
@@ -61,6 +64,7 @@ pub(crate) use plan_cmd_assignment::{
     extract_output_assignment_markers, is_assignment_marker_key, should_inject_assignment_markers,
 };
 pub(crate) use plan_cmd_flow::shell_escape_for_command;
+pub(crate) use plan_cmd_repo::detect_effective_repo;
 #[cfg(test)]
 pub(crate) use plan_cmd_steps::resolve_step_tool;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
@@ -92,45 +96,6 @@ pub(crate) const FEATURE_INPUT_VAR: &str = "FEATURE_INPUT";
 /// Workflow variable containing the numeric issue number from
 /// `csa plan run --issue <N>`.
 pub(crate) const ISSUE_NUMBER_VAR: &str = "ISSUE_NUMBER";
-
-fn detect_effective_repo(project_root: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["config", "--get", "remote.origin.url"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-    // Strip credentials from HTTPS/SSH URLs (e.g. https://user:token@github.com/repo)
-    let sanitized = if let Some(pos) = raw.find("://") {
-        let (scheme, rest) = raw.split_at(pos + 3);
-        if let Some(at_pos) = rest.find('@') {
-            format!("{}{}", scheme, &rest[at_pos + 1..])
-        } else {
-            raw
-        }
-    } else {
-        raw
-    };
-
-    let trimmed = sanitized.trim_end_matches(".git");
-    if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
-        return Some(rest.to_string());
-    }
-    if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
-        return Some(rest.to_string());
-    }
-    if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
-        return Some(rest.to_string());
-    }
-    Some(trimmed.to_string())
-}
 
 /// Resolve a workflow TOML path from either a file path or a pattern name.
 fn resolve_workflow_path(
@@ -448,7 +413,11 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
             "Workflow '{}' paused for manual handoff. Complete the requested main-agent action, then resume with `{}`.",
             plan.name, resume_cmd
         );
-        return Ok(PlanRunOutcome::default());
+        return Ok(PlanRunOutcome {
+            completion_summary: Some(format!(
+                "workflow paused for manual handoff; next_action={resume_cmd}"
+            )),
+        });
     }
 
     if journal.status == "awaiting-user" {
@@ -458,7 +427,12 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
             "Workflow '{}' is awaiting user action. Re-run the workflow from the beginning after the requested remediation is complete.",
             plan.name
         );
-        return Ok(PlanRunOutcome::default());
+        return Ok(PlanRunOutcome {
+            completion_summary: Some(
+                "workflow awaiting user action; next_action=rerun after requested remediation"
+                    .to_string(),
+            ),
+        });
     }
 
     // 9. Warn about unsupported skips (loop_var)
