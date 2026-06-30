@@ -43,6 +43,7 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
             memory_swap_max_mb: None,
             pids_max: None,
             readonly_project_root: false,
+            user_daemon_ipc: false,
             project_root: None,
             soft_limit_percent: None,
             memory_monitor_interval_seconds: None,

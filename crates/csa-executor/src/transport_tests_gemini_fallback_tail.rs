@@ -38,6 +38,7 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
             memory_swap_max_mb: None,
             pids_max: None,
             readonly_project_root: false,
+            user_daemon_ipc: false,
             project_root: None,
             soft_limit_percent: None,
             memory_monitor_interval_seconds: None,

@@ -33,6 +33,8 @@ mod artifact_parse;
 mod bug_class_pipeline;
 #[path = "review_cmd_check_verdict.rs"]
 mod check_verdict;
+#[path = "review_cmd_chunking.rs"]
+mod chunking;
 #[path = "review_cmd_diff_size.rs"]
 mod diff_size;
 #[path = "review_cmd_dirty_tree.rs"]
@@ -326,6 +328,57 @@ pub(crate) async fn handle_review(
     let reviewers = reviewer_selection.reviewers;
     let explicit_tool_with_failover =
         (selection.direct_tool_requested && tier_active && !execution_no_failover).then_some(tool);
+
+    let explicit_multi_reviewer = args.reviewers.is_some() && args.requested_reviewers() > 1;
+    if !explicit_multi_reviewer
+        && !chunking::should_bypass_chunking(args.chunked_review, args.fix, args.session.is_some())
+    {
+        let chunking_config = chunking::ReviewChunkingConfig::for_args(args.chunked_review);
+        match chunking::plan_review_chunks(&project_root, &scope, diff.as_ref(), &chunking_config) {
+            Ok(Some(chunk_plan)) => {
+                return chunking::run_chunked_review(chunking::ChunkedReviewContext {
+                    args: &args,
+                    plan: chunk_plan,
+                    chunking_config,
+                    tool,
+                    prompt: &prompt,
+                    scope: &scope,
+                    project_root: &project_root,
+                    config: &config,
+                    global_config: &global_config,
+                    pre_session_hook: pre_session_hook.clone(),
+                    review_routing,
+                    diff_size: diff.as_ref(),
+                    large_diff_warning: large_warn,
+                    review_model,
+                    resolved_model_spec,
+                    resolved_tier_name,
+                    tier_active,
+                    tier_preference_order,
+                    review_thinking,
+                    stream_mode,
+                    idle_timeout_seconds,
+                    initial_response_timeout_seconds,
+                    execution_no_failover,
+                    explicit_tool_with_failover,
+                    readonly_project_root,
+                    allow_user_daemon_ipc: args.allow_user_daemon_ipc,
+                    build_jobs: args.build_jobs,
+                    review_mode: review_mode.as_str(),
+                    current_depth,
+                    startup_env,
+                })
+                .await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "Chunked review planning failed; falling back to existing review path"
+                );
+            }
+        }
+    }
 
     if reviewers == 1 {
         let review_future = execute_review_with_tier_filter(
