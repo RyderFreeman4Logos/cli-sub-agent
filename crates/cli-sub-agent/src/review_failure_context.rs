@@ -300,14 +300,22 @@ fn fix_route_label(session_dir: &Path, session_id: &str) -> String {
         .unwrap_or_default();
     if action != "confirm_then_fix_finding" {
         return format!(
-            "exact --fix-finding route unavailable (suggestion action '{action}'); use `csa review --session {session_id} --fix` or start a new fix session, then run a fresh exact-head review"
+            "exact --fix-finding route unavailable (suggestion action is not confirm_then_fix_finding); use `csa review --session {session_id} --fix` or start a new fix session, then run a fresh exact-head review"
         );
     }
     let command = suggestion
         .and_then(|value| value.get("command_template"))
         .and_then(toml::Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
+        .map(|value| {
+            // Truncate to prevent leaking large/sensitive content from suggestion.toml (#2542)
+            let truncated = value.trim();
+            if truncated.len() > 200 {
+                format!("{}... (truncated)", &truncated[..200])
+            } else {
+                truncated.to_string()
+            }
+        })
         .unwrap_or_else(|| {
             format!("csa review --fix-finding --session {session_id} --prompt-file FIX_PROMPT.md")
         });
