@@ -40,7 +40,7 @@ fn read_fix_finding_stdin<R: Read>(stdin_is_terminal: bool, reader: &mut R) -> R
     if stdin_is_terminal {
         anyhow::bail!(
             "No fix prompt provided and stdin is a terminal.\n\n\
-             Usage:\n  csa review --fix-finding --session <failed-review-session-id> --prompt \"confirmed fix instructions\"\n  csa review --fix-finding --session <failed-review-session-id> --prompt-file <path>\n  echo \"confirmed fix instructions\" | csa review --fix-finding --session <failed-review-session-id>"
+             Usage:\n  csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt \"confirmed fix instructions\"\n  csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt-file FIX_PROMPT.md\n  echo \"confirmed fix instructions\" | csa review --fix-finding --session FAILED_REVIEW_SESSION_ID"
         );
     }
     let mut buffer = String::new();
