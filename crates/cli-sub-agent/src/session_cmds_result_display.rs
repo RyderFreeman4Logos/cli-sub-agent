@@ -6,7 +6,10 @@ use std::path::Path;
 
 use super::memory_soft_limit_result_display::{insert, lines};
 use super::{StructuredOutputOpts, TranscriptSummary};
-use crate::require_commit_recovery_display::format_require_commit_recovery_lines;
+use crate::require_commit_recovery_display::{
+    build_require_commit_recovery_guidance_for_display_session,
+    format_require_commit_recovery_lines_for_display_session,
+};
 use crate::review_failure_context as rfc;
 use crate::session_display_alias;
 use crate::session_provider_quota::{
@@ -95,7 +98,11 @@ pub(super) fn display_result_text(
         println!("Kill diagnostics: {}", format_kill_diagnostics(diagnostics));
     }
     if let Some(recovery) = envelope.require_commit_recovery.as_ref() {
-        for line in format_require_commit_recovery_lines(recovery) {
+        for line in format_require_commit_recovery_lines_for_display_session(
+            session_dir,
+            session_id,
+            recovery,
+        ) {
             println!("{line}");
         }
     }
@@ -269,6 +276,15 @@ pub(super) fn build_result_json_payload_with_identity(
     let mut payload =
         build_result_json_payload(result, transcript_summary, review_meta, token_usage)?;
     session_display_alias::apply_json_identity(&mut payload, session_dir, session_id);
+    if let Some(recovery) = result.envelope.require_commit_recovery.as_ref() {
+        payload["require_commit_recovery_guidance"] =
+            build_require_commit_recovery_guidance_for_display_session(
+                session_dir,
+                session_id,
+                recovery,
+            )
+            .to_json();
+    }
     insert(&mut payload, session_id, session_dir, &result.envelope);
     rfc::insert_json(&mut payload, session_dir);
     Ok(payload)

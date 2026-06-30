@@ -155,7 +155,11 @@ pub(crate) fn render_wait_result_summary(
 
     if let Some(recovery) = result.require_commit_recovery.as_ref() {
         lines.extend(
-            crate::require_commit_recovery_display::format_require_commit_recovery_lines(recovery),
+            crate::require_commit_recovery_display::format_require_commit_recovery_lines_for_display_session(
+                session_dir,
+                session_id,
+                recovery,
+            ),
         );
     }
     if let Some(recovery) = result.memory_soft_limit_recovery.as_ref() {
@@ -294,6 +298,13 @@ fn render_wait_result_json(
         "kill_hint": result.kill_hint.as_deref(),
         "kill_diagnostics": result.kill_diagnostics.as_ref(),
         "require_commit_recovery": result.require_commit_recovery.as_ref(),
+        "require_commit_recovery_guidance": result.require_commit_recovery.as_ref().map(|recovery| {
+            crate::require_commit_recovery_display::build_require_commit_recovery_guidance_for_display_session(
+                session_dir,
+                session_id,
+                recovery,
+            ).to_json()
+        }),
         "memory_soft_limit_recovery": result.memory_soft_limit_recovery.as_ref(),
         "memory_soft_limit_recovery_guidance": result.memory_soft_limit_recovery.as_ref().map(|recovery| {
             crate::memory_soft_limit_recovery_display::build_memory_soft_limit_recovery_guidance_for_display_session(
