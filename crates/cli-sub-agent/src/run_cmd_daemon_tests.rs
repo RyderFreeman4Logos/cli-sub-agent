@@ -135,6 +135,33 @@ fn run_daemon_options_detect_prompt_file_stdin_sentinel() {
     let options =
         DaemonSpawnOptions::for_run(None, None, None, Some(Path::new("-")), false, &[], false);
     assert_eq!(options.run_stdin_prompt, RunStdinPrompt::PromptFileSentinel);
+    assert!(options.prompt_file_to_capture.is_none());
+}
+
+#[test]
+fn run_daemon_options_capture_regular_prompt_file_before_spawn() {
+    let path = Path::new("RUN_PROMPT.md");
+    let options = DaemonSpawnOptions::for_run(None, None, None, Some(path), false, &[], false);
+
+    assert_eq!(options.run_stdin_prompt, RunStdinPrompt::None);
+    assert_eq!(options.prompt_file_to_capture.as_deref(), Some(path));
+}
+
+#[test]
+fn run_daemon_missing_prompt_file_fails_before_spawn() {
+    let path = Path::new("MISSING_RUN_PROMPT.md");
+    let options = DaemonSpawnOptions::for_run(None, None, None, Some(path), false, &[], false);
+    let mut stdin = std::io::Cursor::new("");
+
+    let err = read_daemon_prompt_input_if_needed_from_reader(&options, true, &mut stdin)
+        .expect_err("missing run --prompt-file must fail before daemon spawn");
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("--prompt-file: failed to read"),
+        "{message}"
+    );
+    assert!(message.contains("MISSING_RUN_PROMPT.md"), "{message}");
 }
 
 #[test]
