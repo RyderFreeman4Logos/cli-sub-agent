@@ -41,6 +41,12 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     assert!(summary.contains("Dirty tracked paths: src/lib.rs, README.md"));
     assert!(summary.contains("Blocker: gate=commit-policy-uncommitted"));
     assert!(summary.contains("Recovery action: inspect_changed_paths_then_commit_or_revert"));
+    assert!(summary.contains(
+        "Work was applied but not committed; use fork-from to continue from this session"
+    ));
+    assert!(summary.contains(
+        "Continuation command: csa run --fork-from 01TESTWAITRECOVER --require-commit --prompt-file CONTINUATION_PROMPT.md"
+    ));
     assert!(!summary.contains("Review verdict: PASS"));
 
     let json: serde_json::Value = serde_json::from_str(
@@ -62,6 +68,17 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     assert_eq!(
         recovery["blocker_summary"],
         serde_json::json!("gate=commit-policy-uncommitted")
+    );
+    assert_eq!(
+        json["require_commit_recovery_guidance"]["continuation_command"],
+        serde_json::json!(
+            "csa run --fork-from 01TESTWAITRECOVER --require-commit --prompt-file CONTINUATION_PROMPT.md"
+        )
+    );
+    assert!(
+        json["require_commit_recovery_guidance"]["continuation_prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.contains("git status --short"))
     );
 }
 

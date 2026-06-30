@@ -1,7 +1,8 @@
 use super::{
-    StructuredOutputOpts, build_result_json_payload, compute_token_measurement,
-    display_all_sections, display_single_section, display_summary_section, format_number,
-    handle_session_artifacts, handle_session_result, render_result_sidecar_for_text,
+    StructuredOutputOpts, build_result_json_payload, build_result_json_payload_with_identity,
+    compute_token_measurement, display_all_sections, display_single_section,
+    display_summary_section, format_number, handle_session_artifacts, handle_session_result,
+    render_result_sidecar_for_text,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_session::state::ReviewSessionMeta;
