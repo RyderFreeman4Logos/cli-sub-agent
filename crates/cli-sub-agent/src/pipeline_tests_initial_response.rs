@@ -41,6 +41,7 @@ fn test_resolve_initial_response_timeout_cli_override_over_config() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // CLI=60 overrides config=120.
@@ -86,6 +87,7 @@ fn test_resolve_initial_response_timeout_config_zero_disables() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // Config=0 → disabled.
@@ -131,6 +133,7 @@ fn test_resolve_initial_response_timeout_uses_config_value() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // Config=90, no CLI → Some(90).
@@ -180,6 +183,7 @@ fn test_resolve_initial_response_timeout_for_tool_disabled_when_idle_timeout_exp
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // cli_idle_timeout=Some(1200), cli_initial_response_timeout=None → disabled.
@@ -217,6 +221,7 @@ fn test_resolve_initial_response_timeout_for_tool_kept_when_both_explicit() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // Both explicit → initial_response_timeout=60 wins.
@@ -254,6 +259,7 @@ fn test_resolve_initial_response_timeout_for_tool_falls_through_without_idle_tim
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     // No cli_idle_timeout → config default applies.
@@ -290,6 +296,7 @@ fn test_resolve_initial_response_timeout_for_codex_defaults_to_300_without_overr
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -326,6 +333,7 @@ fn test_resolve_initial_response_timeout_for_gemini_cli_default() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -359,6 +367,7 @@ fn test_resolve_initial_response_timeout_for_non_codex_cli_zero_disables_watchdo
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -401,6 +410,7 @@ fn test_resolve_initial_response_timeout_gemini_cli_honors_override() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -442,6 +452,7 @@ fn test_resolve_initial_response_timeout_gemini_cli_disable() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -478,6 +489,7 @@ fn test_resolve_initial_response_timeout_for_unknown_tool_uses_global_default() 
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -511,6 +523,7 @@ fn test_resolve_initial_response_timeout_for_non_codex_positive_override_passes_
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -547,6 +560,7 @@ fn test_resolve_initial_response_timeout_for_codex_uses_explicit_resource_timeou
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -588,6 +602,7 @@ fn test_resolve_initial_response_timeout_for_codex_uses_tool_override() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -632,6 +647,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_override_beats_resource_
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -665,6 +681,7 @@ fn test_resolve_initial_response_timeout_for_codex_cli_zero_disables_watchdog() 
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -707,6 +724,7 @@ fn test_resolve_initial_response_timeout_for_codex_tool_zero_disables() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -744,6 +762,7 @@ fn test_resolve_initial_response_timeout_for_codex_global_zero_disables() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -778,6 +797,7 @@ fn test_resolve_initial_response_timeout_for_codex_respects_explicit_idle_overri
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

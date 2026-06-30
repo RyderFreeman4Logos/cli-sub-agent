@@ -51,6 +51,7 @@ fn project_config_with_min_free_memory(min_free_memory_mb: u64) -> ProjectConfig
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

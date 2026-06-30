@@ -33,6 +33,7 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -81,6 +82,7 @@ fn test_validate_fatal_error_markers_rejects_blank_marker() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -129,6 +131,7 @@ fn test_validate_memory_max_mb_too_low() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -177,6 +180,7 @@ fn test_validate_memory_max_mb_at_minimum() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -219,6 +223,7 @@ fn test_validate_pids_max_too_low() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -267,6 +272,7 @@ fn test_validate_pids_max_at_minimum() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -309,6 +315,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -363,6 +370,7 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -420,6 +428,7 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -471,6 +480,7 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -522,6 +532,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -570,6 +581,7 @@ fn test_validate_soft_limit_percent_zero_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -618,6 +630,7 @@ fn test_validate_soft_limit_percent_over_100_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -666,6 +679,7 @@ fn test_validate_soft_limit_percent_valid() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -708,6 +722,7 @@ fn test_validate_memory_monitor_interval_zero_rejected() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 
@@ -756,6 +771,7 @@ fn test_validate_memory_monitor_interval_valid() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 

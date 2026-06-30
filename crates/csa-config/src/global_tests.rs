@@ -8,6 +8,7 @@ use csa_core::{
 };
 use serial_test::serial;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -41,6 +42,14 @@ fn test_default_config() {
     assert_eq!(config.defaults.max_concurrent, 3);
     assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
     assert_eq!(config.kv_cache.long_poll_seconds, 240);
+    assert_eq!(
+        config.tool_state_dirs.get("codex"),
+        Some(&PathBuf::from("~/.codex"))
+    );
+    assert_eq!(
+        config.tool_state_dirs.get("claude"),
+        Some(&PathBuf::from("~/.claude"))
+    );
     assert!(config.tools.is_empty());
 }
 
@@ -49,6 +58,39 @@ fn test_kv_cache_defaults_parse_when_section_omitted() {
     let config: GlobalConfig = toml::from_str("").unwrap();
     assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
     assert_eq!(config.kv_cache.long_poll_seconds, 240);
+}
+
+#[test]
+fn test_tool_state_dirs_defaults_parse_when_section_omitted() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(
+        config.tool_state_dirs.get("codex"),
+        Some(&PathBuf::from("~/.codex"))
+    );
+    assert_eq!(
+        config.tool_state_dirs.get("claude"),
+        Some(&PathBuf::from("~/.claude"))
+    );
+}
+
+#[test]
+fn test_tool_state_dirs_parse_from_global_config() {
+    let config: GlobalConfig = toml::from_str(
+        r#"
+[tool_state_dirs]
+codex = "/srv/codex-state"
+claude = "/srv/claude-state"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.tool_state_dirs.get("codex"),
+        Some(&PathBuf::from("/srv/codex-state"))
+    );
+    assert_eq!(
+        config.tool_state_dirs.get("claude"),
+        Some(&PathBuf::from("/srv/claude-state"))
+    );
 }
 
 #[test]
@@ -492,6 +534,9 @@ fn test_default_template_is_valid_comment_only() {
     assert!(template.contains("[defaults]"));
     assert!(template.contains("max_concurrent"));
     assert!(template.contains("# tool = \"codex\""));
+    assert!(template.contains("[tool_state_dirs]"));
+    assert!(template.contains("codex = \"~/.codex\""));
+    assert!(template.contains("claude = \"~/.claude\""));
     assert!(template.contains("[tier_policy]"));
     assert!(template.contains("allow_force_bypass = false"));
 }

@@ -59,6 +59,7 @@ fn resolve_tool_by_strategy_model_spec_disables_default_tier_and_runtime_fallbac
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     let global_config = GlobalConfig {

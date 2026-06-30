@@ -50,12 +50,13 @@ pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use config_tool::{TransportKind, default_transport_for_tool};
 pub use gc::GcConfig;
 pub use global::{
-    AiConfigSymlinkCheckConfig, BudgetConfig, DEFAULT_KV_CACHE_FREQUENT_POLL_SECS,
-    DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions, ExperimentalConfig, GateMode, GateStep,
-    GithubConfig, GlobalConfig, GlobalHooksConfig, GlobalMcpConfig, KvCacheConfig,
-    KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS, PreflightConfig, ProviderTtls,
-    ResolvedKvCacheValue, RetryConfig, ReviewConfig, SessionWaitConfig, StateDirConfig,
-    StateDirOnExceed, TierPolicyConfig, ToolSelection,
+    AiConfigSymlinkCheckConfig, BudgetConfig, DEFAULT_CLAUDE_STATE_DIR, DEFAULT_CODEX_STATE_DIR,
+    DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, ExecutionEnvOptions,
+    ExperimentalConfig, GateMode, GateStep, GithubConfig, GlobalConfig, GlobalHooksConfig,
+    GlobalMcpConfig, KvCacheConfig, KvCacheValueSource, LEGACY_SESSION_WAIT_FALLBACK_SECS,
+    PreflightConfig, ProviderTtls, ResolvedKvCacheValue, RetryConfig, ReviewConfig,
+    SessionWaitConfig, StateDirConfig, StateDirOnExceed, TierPolicyConfig, ToolSelection,
+    default_tool_state_dirs, ensure_default_tool_state_dirs,
 };
 pub use global_caller_hints::{
     CallerHintsConfig, DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC,

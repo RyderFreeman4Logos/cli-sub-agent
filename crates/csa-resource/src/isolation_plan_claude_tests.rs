@@ -122,6 +122,51 @@ fn test_tool_defaults_claude_code_rejects_unwritable_claude_home() {
     );
 }
 
+#[test]
+fn test_tool_defaults_claude_code_honors_tool_state_dirs_config() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _home_env = ScopedEnvVar::set("HOME", &home);
+    let _claude_home_env = ScopedEnvVar::unset("CLAUDE_CONFIG_DIR");
+
+    let tool_state_dirs =
+        std::collections::HashMap::from([("claude".to_string(), PathBuf::from("~/.state/claude"))]);
+    let expected = home.join(".state/claude");
+
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults_and_state_dirs(
+            "claude-code",
+            &project,
+            &session,
+            Some(&tool_state_dirs),
+        )
+        .build()
+        .expect("configured claude state dir should build");
+
+    assert!(
+        expected.is_dir(),
+        "configured claude state dir should be pre-created"
+    );
+    assert!(
+        plan.writable_paths.contains(&expected),
+        "claude defaults should include configured tool_state_dirs.claude"
+    );
+    assert!(
+        !plan.writable_paths.contains(&home.join(".claude")),
+        "configured claude state dir should replace the hardcoded default"
+    );
+    assert!(
+        !plan.writable_paths.contains(&home.join(".claude.json")),
+        "custom claude state dir should not expose the legacy default-layout sibling"
+    );
+}
+
 /// (b) A peer (non claude-code) tool exposes the claude home WITHOUT a probe,
 /// gated on claude being on PATH.  Because peers register no probe, an
 /// unwritable claude home must NOT abort the build — the asymmetry mirrored from

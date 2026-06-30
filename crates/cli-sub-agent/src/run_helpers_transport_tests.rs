@@ -30,6 +30,7 @@ fn project_config_with_tool(tool_name: &str, tool_config: ToolConfig) -> Project
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

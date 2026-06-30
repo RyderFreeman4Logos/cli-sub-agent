@@ -36,6 +36,7 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }
@@ -397,6 +398,7 @@ fn config_with_multi_tiers() -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

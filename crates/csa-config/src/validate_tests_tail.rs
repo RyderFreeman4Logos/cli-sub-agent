@@ -52,6 +52,7 @@ fn test_validate_model_spec_two_parts() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -110,6 +111,7 @@ fn test_validate_model_spec_five_parts() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -158,6 +160,7 @@ fn test_validate_review_tool_auto_accepted() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -200,6 +203,7 @@ fn test_validate_review_batch_commits_zero_rejected() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -255,6 +259,7 @@ fn test_validate_all_known_review_tools_accepted() {
             session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
         };
 
@@ -309,6 +314,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
         };
 
@@ -357,6 +363,7 @@ fn test_validate_all_known_tools_accepted() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -396,6 +403,7 @@ fn test_validate_no_review_no_debate_is_ok() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -435,6 +443,7 @@ fn test_validate_max_recursion_depth_zero() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -481,6 +490,7 @@ fn test_validate_config_warns_but_passes_on_fork_prefix_budget_below_min() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -533,6 +543,7 @@ fn test_validate_codex_tmux_mode_rejects_acp_transport() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

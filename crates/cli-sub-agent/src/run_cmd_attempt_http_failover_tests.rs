@@ -46,6 +46,7 @@ fn make_failover_config(models: &[&str]) -> ProjectConfig {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

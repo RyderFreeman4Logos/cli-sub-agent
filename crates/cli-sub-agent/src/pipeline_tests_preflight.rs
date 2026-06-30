@@ -40,6 +40,7 @@ async fn execute_with_session_and_meta_fails_preflight_before_creating_session()
             },
         },
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     let executor = Executor::Opencode {
@@ -157,6 +158,7 @@ async fn execute_with_session_and_meta_runs_preflight_for_fresh_spawn_override()
             },
         },
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     let executor = Executor::Opencode {
@@ -240,6 +242,7 @@ async fn execute_with_session_and_meta_skips_preflight_for_resume_session() {
             },
         },
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
     let executor = Executor::Opencode {

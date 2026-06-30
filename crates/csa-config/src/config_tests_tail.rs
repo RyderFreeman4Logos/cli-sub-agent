@@ -115,6 +115,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -251,6 +252,7 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -281,6 +283,7 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -320,6 +323,7 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -739,6 +743,7 @@ fn test_enforce_tool_enabled_includes_alternatives_when_others_enabled() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -805,6 +810,7 @@ fn test_enforce_tool_enabled_omits_hint_when_no_alternatives() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

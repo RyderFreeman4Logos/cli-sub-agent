@@ -33,6 +33,7 @@ fn tier_bypass_gate_allows_bypass_flags_when_no_tiers_configured() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
@@ -516,6 +517,7 @@ fn resolve_tool_and_model_force_ignore_tier_skipped_when_no_tiers_configured() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 

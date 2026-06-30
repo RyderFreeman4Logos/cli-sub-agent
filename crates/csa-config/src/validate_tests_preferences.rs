@@ -34,6 +34,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         session_wait: None,
             preflight: Default::default(),
             vcs: Default::default(),
+            tool_state_dirs: HashMap::new(),
             filesystem_sandbox: Default::default(),
     };
 

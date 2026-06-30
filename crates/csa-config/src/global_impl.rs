@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::global::{
     DEFAULT_KV_CACHE_LONG_POLL_SECS, GlobalConfig, KvCacheValueSource, ResolvedKvCacheValue,
-    heterogeneous_counterpart, sort_tools_by_priority,
+    ensure_default_tool_state_dirs, heterogeneous_counterpart, sort_tools_by_priority,
 };
 use crate::mcp::McpServerConfig;
 use crate::paths;
@@ -164,6 +164,7 @@ impl GlobalConfig {
 
     fn sanitized(mut self, path: Option<&Path>) -> Self {
         self.kv_cache = self.kv_cache.sanitized(path);
+        ensure_default_tool_state_dirs(&mut self.tool_state_dirs);
         self.filesystem_sandbox.sanitize_legacy_xdg_runtime_root();
         self
     }

@@ -163,6 +163,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     }
 }

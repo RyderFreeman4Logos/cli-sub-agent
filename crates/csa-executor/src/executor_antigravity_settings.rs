@@ -343,7 +343,6 @@ mod tests {
     }
 }
 
-
     #[test]
     fn issue_2347_normalize_model_alias_resolves_slugs() {
         assert_eq!(normalize_model_alias("gemini-3.1-pro-high"), "Gemini 3.1 Pro (High)");

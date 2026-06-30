@@ -218,6 +218,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
 
         // Build IsolationPlan via builder (BestEffort for profile defaults).
         let session_dir = resolve_session_dir_for_sandbox(project_root, session_id);
+        let tool_state_dirs = csa_config::default_tool_state_dirs();
         let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
@@ -226,7 +227,12 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
-            .with_tool_defaults(tool_name, project_root, &session_dir)
+            .with_tool_defaults_and_state_dirs(
+                tool_name,
+                project_root,
+                &session_dir,
+                Some(&tool_state_dirs),
+            )
             .with_readonly_project_root(readonly_project_root);
 
         // CSA runtime writable paths.
@@ -413,7 +419,12 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
-        .with_tool_defaults(tool_name, project_root, &session_dir)
+        .with_tool_defaults_and_state_dirs(
+            tool_name,
+            project_root,
+            &session_dir,
+            Some(&cfg.tool_state_dirs),
+        )
         .with_readonly_project_root(effective_readonly)
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);

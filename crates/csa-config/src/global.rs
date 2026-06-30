@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub use crate::global_env::ExecutionEnvOptions;
 pub use crate::global_kv_cache::{
@@ -14,8 +15,10 @@ pub use crate::tool_selection::ToolSelection;
 use csa_core::types::ToolName;
 
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
+pub const DEFAULT_CODEX_STATE_DIR: &str = "~/.codex";
+pub const DEFAULT_CLAUDE_STATE_DIR: &str = "~/.claude";
 /// Global configuration loaded from `~/.config/cli-sub-agent/config.toml`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalConfig {
     #[serde(default)]
     pub defaults: DefaultsConfig,
@@ -45,6 +48,9 @@ pub struct GlobalConfig {
     /// Memory system configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Per-tool state directories exposed writable to sandboxed tool processes.
+    #[serde(default = "default_tool_state_dirs")]
+    pub tool_state_dirs: HashMap<String, PathBuf>,
     /// Global hook behavior settings.
     #[serde(default, skip_serializing_if = "GlobalHooksConfig::is_default")]
     pub hooks: GlobalHooksConfig,
@@ -87,6 +93,56 @@ pub struct GlobalConfig {
     /// Experimental feature flags.
     #[serde(default)]
     pub experimental: ExperimentalConfig,
+}
+
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            defaults: DefaultsConfig::default(),
+            preferences: PreferencesConfig::default(),
+            github: GithubConfig::default(),
+            tools: HashMap::new(),
+            review: ReviewConfig::default(),
+            debate: DebateConfig::default(),
+            fallback: FallbackConfig::default(),
+            retry: RetryConfig::default(),
+            budget: BudgetConfig::default(),
+            tier_policy: TierPolicyConfig::default(),
+            todo: TodoDisplayConfig::default(),
+            memory: MemoryConfig::default(),
+            tool_state_dirs: default_tool_state_dirs(),
+            hooks: GlobalHooksConfig::default(),
+            mcp: GlobalMcpConfig::default(),
+            mcp_proxy_socket: None,
+            tool_aliases: HashMap::new(),
+            run: crate::config::RunConfig::default(),
+            execution: crate::config::ExecutionConfig::default(),
+            kv_cache: KvCacheConfig::default(),
+            session_wait: SessionWaitConfig::default(),
+            preflight: PreflightConfig::default(),
+            state_dir: StateDirConfig::default(),
+            acp: crate::AcpConfig::default(),
+            filesystem_sandbox: crate::config_filesystem_sandbox::FilesystemSandboxConfig::default(
+            ),
+            experimental: ExperimentalConfig::default(),
+        }
+    }
+}
+
+pub fn default_tool_state_dirs() -> HashMap<String, PathBuf> {
+    HashMap::from([
+        ("codex".to_string(), PathBuf::from(DEFAULT_CODEX_STATE_DIR)),
+        (
+            "claude".to_string(),
+            PathBuf::from(DEFAULT_CLAUDE_STATE_DIR),
+        ),
+    ])
+}
+
+pub fn ensure_default_tool_state_dirs(tool_state_dirs: &mut HashMap<String, PathBuf>) {
+    for (tool, path) in default_tool_state_dirs() {
+        tool_state_dirs.entry(tool).or_insert(path);
+    }
 }
 
 /// GitHub CLI authentication settings shared across workflows.

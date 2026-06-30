@@ -229,6 +229,7 @@ fn resolve_tool_and_model_skips_compat_check_when_configured_default() {
         session_wait: None,
         preflight: Default::default(),
         vcs: Default::default(),
+        tool_state_dirs: HashMap::new(),
         filesystem_sandbox: Default::default(),
     };
 
