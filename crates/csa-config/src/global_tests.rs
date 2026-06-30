@@ -442,6 +442,23 @@ fn test_load_missing_file() {
     // verify the default is sane
     let config = GlobalConfig::default();
     assert_eq!(config.max_concurrent("any-tool"), 3);
+    assert_eq!(config.retry.max_attempts, 3);
+    assert_eq!(config.budget.max_tokens_per_issue, 5_000_000);
+}
+
+#[test]
+fn test_retry_and_budget_config_parse_from_toml() {
+    let toml_str = r#"
+[retry]
+max_attempts = 4
+
+[budget]
+max_tokens_per_issue = 123456
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.retry.resolved_max_attempts(), 4);
+    assert_eq!(config.retry.resolved_max_retries(), 3);
+    assert_eq!(config.budget.resolved_max_tokens_per_issue(), 123_456);
 }
 
 #[test]

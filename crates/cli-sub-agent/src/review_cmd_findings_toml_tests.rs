@@ -1,4 +1,7 @@
-use super::{extract_findings_toml_from_text, persist_review_findings_toml, review_explicitly_states_no_findings};
+use super::{
+    extract_findings_toml_from_text, persist_review_findings_toml,
+    review_explicitly_states_no_findings,
+};
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
@@ -882,7 +885,6 @@ start = 300
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
-
 
 #[test]
 fn issue_2536_explicit_findings_none_suppresses_prose_pseudo_findings() {

@@ -400,7 +400,10 @@ hint:   git config --unset-all --local core.hooksPath
         // Session output mentions hooksPath but no commit attempt — should NOT emit hint (#2055)
         let stderr = "core.hooksPath is set locally\noutput generated successfully";
         let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
-        assert!(hint.is_none(), "hint should be suppressed when no commit context exists");
+        assert!(
+            hint.is_none(),
+            "hint should be suppressed when no commit context exists"
+        );
     }
 
     #[test]
@@ -411,14 +414,19 @@ hint:   git config --unset-all --local core.hooksPath
         // This stderr DOES contain the unset-all command, so it DOES match.
         // Verify the hint fires correctly here (this is a real commit failure).
         let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
-        assert!(hint.is_some(), "hint should fire when git config --unset-all appears");
+        assert!(
+            hint.is_some(),
+            "hint should fire when git config --unset-all appears"
+        );
 
         // But stderr with just "Unset it" without the full command should NOT fire
         let stderr2 = "core.hooksPath is set locally\nhint: Unset it\nsome other output";
         let hint2 = lefthook_core_hookspath_conflict_hint(stderr2, "");
-        assert!(hint2.is_none(), "hint should be suppressed for generic 'Unset it' without commit command");
+        assert!(
+            hint2.is_none(),
+            "hint should be suppressed for generic 'Unset it' without commit command"
+        );
     }
-
 
     #[test]
     fn sandbox_fs_denial_hint_fires_on_read_only_error() {

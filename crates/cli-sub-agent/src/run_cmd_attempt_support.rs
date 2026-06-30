@@ -41,11 +41,12 @@ pub(crate) fn allow_cross_tool_failover(
 pub(crate) fn resolve_max_failover_attempts(
     no_failover: bool,
     config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
 ) -> usize {
     if no_failover {
         1
     } else {
-        config
+        let tier_attempts = config
             .map(|cfg| {
                 cfg.tiers
                     .values()
@@ -53,7 +54,8 @@ pub(crate) fn resolve_max_failover_attempts(
                     .sum::<usize>()
                     .max(1)
             })
-            .unwrap_or(1)
+            .unwrap_or(1);
+        tier_attempts.min(global_config.retry.resolved_max_attempts())
     }
 }
 
@@ -263,9 +265,11 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
+    use csa_config::{GlobalConfig, ProjectConfig};
+
     use super::{
         capture_commit_skill_workspace_guard, merge_run_loop_changed_paths,
-        restore_failed_commit_skill_workspace,
+        resolve_max_failover_attempts, restore_failed_commit_skill_workspace,
     };
 
     fn run_git(project_root: &Path, args: &[&str]) {
@@ -410,6 +414,35 @@ mod tests {
         assert_eq!(
             merged,
             Some(vec!["src/lib.rs".to_string(), "src/main.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn max_failover_attempts_clamps_tier_candidates_to_retry_policy() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+[tiers.large]
+description = "large"
+models = [
+  "codex/openai/gpt-5.5/high",
+  "codex/openai/gpt-5.4/high",
+  "codex/openai/gpt-5/high",
+  "opencode/google/gemini-2.5-pro/high",
+  "claude-code/anthropic/sonnet/high",
+]
+"#,
+        )
+        .expect("project config");
+        let mut global = GlobalConfig::default();
+        global.retry.max_attempts = 3;
+
+        assert_eq!(
+            resolve_max_failover_attempts(false, Some(&project), &global),
+            3
+        );
+        assert_eq!(
+            resolve_max_failover_attempts(true, Some(&project), &global),
+            1
         );
     }
 }

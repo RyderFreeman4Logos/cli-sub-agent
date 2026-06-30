@@ -540,6 +540,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 cd.as_deref(),
                 wait_options.behavior.wait_timeout_secs,
                 elapsed,
+                result_session_dir,
                 session_alive,
             ));
         }

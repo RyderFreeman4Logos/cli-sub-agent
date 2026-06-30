@@ -183,13 +183,21 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     )?;
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
-            warn!(
-                session = %session.meta_session_id,
-                used = budget.used,
-                allocated = budget.allocated,
-                pct = budget.usage_pct(),
-                "Token budget hard threshold already exceeded — advisory only, execution continues"
+            let used = budget.used;
+            let allocated = budget.allocated;
+            let pct = budget.usage_pct();
+            let err = anyhow::anyhow!(
+                "token budget exhausted before execution: used={used} allocated={allocated} pct={pct}"
             );
+            return Err(persist_pipeline_pre_exec_failure(
+                project_root,
+                &mut session,
+                executor.tool_name(),
+                err,
+                &mut cleanup_guard,
+                None,
+                PipelinePreExecFailureDetails::default(),
+            ));
         }
         if budget.is_turns_exceeded(session.turn_count) {
             warn!(
