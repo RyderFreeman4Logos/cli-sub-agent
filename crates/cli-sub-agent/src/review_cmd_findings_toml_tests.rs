@@ -1,4 +1,4 @@
-use super::{extract_findings_toml_from_text, persist_review_findings_toml};
+use super::{extract_findings_toml_from_text, persist_review_findings_toml, review_explicitly_states_no_findings};
 use crate::test_env_lock::ScopedTestEnvVar;
 use csa_core::types::ReviewDecision;
 use csa_session::state::ReviewSessionMeta;
@@ -881,4 +881,24 @@ start = 300
     );
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+
+#[test]
+fn issue_2536_explicit_findings_none_suppresses_prose_pseudo_findings() {
+    // When details.md says "Findings: none." but the review text contains
+    // support/evidence prose like "P1 supported by justfile:192-195", those
+    // prose lines should NOT be converted into blocking findings (#2536).
+    let review_text = "Findings: none.\n\n1. P1 supported by `justfile: 192-195`.";
+
+    assert!(
+        review_explicitly_states_no_findings(review_text),
+        "review text explicitly states no findings"
+    );
+
+    let review_without_none = "1. [HIGH] Something is wrong with foo.rs:42";
+    assert!(
+        !review_explicitly_states_no_findings(review_without_none),
+        "review without explicit none should not be suppressed"
+    );
 }
