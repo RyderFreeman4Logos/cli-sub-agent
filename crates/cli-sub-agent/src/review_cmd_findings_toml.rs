@@ -121,7 +121,14 @@ fn derive_findings_toml_artifact(
     let prose_artifact = findings_file_from_prose(&review_text);
     match extract_findings_toml_from_text(&review_text) {
         Some(artifact) if artifact.findings.is_empty() => {
-            if let Some(prose_artifact) =
+            // An explicitly empty findings.toml block means the reviewer found
+            // no blocking findings. Only synthesize prose findings if the review
+            // text does NOT explicitly state "Findings: none" — this prevents
+            // support/evidence prose (e.g. "P1 supported by ...") from being
+            // misclassified as blocking findings (#2536).
+            if review_explicitly_states_no_findings(&review_text) {
+                Ok((artifact, None))
+            } else if let Some(prose_artifact) =
                 findings_file_from_explicit_findings_sections(&review_text)
             {
                 Ok((prose_artifact, None))
@@ -158,6 +165,17 @@ fn derive_findings_toml_artifact(
 /// the other ignores — the root cause of the #1675 review rounds (a verdict in
 /// `details`, then `output.log`, that the detector did not scan). Returns `None`
 /// when no review text can be located.
+
+/// Returns true when the review text explicitly states there are no findings.
+/// This covers "Findings: none" and "Findings: none." as standalone lines.
+pub(in crate::review_cmd) fn review_explicitly_states_no_findings(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.eq_ignore_ascii_case("Findings: none")
+            || trimmed.eq_ignore_ascii_case("Findings: none.")
+    })
+}
+
 pub(in crate::review_cmd) fn load_canonical_review_text(
     session_dir: &Path,
 ) -> Result<Option<String>, anyhow::Error> {
