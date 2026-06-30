@@ -389,7 +389,7 @@ fn debate_omitted_question_tty_fails_before_spawn() {
 
     let message = err.to_string();
     assert!(message.contains("debate question is empty"), "{message}");
-    assert!(message.contains("--question-file <path>"), "{message}");
+    assert!(message.contains("--question-file QUESTION.md"), "{message}");
 }
 
 #[test]

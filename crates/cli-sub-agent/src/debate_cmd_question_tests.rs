@@ -41,7 +41,7 @@ fn debate_empty_question_fails_with_clear_error() {
         message.contains("stdin is not available to the detached daemon"),
         "{message}"
     );
-    assert!(message.contains("--question-file <path>"), "{message}");
+    assert!(message.contains("--question-file QUESTION.md"), "{message}");
 }
 
 #[test]
