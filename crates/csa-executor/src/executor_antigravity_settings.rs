@@ -53,6 +53,7 @@ impl AntigravitySettingsGuard {
         let Some(model) = effective_override(model_override) else {
             return Ok(None);
         };
+        let model = model.as_str();
         let Some(settings_path) = settings_file_path() else {
             tracing::warn!(
                 "antigravity-cli model override requested but $HOME is unset; \
@@ -118,10 +119,43 @@ impl Drop for AntigravitySettingsGuard {
     }
 }
 
-fn effective_override(model_override: &Option<String>) -> Option<&str> {
+/// Known antigravity-cli model display names mapped to their slug aliases.
+/// Users can pass either the exact display name or a slug-style alias (#2347).
+const KNOWN_MODEL_ALIASES: &[(&str, &[&str])] = &[
+    ("Gemini 3.1 Pro (High)", &["gemini-3.1-pro-high", "gemini-3.1-pro", "gemini-pro-high"]),
+    ("Gemini 3.1 Pro (Preview)", &["gemini-3.1-pro-preview", "gemini-pro-preview"]),
+    ("Gemini 3.5 Flash (High)", &["gemini-3.5-flash-high", "gemini-3.5-flash", "gemini-flash-high"]),
+    ("Claude Opus 4.6 (Thinking)", &["claude-opus-4.6-thinking", "opus-thinking", "claude-opus-thinking"]),
+    ("Claude Sonnet 4.5", &["claude-sonnet-4.5", "sonnet-4.5", "claude-sonnet"]),
+];
+
+/// Normalize a user-provided model name: if it matches a known slug alias,
+/// resolve to the canonical display name. Otherwise pass through unchanged
+/// (the model name may be a valid display name we don't know about).
+fn normalize_model_alias(input: &str) -> String {
+    let trimmed = input.trim();
+    let slug = trimmed
+        .to_ascii_lowercase()
+        .replace(' ', "-")
+        .replace(['(', ')'], "");
+    for (display, aliases) in KNOWN_MODEL_ALIASES {
+        if aliases.contains(&slug.as_str()) {
+            return display.to_string();
+        }
+    }
+    // Also check if the input matches a known display name case-insensitively
+    for (display, _) in KNOWN_MODEL_ALIASES {
+        if display.eq_ignore_ascii_case(trimmed) {
+            return display.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn effective_override(model_override: &Option<String>) -> Option<String> {
     model_override
         .as_deref()
-        .map(str::trim)
+        .map(normalize_model_alias)
         .filter(|m| !m.eq_ignore_ascii_case("default"))
         .filter(|m| !m.is_empty())
 }
@@ -281,7 +315,7 @@ mod tests {
         assert!(effective_override(&Some("Default".to_string())).is_none());
         assert_eq!(
             effective_override(&Some("Gemini 3.1 Pro (High)".to_string())),
-            Some("Gemini 3.1 Pro (High)")
+            Some("Gemini 3.1 Pro (High)".to_string())
         );
     }
 
@@ -308,3 +342,22 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "{not json");
     }
 }
+
+
+    #[test]
+    fn issue_2347_normalize_model_alias_resolves_slugs() {
+        assert_eq!(normalize_model_alias("gemini-3.1-pro-high"), "Gemini 3.1 Pro (High)");
+        assert_eq!(normalize_model_alias("gemini-3.5-flash"), "Gemini 3.5 Flash (High)");
+        assert_eq!(normalize_model_alias("opus-thinking"), "Claude Opus 4.6 (Thinking)");
+    }
+
+    #[test]
+    fn issue_2347_normalize_model_alias_preserves_display_names() {
+        assert_eq!(normalize_model_alias("Gemini 3.1 Pro (High)"), "Gemini 3.1 Pro (High)");
+        assert_eq!(normalize_model_alias("claude opus 4.6 (thinking)"), "Claude Opus 4.6 (Thinking)");
+    }
+
+    #[test]
+    fn issue_2347_normalize_model_alias_passes_through_unknown() {
+        assert_eq!(normalize_model_alias("some-custom-model"), "some-custom-model");
+    }
