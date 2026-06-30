@@ -115,6 +115,7 @@ mod tests {
             commit: None,
             range: None,
             files: None,
+            chunked_review: crate::cli::ReviewChunkingMode::Auto,
             fix: false,
             fix_finding: true,
             max_rounds: 3,

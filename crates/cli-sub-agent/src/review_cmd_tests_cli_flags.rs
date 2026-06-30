@@ -22,6 +22,13 @@ fn review_cli_parses_fast_but_more_cost_flag() {
 }
 
 #[test]
+fn review_cli_parses_chunked_review_mode_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--chunked-review", "always"]);
+
+    assert_eq!(args.chunked_review, crate::cli::ReviewChunkingMode::Always);
+}
+
+#[test]
 fn review_cli_parses_fix_finding_prompt_flag() {
     let args = parse_review_args(&[
         "csa",

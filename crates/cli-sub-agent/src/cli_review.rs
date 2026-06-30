@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, ValueEnum};
 use csa_core::types::{ToolArg, ToolName};
+use serde::{Deserialize, Serialize};
 
 use super::{Commands, parse_cli_tool_name, parse_model_spec_arg, parse_spec_path_arg};
 
@@ -23,6 +24,31 @@ impl ReviewMode {
 }
 
 impl std::fmt::Display for ReviewMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[value(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewChunkingMode {
+    Auto,
+    Off,
+    Always,
+}
+
+impl ReviewChunkingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Off => "off",
+            Self::Always => "always",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewChunkingMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -129,6 +155,10 @@ pub struct ReviewArgs {
     /// Review specific files (pathspec)
     #[arg(long)]
     pub files: Option<String>,
+
+    /// Chunk large review diffs by module/crate before reviewer execution
+    #[arg(long, value_enum, default_value_t = ReviewChunkingMode::Auto)]
+    pub chunked_review: ReviewChunkingMode,
 
     /// Review-and-fix mode (apply fixes directly)
     #[arg(long, conflicts_with = "fix_finding")]

@@ -49,6 +49,7 @@ fn make_test_isolation_plan() -> IsolationPlan {
         memory_swap_max_mb: None,
         pids_max: None,
         readonly_project_root: false,
+        user_daemon_ipc: false,
         project_root: None,
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
