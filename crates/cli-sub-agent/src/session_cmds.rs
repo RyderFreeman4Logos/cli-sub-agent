@@ -27,7 +27,7 @@ mod list;
 use list::{
     filter_sessions_by_csa_version, format_elapsed, format_started_at, resolve_session_status,
     select_sessions_for_list, select_sessions_for_list_all_projects, session_created_at,
-    session_to_json, truncate_with_ellipsis,
+    session_outcome_indicator, session_to_json, truncate_with_ellipsis,
 };
 #[cfg(test)]
 use list::{is_session_stale_for_test, status_from_phase_and_result};
@@ -172,12 +172,13 @@ pub(crate) fn handle_session_list(
                 // Print table header
                 if all_projects && filters.show_version {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
                         "LAST ACCESSED",
                         "STATUS",
+                        "OUTCOME",
                         "DESCRIPTION",
                         "TOOLS",
                         "TIER",
@@ -185,57 +186,61 @@ pub(crate) fn handle_session_list(
                         "PROJECT",
                         "VERSION"
                     );
-                    println!("{}", "-".repeat(226));
+                    println!("{}", "-".repeat(235));
                 } else if all_projects {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
                         "LAST ACCESSED",
                         "STATUS",
+                        "OUTCOME",
                         "DESCRIPTION",
                         "TOOLS",
                         "TIER",
                         "BRANCH",
                         "PROJECT"
                     );
-                    println!("{}", "-".repeat(212));
+                    println!("{}", "-".repeat(221));
                 } else if filters.show_version {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
                         "LAST ACCESSED",
                         "STATUS",
+                        "OUTCOME",
                         "DESCRIPTION",
                         "TOOLS",
                         "TIER",
                         "BRANCH",
                         "VERSION"
                     );
-                    println!("{}", "-".repeat(196));
+                    println!("{}", "-".repeat(205));
                 } else {
                     println!(
-                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  TOKENS",
+                        "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  TOKENS",
                         "SESSION",
                         "STARTED",
                         "ELAPSED",
                         "LAST ACCESSED",
                         "STATUS",
+                        "OUTCOME",
                         "DESCRIPTION",
                         "TOOLS",
                         "TIER",
                         "BRANCH"
                     );
-                    println!("{}", "-".repeat(182));
+                    println!("{}", "-".repeat(191));
                 }
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
                     let status_str = resolve_session_status(&session);
+                    let outcome_str = session_outcome_indicator(&session);
                     let started_str = format_started_at(session_created_at(&session));
                     let elapsed_str = format_elapsed(&session, &status_str, chrono::Utc::now());
                     let desc = session
@@ -279,7 +284,7 @@ pub(crate) fn handle_session_list(
                     if all_projects && filters.show_version {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {:<12}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -288,6 +293,7 @@ pub(crate) fn handle_session_list(
                                 .with_timezone(&chrono::Local)
                                 .format("%Y-%m-%d %H:%M"),
                             status_str,
+                            outcome_str,
                             desc_display,
                             tools_str,
                             tier_str,
@@ -301,7 +307,7 @@ pub(crate) fn handle_session_list(
                     } else if all_projects {
                         let project_display = truncate_with_ellipsis(&session.project_path, 30);
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<30}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -310,6 +316,7 @@ pub(crate) fn handle_session_list(
                                 .with_timezone(&chrono::Local)
                                 .format("%Y-%m-%d %H:%M"),
                             status_str,
+                            outcome_str,
                             desc_display,
                             tools_str,
                             tier_str,
@@ -321,7 +328,7 @@ pub(crate) fn handle_session_list(
                         );
                     } else if filters.show_version {
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {:<12}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -330,6 +337,7 @@ pub(crate) fn handle_session_list(
                                 .with_timezone(&chrono::Local)
                                 .format("%Y-%m-%d %H:%M"),
                             status_str,
+                            outcome_str,
                             desc_display,
                             tools_str,
                             tier_str,
@@ -341,7 +349,7 @@ pub(crate) fn handle_session_list(
                         );
                     } else {
                         println!(
-                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<18}  {}{}{}",
+                            "{:<11}  {:<19}  {:<8}  {:<19}  {:<10}  {:<7}  {:<25}  {:<20}  {:<18}  {:<18}  {}{}{}",
                             short_id,
                             started_str,
                             elapsed_str,
@@ -350,6 +358,7 @@ pub(crate) fn handle_session_list(
                                 .with_timezone(&chrono::Local)
                                 .format("%Y-%m-%d %H:%M"),
                             status_str,
+                            outcome_str,
                             desc_display,
                             tools_str,
                             tier_str,

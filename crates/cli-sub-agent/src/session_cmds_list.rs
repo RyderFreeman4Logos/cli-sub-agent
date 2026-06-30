@@ -155,6 +155,23 @@ pub(super) fn status_from_phase_and_result(
     }
 }
 
+pub(super) fn session_outcome_indicator(session: &MetaSessionState) -> &'static str {
+    let project_root = Path::new(&session.project_path);
+    match load_result(project_root, &session.meta_session_id) {
+        Ok(Some(result)) if result.exit_code == 0 => "\u{2713}",
+        Ok(Some(_)) => "\u{2717}",
+        Ok(None) => "-",
+        Err(err) => {
+            tracing::warn!(
+                session_id = %session.meta_session_id,
+                error = %err,
+                "Failed to load result.toml while resolving session outcome"
+            );
+            "-"
+        }
+    }
+}
+
 fn active_status_with_liveness(project_root: &Path, sid: &str, status: &'static str) -> String {
     if status == "Active" && active_session_has_no_live_pid(project_root, sid) {
         NO_LIVE_PID_STATUS.to_string()
