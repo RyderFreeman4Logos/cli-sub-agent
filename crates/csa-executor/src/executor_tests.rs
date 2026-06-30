@@ -365,6 +365,22 @@ fn test_from_spec() {
             ..
         }
     ));
+
+    let spec = ModelSpec::parse("hermes/openai/gpt-5.5/xhigh").unwrap();
+    let exec = Executor::from_spec(&spec).unwrap();
+    assert_eq!(exec.tool_name(), "hermes");
+    match exec {
+        Executor::Hermes {
+            provider_override,
+            model_override,
+            thinking_budget,
+        } => {
+            assert_eq!(provider_override.as_deref(), Some("openai"));
+            assert_eq!(model_override.as_deref(), Some("gpt-5.5"));
+            assert!(matches!(thinking_budget, Some(ThinkingBudget::Xhigh)));
+        }
+        other => panic!("expected Hermes executor, got {other:?}"),
+    }
 }
 
 #[test]
@@ -432,6 +448,25 @@ fn test_thinking_budget_from_spec_codex() {
 
     let debug_str = format!("{cmd:?}");
     assert!(debug_str.contains("model_reasoning_effort=low"));
+}
+
+#[test]
+fn test_hermes_thinking_does_not_emit_codex_reasoning_effort() {
+    let spec = ModelSpec::parse("hermes/openai/gpt-5.5/xhigh").unwrap();
+    let exec = Executor::from_spec(&spec).unwrap();
+
+    let mut cmd = Command::new(exec.executable_name());
+    exec.append_tool_args(&mut cmd, "test prompt", None);
+
+    let debug_str = format!("{cmd:?}");
+    assert!(debug_str.contains("--provider"), "{debug_str}");
+    assert!(debug_str.contains("openai"), "{debug_str}");
+    assert!(debug_str.contains("--model"), "{debug_str}");
+    assert!(debug_str.contains("gpt-5.5"), "{debug_str}");
+    assert!(
+        !debug_str.contains("model_reasoning_effort="),
+        "Hermes must not receive Codex-specific reasoning args: {debug_str}"
+    );
 }
 
 #[test]
@@ -649,6 +684,11 @@ fn test_execute_in_preserves_model_override() {
             model_override: Some("gemini-3-pro".to_string()),
             thinking_budget: Some(ThinkingBudget::High),
         },
+        Executor::Hermes {
+            provider_override: Some("anthropic".to_string()),
+            model_override: Some("claude-opus".to_string()),
+            thinking_budget: Some(ThinkingBudget::Medium),
+        },
     ];
 
     for exec in &tools {
@@ -709,6 +749,24 @@ fn test_execute_in_preserves_model_override() {
             }
             Executor::OpenaiCompat { .. } => {
                 // HTTP-only tool — no CLI args. Nothing to assert on Command.
+            }
+            Executor::Hermes { .. } => {
+                assert!(
+                    debug_str.contains("anthropic"),
+                    "Hermes missing provider: {debug_str}"
+                );
+                assert!(
+                    debug_str.contains("claude-opus"),
+                    "Hermes missing model: {debug_str}"
+                );
+                assert!(
+                    debug_str.contains("--thinking"),
+                    "Hermes missing thinking: {debug_str}"
+                );
+                assert!(
+                    !debug_str.contains("model_reasoning_effort="),
+                    "Hermes must not receive Codex-specific thinking args: {debug_str}"
+                );
             }
             Executor::AntigravityCli { .. } => {
                 // `agy` rejects `-m`; the model override is staged in

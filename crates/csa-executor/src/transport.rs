@@ -6,6 +6,11 @@ use crate::executor::Executor;
 #[cfg(feature = "acp")]
 use crate::lefthook_guard::sanitize_args_for_codex;
 #[cfg(feature = "acp")]
+use crate::hermes_config::{
+    HermesRunConfig, filter_resume_session_id_for_hermes, persist_hermes_fingerprint,
+    run_hermes_acp_check,
+};
+#[cfg(feature = "acp")]
 use crate::session_config::SessionConfig;
 use crate::transport_gemini_retry::{
     apply_gemini_permanent_quota_exhaustion_summary,
@@ -186,18 +191,20 @@ pub struct AcpTransport {
     acp_command: String,
     acp_args: Vec<String>,
     pub(crate) session_config: Option<SessionConfig>,
+    pub(crate) hermes_run_config: Option<HermesRunConfig>,
 }
 
 #[cfg(feature = "acp")]
 impl AcpTransport {
     pub fn new(tool_name: &str, session_config: Option<SessionConfig>) -> Self {
-        Self::new_with_codex_fast_mode(tool_name, session_config, false)
+        Self::new_with_codex_fast_mode(tool_name, session_config, false, None)
     }
 
     pub(crate) fn new_with_codex_fast_mode(
         tool_name: &str,
         session_config: Option<SessionConfig>,
         codex_fast_mode: bool,
+        hermes_run_config: Option<HermesRunConfig>,
     ) -> Self {
         let (cmd, args) = Self::acp_command_for_tool(tool_name);
         let args = if tool_name == "codex" && codex_fast_mode {
@@ -212,6 +219,7 @@ impl AcpTransport {
             acp_command: cmd,
             acp_args: args,
             session_config,
+            hermes_run_config,
         }
     }
 
@@ -222,6 +230,7 @@ impl AcpTransport {
             "claude-code" => ("claude-code-acp".into(), vec![]),
             "codex" => ("codex-acp".into(), vec![]),
             "gemini-cli" => ("gemini".into(), vec!["--acp".into()]),
+            "hermes" => ("hermes".into(), vec!["acp".into()]),
             _ => (format!("{tool_name}-acp"), vec![]),
         }
     }
@@ -257,9 +266,17 @@ impl AcpTransport {
         let mut acp_command = self.acp_command.clone();
         let mut acp_args = acp_args.to_vec();
         let prompt = prompt.to_string();
-        let resume_session_id = resume_session_id.map(String::from);
         let session_dir =
             csa_session::manager::get_session_dir(&working_dir, &session.meta_session_id).ok();
+        let resume_session_id = if self.tool_name == "hermes" {
+            filter_resume_session_id_for_hermes(
+                session_dir.as_deref(),
+                self.hermes_run_config.as_ref(),
+                resume_session_id.map(String::from),
+            )
+        } else {
+            resume_session_id.map(String::from)
+        };
 
         let mut gemini_runtime_home = None;
         let (shared_gemini_npm_cache_raw_path, shared_gemini_npm_cache_source) =
@@ -290,6 +307,9 @@ impl AcpTransport {
         }
         if self.tool_name == "codex" {
             sanitize_args_for_codex(&mut acp_args);
+        }
+        if self.tool_name == "hermes" {
+            run_hermes_acp_check(&acp_command, &acp_args, &working_dir, &env).await?;
         }
         let gemini_sandbox_env_overrides =
             (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
@@ -329,7 +349,7 @@ impl AcpTransport {
                 &self.tool_name,
                 options.initial_response_timeout,
             )
-        } else if self.tool_name == "codex" {
+        } else if matches!(self.tool_name.as_str(), "codex" | "hermes") {
             consume_resolved_initial_response_timeout_seconds(options.initial_response_timeout)
         } else {
             None
@@ -339,6 +359,7 @@ impl AcpTransport {
         let session_meta = Self::build_session_meta(
             options.setting_sources.as_deref(),
             self.session_config.as_ref(),
+            self.hermes_run_config.as_ref(),
         );
         let acp_payload_debug_path = maybe_write_acp_payload_debug(AcpPayloadDebugRequest {
             env: &env,
@@ -457,6 +478,9 @@ impl AcpTransport {
             .flatten()
         {
             apply_gemini_acp_initial_stall_summary(&mut execution, &classification);
+        }
+        if self.tool_name == "hermes" && execution.exit_code == 0 {
+            persist_hermes_fingerprint(session_dir.as_deref(), self.hermes_run_config.as_ref())?;
         }
 
         Ok(TransportResult {

@@ -13,11 +13,12 @@ pub enum ToolName {
     Codex,
     ClaudeCode,
     OpenaiCompat,
+    Hermes,
     AntigravityCli,
 }
 
 /// Primary CLI-backed tools surfaced by doctor and default tool listings.
-pub const PRIMARY_TOOL_NAMES: &[&str] = &["opencode", "codex", "claude-code"];
+pub const PRIMARY_TOOL_NAMES: &[&str] = &["opencode", "codex", "claude-code", "hermes"];
 
 /// Tools eligible for general automatic routing and fallback.
 ///
@@ -29,6 +30,7 @@ pub const ROUTING_CANDIDATE_TOOLS: &[ToolName] = &[
     ToolName::Codex,
     ToolName::ClaudeCode,
     ToolName::OpenaiCompat,
+    ToolName::Hermes,
 ];
 
 pub fn is_removed_tool_name(name: &str) -> bool {
@@ -52,6 +54,7 @@ impl ToolName {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
             Self::OpenaiCompat => "openai-compat",
+            Self::Hermes => "hermes",
             Self::AntigravityCli => "antigravity-cli",
         }
     }
@@ -64,6 +67,7 @@ impl ToolName {
             Self::Codex => ModelFamily::OpenAI,
             Self::Opencode => ModelFamily::Other,
             Self::OpenaiCompat => ModelFamily::Other,
+            Self::Hermes => ModelFamily::Other,
         }
     }
 
@@ -90,6 +94,7 @@ pub fn prompt_transport_capabilities(tool: &ToolName) -> &'static [PromptTranspo
         ToolName::Codex => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::GeminiCli | ToolName::AntigravityCli => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::ClaudeCode => PROMPT_TRANSPORT_ARGV_AND_STDIN,
+        ToolName::Hermes => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::Opencode => PROMPT_TRANSPORT_ARGV_ONLY,
         // OpenAI-compat is HTTP-only; prompt transport is irrelevant (no CLI process).
         // Return Stdin to satisfy callers that check capabilities.
@@ -136,7 +141,7 @@ pub fn provider_for_tool_name(tool: &str) -> Option<ModelFamily> {
         "gemini-cli" | "antigravity-cli" | "antigravity" | "gemini" => Some(ModelFamily::Gemini),
         "claude-code" | "claude" => Some(ModelFamily::Claude),
         "codex" => Some(ModelFamily::OpenAI),
-        "opencode" | "openai-compat" => Some(ModelFamily::Other),
+        "opencode" | "openai-compat" | "hermes" => Some(ModelFamily::Other),
         _ => None,
     }
 }
@@ -185,6 +190,7 @@ impl std::str::FromStr for ToolArg {
             "codex" => Ok(Self::Specific(ToolName::Codex)),
             "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
             "openai-compat" => Ok(Self::Specific(ToolName::OpenaiCompat)),
+            "hermes" => Ok(Self::Specific(ToolName::Hermes)),
             "antigravity-cli" => Ok(Self::Specific(ToolName::AntigravityCli)),
             // Built-in aliases for common short names
             "claude" => Ok(Self::Specific(ToolName::ClaudeCode)),
@@ -211,14 +217,14 @@ impl ToolArg {
                     match resolved {
                         Self::Alias(ref inner) => Err(format!(
                             "tool alias '{alias}' maps to '{inner}' which is not a valid tool \
-                             name. Valid targets: opencode, codex, claude-code, openai-compat, antigravity-cli"
+                             name. Valid targets: opencode, codex, claude-code, openai-compat, hermes, antigravity-cli"
                         )),
                         other => Ok(other),
                     }
                 } else {
                     Err(format!(
                         "unknown tool '{alias}'. Valid values: auto, any-available, \
-                         opencode, codex, claude-code, openai-compat, antigravity-cli. \
+                         opencode, codex, claude-code, openai-compat, hermes, antigravity-cli. \
                          Or define it in [tool_aliases] in config."
                     ))
                 }
@@ -476,6 +482,7 @@ mod tests {
         assert_eq!(ToolName::GeminiCli.model_family(), ModelFamily::Gemini);
         assert_eq!(ToolName::Codex.model_family(), ModelFamily::OpenAI);
         assert_eq!(ToolName::Opencode.model_family(), ModelFamily::Other);
+        assert_eq!(ToolName::Hermes.model_family(), ModelFamily::Other);
     }
 
     #[test]
@@ -502,6 +509,7 @@ mod tests {
         assert_eq!(ToolName::Opencode.as_str(), "opencode");
         assert_eq!(ToolName::Codex.as_str(), "codex");
         assert_eq!(ToolName::ClaudeCode.as_str(), "claude-code");
+        assert_eq!(ToolName::Hermes.as_str(), "hermes");
     }
 
     #[test]
@@ -510,6 +518,7 @@ mod tests {
         assert_eq!(ToolName::Opencode.to_string(), "opencode");
         assert_eq!(ToolName::Codex.to_string(), "codex");
         assert_eq!(ToolName::ClaudeCode.to_string(), "claude-code");
+        assert_eq!(ToolName::Hermes.to_string(), "hermes");
     }
 
     #[test]
@@ -525,6 +534,12 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_arg_from_str_specific_hermes() {
+        let arg = ToolArg::from_str("hermes").unwrap();
+        assert!(matches!(arg, ToolArg::Specific(ToolName::Hermes)));
+    }
+
+    #[test]
     fn test_tool_arg_display_fromstr_roundtrip() {
         let cases = [
             ToolArg::Auto,
@@ -533,6 +548,7 @@ mod tests {
             ToolArg::Specific(ToolName::Codex),
             ToolArg::Specific(ToolName::ClaudeCode),
             ToolArg::Specific(ToolName::OpenaiCompat),
+            ToolArg::Specific(ToolName::Hermes),
             ToolArg::Specific(ToolName::AntigravityCli),
         ];
         for original in &cases {
@@ -549,6 +565,7 @@ mod tests {
             (ToolName::Opencode, "Opencode"),
             (ToolName::Codex, "Codex"),
             (ToolName::ClaudeCode, "ClaudeCode"),
+            (ToolName::Hermes, "Hermes"),
         ];
         for (tool, label) in tools {
             let strategy = ToolArg::Specific(tool).into_strategy();
@@ -571,6 +588,10 @@ mod tests {
         );
         assert_eq!(
             prompt_transport_capabilities(&ToolName::ClaudeCode),
+            &[PromptTransport::Argv, PromptTransport::Stdin]
+        );
+        assert_eq!(
+            prompt_transport_capabilities(&ToolName::Hermes),
             &[PromptTransport::Argv, PromptTransport::Stdin]
         );
         assert_eq!(

@@ -44,6 +44,9 @@ impl Executor {
                 cmd.arg("--dangerously-skip-permissions");
                 cmd.arg("--output-format").arg("json");
             }
+            Self::Hermes { .. } => {
+                cmd.arg("run");
+            }
             Self::OpenaiCompat { .. } | Self::AntigravityCli { .. } => {}
         }
 
@@ -75,6 +78,9 @@ impl Executor {
                 {
                     cmd.arg("--resume").arg(session_id);
                 }
+                Self::Hermes { .. } => {
+                    cmd.arg("--resume").arg(session_id);
+                }
                 Self::OpenaiCompat { .. } => {} // HTTP-only
                 Self::ClaudeCode { .. } => {}
             }
@@ -89,6 +95,9 @@ impl Executor {
                 Self::Opencode { .. } | Self::Codex { .. } => {
                     cmd.arg(prompt);
                 }
+                Self::Hermes { .. } => {
+                    cmd.arg(prompt);
+                }
                 Self::OpenaiCompat { .. } => {} // HTTP-only
             },
             PromptTransport::Stdin => {
@@ -101,7 +110,10 @@ impl Executor {
                     Self::Codex { .. } if codex_resume => {
                         cmd.arg("-");
                     }
-                    Self::Opencode { .. } | Self::Codex { .. } | Self::OpenaiCompat { .. } => {
+                    Self::Opencode { .. }
+                    | Self::Codex { .. }
+                    | Self::Hermes { .. }
+                    | Self::OpenaiCompat { .. } => {
                         // These tools read from stdin natively without extra flags.
                     }
                 }
@@ -198,6 +210,21 @@ impl Executor {
                     && let Some(level) = budget.claude_effort()
                 {
                     cmd.arg("--effort").arg(level);
+                }
+            }
+            Self::Hermes {
+                provider_override,
+                model_override,
+                thinking_budget,
+            } => {
+                if let Some(provider) = provider_override {
+                    cmd.arg("--provider").arg(provider);
+                }
+                if let Some(model) = model_override {
+                    cmd.arg("--model").arg(model);
+                }
+                if let Some(budget) = thinking_budget {
+                    cmd.arg("--thinking").arg(budget.token_count().to_string());
                 }
             }
             Self::OpenaiCompat { .. } => {} // HTTP-only: model/thinking via API body

@@ -15,8 +15,10 @@ use crate::claude_runtime::{
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
 use crate::install_hints::{
     ANTIGRAVITY_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
-    OPENCODE_INSTALL_HINT,
+    OPENCODE_INSTALL_HINT, HERMES_INSTALL_HINT,
 };
+#[cfg(feature = "acp")]
+use crate::hermes_config::HermesRunConfig;
 use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::session_config::SessionConfig;
@@ -82,6 +84,11 @@ pub enum Executor {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
     },
+    Hermes {
+        provider_override: Option<String>,
+        model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
+    },
     AntigravityCli {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
@@ -103,6 +110,7 @@ impl Executor {
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude-code",
             Self::OpenaiCompat { .. } => "openai-compat",
+            Self::Hermes { .. } => "hermes",
             Self::AntigravityCli { .. } => "antigravity-cli",
         }
     }
@@ -114,6 +122,7 @@ impl Executor {
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude",
             Self::OpenaiCompat { .. } => "openai-compat",
+            Self::Hermes { .. } => "hermes",
             Self::AntigravityCli { .. } => "antigravity",
         }
     }
@@ -129,6 +138,7 @@ impl Executor {
                 runtime_metadata, ..
             } => runtime_metadata.runtime_binary_name(),
             Self::OpenaiCompat { .. } => "openai-compat",
+            Self::Hermes { .. } => "hermes",
             Self::AntigravityCli { .. } => "antigravity",
         }
     }
@@ -144,6 +154,7 @@ impl Executor {
                 runtime_metadata, ..
             } => runtime_metadata.install_hint(),
             Self::OpenaiCompat { .. } => OPENAI_COMPAT_INSTALL_HINT,
+            Self::Hermes { .. } => HERMES_INSTALL_HINT,
             Self::AntigravityCli { .. } => ANTIGRAVITY_CLI_INSTALL_HINT,
         }
     }
@@ -154,7 +165,7 @@ impl Executor {
             Self::Opencode { .. } => &[] as &[&str],
             Self::Codex { .. } => &["--dangerously-bypass-approvals-and-sandbox"],
             Self::ClaudeCode { .. } => &["--dangerously-skip-permissions"],
-            Self::OpenaiCompat { .. } => &[] as &[&str],
+            Self::OpenaiCompat { .. } | Self::Hermes { .. } => &[] as &[&str],
         }
     }
 
@@ -168,9 +179,17 @@ impl Executor {
             "codex" => ToolName::Codex,
             "claude-code" => ToolName::ClaudeCode,
             "openai-compat" => ToolName::OpenaiCompat,
+            "hermes" => ToolName::Hermes,
             "antigravity-cli" => ToolName::AntigravityCli,
             other => anyhow::bail!("Unknown tool '{other}' in model spec"),
         };
+        if matches!(tool, ToolName::Hermes) {
+            return Ok(Self::Hermes {
+                provider_override: Some(spec.provider.clone()),
+                model_override: model,
+                thinking_budget: budget,
+            });
+        }
         Ok(Self::from_tool_name(&tool, model, budget))
     }
 
@@ -204,6 +223,11 @@ impl Executor {
                 model_override: model,
                 thinking_budget,
             },
+            ToolName::Hermes => Self::Hermes {
+                provider_override: None,
+                model_override: model,
+                thinking_budget,
+            },
             ToolName::AntigravityCli => Self::AntigravityCli {
                 model_override: model,
                 thinking_budget,
@@ -229,6 +253,9 @@ impl Executor {
             | Self::OpenaiCompat {
                 thinking_budget, ..
             }
+            | Self::Hermes {
+                thinking_budget, ..
+            }
             | Self::AntigravityCli {
                 thinking_budget, ..
             } => thinking_budget.as_ref(),
@@ -251,6 +278,9 @@ impl Executor {
                 thinking_budget, ..
             }
             | Self::OpenaiCompat {
+                thinking_budget, ..
+            }
+            | Self::Hermes {
                 thinking_budget, ..
             }
             | Self::AntigravityCli {
@@ -288,6 +318,7 @@ impl Executor {
             | Self::Codex { model_override, .. }
             | Self::ClaudeCode { model_override, .. }
             | Self::OpenaiCompat { model_override, .. }
+            | Self::Hermes { model_override, .. }
             | Self::AntigravityCli { model_override, .. } => {
                 *model_override = Some(model);
             }
@@ -503,6 +534,22 @@ impl Executor {
         session_config: Option<SessionConfig>,
     ) -> Result<Box<dyn Transport>> {
         TransportFactory::create(self, session_config)
+    }
+
+    #[cfg(feature = "acp")]
+    pub(crate) fn hermes_run_config(&self) -> Option<HermesRunConfig> {
+        match self {
+            Self::Hermes {
+                provider_override,
+                model_override,
+                thinking_budget,
+            } => Some(HermesRunConfig::new(
+                provider_override.clone(),
+                model_override.clone(),
+                thinking_budget.clone(),
+            )),
+            _ => None,
+        }
     }
 }
 

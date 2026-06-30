@@ -40,7 +40,7 @@ pub enum ModelSpecValidationError {
 }
 
 /// Thinking budget for AI models.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThinkingBudget {
     /// Use the tool's default thinking budget.
     DefaultBudget,
@@ -353,6 +353,12 @@ mod tests {
     fn validate_with_catalog_skips_openai_compat_provider_and_model() {
         let spec = ModelSpec::parse("openai-compat/local/my-fine-tune/medium").unwrap();
         assert!(spec.validate_with_catalog(&["openai-compat"]).is_ok());
+    }
+
+    #[test]
+    fn validate_with_catalog_skips_hermes_provider_and_model() {
+        let spec = ModelSpec::parse("hermes/local/custom-model/xhigh").unwrap();
+        assert!(spec.validate_with_catalog(&["hermes"]).is_ok());
     }
 
     #[test]

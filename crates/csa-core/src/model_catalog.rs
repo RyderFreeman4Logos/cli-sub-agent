@@ -12,6 +12,7 @@ pub fn valid_providers(tool: &str) -> &'static [&'static str] {
         "gemini-cli" => &["google"],
         "opencode" => &["openai", "google", "anthropic"],
         "openai-compat" => &[],
+        "hermes" => &[],
         _ => &[],
     }
 }
@@ -82,18 +83,19 @@ pub fn valid_models(tool: &str, provider: &str) -> &'static [&'static str] {
         ("opencode", "google") => OPENCODE_GOOGLE_MODELS,
         ("opencode", "anthropic") => OPENCODE_ANTHROPIC_MODELS,
         ("openai-compat", _) => &[],
+        ("hermes", _) => &[],
         _ => &[],
     }
 }
 
 /// Whether provider validation is meaningful for this tool.
 pub fn provider_validation_enabled(tool: &str) -> bool {
-    !matches!(tool, "openai-compat")
+    !matches!(tool, "openai-compat" | "hermes")
 }
 
 /// Whether model validation is meaningful for this tool.
 pub fn model_validation_enabled(tool: &str) -> bool {
-    !matches!(tool, "openai-compat")
+    !matches!(tool, "openai-compat" | "hermes")
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ pub const CLAUDE_CODE_CLI_INSTALL_HINT: &str =
     "Install Claude Code CLI and ensure `claude` is on PATH";
 pub const OPENAI_COMPAT_INSTALL_HINT: &str =
     "Configure [tools.openai-compat] with base_url and api_key in config.toml";
+pub const HERMES_INSTALL_HINT: &str = "Install Hermes and ensure `hermes` is on PATH";
 pub const ANTIGRAVITY_CLI_INSTALL_HINT: &str =
     "Install: go install google.dev/antigravity@latest (requires Go 1.22+)";
 
@@ -17,6 +18,7 @@ pub fn install_hint_for_known_tool(tool_name: &str) -> Option<&'static str> {
         "opencode" => Some(OPENCODE_INSTALL_HINT),
         "claude-code" => Some(CLAUDE_CODE_ACP_INSTALL_HINT),
         "openai-compat" => Some(OPENAI_COMPAT_INSTALL_HINT),
+        "hermes" => Some(HERMES_INSTALL_HINT),
         "antigravity-cli" => Some(ANTIGRAVITY_CLI_INSTALL_HINT),
         _ => None,
     }
@@ -43,6 +45,10 @@ mod tests {
         assert_eq!(
             install_hint_for_known_tool("openai-compat"),
             Some(OPENAI_COMPAT_INSTALL_HINT)
+        );
+        assert_eq!(
+            install_hint_for_known_tool("hermes"),
+            Some(HERMES_INSTALL_HINT)
         );
         assert_eq!(install_hint_for_known_tool("codex"), None);
     }

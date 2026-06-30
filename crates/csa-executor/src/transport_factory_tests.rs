@@ -42,6 +42,14 @@ fn make_codex_executor_acp() -> Executor {
     }
 }
 
+fn make_hermes_executor() -> Executor {
+    Executor::Hermes {
+        provider_override: Some("openai".to_string()),
+        model_override: Some("gpt-5.5".to_string()),
+        thinking_budget: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Change 1: default transport flip — explicit Cli routes to Legacy
 // ---------------------------------------------------------------------------
@@ -153,6 +161,27 @@ fn test_mode_for_executor_codex_default_is_legacy() {
         TransportMode::Legacy,
         "default Cli metadata must route to Legacy, not ACP"
     );
+}
+
+#[test]
+#[cfg(feature = "acp")]
+fn test_mode_for_executor_hermes_defaults_to_acp() {
+    let executor = make_hermes_executor();
+    let mode = TransportFactory::mode_for_executor_pub(&executor)
+        .expect("Hermes should use ACP when ACP feature is enabled");
+
+    assert_eq!(mode, TransportMode::Acp);
+}
+
+#[test]
+#[cfg(not(feature = "acp"))]
+fn test_mode_for_executor_hermes_errors_without_acp_feature() {
+    let executor = make_hermes_executor();
+    let error = TransportFactory::mode_for_executor_pub(&executor)
+        .expect_err("Hermes ACP should require the acp feature");
+
+    let message = format!("{error:#}");
+    assert!(message.contains("ACP transport requires"), "{message}");
 }
 
 // ---------------------------------------------------------------------------

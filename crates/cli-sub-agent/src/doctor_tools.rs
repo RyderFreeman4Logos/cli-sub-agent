@@ -192,6 +192,7 @@ fn tool_transport_doctor_status(
     match tool_name {
         "codex" => codex_doctor_status(config),
         "claude-code" => claude_code_doctor_status(config),
+        "hermes" => hermes_doctor_status(),
         _ => None,
     }
 }
@@ -236,6 +237,15 @@ fn claude_code_transport_label(transport: ClaudeCodeTransport) -> &'static str {
         ClaudeCodeTransport::Acp => "acp",
         ClaudeCodeTransport::Tmux => "tmux",
     }
+}
+
+fn hermes_doctor_status() -> Option<ToolTransportDoctorStatus> {
+    Some(ToolTransportDoctorStatus {
+        transport_active: "acp",
+        acp_compiled_in: Some(cfg!(feature = "acp")),
+        probed_binary: "hermes".to_string(),
+        acp_override_hint: None,
+    })
 }
 
 fn yes_no(value: bool) -> &'static str {

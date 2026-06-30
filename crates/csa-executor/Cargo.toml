@@ -25,6 +25,7 @@ tracing-appender.workspace = true
 chrono.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+sha2.workspace = true
 
 [features]
 default = []

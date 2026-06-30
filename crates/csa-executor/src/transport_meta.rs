@@ -19,6 +19,8 @@ use serde_json::{Map, Value, json};
 #[cfg(feature = "acp")]
 use super::AcpTransport;
 #[cfg(feature = "acp")]
+use crate::hermes_config::HermesRunConfig;
+#[cfg(feature = "acp")]
 use crate::lefthook_guard::sanitize_env_map_for_codex;
 #[cfg(feature = "acp")]
 use crate::session_config::SessionConfig;
@@ -106,6 +108,7 @@ impl AcpTransport {
     pub(crate) fn build_session_meta(
         setting_sources: Option<&[String]>,
         session_config: Option<&SessionConfig>,
+        hermes_run_config: Option<&HermesRunConfig>,
     ) -> Option<serde_json::Map<String, serde_json::Value>> {
         let mut options = serde_json::Map::new();
         if let Some(sources) = setting_sources {
@@ -129,18 +132,22 @@ impl AcpTransport {
                 options.insert("mcpServers".to_string(), mcp_servers);
             }
         }
-        if options.is_empty() {
-            return None;
+        let mut meta = serde_json::Map::new();
+        if !options.is_empty() {
+            let mut claude_code = serde_json::Map::new();
+            claude_code.insert("options".to_string(), serde_json::Value::Object(options));
+            meta.insert(
+                "claudeCode".to_string(),
+                serde_json::Value::Object(claude_code),
+            );
+        }
+        if let Some(hermes_options) = hermes_run_config.and_then(HermesRunConfig::meta_options) {
+            let mut hermes = serde_json::Map::new();
+            hermes.insert("options".to_string(), hermes_options);
+            meta.insert("hermes".to_string(), serde_json::Value::Object(hermes));
         }
 
-        let mut claude_code = serde_json::Map::new();
-        claude_code.insert("options".to_string(), serde_json::Value::Object(options));
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            "claudeCode".to_string(),
-            serde_json::Value::Object(claude_code),
-        );
-        Some(meta)
+        (!meta.is_empty()).then_some(meta)
     }
 
     pub(crate) fn build_env(

@@ -17,6 +17,7 @@ pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
         "openai-compat" => Ok(ToolName::OpenaiCompat),
+        "hermes" => Ok(ToolName::Hermes),
         "antigravity-cli" => Ok(ToolName::AntigravityCli),
         _ => anyhow::bail!("Unknown tool: {name}"),
     }

@@ -84,6 +84,7 @@ impl TransportFactory {
     pub fn mode_for_tool(tool_name: &str) -> TransportMode {
         match tool_name {
             "claude-code" => TransportMode::Acp,
+            "hermes" => TransportMode::Acp,
             "openai-compat" => TransportMode::OpenaiCompat,
             _ => TransportMode::Legacy,
         }
@@ -229,6 +230,17 @@ impl TransportFactory {
                 err("openai-compat does not support tmux transport")
             }
 
+            // Hermes: ACP-backed adapter only.
+            #[cfg(feature = "acp")]
+            (Executor::Hermes { .. }, TransportMode::Acp) => Ok(()),
+            (Executor::Hermes { .. }, TransportMode::Legacy) => {
+                err("hermes currently supports acp transport only")
+            }
+            (Executor::Hermes { .. }, TransportMode::OpenaiCompat)
+            | (Executor::Hermes { .. }, TransportMode::Tmux) => {
+                err("hermes only supports acp transport")
+            }
+
             // AntigravityCli: Legacy and ACP (same as gemini-cli)
             (Executor::AntigravityCli { .. }, TransportMode::Legacy) => Ok(()),
             #[cfg(feature = "acp")]
@@ -323,6 +335,7 @@ impl TransportFactory {
                         executor.tool_name(),
                         session_config,
                         executor.codex_fast_mode_enabled(),
+                        executor.hermes_run_config(),
                     )))
                 }
             }
