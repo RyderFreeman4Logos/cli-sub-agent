@@ -141,6 +141,7 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
         build_jobs: None,
         fast_but_more_cost: false,
         no_fs_sandbox: true,
+        allow_user_daemon_ipc: false,
         error_marker_scan_override: None,
         resource_overrides: crate::run_resource_overrides::RunResourceOverrides::default(),
         extra_writable: &[],

@@ -122,11 +122,34 @@ impl Drop for AntigravitySettingsGuard {
 /// Known antigravity-cli model display names mapped to their slug aliases.
 /// Users can pass either the exact display name or a slug-style alias (#2347).
 const KNOWN_MODEL_ALIASES: &[(&str, &[&str])] = &[
-    ("Gemini 3.1 Pro (High)", &["gemini-3.1-pro-high", "gemini-3.1-pro", "gemini-pro-high"]),
-    ("Gemini 3.1 Pro (Preview)", &["gemini-3.1-pro-preview", "gemini-pro-preview"]),
-    ("Gemini 3.5 Flash (High)", &["gemini-3.5-flash-high", "gemini-3.5-flash", "gemini-flash-high"]),
-    ("Claude Opus 4.6 (Thinking)", &["claude-opus-4.6-thinking", "opus-thinking", "claude-opus-thinking"]),
-    ("Claude Sonnet 4.5", &["claude-sonnet-4.5", "sonnet-4.5", "claude-sonnet"]),
+    (
+        "Gemini 3.1 Pro (High)",
+        &["gemini-3.1-pro-high", "gemini-3.1-pro", "gemini-pro-high"],
+    ),
+    (
+        "Gemini 3.1 Pro (Preview)",
+        &["gemini-3.1-pro-preview", "gemini-pro-preview"],
+    ),
+    (
+        "Gemini 3.5 Flash (High)",
+        &[
+            "gemini-3.5-flash-high",
+            "gemini-3.5-flash",
+            "gemini-flash-high",
+        ],
+    ),
+    (
+        "Claude Opus 4.6 (Thinking)",
+        &[
+            "claude-opus-4.6-thinking",
+            "opus-thinking",
+            "claude-opus-thinking",
+        ],
+    ),
+    (
+        "Claude Sonnet 4.5",
+        &["claude-sonnet-4.5", "sonnet-4.5", "claude-sonnet"],
+    ),
 ];
 
 /// Normalize a user-provided model name: if it matches a known slug alias,
@@ -343,20 +366,38 @@ mod tests {
     }
 }
 
-    #[test]
-    fn issue_2347_normalize_model_alias_resolves_slugs() {
-        assert_eq!(normalize_model_alias("gemini-3.1-pro-high"), "Gemini 3.1 Pro (High)");
-        assert_eq!(normalize_model_alias("gemini-3.5-flash"), "Gemini 3.5 Flash (High)");
-        assert_eq!(normalize_model_alias("opus-thinking"), "Claude Opus 4.6 (Thinking)");
-    }
+#[test]
+fn issue_2347_normalize_model_alias_resolves_slugs() {
+    assert_eq!(
+        normalize_model_alias("gemini-3.1-pro-high"),
+        "Gemini 3.1 Pro (High)"
+    );
+    assert_eq!(
+        normalize_model_alias("gemini-3.5-flash"),
+        "Gemini 3.5 Flash (High)"
+    );
+    assert_eq!(
+        normalize_model_alias("opus-thinking"),
+        "Claude Opus 4.6 (Thinking)"
+    );
+}
 
-    #[test]
-    fn issue_2347_normalize_model_alias_preserves_display_names() {
-        assert_eq!(normalize_model_alias("Gemini 3.1 Pro (High)"), "Gemini 3.1 Pro (High)");
-        assert_eq!(normalize_model_alias("claude opus 4.6 (thinking)"), "Claude Opus 4.6 (Thinking)");
-    }
+#[test]
+fn issue_2347_normalize_model_alias_preserves_display_names() {
+    assert_eq!(
+        normalize_model_alias("Gemini 3.1 Pro (High)"),
+        "Gemini 3.1 Pro (High)"
+    );
+    assert_eq!(
+        normalize_model_alias("claude opus 4.6 (thinking)"),
+        "Claude Opus 4.6 (Thinking)"
+    );
+}
 
-    #[test]
-    fn issue_2347_normalize_model_alias_passes_through_unknown() {
-        assert_eq!(normalize_model_alias("some-custom-model"), "some-custom-model");
-    }
+#[test]
+fn issue_2347_normalize_model_alias_passes_through_unknown() {
+    assert_eq!(
+        normalize_model_alias("some-custom-model"),
+        "some-custom-model"
+    );
+}

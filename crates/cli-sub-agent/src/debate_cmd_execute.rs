@@ -180,6 +180,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 crate::pipeline::SessionCreationMode::DaemonManaged,
                 request.args.resource_overrides(),
                 request.args.no_fs_sandbox,
+                false,
                 request.readonly_project_root,
                 &request.args.extra_writable,
                 &request.args.extra_readable,

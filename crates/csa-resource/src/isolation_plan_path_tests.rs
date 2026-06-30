@@ -125,7 +125,7 @@ fn test_xdg_runtime_child_helper_keeps_run_user_scope_narrow() {
 }
 
 #[test]
-fn test_runtime_writable_child_exposes_user_daemon_sockets_readonly() {
+fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
     let _guard = ENV_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_root = tmp.path().join("run/user/1001");
@@ -141,15 +141,16 @@ fn test_runtime_writable_child_exposes_user_daemon_sockets_readonly() {
     let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
         .with_filesystem_capability(FilesystemCapability::Bwrap)
         .with_writable_path(runtime_child)
+        .with_user_daemon_ipc()
         .build()
-        .expect("runtime child scope should build");
+        .expect("runtime child scope with user_daemon_ipc should build");
 
     assert!(plan.readable_paths.contains(&bus_socket));
     assert!(plan.readable_paths.contains(&systemd_socket));
 }
 
 #[test]
-fn test_user_daemon_sockets_not_exposed_without_runtime_writable_child() {
+fn test_daemon_sockets_not_exposed_without_user_daemon_ipc() {
     let _guard = ENV_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().expect("tempdir");
     let runtime_root = tmp.path().join("run/user/1001");

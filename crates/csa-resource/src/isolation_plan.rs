@@ -73,6 +73,15 @@ pub struct IsolationPlan {
     pub soft_limit_percent: Option<u8>,
     /// Polling interval for the memory monitor in seconds.
     pub memory_monitor_interval_seconds: Option<u64>,
+    /// When true, the sandbox exposes D-Bus user bus and systemd private socket
+    /// as readable paths, allowing the sandboxed process to communicate with
+    /// the user session daemon manager (#2404).
+    ///
+    /// This is a named capability — it must be explicitly requested via
+    /// [`IsolationPlanBuilder::with_user_daemon_ipc`]. The implicit auto-detection
+    /// based on writable runtime children has been removed in favor of this
+    /// explicit opt-in.
+    pub user_daemon_ipc: bool,
 }
 
 impl IsolationPlan {
@@ -116,6 +125,7 @@ pub struct IsolationPlanBuilder {
     project_root: Option<PathBuf>,
     soft_limit_percent: Option<u8>,
     memory_monitor_interval_seconds: Option<u64>,
+    user_daemon_ipc: bool,
     required_writable_dirs: Vec<codex_paths::RequiredWritableDir>,
 }
 
@@ -138,6 +148,7 @@ impl IsolationPlanBuilder {
             project_root: None,
             soft_limit_percent: None,
             memory_monitor_interval_seconds: None,
+            user_daemon_ipc: false,
             required_writable_dirs: Vec::new(),
         }
     }
@@ -207,6 +218,21 @@ impl IsolationPlanBuilder {
     /// Set the memory monitor polling interval in seconds.
     pub fn with_memory_monitor_interval(mut self, seconds: Option<u64>) -> Self {
         self.memory_monitor_interval_seconds = seconds;
+        self
+    }
+
+    /// Enable the `user-daemon-ipc` named sandbox capability (#2404).
+    ///
+    /// When enabled, the sandbox exposes the D-Bus user bus socket
+    /// (`$XDG_RUNTIME_DIR/bus`) and systemd private socket
+    /// (`$XDG_RUNTIME_DIR/systemd/private`) as readable paths, allowing
+    /// the sandboxed process to communicate with the user session daemon
+    /// manager (e.g. for `systemctl --user restart`).
+    ///
+    /// This capability MUST be explicitly requested — it is never auto-detected.
+    /// Usage should be recorded in session audit artifacts.
+    pub fn with_user_daemon_ipc(mut self) -> Self {
+        self.user_daemon_ipc = true;
         self
     }
 
@@ -460,6 +486,7 @@ impl IsolationPlanBuilder {
             project_root: self.project_root,
             soft_limit_percent: self.soft_limit_percent,
             memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
+            user_daemon_ipc: self.user_daemon_ipc,
         })
     }
 
@@ -467,12 +494,14 @@ impl IsolationPlanBuilder {
         if self.filesystem != FilesystemCapability::Bwrap {
             return;
         }
+        // #2404: D-Bus socket exposure is now an explicit named capability,
+        // not an implicit side-effect of having writable runtime children.
+        if !self.user_daemon_ipc {
+            return;
+        }
         let Some(runtime_root) = runtime_path::xdg_runtime_root() else {
             return;
         };
-        if !self.has_writable_runtime_child(&runtime_root) {
-            return;
-        }
 
         for socket_path in runtime_daemon_socket_paths(&runtime_root) {
             if !socket_path.exists() || self.path_already_exposed(&socket_path) {
@@ -482,6 +511,7 @@ impl IsolationPlanBuilder {
         }
     }
 
+    #[allow(dead_code)]
     fn has_writable_runtime_child(&self, runtime_root: &Path) -> bool {
         self.writable_paths.iter().any(|path| {
             let comparable = runtime_path::canonicalize_or_fallback(path);
@@ -567,6 +597,30 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
         }
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod issue_2404_tests {
+    use super::*;
+
+    #[test]
+    fn issue_2404_user_daemon_ipc_disabled_by_default() {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .build()
+            .expect("build should succeed in BestEffort mode");
+        assert!(!plan.user_daemon_ipc);
+    }
+
+    #[test]
+    fn issue_2404_user_daemon_ipc_enabled_via_builder() {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_user_daemon_ipc()
+            .build()
+            .expect("build should succeed in BestEffort mode");
+        assert!(plan.user_daemon_ipc);
     }
 }
 

@@ -249,5 +249,4 @@ model:
         // OpenAI falls back to default 540 < 3000 → not clamped
         assert_eq!(provider_ttl(ModelProvider::OpenAI, &config), 540);
     }
-
 }

@@ -9,6 +9,7 @@ use csa_session::{
     FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity,
     write_findings_toml,
 };
+use std::collections::HashMap;
 use tempfile::TempDir;
 
 #[cfg(unix)]

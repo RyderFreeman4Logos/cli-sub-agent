@@ -210,6 +210,7 @@ async fn fix_finding_2348_harness_covers_env_identity_amend_and_residual_gate() 
             liveness_dead_seconds: 600,
             initial_response_timeout_seconds: Some(120),
             no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
             readonly_project_root: false,
             extra_writable: &[],
             extra_readable: &[],

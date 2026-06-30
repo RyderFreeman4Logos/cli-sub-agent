@@ -139,6 +139,7 @@ mod tests {
             tier: None,
             force_ignore_tier_setting: false,
             no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
             extra_writable: vec![],
             extra_readable: vec![],
             prompt: None,

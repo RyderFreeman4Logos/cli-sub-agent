@@ -250,6 +250,7 @@ mod tests {
             project_root: None,
             soft_limit_percent,
             memory_monitor_interval_seconds: None,
+            user_daemon_ipc: false,
         }
     }
 

@@ -82,6 +82,7 @@ fn test_bwrap_from_isolation_plan_bwrap() {
         project_root: None,
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     };
 
     let result = from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]);
@@ -109,6 +110,7 @@ fn test_bwrap_from_isolation_plan_none() {
         project_root: None,
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     };
 
     let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]);
@@ -230,6 +232,7 @@ fn test_bwrap_from_isolation_plan_sets_tmpdir_override() {
         project_root: Some(PathBuf::from("/project")),
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     };
 
     let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
@@ -278,6 +281,7 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
         project_root: Some(PathBuf::from("/project")),
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     };
 
     let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
@@ -322,6 +326,7 @@ fn test_bwrap_readonly_project_root() {
         project_root: Some(PathBuf::from("/project")),
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     };
 
     let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");

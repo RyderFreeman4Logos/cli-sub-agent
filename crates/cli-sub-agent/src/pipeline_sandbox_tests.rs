@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::test_env_lock::TEST_ENV_LOCK;
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 
 /// Helper: parse a TOML string into a ProjectConfig for test setup.
 fn parse_project_config(toml_str: &str) -> csa_config::ProjectConfig {
@@ -60,6 +60,104 @@ fn test_filesystem_sandbox_active_helper() {
     assert!(filesystem_sandbox_active(Some(&active)));
     assert!(!filesystem_sandbox_active(None));
     assert!(!filesystem_sandbox_active(Some(&inactive)));
+}
+
+#[test]
+fn user_daemon_ipc_audit_artifact_records_capability() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let runtime_dir = tmp.path().join("runtime");
+    let systemd_dir = runtime_dir.join("systemd");
+    std::fs::create_dir_all(&systemd_dir).expect("systemd dir");
+    let bus_socket = runtime_dir.join("bus");
+    let systemd_socket = systemd_dir.join("private");
+    std::fs::write(&bus_socket, "").expect("bus socket placeholder");
+    std::fs::write(&systemd_socket, "").expect("systemd socket placeholder");
+    let _runtime_guard = ScopedEnvVarRestore::set("XDG_RUNTIME_DIR", &runtime_dir);
+    let plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(csa_resource::FilesystemCapability::Bwrap)
+    .with_readable_path(bus_socket.clone())
+    .with_readable_path(systemd_socket.clone())
+    .with_user_daemon_ipc()
+    .build()
+    .expect("test isolation plan");
+
+    let session_dir = tmp.path().join("session");
+    write_user_daemon_ipc_audit_artifact(&session_dir, &plan).expect("audit artifact write");
+
+    let raw = std::fs::read_to_string(
+        session_dir
+            .join("output")
+            .join("sandbox-capability-audit.json"),
+    )
+    .expect("audit artifact");
+    let value: serde_json::Value = serde_json::from_str(&raw).expect("audit json");
+    assert_eq!(value["capability"], "user-daemon-ipc");
+    assert_eq!(
+        value["reason"],
+        "verification session requested user daemon restart capability"
+    );
+    assert!(value["timestamp"].as_str().is_some_and(|s| !s.is_empty()));
+    let exposed_paths = value["exposed_paths"]
+        .as_array()
+        .expect("exposed_paths array");
+    assert_eq!(exposed_paths.len(), 2);
+    let bus_socket = bus_socket.display().to_string();
+    let systemd_socket = systemd_socket.display().to_string();
+    assert!(
+        exposed_paths
+            .iter()
+            .any(|path| path.as_str() == Some(bus_socket.as_str()))
+    );
+    assert!(
+        exposed_paths
+            .iter()
+            .any(|path| path.as_str() == Some(systemd_socket.as_str()))
+    );
+}
+
+#[test]
+fn sandbox_resolver_applies_user_daemon_ipc_capability() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_sandbox_options_with_overrides(
+        SandboxResolveInput {
+            config: Some(&cfg),
+            tool_name: "codex",
+            session_id: "test-session",
+            project_root: project_root.path(),
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: true,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: None,
+        },
+        RunResourceOverrides::default(),
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    assert!(sandbox.isolation_plan.user_daemon_ipc);
+    let audit_path = resolve_session_dir_for_sandbox(project_root.path(), "test-session")
+        .join("output")
+        .join("sandbox-capability-audit.json");
+    assert!(audit_path.is_file(), "audit artifact should be written");
 }
 
 #[test]

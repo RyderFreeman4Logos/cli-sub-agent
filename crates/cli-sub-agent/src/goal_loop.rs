@@ -109,6 +109,7 @@ pub(crate) struct GoalRunRequest {
     pub(crate) tier: Option<String>,
     pub(crate) force_ignore_tier_setting: bool,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) allow_user_daemon_ipc: bool,
     /// Resolved CLI override for the #1652 fatal-error-marker silent-hang scan
     /// (#1745): `Some(true)` force-enables, `Some(false)` force-disables, `None`
     /// defers to the `CSA_PATTERN_INTERNAL` marker default then config (#1847).
@@ -193,6 +194,7 @@ pub(crate) async fn handle_run_or_goal(request: GoalRunRequest) -> Result<i32> {
         request.tier,
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
+        request.allow_user_daemon_ipc,
         request.error_marker_scan_override,
         request.no_hook_bypass_scan,
         request.no_preflight,
@@ -359,6 +361,7 @@ async fn run_goal_iteration(
         request.tier.clone(),
         request.force_ignore_tier_setting,
         request.no_fs_sandbox,
+        request.allow_user_daemon_ipc,
         request.error_marker_scan_override,
         request.no_hook_bypass_scan,
         request.no_preflight,

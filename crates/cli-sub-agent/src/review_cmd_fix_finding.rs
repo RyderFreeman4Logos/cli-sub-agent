@@ -134,6 +134,7 @@ pub(crate) async fn handle_fix_finding(
         args.fast_but_more_cost,
         false,
         args.no_fs_sandbox,
+        args.allow_user_daemon_ipc,
         false,
         &args.extra_writable,
         &args.extra_readable,
