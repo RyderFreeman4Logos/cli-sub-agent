@@ -282,6 +282,40 @@ fn session_result_lookup_miss_uses_exact_id_registry_loss_without_list_hint() {
     assert!(!stderr.contains("csa session list"), "{stderr}");
 }
 
+#[test]
+fn session_wait_lookup_miss_reports_structured_gc_pruned_registry_loss() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project");
+    let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FBG";
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "session",
+            "wait",
+            "--session",
+            session_id,
+            "--cd",
+            project.to_str().expect("utf-8 project path"),
+        ])
+        .output()
+        .expect("run csa session wait");
+
+    assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("CSA:SESSION_REGISTRY_LOSS"), "{stderr}");
+    assert!(stderr.contains("reason=lookup_miss_or_gc"), "{stderr}");
+    assert!(
+        stderr.contains("whole session") || stderr.contains("whole-session"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("result.toml was inside the removed session directory"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("csa session list"), "{stderr}");
+}
+
 #[cfg(unix)]
 #[test]
 fn session_wait_classifies_corrupt_state_as_registry_loss() {

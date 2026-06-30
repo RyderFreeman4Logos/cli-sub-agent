@@ -124,6 +124,99 @@ fn handle_session_wait_kv_warm_exit_when_daemon_alive_at_cap() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-kv-warm-then-retired-result"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn child");
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(child.id()),
+    )
+    .expect("write daemon pid");
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let first_exit = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("KV-warm alive path must not emit completion")
+        },
+    )
+    .expect("first wait should return KV-warm");
+    assert_eq!(first_exit, 0);
+
+    save_result(project, &session_id, &make_result("success", 0)).expect("save terminal result");
+    let mut retired = load_session(project, &session_id).expect("load session");
+    retired.phase = SessionPhase::Retired;
+    save_session(&retired).expect("save retired state");
+
+    let mut completed_signal = None;
+    let second_exit = handle_session_wait_with_hooks(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            panic!("retired session with result must not be reconciled")
+        },
+        |sid, status, exit_code, synthetic, _mirror_to_stdout| {
+            completed_signal = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        },
+    )
+    .expect("second wait should return retired result");
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(second_exit, 0);
+    assert_eq!(
+        completed_signal,
+        Some((session_id, "success".to_string(), 0, false)),
+        "Retired registry phase must make result.toml authoritative over lingering liveness"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn handle_session_wait_kv_warm_after_registry_state_loss_with_metadata_fallback() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

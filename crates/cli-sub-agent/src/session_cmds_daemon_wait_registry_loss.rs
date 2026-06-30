@@ -8,6 +8,11 @@ pub(super) fn session_registry_state_loss(
     session_dir.is_dir() && csa_session::load_session(project_root, session_id).is_err()
 }
 
+pub(super) fn session_registry_phase_retired(project_root: &Path, session_id: &str) -> bool {
+    csa_session::load_session(project_root, session_id)
+        .is_ok_and(|session| matches!(session.phase, csa_session::SessionPhase::Retired))
+}
+
 pub(super) fn emit_registry_state_loss_or_missing_result(
     project_root: &Path,
     session_id: &str,
