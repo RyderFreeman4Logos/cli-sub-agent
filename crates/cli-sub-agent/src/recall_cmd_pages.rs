@@ -5,6 +5,8 @@ use std::path::Path;
 
 /// Heading suffix that xurl-core renders for compact timeline entries.
 const COMPACT_HEADING_SUFFIX: &str = "Context Compacted";
+/// Hard cap for a rendered recall page after compact-boundary splitting.
+pub(crate) const PAGE_HARD_CAP_BYTES: usize = 48 * 1024;
 
 /// Returns true if `line` is a rendered compact heading of the form `## N. Context Compacted`.
 pub(super) fn is_compact_heading(line: &str) -> bool {
@@ -35,6 +37,56 @@ pub(crate) fn split_markdown_pages(content: &str) -> Vec<String> {
         }
     }
     pages.push(content[current_start..].to_string());
+    pages
+}
+
+/// Splits rendered markdown at compact boundaries, then byte-caps each page.
+///
+/// The compact split preserves semantic pages for normal sessions. The byte cap
+/// is a fallback for large sessions without compaction events, so `--page N`
+/// cannot expand into an unbounded stdout dump.
+pub(crate) fn split_markdown_pages_bounded(content: &str) -> Vec<String> {
+    let mut bounded = Vec::new();
+    for page in split_markdown_pages(content) {
+        bounded.extend(split_page_by_byte_cap(&page, PAGE_HARD_CAP_BYTES));
+    }
+    bounded
+}
+
+fn split_page_by_byte_cap(content: &str, max_bytes: usize) -> Vec<String> {
+    if content.len() <= max_bytes || max_bytes == 0 {
+        return vec![content.to_string()];
+    }
+
+    let mut pages = Vec::new();
+    let mut start = 0usize;
+    while start < content.len() {
+        let mut end = (start + max_bytes).min(content.len());
+        if end < content.len() {
+            while end > start && !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            let window = &content[start..end];
+            let newline_end = window
+                .rfind('\n')
+                .filter(|pos| *pos >= max_bytes / 2)
+                .map(|pos| start + pos + 1);
+            if let Some(candidate) = newline_end {
+                end = candidate;
+            } else {
+                if end == start {
+                    end = content[start..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(offset, _)| start + offset)
+                        .unwrap_or(content.len());
+                }
+            }
+        }
+
+        pages.push(content[start..end].to_string());
+        start = end;
+    }
     pages
 }
 
@@ -205,6 +257,37 @@ mod tests {
         assert!(!pages[0].contains("Context Compacted"));
         assert!(pages[1].starts_with("## 2. Context Compacted"));
         assert!(pages[2].starts_with("## 4. Context Compacted"));
+    }
+
+    #[test]
+    fn split_markdown_pages_bounded_caps_uncompacted_large_page() {
+        let content = format!("# Thread\n\n{}\n", "x".repeat(PAGE_HARD_CAP_BYTES * 2 + 17));
+        let pages = split_markdown_pages_bounded(&content);
+
+        assert!(
+            pages.len() >= 3,
+            "large uncompacted content should split into bounded pages"
+        );
+        assert!(
+            pages.iter().all(|page| page.len() <= PAGE_HARD_CAP_BYTES),
+            "every page must stay under hard cap"
+        );
+        assert_eq!(pages.concat(), content);
+    }
+
+    #[test]
+    fn split_markdown_pages_bounded_preserves_utf8_boundaries() {
+        let content = "α".repeat(PAGE_HARD_CAP_BYTES);
+        let pages = split_page_by_byte_cap(&content, PAGE_HARD_CAP_BYTES - 1);
+
+        assert!(pages.len() > 1);
+        assert_eq!(pages.concat(), content);
+        assert!(
+            pages
+                .iter()
+                .all(|page| page.len() <= PAGE_HARD_CAP_BYTES - 1),
+            "page split must not exceed cap even for multibyte text"
+        );
     }
 
     #[test]

@@ -142,14 +142,36 @@ fn handle_recall(args: RecallDispatch) -> Result<()> {
             hermes_profile,
         });
     }
-    if let Some(provider) = provider {
-        anyhow::bail!(
-            "csa xurl recall --provider currently supports only 'hermes'; got '{provider}'"
-        );
-    }
     if cwd.is_some() || hermes_home.is_some() || hermes_profile.is_some() {
         anyhow::bail!("--cwd/--hermes-home/--hermes-profile require --provider hermes");
     }
+
+    let provider = provider
+        .as_deref()
+        .map(crate::cli::parse_provider)
+        .transpose()?;
+    if let Some(provider) = provider {
+        if provider != xurl_core::ProviderKind::Codex {
+            anyhow::bail!(
+                "csa xurl recall --provider currently supports 'hermes' and 'codex'; got '{provider}'"
+            );
+        }
+        if list {
+            return recall_cmd::handle_recall_list_for_provider_cmd(provider, limit, all);
+        }
+        if let Some(kw) = keyword {
+            return recall_cmd::handle_recall_keyword_for_provider(
+                provider,
+                &kw,
+                session.as_deref(),
+                all,
+                limit,
+            );
+        }
+        let sid = session.as_deref().unwrap_or("latest");
+        return recall_cmd::handle_recall_read_for_provider_cmd(provider, sid, page);
+    }
+
     if list {
         return recall_cmd::handle_recall_list_cmd(limit, all);
     }

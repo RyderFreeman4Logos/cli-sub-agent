@@ -62,12 +62,12 @@ pub enum XurlCommands {
         ///
         /// Combined with `--keyword`, restricts the keyword search to this
         /// session instead of scanning all recorded sessions.
-        #[arg(long, conflicts_with_all = ["page", "list"])]
+        #[arg(long, conflicts_with = "list")]
         session: Option<String>,
 
-        /// Render compact page N of the latest session (newest-first).
+        /// Render compact page N of the selected or latest session (newest-first).
         /// Page 0 = current page, 1 = previous, etc.
-        #[arg(long, conflicts_with_all = ["keyword", "session", "list"])]
+        #[arg(long, conflicts_with_all = ["keyword", "list"])]
         page: Option<u32>,
 
         /// List recorded sessions instead of reading or searching.
@@ -82,7 +82,7 @@ pub enum XurlCommands {
         #[arg(long, default_value = "10")]
         limit: usize,
 
-        /// Provider-specific recall backend. Currently supports `hermes`.
+        /// Provider-specific recall backend. Currently supports `hermes` and `codex`.
         #[arg(long)]
         provider: Option<String>,
 
@@ -109,7 +109,7 @@ const ALL_PROVIDERS: &[xurl_core::ProviderKind] = &[
     xurl_core::ProviderKind::Pi,
 ];
 
-fn parse_provider(s: &str) -> Result<xurl_core::ProviderKind> {
+pub(crate) fn parse_provider(s: &str) -> Result<xurl_core::ProviderKind> {
     match s.to_ascii_lowercase().as_str() {
         "amp" => Ok(xurl_core::ProviderKind::Amp),
         "codex" => Ok(xurl_core::ProviderKind::Codex),
