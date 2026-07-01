@@ -318,9 +318,11 @@ pub(crate) fn evaluate_post_run_commit_guard(
         return None;
     }
 
+    let head_changed = before.head != after.head;
     Some(PostRunCommitGuard {
         workspace_mutated,
-        head_changed: before.head != after.head,
+        head_changed,
+        // Set by the caller after checking whether the child attempted git commit.
         head_externally_raced: false,
         changed_paths: changed_paths_from_status(&after.status, 8),
     })

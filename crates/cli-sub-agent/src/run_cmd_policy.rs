@@ -74,6 +74,8 @@ pub(crate) fn apply_post_run_commit_policy(
 
     let commit_ref_update_failed =
         git_commit_attempted && commit_guard.workspace_mutated && !commit_guard.head_changed;
+    // #2556/#2557: HEAD changed without a child git commit, so another
+    // process moved the worktree during the session.
     let head_externally_raced =
         commit_guard.head_changed && !git_commit_attempted && commit_guard.workspace_mutated;
     let enforce_closed_policy = commit_guard.workspace_mutated
