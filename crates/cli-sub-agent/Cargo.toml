@@ -57,7 +57,7 @@ proptest = "1"
 serial_test = "3.4"
 
 [features]
-default = []
+default = ["acp"]
 acp = ["dep:csa-acp", "csa-executor/acp"]
 codex-acp = ["csa-config/codex-acp", "csa-executor/codex-acp"]
 codex-pty-fork = ["csa-executor/codex-pty-fork"]
