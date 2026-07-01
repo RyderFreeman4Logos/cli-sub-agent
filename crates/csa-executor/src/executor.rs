@@ -13,12 +13,12 @@ use crate::claude_runtime::{
     ClaudeCodeRuntimeMetadata, ClaudeCodeTransport, claude_runtime_metadata,
 };
 use crate::codex_runtime::{CodexRuntimeMetadata, CodexTransport, codex_runtime_metadata};
-use crate::install_hints::{
-    ANTIGRAVITY_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, OPENAI_COMPAT_INSTALL_HINT,
-    OPENCODE_INSTALL_HINT, HERMES_INSTALL_HINT,
-};
 #[cfg(feature = "acp")]
 use crate::hermes_config::HermesRunConfig;
+use crate::install_hints::{
+    ANTIGRAVITY_CLI_INSTALL_HINT, GEMINI_CLI_INSTALL_HINT, HERMES_INSTALL_HINT,
+    OPENAI_COMPAT_INSTALL_HINT, OPENCODE_INSTALL_HINT,
+};
 use crate::lefthook_guard::{sanitize_args_for_codex, sanitize_env_for_codex};
 use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::session_config::SessionConfig;

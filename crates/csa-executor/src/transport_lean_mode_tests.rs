@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::AcpTransport;
-use crate::{AcpMcpServerConfig as McpServerConfig, HermesRunConfig, SessionConfig};
 use crate::model_spec::ThinkingBudget;
+use crate::{AcpMcpServerConfig as McpServerConfig, HermesRunConfig, SessionConfig};
 use std::collections::HashMap;
 
 #[test]

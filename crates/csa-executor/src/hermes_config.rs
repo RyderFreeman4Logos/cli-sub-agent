@@ -33,11 +33,7 @@ impl HermesRunConfig {
         }
     }
 
-    pub fn from_model_spec(
-        provider: String,
-        model: String,
-        thinking: ThinkingBudget,
-    ) -> Self {
+    pub fn from_model_spec(provider: String, model: String, thinking: ThinkingBudget) -> Self {
         Self::new(Some(provider), Some(model), Some(thinking))
     }
 

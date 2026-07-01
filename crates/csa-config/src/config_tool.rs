@@ -333,10 +333,7 @@ transport = "cli"
             config.resolve_transport("gemini-cli"),
             Some(TransportKind::Cli)
         );
-        assert_eq!(
-            config.resolve_transport("hermes"),
-            Some(TransportKind::Acp)
-        );
+        assert_eq!(config.resolve_transport("hermes"), Some(TransportKind::Acp));
     }
 
     #[test]
@@ -349,10 +346,7 @@ transport = "cli"
             config.resolve_transport("opencode"),
             Some(TransportKind::Cli)
         );
-        assert_eq!(
-            config.resolve_transport("hermes"),
-            Some(TransportKind::Acp)
-        );
+        assert_eq!(config.resolve_transport("hermes"), Some(TransportKind::Acp));
     }
 
     /// Mirrors `test_resolve_transport_claude_code_cli_round_trips` for codex.
