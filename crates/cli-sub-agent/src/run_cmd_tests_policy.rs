@@ -415,7 +415,7 @@ fn apply_post_run_commit_policy_warns_when_commit_reflog_raced_without_dirty_gua
         peak_memory_mb: None,
         ..Default::default()
     };
-    let race = CommitReflogRace {
+    let race = crate::run_cmd::git::CommitReflogRace {
         created_commit: "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddddddd".to_string(),
         current_head: "11111111111122222222222233333333333344444444".to_string(),
     };
