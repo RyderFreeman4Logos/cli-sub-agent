@@ -23,6 +23,12 @@ pub(crate) struct PostRunCommitGuard {
     pub(crate) changed_paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommitReflogRace {
+    pub(crate) created_commit: String,
+    pub(crate) current_head: String,
+}
+
 pub(crate) fn capture_git_workspace_snapshot(
     project_root: &Path,
     deep_fingerprint: bool,
@@ -100,6 +106,41 @@ pub(crate) fn attempt_rescue_commit(project_root: &Path, tool_name: &str) -> Opt
     run_git_capture(project_root, &["rev-parse", "HEAD"]).map(|head| head.trim().to_string())
 }
 
+pub(crate) fn detect_external_checkout_after_commit(
+    project_root: &Path,
+    current_head: Option<&str>,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Option<CommitReflogRace> {
+    let current_head = current_head?.trim();
+    if current_head.is_empty() {
+        return None;
+    }
+
+    let reflog = run_git_capture(
+        project_root,
+        &["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs", "HEAD"],
+    )?;
+    let since_secs = since.timestamp();
+    for line in reflog.lines() {
+        let entry = parse_head_reflog_entry(line)?;
+        if entry.timestamp_secs < since_secs {
+            break;
+        }
+        if !entry.subject.starts_with("commit") {
+            continue;
+        }
+        if entry.commit == current_head {
+            return None;
+        }
+        return Some(CommitReflogRace {
+            created_commit: entry.commit.to_string(),
+            current_head: current_head.to_string(),
+        });
+    }
+
+    None
+}
+
 fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -111,6 +152,31 @@ fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+struct HeadReflogEntry<'a> {
+    commit: &'a str,
+    timestamp_secs: i64,
+    subject: &'a str,
+}
+
+fn parse_head_reflog_entry(line: &str) -> Option<HeadReflogEntry<'_>> {
+    let mut parts = line.splitn(3, '\0');
+    let commit = parts.next()?.trim();
+    let selector = parts.next()?.trim();
+    let subject = parts.next()?.trim();
+    let timestamp_secs = parse_unix_reflog_selector_timestamp_secs(selector)?;
+    Some(HeadReflogEntry {
+        commit,
+        timestamp_secs,
+        subject,
+    })
+}
+
+fn parse_unix_reflog_selector_timestamp_secs(selector: &str) -> Option<i64> {
+    let selector = selector.trim().strip_suffix('}')?;
+    let (_, timestamp_secs) = selector.rsplit_once("@{")?;
+    timestamp_secs.parse().ok()
 }
 
 fn run_git_capture_with_paths(
@@ -440,5 +506,35 @@ mod tests {
 
         assert!(attempt_rescue_commit(project_root, "codex").is_none());
         assert!(run_git_capture(project_root, &["rev-parse", "HEAD"]).is_none());
+    }
+
+    #[test]
+    fn external_checkout_after_commit_is_detected_from_head_reflog() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        init_git_repo(project_root);
+        let primary_branch = run_git_capture(project_root, &["branch", "--show-current"])
+            .expect("current branch")
+            .trim()
+            .to_string();
+
+        run_git(project_root, &["checkout", "-q", "-b", "other"]);
+        std::fs::write(project_root.join("tracked.txt"), "other\n").expect("write other");
+        run_git(project_root, &["commit", "-am", "other"]);
+        run_git(project_root, &["checkout", "-q", &primary_branch]);
+
+        let since = chrono::Utc::now() - chrono::Duration::seconds(1);
+        std::fs::write(project_root.join("tracked.txt"), "child\n").expect("write child");
+        run_git(project_root, &["commit", "-am", "child commit"]);
+        let child_commit = run_git_capture(project_root, &["rev-parse", "HEAD"]).expect("head");
+
+        run_git(project_root, &["checkout", "-q", "other"]);
+        let current_head = run_git_capture(project_root, &["rev-parse", "HEAD"]).expect("head");
+
+        let race =
+            detect_external_checkout_after_commit(project_root, Some(current_head.trim()), since)
+                .expect("external checkout after commit should be detected");
+        assert_eq!(race.created_commit, child_commit.trim());
+        assert_eq!(race.current_head, current_head.trim());
     }
 }

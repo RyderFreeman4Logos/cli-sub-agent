@@ -129,6 +129,11 @@ fn with_stubbed_claude_code_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
     with_stubbed_binaries_on_path(&["claude", "claude-code-acp"], test_fn)
 }
 
+#[cfg(unix)]
+fn with_stubbed_hermes_on_path<T>(test_fn: impl FnOnce() -> T) -> T {
+    with_stubbed_binaries_on_path(&["hermes"], test_fn)
+}
+
 #[test]
 fn test_format_bytes() {
     assert_eq!(format_bytes(0), "0.0 GB");
@@ -267,6 +272,32 @@ fn default_build_doctor_json_output_reports_codex_transport_details() {
                 "doctor JSON should omit ACP override hints when ACP is not compiled in: {json}"
             );
         }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_hermes_binary_hint_and_acp_transport() {
+    with_stubbed_hermes_on_path(|| {
+        let status = check_tool_status("hermes", None);
+        let rendered = render_tool_status_lines(&status).join("\n");
+
+        assert!(status.is_ready(), "Hermes stub should satisfy doctor");
+        assert_eq!(status.binary_name, "hermes");
+        assert!(status.binary_available());
+        assert!(status.hint.is_none());
+        assert!(
+            rendered.contains("Active transport: acp"),
+            "Hermes doctor should report ACP transport: {rendered}"
+        );
+        assert!(
+            rendered.contains("Probed binary: hermes"),
+            "Hermes doctor should probe the hermes binary: {rendered}"
+        );
+        assert!(
+            rendered.contains("ACP compiled in:"),
+            "Hermes doctor should report ACP compile status: {rendered}"
+        );
     });
 }
 

@@ -6,7 +6,7 @@ use csa_core::transport_events::{SessionEvent, StreamingMetadata};
 use csa_core::types::OutputFormat;
 use std::collections::HashMap;
 
-use super::git::PostRunCommitGuard;
+use super::git::{CommitReflogRace, PostRunCommitGuard};
 use super::shell::{
     detect_git_commit_commands, detect_hook_bypass_env_usage, detect_lefthook_bypass_commands,
     detect_no_verify_commit_commands,
@@ -66,9 +66,17 @@ pub(crate) fn apply_post_run_commit_policy(
     recovery_tool: Option<&str>,
     require_commit_on_mutation: bool,
     git_commit_attempted: bool,
+    commit_reflog_race: Option<&CommitReflogRace>,
     commit_guard: Option<&PostRunCommitGuard>,
 ) {
     let Some(commit_guard) = commit_guard else {
+        if let Some(race) = commit_reflog_race {
+            let message = format_external_checkout_after_commit_message(race, recovery_tool);
+            match output_format {
+                OutputFormat::Text => eprintln!("{message}"),
+                OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &message),
+            }
+        }
         return;
     };
 
@@ -86,6 +94,7 @@ pub(crate) fn apply_post_run_commit_policy(
         enforce_closed_policy,
         commit_ref_update_failed,
         head_externally_raced,
+        commit_reflog_race,
         recovery_tool,
     );
 
@@ -128,6 +137,7 @@ pub(crate) struct PostSessionCommitPolicyArgs<'a> {
     pub(crate) policy_evaluation_failed: bool,
     pub(crate) hook_bypass_scan_enabled: bool,
     pub(crate) executed_shell_commands: &'a [String],
+    pub(crate) commit_reflog_race: Option<&'a CommitReflogRace>,
     pub(crate) merged_env_ref: Option<&'a HashMap<String, String>>,
     pub(crate) execute_events_observed: bool,
 }
@@ -143,6 +153,7 @@ pub(crate) fn apply_post_session_commit_policies(
         Some(args.tool_name),
         args.require_commit_on_mutation,
         git_commit_attempted,
+        args.commit_reflog_race,
         args.commit_guard,
     );
     apply_unverifiable_commit_policy(result, args.output_format, args.policy_evaluation_failed);
@@ -306,6 +317,7 @@ pub(crate) fn format_post_run_commit_guard_message(
     enforce_closed_policy: bool,
     commit_ref_update_failed: bool,
     head_externally_raced: bool,
+    commit_reflog_race: Option<&CommitReflogRace>,
     recovery_tool: Option<&str>,
 ) -> String {
     let severity = if enforce_closed_policy {
@@ -315,13 +327,15 @@ pub(crate) fn format_post_run_commit_guard_message(
     };
     let head_externally_raced = head_externally_raced || guard.head_externally_raced;
     let reason = if commit_ref_update_failed {
-        "git commit was attempted but HEAD did not advance; work remains uncommitted"
+        "git commit was attempted but HEAD did not advance; work remains uncommitted".to_string()
+    } else if let Some(race) = commit_reflog_race {
+        external_checkout_after_commit_reason(race)
     } else if head_externally_raced {
-        "HEAD was moved by an external process during this session (worktree race detected, #2556/#2557)"
+        "HEAD was moved by an external process during this session (worktree race detected, #2556/#2557)".to_string()
     } else if guard.head_changed {
-        "run created commit(s) but still left uncommitted workspace mutations"
+        "run created commit(s) but still left uncommitted workspace mutations".to_string()
     } else {
-        "run left uncommitted workspace mutations compared to start"
+        "run left uncommitted workspace mutations compared to start".to_string()
     };
 
     let mut lines = vec![format!("{severity}: csa run completed but {reason}.")];
@@ -339,6 +353,35 @@ pub(crate) fn format_post_run_commit_guard_message(
         lines.push(format!("Changed paths: {}", guard.changed_paths.join(", ")));
     }
     lines.join("\n")
+}
+
+fn format_external_checkout_after_commit_message(
+    race: &CommitReflogRace,
+    recovery_tool: Option<&str>,
+) -> String {
+    let mut lines = vec![format!(
+        "WARNING: csa run completed but {}.",
+        external_checkout_after_commit_reason(race)
+    )];
+    let recovery_command = recovery_tool
+        .map(|tool| format!("csa run --tool {tool} --skill commit \"<scope>\""))
+        .unwrap_or_else(|| "csa run --skill commit \"<scope>\"".to_string());
+    lines.push(format!(
+        "Next step: inspect HEAD/reflog, then run `{recovery_command}` only if additional commit work remains."
+    ));
+    lines.join("\n")
+}
+
+fn external_checkout_after_commit_reason(race: &CommitReflogRace) -> String {
+    format!(
+        "HEAD reflog shows git commit {} was created, but HEAD now points to {}; an external checkout/reset moved the worktree before session completion (#2570)",
+        short_hash(&race.created_commit),
+        short_hash(&race.current_head)
+    )
+}
+
+fn short_hash(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
 }
 
 fn prompt_allows_no_verify_commit(prompt: &str) -> bool {

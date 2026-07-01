@@ -161,6 +161,20 @@ pub(super) async fn complete_session_execution(
                     || pre_run_workspace.is_none()
                     || post_run_workspace.is_none());
         }
+        let git_commit_attempted =
+            !crate::run_cmd::detect_git_commit_commands(&executed_shell_commands).is_empty();
+        let commit_reflog_race = if git_commit_attempted && commit_created == Some(true) {
+            let current_head = post_run_workspace
+                .as_ref()
+                .and_then(|snap| snap.head.as_deref());
+            crate::run_cmd::detect_external_checkout_after_commit(
+                input.project_root,
+                current_head,
+                execution_start_time,
+            )
+        } else {
+            None
+        };
         crate::run_cmd::apply_post_session_commit_policies(
             &mut result,
             crate::run_cmd::PostSessionCommitPolicyArgs {
@@ -172,6 +186,7 @@ pub(super) async fn complete_session_execution(
                 policy_evaluation_failed,
                 hook_bypass_scan_enabled,
                 executed_shell_commands: &executed_shell_commands,
+                commit_reflog_race: commit_reflog_race.as_ref(),
                 merged_env_ref,
                 execute_events_observed,
             },
@@ -356,6 +371,26 @@ mod tests {
         );
     }
 
+    fn git_capture(project_root: &std::path::Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("git output should be utf8")
+            .trim()
+            .to_string()
+    }
+
     fn init_git_repo(project_root: &std::path::Path) {
         run_git(project_root, &["init", "-q"]);
         run_git(
@@ -368,6 +403,115 @@ mod tests {
         std::fs::write(project_root.join("tracked.txt"), "initial\n").expect("write tracked");
         run_git(project_root, &["add", ".gitignore", "tracked.txt"]);
         run_git(project_root, &["commit", "-q", "-m", "initial"]);
+    }
+
+    #[tokio::test]
+    async fn completion_warns_when_commit_reflog_is_followed_by_external_checkout() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+        let project_root = tmp.path();
+        init_git_repo(project_root);
+        let primary_branch = git_capture(project_root, &["branch", "--show-current"]);
+
+        run_git(project_root, &["checkout", "-q", "-b", "other"]);
+        std::fs::write(project_root.join("tracked.txt"), "other\n").expect("write other");
+        run_git(project_root, &["commit", "-am", "other"]);
+        run_git(project_root, &["checkout", "-q", &primary_branch]);
+
+        let before =
+            crate::run_cmd::capture_git_workspace_snapshot(project_root, false).expect("snapshot");
+        let execution_start_time = chrono::Utc::now() - chrono::Duration::seconds(1);
+        std::fs::write(project_root.join("tracked.txt"), "child\n").expect("write child");
+        run_git(project_root, &["commit", "-am", "child commit"]);
+        run_git(project_root, &["checkout", "-q", "other"]);
+
+        let mut session = create_session(
+            project_root,
+            Some("external checkout after commit"),
+            None,
+            Some("codex"),
+        )
+        .expect("create session");
+        let session_dir =
+            get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+            runtime_metadata: CodexRuntimeMetadata::current(),
+        };
+        let transport_result = TransportResult {
+            execution: csa_process::ExecutionResult {
+                output: String::new(),
+                stderr_output: "nothing to commit, working tree clean".to_string(),
+                summary: "nothing to commit".to_string(),
+                exit_code: 1,
+                model_completed: Some(true),
+                ..Default::default()
+            },
+            provider_session_id: None,
+            events: Vec::new(),
+            metadata: StreamingMetadata {
+                extracted_commands: vec!["git commit -m 'child commit'".to_string()],
+                has_tool_calls: true,
+                has_execute_tool_calls: true,
+                turn_count: 1,
+                ..Default::default()
+            },
+        };
+        let plan = SessionCompletionPlan {
+            merged_env: Default::default(),
+            hooks_config: Default::default(),
+            sessions_root: session_dir
+                .parent()
+                .expect("sessions root")
+                .display()
+                .to_string(),
+            edit_guard: None,
+            new_file_guard: None,
+            result_file_cleared: false,
+            execution_start_time,
+            commit_guard_enabled: true,
+            require_commit_on_mutation: true,
+            hook_bypass_scan_enabled: true,
+            is_git: true,
+            inside_git_worktree: true,
+            pre_run_workspace: Some(before),
+            pre_exec_snapshot: None,
+            timeout_diagnostics: None,
+            sa_mode: false,
+        };
+
+        let completed = complete_session_execution(
+            CompletionInput {
+                executor: &executor,
+                tool: &csa_core::types::ToolName::Codex,
+                prompt: "Commit the work",
+                output_format: &OutputFormat::Json,
+                task_type: Some("run"),
+                readonly_project_root: false,
+                project_root,
+                config: None,
+                global_config: None,
+                session_dir: &session_dir,
+                memory_project_key: None,
+                effective_prompt: "Commit the work".to_string(),
+                plan,
+                transport_result,
+            },
+            &mut session,
+        )
+        .await
+        .expect("complete session");
+
+        assert_eq!(completed.commit_created, Some(true));
+        assert!(completed.execution.csa_gate_failure.is_none());
+        assert!(
+            completed.execution.stderr_output.contains(
+                "external checkout/reset moved the worktree before session completion (#2570)"
+            ),
+            "{}",
+            completed.execution.stderr_output
+        );
     }
 
     #[tokio::test]

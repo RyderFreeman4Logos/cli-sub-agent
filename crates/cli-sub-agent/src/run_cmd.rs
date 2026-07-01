@@ -28,15 +28,16 @@ mod uncommitted;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
-    GitWorkspaceSnapshot, PostRunCommitGuard, attempt_rescue_commit,
-    capture_git_workspace_snapshot, evaluate_post_run_commit_guard, is_git_worktree,
+    CommitReflogRace, GitWorkspaceSnapshot, PostRunCommitGuard, attempt_rescue_commit,
+    capture_git_workspace_snapshot, detect_external_checkout_after_commit,
+    evaluate_post_run_commit_guard, is_git_worktree,
 };
 pub(crate) use policy::{
     PostSessionCommitPolicyArgs, apply_post_session_commit_policies, execute_tool_calls_observed,
     extract_executed_shell_commands, is_post_run_commit_policy_gate_failure,
     resolve_hook_bypass_scan_enabled,
 };
-pub(crate) use shell::detect_no_verify_commit_commands;
+pub(crate) use shell::{detect_git_commit_commands, detect_no_verify_commit_commands};
 pub(crate) use uncommitted::{
     collect_uncommitted_changes_for_changed_paths, format_large_diff_warning_block,
     format_uncommitted_warning, is_writer_session, working_tree_changed_lines,
