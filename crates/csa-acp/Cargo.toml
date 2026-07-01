@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-agent-client-protocol = "0.10"
+agent-client-protocol = { version = "0.10", features = ["unstable_session_usage"] }
 csa-core.workspace = true
 csa-process.workspace = true
 csa-resource.workspace = true

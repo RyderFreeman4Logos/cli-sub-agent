@@ -414,6 +414,10 @@ impl AcpClient {
                 tracing::trace!("suppressed protocol-level SessionUpdate (not content)");
                 None
             }
+            SessionUpdate::UsageUpdate(_) => {
+                tracing::trace!("suppressed usage telemetry SessionUpdate");
+                None
+            }
             // Catch-all for future ACP protocol variants (enum is
             // non-exhaustive).  Emit as Other for visibility.
             other => Some(SessionEvent::Other(
