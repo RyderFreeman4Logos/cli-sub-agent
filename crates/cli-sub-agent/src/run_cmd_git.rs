@@ -72,6 +72,34 @@ pub(crate) fn is_git_worktree(project_root: &Path) -> bool {
         .is_some_and(|value| value.trim() == "true")
 }
 
+/// Attempt a CSA-owned rescue commit after a `--require-commit` writer left
+/// verified workspace mutations uncommitted.
+pub(crate) fn attempt_rescue_commit(project_root: &Path, tool_name: &str) -> Option<String> {
+    let add = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["add", "-A"])
+        .output()
+        .ok()?;
+    if !add.status.success() {
+        return None;
+    }
+
+    let message = format!("feat: auto-rescue commit from CSA {tool_name} writer session");
+    let commit = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["commit", "--no-verify", "-m"])
+        .arg(message)
+        .output()
+        .ok()?;
+    if !commit.status.success() {
+        return None;
+    }
+
+    run_git_capture(project_root, &["rev-parse", "HEAD"]).map(|head| head.trim().to_string())
+}
+
 fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -334,4 +362,83 @@ pub(crate) fn changed_paths_from_status(status: &str, limit: usize) -> Vec<Strin
         .filter_map(|entry| parse_status_entry(entry).map(|(_, _, path)| path.to_string()))
         .take(limit)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::*;
+
+    fn run_git(project_root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_git_repo(project_root: &Path) {
+        init_empty_git_repo(project_root);
+        std::fs::write(project_root.join("tracked.txt"), "initial\n").expect("write tracked");
+        run_git(project_root, &["add", "tracked.txt"]);
+        run_git(project_root, &["commit", "-q", "-m", "initial"]);
+    }
+
+    fn init_empty_git_repo(project_root: &Path) {
+        run_git(project_root, &["init", "-q"]);
+        run_git(
+            project_root,
+            &["config", "user.email", "csa-test@example.com"],
+        );
+        run_git(project_root, &["config", "user.name", "CSA Test"]);
+        run_git(project_root, &["config", "commit.gpgsign", "false"]);
+    }
+
+    #[test]
+    fn rescue_commit_succeeds_when_writer_left_uncommitted_changes() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        init_git_repo(project_root);
+        let before = run_git_capture(project_root, &["rev-parse", "HEAD"]).expect("head");
+
+        std::fs::write(project_root.join("tracked.txt"), "changed\n").expect("write tracked");
+        std::fs::write(project_root.join("new.txt"), "new\n").expect("write untracked");
+
+        let rescued_head =
+            attempt_rescue_commit(project_root, "codex").expect("rescue commit should succeed");
+
+        assert_ne!(rescued_head, before.trim());
+        assert_eq!(
+            run_git_capture(project_root, &["status", "--porcelain=v1"])
+                .expect("status")
+                .trim(),
+            ""
+        );
+        assert_eq!(
+            run_git_capture(project_root, &["log", "-1", "--format=%s"])
+                .expect("log")
+                .trim(),
+            "feat: auto-rescue commit from CSA codex writer session"
+        );
+    }
+
+    #[test]
+    fn rescue_commit_fails_gracefully_on_empty_repo() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        init_empty_git_repo(project_root);
+
+        assert!(attempt_rescue_commit(project_root, "codex").is_none());
+        assert!(run_git_capture(project_root, &["rev-parse", "HEAD"]).is_none());
+    }
 }

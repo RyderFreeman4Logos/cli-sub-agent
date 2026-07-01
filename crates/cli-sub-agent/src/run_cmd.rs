@@ -28,8 +28,8 @@ mod uncommitted;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
-    GitWorkspaceSnapshot, PostRunCommitGuard, capture_git_workspace_snapshot,
-    evaluate_post_run_commit_guard, is_git_worktree,
+    GitWorkspaceSnapshot, PostRunCommitGuard, attempt_rescue_commit,
+    capture_git_workspace_snapshot, evaluate_post_run_commit_guard, is_git_worktree,
 };
 pub(crate) use policy::{
     PostSessionCommitPolicyArgs, apply_post_session_commit_policies, execute_tool_calls_observed,

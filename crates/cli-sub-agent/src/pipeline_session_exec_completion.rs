@@ -12,6 +12,9 @@ use super::session_exec_runtime::SessionCompletionPlan;
 use super::session_exec_write_guard::apply_write_restriction_violations;
 use crate::pipeline::SessionExecutionResult;
 
+#[path = "pipeline_session_exec_completion_require_commit.rs"]
+mod require_commit;
+
 const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
 
 pub(super) struct CompletionInput<'a> {
@@ -105,24 +108,12 @@ pub(super) async fn complete_session_execution(
             &session.meta_session_id,
         );
     }
-    let post_run_workspace = session_exec_audit::capture_git_workspace_snapshot_if_needed(
+    let mut post_run_workspace = session_exec_audit::capture_git_workspace_snapshot_if_needed(
         is_git,
         input.project_root,
         require_commit_on_mutation,
     );
-    let pre_fingerprints = pre_run_workspace
-        .as_ref()
-        .map(session_exec_audit::snapshot_to_fingerprints);
-    let post_fingerprints = post_run_workspace
-        .as_ref()
-        .map(session_exec_audit::snapshot_to_fingerprints);
-    let changed_paths = crate::pipeline::changed_paths::compute_changed_paths(
-        pre_run_workspace.as_ref().map(|s| s.status.as_str()),
-        post_run_workspace.as_ref().map(|s| s.status.as_str()),
-        pre_fingerprints.as_ref(),
-        post_fingerprints.as_ref(),
-    );
-    let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
+    let mut rescued_changed_paths = None;
     let mut commit_created = None;
     if commit_guard_enabled {
         let effective_require_commit_on_mutation =
@@ -131,14 +122,45 @@ pub(super) async fn complete_session_execution(
             .as_ref()
             .zip(post_run_workspace.as_ref())
             .map(|(before, after)| before.head != after.head);
-        let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
+        let mut commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
             pre_run_workspace.as_ref(),
             post_run_workspace.as_ref(),
         );
-        let policy_evaluation_failed = effective_require_commit_on_mutation
+        let mut policy_evaluation_failed = effective_require_commit_on_mutation
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
+        if require_commit::should_attempt_require_commit_rescue(
+            effective_require_commit_on_mutation,
+            commit_guard.as_ref(),
+        ) && let Some(new_head) =
+            crate::run_cmd::attempt_rescue_commit(input.project_root, input.executor.tool_name())
+        {
+            commit_created = Some(true);
+            rescued_changed_paths = Some(require_commit::compute_changed_paths_from_snapshots(
+                pre_run_workspace.as_ref(),
+                post_run_workspace.as_ref(),
+            ));
+            require_commit::record_require_commit_rescue(
+                input.output_format,
+                &mut result,
+                input.executor.tool_name(),
+                &new_head,
+            );
+            post_run_workspace = session_exec_audit::capture_git_workspace_snapshot_if_needed(
+                is_git,
+                input.project_root,
+                require_commit_on_mutation,
+            );
+            commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
+                pre_run_workspace.as_ref(),
+                post_run_workspace.as_ref(),
+            );
+            policy_evaluation_failed = effective_require_commit_on_mutation
+                && (!inside_git_worktree
+                    || pre_run_workspace.is_none()
+                    || post_run_workspace.is_none());
+        }
         crate::run_cmd::apply_post_session_commit_policies(
             &mut result,
             crate::run_cmd::PostSessionCommitPolicyArgs {
@@ -162,6 +184,16 @@ pub(super) async fn complete_session_execution(
         );
         apply_fix_finding_terminal_guard_summary(input.project_root, session, &mut result);
     }
+    let mut changed_paths = require_commit::compute_changed_paths_from_snapshots(
+        pre_run_workspace.as_ref(),
+        post_run_workspace.as_ref(),
+    );
+    if changed_paths.is_empty()
+        && let Some(paths) = rescued_changed_paths
+    {
+        changed_paths = paths;
+    }
+    let snapshots_available = pre_run_workspace.is_some() && post_run_workspace.is_some();
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor: input.executor,
         prompt: input.prompt,
@@ -293,6 +325,10 @@ fn is_fix_finding_session(session: &MetaSessionState) -> bool {
 mod fix_finding_tests;
 
 #[cfg(test)]
+#[path = "pipeline_session_exec_completion_require_commit_tests.rs"]
+mod require_commit_tests;
+
+#[cfg(test)]
 mod tests {
     use std::process::Command;
 
@@ -328,8 +364,9 @@ mod tests {
         );
         run_git(project_root, &["config", "user.name", "CSA Test"]);
         run_git(project_root, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(project_root.join(".gitignore"), "state/\n").expect("write gitignore");
         std::fs::write(project_root.join("tracked.txt"), "initial\n").expect("write tracked");
-        run_git(project_root, &["add", "tracked.txt"]);
+        run_git(project_root, &["add", ".gitignore", "tracked.txt"]);
         run_git(project_root, &["commit", "-q", "-m", "initial"]);
     }
 
@@ -484,7 +521,7 @@ mod tests {
             result_file_cleared: false,
             execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
             commit_guard_enabled: true,
-            require_commit_on_mutation: false,
+            require_commit_on_mutation: true,
             hook_bypass_scan_enabled: true,
             is_git: true,
             inside_git_worktree: true,
@@ -518,6 +555,14 @@ mod tests {
 
         assert_eq!(completed.commit_created, Some(true));
         assert_eq!(completed.execution.exit_code, 0);
+        assert!(
+            !completed
+                .execution
+                .stderr_output
+                .contains("CSA require-commit rescue"),
+            "{}",
+            completed.execution.stderr_output
+        );
     }
 
     #[test]

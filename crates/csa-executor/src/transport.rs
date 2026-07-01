@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use crate::executor::Executor;
 #[cfg(feature = "acp")]
-use crate::lefthook_guard::sanitize_args_for_codex;
-#[cfg(feature = "acp")]
 use crate::hermes_config::{
     HermesRunConfig, filter_resume_session_id_for_hermes, persist_hermes_fingerprint,
     run_hermes_acp_check,
 };
+#[cfg(feature = "acp")]
+use crate::lefthook_guard::sanitize_args_for_codex;
 #[cfg(feature = "acp")]
 use crate::session_config::SessionConfig;
 use crate::transport_gemini_retry::{
