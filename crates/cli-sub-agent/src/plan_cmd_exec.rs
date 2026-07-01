@@ -19,6 +19,8 @@ use crate::run_helpers::build_executor;
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
+use super::plan_cmd_child_diagnostics::append_child_diagnostics;
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub(super) struct StepExecutionOutcome {
@@ -113,7 +115,10 @@ pub(super) async fn execute_bash_step(
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+    let mut stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.code().unwrap_or(1) != 0 {
+        append_bash_child_diagnostics(&mut stderr_str, project_root, &stdout);
+    }
     if !stdout.is_empty() {
         eprint!("{stdout}");
     }
@@ -126,6 +131,15 @@ pub(super) async fn execute_bash_step(
         session_id: None,
         stderr: stderr_str,
     })
+}
+
+fn append_bash_child_diagnostics(stderr: &mut String, project_root: &Path, stdout: &str) {
+    let original_stderr = stderr.clone();
+    let before_len = stderr.len();
+    append_child_diagnostics(stderr, project_root, stdout, &original_stderr);
+    if stderr.len() > before_len && !stderr.ends_with('\n') {
+        stderr.push('\n');
+    }
 }
 
 async fn spawn_bash(

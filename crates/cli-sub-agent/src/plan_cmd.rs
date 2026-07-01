@@ -54,6 +54,8 @@ mod plan_cmd_assignment;
 #[path = "plan_cmd_tier_failover.rs"]
 mod plan_cmd_tier_failover;
 
+#[path = "plan_cmd_child_diagnostics.rs"]
+mod plan_cmd_child_diagnostics;
 #[path = "plan_cmd_steps.rs"]
 mod plan_cmd_steps;
 #[cfg(test)]
