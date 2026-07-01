@@ -25,6 +25,9 @@ fn build_review_instruction_for_project_injects_review_checklist() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -56,6 +59,9 @@ fn build_review_instruction_for_project_omits_checklist_when_missing() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 

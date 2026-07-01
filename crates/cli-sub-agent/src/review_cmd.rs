@@ -35,6 +35,8 @@ mod bug_class_pipeline;
 mod check_verdict;
 #[path = "review_cmd_chunking.rs"]
 mod chunking;
+#[path = "review_cmd_depth.rs"]
+mod depth;
 #[path = "review_cmd_diff_size.rs"]
 mod diff_size;
 #[path = "review_cmd_dirty_tree.rs"]
@@ -178,6 +180,9 @@ pub(crate) async fn handle_review(
     .await?;
 
     let scope = derive_scope_for_project(&args, &project_root);
+    let depth_assessment =
+        depth::resolve_review_depth_for_project(&args, &project_root, &scope).await;
+    let regression_context = depth::collect_bounded_regression_context(&project_root, &scope).await;
     let diff = diff_size::compute_review_diff_size(&project_root, &scope);
     let large_warn = diff_size::warn_if_large_diff(diff.as_ref(), config.as_ref(), &global_config);
     let mode = if args.fix {
@@ -185,8 +190,13 @@ pub(crate) async fn handle_review(
     } else {
         "review-only"
     };
-    let review_mode = args.effective_review_mode();
-    let security_mode = args.effective_security_mode();
+    let requested_review_mode = args.effective_review_mode();
+    let review_mode = depth_assessment.effective_review_mode(requested_review_mode);
+    let security_mode = if review_mode == requested_review_mode {
+        args.effective_security_mode()
+    } else {
+        args.effective_security_mode_for(review_mode)
+    };
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
     let prompt_file_path = args.prompt_file.as_ref().map(|p| p.display().to_string());
     let explicit_context = args
@@ -225,6 +235,9 @@ pub(crate) async fn handle_review(
             prior_rounds_section: prior_rounds_section.as_deref(),
             current_session_id: startup_env.session_id(),
             full_consistency: args.full_consistency,
+            review_depth: depth_assessment.depth,
+            review_depth_auto_escalation: depth_assessment.auto_escalation_summary(),
+            regression_context: regression_context.as_deref(),
         },
     );
 

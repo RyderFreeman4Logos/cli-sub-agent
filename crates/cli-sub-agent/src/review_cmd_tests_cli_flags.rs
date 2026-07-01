@@ -29,6 +29,36 @@ fn review_cli_parses_chunked_review_mode_flag() {
 }
 
 #[test]
+fn review_cli_parses_depth_flag() {
+    let default_args = parse_review_args(&["csa", "review", "--diff"]);
+    assert_eq!(default_args.depth, crate::cli::ReviewDepth::Standard);
+
+    let standard_args = parse_review_args(&["csa", "review", "--diff", "--depth", "standard"]);
+    assert_eq!(standard_args.depth, crate::cli::ReviewDepth::Standard);
+
+    let audit_args = parse_review_args(&["csa", "review", "--diff", "--depth", "audit"]);
+    assert_eq!(audit_args.depth, crate::cli::ReviewDepth::Audit);
+}
+
+#[test]
+fn review_cli_rejects_audit_depth_with_security_off() {
+    let err = parse_or_validate_review_error(&[
+        "csa",
+        "review",
+        "--diff",
+        "--depth",
+        "audit",
+        "--security-mode",
+        "off",
+    ]);
+    assert!(
+        err.to_string()
+            .contains("--depth audit conflicts with --security-mode off"),
+        "{err}"
+    );
+}
+
+#[test]
 fn review_cli_parses_fix_finding_prompt_flag() {
     let args = parse_review_args(&[
         "csa",

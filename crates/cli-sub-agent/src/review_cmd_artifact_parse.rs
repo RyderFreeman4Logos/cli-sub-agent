@@ -7,6 +7,8 @@ pub(crate) struct LossyReviewArtifactFields {
     pub(crate) findings: Vec<Finding>,
     pub(crate) severity_summary: SeveritySummary,
     pub(crate) overall_risk: Option<String>,
+    pub(crate) schema_version: Option<String>,
+    pub(crate) bug_category_checklist: Vec<Value>,
 }
 
 pub(crate) fn parse_review_artifact_fields_lossy(
@@ -34,11 +36,22 @@ pub(crate) fn parse_review_artifact_fields_lossy(
         .get("overall_risk")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let schema_version = value
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let bug_category_checklist = value
+        .get("bug_category_checklist")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     Ok(LossyReviewArtifactFields {
         findings,
         severity_summary,
         overall_risk,
+        schema_version,
+        bug_category_checklist,
     })
 }
 

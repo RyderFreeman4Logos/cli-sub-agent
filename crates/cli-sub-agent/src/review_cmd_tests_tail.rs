@@ -404,6 +404,9 @@ fn test_build_review_instruction_for_project_includes_rust_profile() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -428,6 +431,9 @@ fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -580,6 +586,9 @@ fn build_review_instruction_for_project_injects_bundled_pattern_without_repo_loc
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -624,6 +633,9 @@ fn build_review_instruction_for_project_injects_repo_local_pattern() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 

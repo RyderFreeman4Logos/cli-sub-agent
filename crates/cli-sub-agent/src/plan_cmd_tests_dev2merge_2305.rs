@@ -72,6 +72,10 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
         ("Resume Commit", "## Step 9: Resume Commit"),
         ("Ensure Version Bumped", "## Step 10: Ensure Version Bumped"),
         (
+            "Decomposition Review Depth Warning",
+            "## Step 11.5: Decomposition Review Depth Warning",
+        ),
+        (
             "Pre-PR Cumulative Review Gate",
             "## Step 12: Pre-PR Cumulative Review Gate",
         ),
@@ -86,6 +90,35 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             "dev2merge PATTERN.md and workflow.toml {heading} bash blocks must stay synced"
         );
     }
+}
+
+#[test]
+fn dev2merge_decomposition_warning_placeholders_stay_synced() {
+    let pattern =
+        std::fs::read_to_string(workspace_root().join("patterns/dev2merge/PATTERN.md")).unwrap();
+    let pattern_bash =
+        dev2merge_pattern_step_bash(&pattern, "## Step 11.5: Decomposition Review Depth Warning");
+    let workflow_bash = dev2merge_workflow_step_bash("Decomposition Review Depth Warning");
+
+    assert_eq!(
+        placeholders_in(&pattern_bash),
+        placeholders_in(&workflow_bash),
+        "dev2merge Step 11.5 must not introduce orphan ${{VAR}} placeholders"
+    );
+}
+
+fn placeholders_in(content: &str) -> std::collections::BTreeSet<String> {
+    let mut placeholders = std::collections::BTreeSet::new();
+    let mut rest = content;
+    while let Some(start) = rest.find("${") {
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            break;
+        };
+        placeholders.insert(after_start[..end].to_string());
+        rest = &after_start[end + 1..];
+    }
+    placeholders
 }
 
 #[test]
