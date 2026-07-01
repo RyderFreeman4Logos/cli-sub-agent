@@ -42,7 +42,7 @@
     "info": 0
   },
   "review_mode": "standard|red-team",
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "session_id": "string",
   "timestamp": "RFC3339 string",
   "overall_risk": "low|medium|high|critical",
@@ -55,6 +55,14 @@
       "source_agents_md": "string",
       "result": "pass|violation",
       "evidence": "string"
+    }
+  ],
+  "bug_category_checklist": [
+    {
+      "category": "shell_semantics|byte_char_boundary|escape_sequences|binary_vs_script|subprocess_timeout|cross_tenant_isolation|unwrap_on_untrusted|cgroup_container_awareness|crash_retry_coverage|missing_script_binary_refs",
+      "status": "pass|na|violation|open_question",
+      "evidence": "string",
+      "files_examined": ["path/to/file.rs"]
     }
   ],
   "test_gaps": ["string"],
@@ -83,10 +91,13 @@
 `review-findings.json` is consumed by `review_consensus.rs`, so the following fields are
 mandatory and must remain ReviewArtifact-compatible:
 
-- Top level: `findings`, `severity_summary`, `review_mode`, `schema_version`, `session_id`, `timestamp`
+- Top level: `findings`, `severity_summary`, `review_mode`, `schema_version`, `session_id`, `timestamp`, `bug_category_checklist`
 - Per finding: `fid`, `severity`, `file`, `line`, `rule_id`, `summary`, `engine`
 
 Additional rich fields are allowed and will be ignored by the consolidator when not needed.
+For schema_version `1.1` or newer, a missing `bug_category_checklist` means the review
+is incomplete and must resolve to `UNCERTAIN`, not `PASS`. A category marked `na`
+is valid evidence and must not fail the review by itself.
 
 ## $CSA_SESSION_DIR/output/review-verdict.json
 
@@ -180,6 +191,18 @@ Mandatory AGENTS.md compliance evidence:
 ## AGENTS.md Checklist
 - [x] `<file>` | `<rule-id>` | `<source AGENTS.md>` | PASS
 - [x] `<file>` | `<rule-id>` | `<source AGENTS.md>` | VIOLATION (finding: `<id>`)
+
+## Bug-Category Checklist
+- [x] `shell_semantics` | PASS | <evidence>
+- [x] `byte_char_boundary` | N/A | <evidence>
+- [x] `escape_sequences` | PASS | <evidence>
+- [x] `binary_vs_script` | PASS | <evidence>
+- [x] `subprocess_timeout` | OPEN_QUESTION | <evidence>
+- [x] `cross_tenant_isolation` | PASS | <evidence>
+- [x] `unwrap_on_untrusted` | PASS | <evidence>
+- [x] `cgroup_container_awareness` | N/A | <evidence>
+- [x] `crash_retry_coverage` | PASS | <evidence>
+- [x] `missing_script_binary_refs` | PASS | <evidence>
 
 ## Security Findings (attacker perspective)
 1. [P?][security] <summary> (`<file>:<line>`)

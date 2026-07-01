@@ -56,6 +56,9 @@ invariant = "lock-losing resume cannot mutate metadata of winning session"
             prior_rounds_section: Some(&prior_rounds),
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -151,6 +154,9 @@ fn build_review_instruction_for_project_without_prior_rounds_flag_leaves_section
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 

@@ -519,6 +519,21 @@ else
 fi
 ```
 
+## Step 11.5: Decomposition Review Depth Warning
+Tool: bash
+OnFail: skip
+Warn when the branch diff is broad enough to dilute review depth. This is
+advisory only and does not block Step 12.
+
+```bash
+# Decomposition check — WARN only, does not block
+CHANGED_FILES=$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | wc -l | tr -d ' ')
+if [ "${CHANGED_FILES:-0}" -gt 5 ]; then
+  echo "WARN: Branch has $CHANGED_FILES changed files (>5). Large diffs dilute review depth. Consider splitting into separate issue-scoped PRs."
+  echo "Consider using --depth audit for this review."
+fi
+```
+
 ## Step 12: Pre-PR Cumulative Review Gate
 Tool: bash
 OnFail: abort

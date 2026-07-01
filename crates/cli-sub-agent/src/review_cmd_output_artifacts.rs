@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use csa_session::{Finding, FindingsFile, Severity, SeveritySummary};
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::warn;
 
 use crate::bug_class::{CONSOLIDATED_REVIEW_ARTIFACT_FILE, SINGLE_REVIEW_ARTIFACT_FILE};
@@ -17,6 +18,17 @@ pub(super) struct PersistedReviewArtifact {
     pub(super) severity_summary: SeveritySummary,
     #[serde(default)]
     pub(super) overall_risk: Option<String>,
+    #[serde(default)]
+    pub(super) schema_version: Option<String>,
+    #[serde(default)]
+    pub(super) bug_category_checklist: Vec<Value>,
+}
+
+impl PersistedReviewArtifact {
+    pub(super) fn missing_required_bug_category_checklist(&self) -> bool {
+        schema_version_requires_bug_category_checklist(self.schema_version.as_deref())
+            && self.bug_category_checklist.is_empty()
+    }
 }
 
 pub(super) fn load_review_artifact_from_output(
@@ -47,6 +59,8 @@ pub(super) fn load_review_artifact_from_output(
                     findings: fields.findings,
                     severity_summary: fields.severity_summary,
                     overall_risk: fields.overall_risk,
+                    schema_version: fields.schema_version,
+                    bug_category_checklist: fields.bug_category_checklist,
                 }));
             }
             warn!(
@@ -58,9 +72,27 @@ pub(super) fn load_review_artifact_from_output(
                 findings: Vec::new(),
                 severity_summary: SeveritySummary::default(),
                 overall_risk: None,
+                schema_version: None,
+                bug_category_checklist: Vec::new(),
             }))
         }
     }
+}
+
+fn schema_version_requires_bug_category_checklist(schema_version: Option<&str>) -> bool {
+    let Some(schema_version) = schema_version else {
+        return false;
+    };
+    let mut parts = schema_version.split('.');
+    let major = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+    let minor = parts
+        .next()
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+    major > 1 || major == 1 && minor >= 1
 }
 
 fn review_artifact_path(session_dir: &Path) -> Option<PathBuf> {

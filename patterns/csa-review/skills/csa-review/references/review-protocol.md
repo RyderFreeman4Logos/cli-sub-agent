@@ -280,6 +280,21 @@ Detect AI-generated code redundancy patterns. Severity: LOW-MEDIUM (advisory).
 Report deslop findings as LOW severity unless they significantly inflate module token count
 (approaching or exceeding 8K tokens), in which case use MEDIUM.
 
+## Mandatory Bug-Category Checklist
+
+For each category, the reviewer MUST state one of: PASS / N/A / VIOLATION / OPEN_QUESTION.
+
+- **Shell semantics**: Are all `&&`/`||` chains correctly grouped? Any precedence ambiguity?
+- **Byte/char boundary**: Are all `&str[..N]` / `&str[N..]` slices char-boundary-safe?
+- **Escape sequences**: Are all `\n`, `\t`, `\\` in string literals correct (not double-escaped)?
+- **Binary vs script**: Are all command invocations using the correct executor?
+- **Subprocess timeout**: Does every `cmd.output().await` / `Command::output()` have a timeout?
+- **Cross-tenant isolation**: Does any filter function use a `_ => true` default?
+- **Unwrap on untrusted**: Are there `.unwrap()` / `[]` / `expect()` on external data?
+- **cgroup/container awareness**: Does resource code account for container limits?
+- **Crash-retry coverage**: Did this change narrow any match guard? Did other tools lose coverage?
+- **Missing script/binary refs**: Does any pattern reference a file not included?
+
 ### Pass 1: Broad Issue Discovery (maximize recall)
 Scan all changed code for:
 - Correctness issues
@@ -386,3 +401,4 @@ If P0 or P1 findings exist, set both fields to `null` — the developer needs to
 11. Review completion is invalid if AGENTS.md checklist has any unchecked item or missing applicable rule.
 12. `review-findings.json` must remain deserializable as a `ReviewArtifact`: include compact fields (`fid`, `severity`, `file`, `line`, `rule_id`, `summary`, `engine`) even when richer metadata is attached.
 13. Always include `review_mode` in `review-findings.json` (`standard` or `red-team`).
+14. Always include `bug_category_checklist` in `review-findings.json`. For schema_version `1.1` or newer, a missing checklist means the review is incomplete; return UNCERTAIN rather than PASS.

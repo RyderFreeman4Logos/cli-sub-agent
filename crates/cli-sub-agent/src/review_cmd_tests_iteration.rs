@@ -123,6 +123,9 @@ fn build_review_instruction_for_project_contains_design_preference_anchor() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -145,6 +148,9 @@ fn build_review_instruction_for_project_contains_same_class_site_sweep_anchor() 
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -209,6 +215,9 @@ fn count_prior_reviews_zero_omits_iteration_block() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 
@@ -246,6 +255,9 @@ fn count_prior_reviews_one_injects_iteration_two() {
             prior_rounds_section: None,
             current_session_id: None,
             full_consistency: false,
+            review_depth: crate::cli::ReviewDepth::Standard,
+            review_depth_auto_escalation: None,
+            regression_context: None,
         },
     );
 

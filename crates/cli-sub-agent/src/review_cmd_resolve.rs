@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use crate::cli::{ReviewArgs, ReviewMode};
+use crate::cli::{ReviewArgs, ReviewDepth, ReviewMode};
 use crate::pattern_resolver::ResolvedPattern;
 use crate::review_context::{
     ResolvedReviewContext, ResolvedReviewContextKind, discover_prior_round_assumptions,
@@ -545,6 +545,16 @@ pub(crate) fn build_review_instruction_for_project(
         "diff-only"
     };
     instruction.push_str(&format!("\nconsistency_scope={consistency_scope}"));
+    append_review_depth_metadata(
+        &mut instruction,
+        options.review_depth,
+        options.review_depth_auto_escalation.as_deref(),
+    );
+    if let Some(regression_context) = options.regression_context {
+        instruction.push_str("\n\n<review-regression-context inert=\"true\">\n");
+        instruction.push_str(regression_context);
+        instruction.push_str("\n</review-regression-context>");
+    }
     crate::review_design_anchor::append_design_anchor(&mut instruction);
     instruction.push_str(&format!(
         "\n[project_profile: {}]",
@@ -591,4 +601,31 @@ pub(crate) struct ReviewProjectPromptOptions<'a> {
     pub(crate) prior_rounds_section: Option<&'a str>,
     pub(crate) current_session_id: Option<&'a str>,
     pub(crate) full_consistency: bool,
+    pub(crate) review_depth: ReviewDepth,
+    pub(crate) review_depth_auto_escalation: Option<String>,
+    pub(crate) regression_context: Option<&'a str>,
+}
+
+fn append_review_depth_metadata(
+    instruction: &mut String,
+    review_depth: ReviewDepth,
+    auto_escalation: Option<&str>,
+) {
+    instruction.push_str(&format!("\nreview_depth={review_depth}"));
+    if let Some(auto_escalation) = auto_escalation {
+        instruction.push_str(&format!(
+            "\nreview_depth_auto_escalated=true ({auto_escalation})"
+        ));
+    }
+    instruction.push_str(
+        "\nMandatory bug-category checklist categories: shell_semantics, byte_char_boundary, \
+escape_sequences, binary_vs_script, subprocess_timeout, cross_tenant_isolation, \
+unwrap_on_untrusted, cgroup_container_awareness, crash_retry_coverage, missing_script_binary_refs.",
+    );
+    if review_depth == ReviewDepth::Audit {
+        instruction.push_str(
+            "\nAudit depth is active: red-team review mode is enabled; treat a missing or incomplete \
+bug_category_checklist in new review artifacts as incomplete evidence and return UNCERTAIN.",
+        );
+    }
 }

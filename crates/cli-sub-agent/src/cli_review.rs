@@ -29,6 +29,29 @@ impl std::fmt::Display for ReviewMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum ReviewDepth {
+    #[default]
+    Standard,
+    Audit,
+}
+
+impl ReviewDepth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Audit => "audit",
+        }
+    }
+}
+
+impl std::fmt::Display for ReviewDepth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[value(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
@@ -175,6 +198,10 @@ pub struct ReviewArgs {
     /// Review mode: standard (default) or red-team
     #[arg(long, value_enum)]
     pub review_mode: Option<ReviewMode>,
+
+    /// Review depth: standard (default) or audit. Audit enables red-team mode.
+    #[arg(long, value_enum, default_value_t = ReviewDepth::Standard)]
+    pub depth: ReviewDepth,
 
     /// Shorthand for `--review-mode red-team`
     #[arg(long)]
@@ -327,7 +354,11 @@ impl ReviewArgs {
     }
 
     pub fn effective_security_mode(&self) -> &str {
-        if self.effective_review_mode() == ReviewMode::RedTeam && self.security_mode == "auto" {
+        self.effective_security_mode_for(self.effective_review_mode())
+    }
+
+    pub fn effective_security_mode_for(&self, review_mode: ReviewMode) -> &str {
+        if review_mode == ReviewMode::RedTeam && self.security_mode == "auto" {
             "on"
         } else {
             &self.security_mode
@@ -355,6 +386,13 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
         return Err(clap::Error::raw(
             clap::error::ErrorKind::ArgumentConflict,
             format!("{mode_flag} conflicts with --security-mode off"),
+        ));
+    }
+
+    if args.depth == ReviewDepth::Audit && args.security_mode == "off" {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--depth audit conflicts with --security-mode off",
         ));
     }
 

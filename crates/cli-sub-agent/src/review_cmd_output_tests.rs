@@ -573,6 +573,54 @@ fn persist_review_verdict_marks_clean_transcript_as_pass() {
 }
 
 #[test]
+fn persist_review_verdict_missing_new_bug_category_checklist_is_uncertain() {
+    let session_id = "01TESTBUGCHECKLISTMISSING000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("persist-review-verdict-missing-bug-checklist", session_id);
+    fs::write(
+        session_dir.join("review-findings.json"),
+        serde_json::to_string_pretty(&json!({
+            "findings": [],
+            "severity_summary": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0
+            },
+            "review_mode": "standard",
+            "schema_version": "1.1",
+            "session_id": session_id,
+            "timestamp": "2026-07-01T00:00:00Z",
+            "overall_risk": "low"
+        }))
+        .expect("serialize review findings"),
+    )
+    .expect("write review-findings.json");
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nCLEAN\n<!-- CSA:SECTION:summary:END -->\n\n\
+<!-- CSA:SECTION:details -->\nNo blocking issues found.\nOverall risk: low\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist clean output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict_path = session_dir.join("output").join("review-verdict.json");
+    let artifact: ReviewVerdictArtifact =
+        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
+            .expect("parse verdict");
+    assert_eq!(artifact.decision, ReviewDecision::Uncertain);
+    assert_eq!(artifact.verdict_legacy, "UNCERTAIN");
+    assert_eq!(
+        artifact.failure_reason.as_deref(),
+        Some("missing_bug_category_checklist")
+    );
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn persist_review_verdict_plain_text_full_output_without_review_message_emits_fail_verdict() {
     let session_id = "01TESTMETAFALLBACK000000000";
     let (_env_lock, project_root, session_dir) =

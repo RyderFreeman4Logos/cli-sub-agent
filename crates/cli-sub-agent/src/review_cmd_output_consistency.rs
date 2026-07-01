@@ -23,6 +23,7 @@ use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
 const SEVERITY_FINDINGS_MISMATCH_REASON: &str = "severity_counts_findings_mismatch";
 const EMPTY_FAIL_FINDINGS_ARTIFACT_REASON: &str = "fail_verdict_empty_findings_artifact";
+const MISSING_BUG_CATEGORY_CHECKLIST_REASON: &str = "missing_bug_category_checklist";
 const ARTIFACT_GENERATION_FINDING_ID: &str = "artifact-generation-001";
 
 pub(super) fn enforce_final_verdict_consistency(
@@ -103,6 +104,9 @@ pub(super) fn enforce_final_verdict_consistency(
 
     let resume_to_fix = has_resume_to_fix_suggestion(session_dir)?;
     let review_artifact = load_review_artifact_from_output(session_dir)?;
+    let review_artifact_missing_bug_category_checklist = review_artifact
+        .as_ref()
+        .is_some_and(|artifact| artifact.missing_required_bug_category_checklist());
     let review_artifact_findings: &[Finding] = review_artifact
         .as_ref()
         .map(|artifact| artifact.findings.as_slice())
@@ -149,7 +153,8 @@ pub(super) fn enforce_final_verdict_consistency(
             has_prose_failure_evidence: has_hard_prose_failure_evidence,
             resume_to_fix: resume_to_fix_blocks_clean_recovery,
             review_artifact_has_fail_signal: review_artifact_has_severity_counts
-                || review_artifact_has_blocking_risk,
+                || review_artifact_has_blocking_risk
+                || review_artifact_missing_bug_category_checklist,
             clean_prose_conclusion,
             fail_prose_conclusion: repair_fail_prose_conclusion,
             uncertain_prose_conclusion: repair_uncertain_prose_conclusion,
@@ -188,6 +193,13 @@ pub(super) fn enforce_final_verdict_consistency(
     if artifact.decision == ReviewDecision::Pass && !skip_prose_override && uncertain_prose {
         artifact.decision = ReviewDecision::Uncertain;
         artifact.verdict_legacy = "UNCERTAIN".to_string();
+    }
+    if artifact.decision == ReviewDecision::Pass && review_artifact_missing_bug_category_checklist {
+        artifact.decision = ReviewDecision::Uncertain;
+        artifact.verdict_legacy = "UNCERTAIN".to_string();
+        artifact
+            .failure_reason
+            .get_or_insert_with(|| MISSING_BUG_CATEGORY_CHECKLIST_REASON.to_string());
     }
 
     // #1852: a Fail verdict must carry a severity count that reflects the

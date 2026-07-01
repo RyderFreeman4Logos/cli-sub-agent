@@ -120,6 +120,7 @@ mod tests {
             fix_finding: true,
             max_rounds: 3,
             review_mode: None,
+            depth: crate::cli::ReviewDepth::Standard,
             red_team: false,
             security_mode: "auto".to_string(),
             context: None,
