@@ -311,7 +311,12 @@ fn fix_route_label(session_dir: &Path, session_id: &str) -> String {
             // Truncate to prevent leaking large/sensitive content from suggestion.toml (#2542)
             let truncated = value.trim();
             if truncated.len() > 200 {
-                format!("{}... (truncated)", &truncated[..200])
+                // Use char-boundary-safe truncation to avoid panicking on multi-byte UTF-8 (#2576)
+                let mut end = 200;
+                while end > 0 && !truncated.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}... (truncated)", &truncated[..end])
             } else {
                 truncated.to_string()
             }

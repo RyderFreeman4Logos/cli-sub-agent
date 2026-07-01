@@ -28,7 +28,7 @@ mod uncommitted;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
-    CommitReflogRace, GitWorkspaceSnapshot, PostRunCommitGuard, attempt_rescue_commit,
+    GitWorkspaceSnapshot, PostRunCommitGuard, attempt_rescue_commit,
     capture_git_workspace_snapshot, detect_external_checkout_after_commit,
     evaluate_post_run_commit_guard, is_git_worktree,
 };

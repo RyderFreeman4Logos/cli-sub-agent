@@ -147,7 +147,7 @@ pub(crate) fn sandbox_fs_denial_hint(
     let path_hint = format!("--extra-writable {suggested}");
 
     Some(format!(
-        "hint: sandbox filesystem write denied for {denied_path}. To continue from this session's partial work rather than re-running from scratch, run:\\n  csa run --fork-from {session_id} {path_hint} --prompt-file CONTINUATION_PROMPT.md"
+        "hint: sandbox filesystem write denied for {denied_path}. To continue from this session's partial work rather than re-running from scratch, run:\n  csa run --fork-from {session_id} {path_hint} --prompt-file CONTINUATION_PROMPT.md"
     ))
 }
 

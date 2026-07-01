@@ -505,7 +505,7 @@ set -euo pipefail
 if [ -f Cargo.toml ]; then
   just fmt && just clippy && just test
 elif [ -f pyproject.toml ]; then
-  (just lint 2>/dev/null || ruff check . && ruff format --check .)
+  { just lint 2>/dev/null || { ruff check . && ruff format --check .; }; }
   (just test 2>/dev/null || pytest)
 elif [ -f package.json ]; then
   (just lint 2>/dev/null || biome check .)
