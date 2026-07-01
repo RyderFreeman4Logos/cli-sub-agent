@@ -334,6 +334,7 @@ mod tests {
             tier_mapping,
             aliases: HashMap::new(),
             tool_aliases: HashMap::new(),
+            tool_state_dirs: HashMap::new(),
             preferences: None,
             github: None,
             session: Default::default(),

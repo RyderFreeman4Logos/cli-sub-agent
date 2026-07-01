@@ -131,23 +131,120 @@ fn thread_rejects_different_project_claude() {
     ));
 }
 
+fn write_thread_jsonl(dir: &Path, first_line: serde_json::Value) -> std::path::PathBuf {
+    let path = dir.join("thread.jsonl");
+    std::fs::write(&path, format!("{first_line}\n")).expect("write thread jsonl");
+    path
+}
+
 #[test]
-fn thread_belongs_to_project_codex_always_true() {
-    let source = "/home/obj/.codex/sessions/2026/05/16/rollout-abc.jsonl";
-    let root = Path::new("/home/obj/project/github/user/repo");
+fn thread_belongs_to_matching_project_codex() {
+    let project = tempfile::tempdir().expect("project tempdir");
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let source = write_thread_jsonl(
+        session_dir.path(),
+        serde_json::json!({
+            "type": "session_meta",
+            "cwd": project.path().to_string_lossy(),
+        }),
+    );
+
     assert!(
-        thread_belongs_to_project(source, root, xurl_core::ProviderKind::Codex),
-        "codex sessions don't encode project; always pass ownership check"
+        thread_belongs_to_project(
+            source.to_str().expect("utf8 source"),
+            project.path(),
+            xurl_core::ProviderKind::Codex
+        ),
+        "codex session cwd must match the current project"
     );
 }
 
 #[test]
-fn thread_belongs_to_project_gemini_always_true() {
-    let source = "/home/obj/.gemini/history/session-abc.jsonl";
-    let root = Path::new("/home/obj/project/github/user/repo");
+fn thread_rejects_different_project_codex() {
+    let project = tempfile::tempdir().expect("project tempdir");
+    let other_project = tempfile::tempdir().expect("other project tempdir");
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let source = write_thread_jsonl(
+        session_dir.path(),
+        serde_json::json!({
+            "type": "session_meta",
+            "cwd": other_project.path().to_string_lossy(),
+        }),
+    );
+
     assert!(
-        thread_belongs_to_project(source, root, xurl_core::ProviderKind::Gemini),
-        "gemini sessions don't encode project; always pass ownership check"
+        !thread_belongs_to_project(
+            source.to_str().expect("utf8 source"),
+            project.path(),
+            xurl_core::ProviderKind::Codex
+        ),
+        "codex session from another project must be rejected"
+    );
+}
+
+#[test]
+fn thread_rejects_codex_missing_cwd() {
+    let project = tempfile::tempdir().expect("project tempdir");
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let source = write_thread_jsonl(
+        session_dir.path(),
+        serde_json::json!({
+            "type": "session_meta",
+            "id": "missing-cwd",
+        }),
+    );
+
+    assert!(
+        !thread_belongs_to_project(
+            source.to_str().expect("utf8 source"),
+            project.path(),
+            xurl_core::ProviderKind::Codex
+        ),
+        "codex session without cwd must fail closed"
+    );
+}
+
+#[test]
+fn thread_belongs_to_matching_project_gemini() {
+    let project = tempfile::tempdir().expect("project tempdir");
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let source = write_thread_jsonl(
+        session_dir.path(),
+        serde_json::json!({
+            "type": "session_meta",
+            "cwd": project.path().to_string_lossy(),
+        }),
+    );
+
+    assert!(
+        thread_belongs_to_project(
+            source.to_str().expect("utf8 source"),
+            project.path(),
+            xurl_core::ProviderKind::Gemini
+        ),
+        "gemini session cwd must match the current project when present"
+    );
+}
+
+#[test]
+fn thread_rejects_gemini_missing_cwd() {
+    let project = tempfile::tempdir().expect("project tempdir");
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let source = write_thread_jsonl(
+        session_dir.path(),
+        serde_json::json!({
+            "type": "session_meta",
+            "id": "missing-cwd",
+        }),
+    );
+
+    assert!(
+        !thread_belongs_to_project(
+            source.to_str().expect("utf8 source"),
+            project.path(),
+            xurl_core::ProviderKind::Gemini
+        ),
+        "gemini session without cwd must fail closed"
     );
 }
 

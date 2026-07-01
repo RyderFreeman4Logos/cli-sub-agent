@@ -1,3 +1,7 @@
+fn uses_acp_crash_retry(tool_name: &str) -> bool {
+    matches!(tool_name, "codex" | "claude-code")
+}
+
 #[async_trait]
 impl Transport for AcpTransport {
     fn mode(&self) -> TransportMode {
@@ -25,7 +29,7 @@ impl Transport for AcpTransport {
     ) -> Result<TransportResult> {
         let is_gemini = self.tool_name == "gemini-cli";
 
-        if self.tool_name == "codex" {
+        if uses_acp_crash_retry(&self.tool_name) {
             return execute_with_crash_retry(
                 self, prompt, tool_state, session, extra_env, &options,
             )

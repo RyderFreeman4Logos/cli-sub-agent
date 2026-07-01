@@ -65,6 +65,49 @@ fn test_check_availability_reports_swap_without_requiring_it() {
 }
 
 #[test]
+fn test_cgroup_available_memory_bytes_reads_v2_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("memory.max"), "1048576\n").expect("write memory.max");
+    std::fs::write(dir.path().join("memory.current"), "262144\n").expect("write memory.current");
+
+    assert_eq!(cgroup_available_memory_bytes_at(dir.path()), Some(786432));
+}
+
+#[test]
+fn test_cgroup_available_memory_bytes_treats_v2_max_as_unlimited() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("memory.max"), "max\n").expect("write memory.max");
+    std::fs::write(dir.path().join("memory.current"), "262144\n").expect("write memory.current");
+
+    assert_eq!(cgroup_available_memory_bytes_at(dir.path()), None);
+}
+
+#[test]
+fn test_cgroup_available_memory_bytes_reads_v1_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let memory_dir = dir.path().join("memory");
+    std::fs::create_dir(&memory_dir).expect("create memory cgroup dir");
+    std::fs::write(memory_dir.join("memory.limit_in_bytes"), "2097152\n")
+        .expect("write memory.limit_in_bytes");
+    std::fs::write(memory_dir.join("memory.usage_in_bytes"), "524288\n")
+        .expect("write memory.usage_in_bytes");
+
+    assert_eq!(cgroup_available_memory_bytes_at(dir.path()), Some(1572864));
+}
+
+#[test]
+fn test_effective_available_memory_uses_lower_cgroup_available() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("memory.max"), "1048576\n").expect("write memory.max");
+    std::fs::write(dir.path().join("memory.current"), "262144\n").expect("write memory.current");
+
+    assert_eq!(
+        effective_available_memory_bytes_at(4 * 1024 * 1024, dir.path()),
+        786432
+    );
+}
+
+#[test]
 fn test_evaluate_hard_block_when_available_below_reserve() {
     let result = evaluate_memory_availability("test_tool", 3000, 1000, 4000, 32_000, 4096, None);
     assert!(result.is_err());
