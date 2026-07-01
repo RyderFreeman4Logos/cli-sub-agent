@@ -259,7 +259,7 @@ pub(crate) fn daemon_completion_result(
     } else {
         ""
     };
-    let effective = daemon_completion_effective_outcome(packet);
+    let effective = daemon_completion_effective_outcome(packet, session_dir);
     let missing_result_note = if effective.forced_missing_result_failure {
         "; treating daemon completion as failure because result.toml was missing"
     } else {
@@ -312,8 +312,24 @@ struct DaemonCompletionEffectiveOutcome {
 
 fn daemon_completion_effective_outcome(
     packet: &DaemonCompletionPacket,
+    session_dir: &Path,
 ) -> DaemonCompletionEffectiveOutcome {
     if packet.status == "success" || packet.exit_code == 0 {
+        // ACP transport tools (e.g., hermes) do not write result.toml via
+        // env contract. When the daemon exits cleanly and the session has
+        // non-empty collected output (stdout), treat it as success rather
+        // than forcing a misleading failure. (#2588)
+        let stdout_path = session_dir.join("stdout.log");
+        let has_output = fs::read_to_string(&stdout_path)
+            .is_ok_and(|s| !s.trim().is_empty());
+        if has_output {
+            return DaemonCompletionEffectiveOutcome {
+                status: "success".to_string(),
+                exit_code: 0,
+                raw_process_exit_code: Some(packet.exit_code),
+                forced_missing_result_failure: false,
+            };
+        }
         return DaemonCompletionEffectiveOutcome {
             status: "failure".to_string(),
             exit_code: 1,
