@@ -101,13 +101,43 @@ pub(super) fn thread_belongs_to_project(
                 .unwrap_or_default();
             dir_name.as_ref() == encoded
         }
-        // Codex, Gemini, Opencode: session paths don't encode project root
-        // (e.g. codex uses ~/.codex/sessions/YYYY/MM/DD/...).
-        // The project field in RecallHistoryEntry is set from the CSA
-        // invocation context, so project ownership is tracked correctly
-        // regardless of the provider's path layout.
-        _ => true,
+        xurl_core::ProviderKind::Codex
+        | xurl_core::ProviderKind::Gemini
+        | xurl_core::ProviderKind::Opencode => {
+            thread_jsonl_cwd_belongs_to_project(thread_source, project_root)
+        }
+        _ => false,
     }
+}
+
+fn thread_jsonl_cwd_belongs_to_project(thread_source: &str, project_root: &Path) -> bool {
+    let Ok(project_root) = fs::canonicalize(project_root) else {
+        return false;
+    };
+    let Some(cwd) = thread_jsonl_first_line_cwd(thread_source) else {
+        return false;
+    };
+    let Ok(cwd) = fs::canonicalize(cwd) else {
+        return false;
+    };
+
+    cwd == project_root
+}
+
+fn thread_jsonl_first_line_cwd(thread_source: &str) -> Option<PathBuf> {
+    let file = fs::File::open(thread_source).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&line).ok()?;
+    value
+        .get("cwd")
+        .or_else(|| value.get("payload").and_then(|payload| payload.get("cwd")))?
+        .as_str()
+        .map(PathBuf::from)
 }
 
 pub(crate) fn spawn_recall_record_if_needed(project_root: &Path, current_depth: u32) {

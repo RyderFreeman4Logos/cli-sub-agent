@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 use sysinfo::System;
 use tracing::warn;
@@ -161,7 +163,7 @@ impl ResourceGuard {
     ) -> Result<()> {
         self.sys.refresh_memory();
 
-        let available_phys_bytes = self.sys.available_memory();
+        let available_phys_bytes = effective_available_memory_bytes(self.sys.available_memory());
         let available_swap_bytes = self.sys.free_swap();
         let total_ram_bytes = self.sys.total_memory();
         let available_phys = available_phys_bytes / 1024 / 1024;
@@ -225,6 +227,53 @@ const ACTIVE_SESSION_SAFE_FRACTION_NUM: u64 = 3;
 const ACTIVE_SESSION_SAFE_FRACTION_DEN: u64 = 4;
 const ACTIVE_SESSION_WARNING_FRACTION_NUM: u64 = 9;
 const ACTIVE_SESSION_WARNING_FRACTION_DEN: u64 = 10;
+const CGROUP_ROOT: &str = "/sys/fs/cgroup";
+
+fn effective_available_memory_bytes(available_phys_bytes: u64) -> u64 {
+    available_phys_bytes.min(cgroup_available_memory_bytes().unwrap_or(u64::MAX))
+}
+
+#[cfg(test)]
+fn effective_available_memory_bytes_at(available_phys_bytes: u64, cgroup_root: &Path) -> u64 {
+    available_phys_bytes.min(cgroup_available_memory_bytes_at(cgroup_root).unwrap_or(u64::MAX))
+}
+
+fn cgroup_available_memory_bytes() -> Option<u64> {
+    cgroup_available_memory_bytes_at(Path::new(CGROUP_ROOT))
+}
+
+fn cgroup_available_memory_bytes_at(cgroup_root: &Path) -> Option<u64> {
+    if let Some(available) = cgroup_v2_available_memory_bytes(cgroup_root) {
+        return available;
+    }
+    cgroup_v1_available_memory_bytes(cgroup_root)
+}
+
+fn cgroup_v2_available_memory_bytes(cgroup_root: &Path) -> Option<Option<u64>> {
+    let limit = read_cgroup_limit_bytes(&cgroup_root.join("memory.max"))?;
+    let current = read_cgroup_usage_bytes(&cgroup_root.join("memory.current"))?;
+    Some(limit.map(|limit| limit.saturating_sub(current)))
+}
+
+fn cgroup_v1_available_memory_bytes(cgroup_root: &Path) -> Option<u64> {
+    let memory_root = cgroup_root.join("memory");
+    let limit = read_cgroup_limit_bytes(&memory_root.join("memory.limit_in_bytes"))??;
+    let current = read_cgroup_usage_bytes(&memory_root.join("memory.usage_in_bytes"))?;
+    Some(limit.saturating_sub(current))
+}
+
+fn read_cgroup_limit_bytes(path: &Path) -> Option<Option<u64>> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    if trimmed == "max" {
+        return Some(None);
+    }
+    trimmed.parse::<u64>().ok().map(Some)
+}
+
+fn read_cgroup_usage_bytes(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
 
 /// Pure evaluation of memory availability against reserve.
 ///

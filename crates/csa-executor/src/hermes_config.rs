@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use tokio::process::Command;
 use crate::model_spec::ThinkingBudget;
 
 const HERMES_FINGERPRINT_FILE: &str = "hermes-run-config.sha256";
+const HERMES_ACP_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Per-run Hermes selection passed to the ACP adapter.
 ///
@@ -126,20 +128,42 @@ pub(crate) async fn run_hermes_acp_check(
     working_dir: &Path,
     env: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
+    run_hermes_acp_check_with_timeout(command, args, working_dir, env, HERMES_ACP_CHECK_TIMEOUT)
+        .await
+}
+
+async fn run_hermes_acp_check_with_timeout(
+    command: &str,
+    args: &[String],
+    working_dir: &Path,
+    env: &std::collections::HashMap<String, String>,
+    timeout_duration: Duration,
+) -> Result<()> {
+    let label = check_label(args);
     let mut cmd = Command::new(command);
     cmd.args(args)
         .arg("--check")
         .current_dir(working_dir)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
     for (key, value) in env {
         cmd.env(key, value);
     }
 
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("failed to run Hermes ACP preflight `{}`", check_label(args)))?;
+    let output = match tokio::time::timeout(timeout_duration, cmd.output()).await {
+        Ok(output) => {
+            output.with_context(|| format!("failed to run Hermes ACP preflight `{label}`"))?
+        }
+        Err(_) => {
+            tracing::warn!(
+                check = %label,
+                timeout_secs = timeout_duration.as_secs(),
+                "Hermes ACP preflight timed out; skipping non-blocking preflight"
+            );
+            return Ok(());
+        }
+    };
     if output.status.success() {
         return Ok(());
     }
@@ -152,7 +176,7 @@ pub(crate) async fn run_hermes_acp_check(
     let stdout = String::from_utf8_lossy(&output.stdout);
     Err(anyhow!(
         "Hermes ACP preflight failed: `{}` exited with {code}\nstdout:\n{}\nstderr:\n{}",
-        check_label(args),
+        label,
         stdout.trim(),
         stderr.trim()
     ))
@@ -241,5 +265,40 @@ mod tests {
         assert!(message.contains("hermes acp --check"), "{message}");
         assert!(message.contains("42"), "{message}");
         assert!(message.contains("check-failed"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn acp_check_timeout_is_non_blocking_success() {
+        use std::collections::HashMap;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hermes = dir.path().join("hermes");
+        std::fs::write(&hermes, "#!/bin/sh\nsleep 1\necho too-late >&2\nexit 42\n")
+            .expect("write fake hermes");
+        let mut perms = std::fs::metadata(&hermes)
+            .expect("fake hermes metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&hermes, perms).expect("chmod fake hermes");
+
+        let args = vec!["acp".to_string()];
+        let started = Instant::now();
+        run_hermes_acp_check_with_timeout(
+            hermes.to_str().expect("utf8 path"),
+            &args,
+            dir.path(),
+            &HashMap::new(),
+            Duration::from_millis(20),
+        )
+        .await
+        .expect("timeout should skip non-blocking Hermes ACP preflight");
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "timeout path should return promptly"
+        );
     }
 }
