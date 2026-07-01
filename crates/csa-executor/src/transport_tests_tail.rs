@@ -228,7 +228,7 @@ fn test_acp_command_for_tool_mappings() {
 
 #[test]
 fn test_codex_acp_fast_mode_uses_config_arg() {
-    let transport = AcpTransport::new_with_codex_fast_mode("codex", None, true);
+    let transport = AcpTransport::new_with_codex_fast_mode("codex", None, true, None);
 
     assert_eq!(
         transport.acp_args,

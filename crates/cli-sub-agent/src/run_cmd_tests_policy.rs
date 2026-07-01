@@ -171,7 +171,8 @@ fn format_post_run_commit_guard_message_includes_next_step_and_paths() {
         ],
     };
 
-    let message = format_post_run_commit_guard_message(&guard, false, false, false, Some("codex"));
+    let message =
+        format_post_run_commit_guard_message(&guard, false, false, false, None, Some("codex"));
     assert!(message.contains("WARNING"));
     assert!(message.contains("csa run --tool codex --skill commit"));
     assert!(message.contains("lineage-scoped child sessions"));
@@ -223,6 +224,7 @@ fn apply_post_run_commit_policy_sets_failure_when_policy_requires_commit() {
         None,
         true,
         false,
+        None,
         Some(&guard),
     );
 
@@ -263,6 +265,7 @@ fn apply_post_run_commit_policy_keeps_success_when_policy_disabled() {
         None,
         false,
         false,
+        None,
         Some(&guard),
     );
 
@@ -294,6 +297,7 @@ fn apply_post_run_commit_policy_fails_when_commit_attempt_left_head_unchanged() 
         None,
         false,
         true,
+        None,
         Some(&guard),
     );
 
@@ -341,6 +345,7 @@ fn apply_post_run_commit_policy_warns_when_head_externally_raced() {
         None,
         true,
         false,
+        None,
         Some(&guard),
     );
 
@@ -378,6 +383,7 @@ fn apply_post_run_commit_policy_does_not_report_external_race_for_normal_commit(
         None,
         true,
         true,
+        None,
         Some(&guard),
     );
 
@@ -394,6 +400,49 @@ fn apply_post_run_commit_policy_does_not_report_external_race_for_normal_commit(
         !result
             .stderr_output
             .contains("HEAD was moved by an external process"),
+        "{}",
+        result.stderr_output
+    );
+}
+
+#[test]
+fn apply_post_run_commit_policy_warns_when_commit_reflog_raced_without_dirty_guard() {
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "nothing to commit".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+        ..Default::default()
+    };
+    let race = CommitReflogRace {
+        created_commit: "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddddddd".to_string(),
+        current_head: "11111111111122222222222233333333333344444444".to_string(),
+    };
+
+    apply_post_run_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        None,
+        true,
+        true,
+        Some(&race),
+        None,
+    );
+
+    assert_eq!(result.exit_code, 1);
+    assert!(result.csa_gate_failure.is_none());
+    assert!(
+        result
+            .stderr_output
+            .contains("HEAD reflog shows git commit aaaaaaaaaaaa was created"),
+        "{}",
+        result.stderr_output
+    );
+    assert!(
+        result
+            .stderr_output
+            .contains("external checkout/reset moved the worktree before session completion (#2570)"),
         "{}",
         result.stderr_output
     );

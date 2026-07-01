@@ -140,6 +140,7 @@ fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
         None,
         true,
         false,
+        None,
         Some(&guard),
     );
 
@@ -240,6 +241,7 @@ fn apply_post_run_commit_policy_does_not_fail_closed_when_head_changed() {
         None,
         true,
         false,
+        None,
         Some(&guard),
     );
 
