@@ -4,6 +4,9 @@ pub(super) fn select_actionable_failure_line(text: &str) -> Option<String> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect();
+    if let Some(detail) = select_plan_child_died_detail(&all_lines) {
+        return Some(detail);
+    }
     if let Some(detail) = select_underlying_command_failure_detail(&all_lines) {
         return Some(detail);
     }
@@ -23,6 +26,15 @@ pub(super) fn select_actionable_failure_line(text: &str) -> Option<String> {
         .find(|line| is_high_signal_failure_line(line))
         .or_else(|| lines.last())
         .map(|line| truncate_failure_detail(line))
+}
+
+fn select_plan_child_died_detail(lines: &[&str]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .copied()
+        .find(|line| line.starts_with("plan_child_died "))
+        .map(truncate_failure_detail)
 }
 
 fn select_underlying_command_failure_detail(lines: &[&str]) -> Option<String> {

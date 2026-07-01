@@ -175,6 +175,24 @@ Afterward text.
 }
 
 #[test]
+fn append_bash_child_diagnostics_adds_child_status_to_stderr() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new_blocking(&td);
+    let project = td.path();
+    let session = csa_session::create_session(project, Some("child"), None, Some("codex"))
+        .expect("create child session");
+    let mut stderr = format!(
+        "Session {} has no live daemon process and no terminal result packet.",
+        session.meta_session_id
+    );
+
+    append_bash_child_diagnostics(&mut stderr, project, "");
+
+    assert!(stderr.contains("plan_child_died"));
+    assert!(stderr.contains("status=NoLivePID"));
+}
+
+#[test]
 fn clean_step_output_extracts_codex_json_event_stream_text() {
     let output = [
             r#"{"type":"thread.started","thread_id":"thread_1"}"#,

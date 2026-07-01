@@ -102,6 +102,50 @@ fn failure_summary_surfaces_actionable_step_stderr() {
 }
 
 #[test]
+fn failure_summary_prefers_plan_child_died_diagnostic() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let workflow_path = temp.path().join("workflow.toml");
+    let results = vec![StepResult {
+        step_id: 10,
+        title: "Phase 3 — Adversarial Debate".to_string(),
+        exit_code: 1,
+        duration_secs: 0.0,
+        skipped: false,
+        error: Some(
+            [
+                "Exit code 1",
+                "stderr (last 20 lines):",
+                "csa debate failed",
+                "plan_child_died session=01KWD2XP59K0QE6YMM0M7N2FHW status=NoLivePID phase=Active live_process=false result_status=missing result_exit=missing",
+            ]
+            .join("\n"),
+        ),
+        output: None,
+        session_id: None,
+        command: Some("csa debate --sa-mode true && csa session wait".to_string()),
+        stderr: Some("csa debate failed".to_string()),
+    }];
+    let report = PlanFailureReport::from_results(
+        "mktd",
+        &workflow_path,
+        "1 step(s) failed".to_string(),
+        &results,
+        None,
+    );
+
+    let summary_line = report.summary_line("patterns/mktd/workflow.toml");
+    let summary_section = report.render_summary_section();
+
+    for rendered in [&summary_line, &summary_section] {
+        assert!(
+            rendered.contains("plan_child_died session=01KWD2XP59K0QE6YMM0M7N2FHW")
+                && rendered.contains("status=NoLivePID"),
+            "parent-visible failure should expose the child session death diagnostic: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn failure_summary_surfaces_mktd_stdout_for_post_2082_issue_body_shape() {
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let workflow_path = temp.path().join("workflow.toml");
