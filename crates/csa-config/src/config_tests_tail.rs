@@ -769,18 +769,10 @@ fn test_enforce_tool_enabled_includes_alternatives_when_others_enabled() {
 /// be omitted entirely — no point listing an empty set.
 #[test]
 fn test_enforce_tool_enabled_omits_hint_when_no_alternatives() {
-    let known_tools = [
-        "gemini-cli",
-        "opencode",
-        "codex",
-        "claude-code",
-        "openai-compat",
-        "antigravity-cli",
-    ];
     let mut tools = HashMap::new();
-    for name in &known_tools {
+    for name in crate::global::all_known_tools() {
         tools.insert(
-            name.to_string(),
+            name.as_str().to_string(),
             ToolConfig {
                 enabled: false,
                 ..Default::default()

@@ -130,6 +130,7 @@ fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: false,
+        head_externally_raced: false,
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
@@ -229,6 +230,7 @@ fn apply_post_run_commit_policy_does_not_fail_closed_when_head_changed() {
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
         head_changed: true,
+        head_externally_raced: false,
         changed_paths: vec!["src/lib.rs".to_string()],
     };
 
@@ -246,6 +248,6 @@ fn apply_post_run_commit_policy_does_not_fail_closed_when_head_changed() {
     assert!(
         result
             .stderr_output
-            .contains("run created commit(s) but still left uncommitted workspace mutations")
+            .contains("HEAD was moved by an external process during this session")
     );
 }

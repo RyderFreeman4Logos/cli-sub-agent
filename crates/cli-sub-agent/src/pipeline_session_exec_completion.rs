@@ -527,6 +527,7 @@ mod tests {
         let commit_guard = crate::run_cmd::PostRunCommitGuard {
             workspace_mutated: true,
             head_changed: true,
+            head_externally_raced: false,
             changed_paths: vec!["tracked.txt".to_string()],
         };
         let mut result = csa_process::ExecutionResult {
