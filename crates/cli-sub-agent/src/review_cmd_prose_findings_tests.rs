@@ -115,6 +115,30 @@ Verification:
 }
 
 #[test]
+fn issue_2601_chinese_positive_evidence_bullets_do_not_become_prose_findings() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "PASS\n",
+        "- P1/P2/C1: \u{9ed8}\u{8ba4} evidence \u{5173}\u{95ed}\u{3001}raw ",
+        "\u{5173}\u{95ed}\u{3001}XDG \u{9ed8}\u{8ba4}\u{8def}\u{5f84}",
+        "\u{4e0e}\u{8def}\u{5f84}\u{8986}\u{76d6}/\u{975e}\u{6cd5}",
+        "\u{8def}\u{5f84}\u{6821}\u{9a8c}\u{5728} settings \u{4e2d}",
+        "\u{5df2}\u{5b9e}\u{73b0}\u{5e76}\u{6d4b}\u{8bd5}\n",
+        "- P2: CLI \u{900f}\u{4f20}\u{5df2}\u{6709}\u{76f4}\u{63a5}",
+        "\u{6d4b}\u{8bd5}\n",
+        "- C1: XDG override \u{5df2}\u{901a}\u{8fc7}\u{8def}\u{5f84}",
+        "\u{6821}\u{9a8c}\u{7f13}\u{89e3}\n",
+        "- P1: fallback \u{884c}\u{4e3a}\u{5df2}\u{6709}\u{673a}\u{68b0}",
+        "\u{6d4b}\u{8bd5}\n",
+        "- P2: reviewer summary \u{5df2}\u{8986}\u{76d6}\n",
+    ));
+
+    assert!(
+        findings.is_empty(),
+        "Chinese positive-evidence bullets must not become findings: {findings:?}"
+    );
+}
+
+#[test]
 fn issue_2440_verified_word_does_not_trigger_resolution() {
     use super::finding_text_describes_resolved_issue;
 
@@ -143,6 +167,48 @@ fn issue_2516_no_longer_describes_regression_not_resolution() {
             "The prior high finding is addressed and no longer present"
         ),
         "'no longer present' after a resolution word should be classified as resolved"
+    );
+}
+
+#[test]
+fn issue_2601_chinese_resolution_phrases_describe_resolved_issue() {
+    use super::finding_text_describes_resolved_issue;
+
+    for text in [
+        concat!(
+            "P1/P2/C1\u{ff1a}\u{9ed8}\u{8ba4} evidence \u{5173}\u{95ed}\u{3001}raw ",
+            "\u{5173}\u{95ed}\u{3001}XDG \u{9ed8}\u{8ba4}\u{8def}\u{5f84}",
+            "\u{4e0e}\u{8def}\u{5f84}\u{8986}\u{76d6}/\u{975e}\u{6cd5}",
+            "\u{8def}\u{5f84}\u{6821}\u{9a8c}\u{5df2}\u{5b9e}\u{73b0}",
+            "\u{5e76}\u{6d4b}\u{8bd5}",
+        ),
+        "P2\u{ff1a}CLI \u{8f93}\u{51fa}\u{5df2}\u{6709}\u{76f4}\u{63a5}\u{6d4b}\u{8bd5}",
+        "C1\u{ff1a}\u{975e}\u{6cd5}\u{8def}\u{5f84}\u{5df2}\u{901a}\u{8fc7} settings \u{6821}\u{9a8c}\u{7f13}\u{89e3}",
+        "P1\u{ff1a}\u{8986}\u{76d6}\u{7387}\u{5df2}\u{6709}\u{673a}\u{68b0}\u{6d4b}\u{8bd5}",
+        "P2\u{ff1a}\u{72b6}\u{6001}\u{6458}\u{8981}\u{5df2}\u{8986}\u{76d6}",
+    ] {
+        assert!(
+            finding_text_describes_resolved_issue(text),
+            "Chinese positive evidence should be classified as resolved: {text}"
+        );
+    }
+}
+
+#[test]
+fn issue_2601_chinese_active_problem_phrases_stay_blocking() {
+    use super::finding_text_describes_resolved_issue;
+
+    assert!(
+        !finding_text_describes_resolved_issue(
+            "P1: settings \u{8def}\u{5f84}\u{6821}\u{9a8c}\u{672a}\u{8986}\u{76d6}"
+        ),
+        "Chinese active problem prose must not be classified as resolved"
+    );
+    assert!(
+        !finding_text_describes_resolved_issue(
+            "P1: evidence \u{5df2}\u{8986}\u{76d6}\u{4e0d}\u{8db3}"
+        ),
+        "Chinese insufficiency prose must not be classified as resolved"
     );
 }
 
