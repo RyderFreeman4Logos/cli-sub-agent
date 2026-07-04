@@ -160,6 +160,34 @@ fn codex_yield_hint_prefers_mcp_wait_and_keeps_shell_fallback_yield() {
     );
 }
 
+/// Maximum allowed length of a single CALLER_HINT block body (bytes).
+///
+/// CALLER_HINT markers are emitted on every session wait cap (~240s). Over a
+/// multi-round review loop (8+ re-waits), verbose markers flood the caller
+/// agent's context window with noise, triggering compaction and losing earlier
+/// work context (#2591). This budget guards against future bloat.
+const CALLER_HINT_MAX_BYTES: usize = 300;
+
+#[test]
+fn caller_hint_blocks_stay_under_size_budget() {
+    let all_sources = [
+        ("run_cmd_daemon", RUN_CMD_DAEMON_SRC),
+        ("plan_cmd_daemon", PLAN_CMD_DAEMON_SRC),
+        ("session_cmds_daemon_wait", SESSION_CMDS_DAEMON_WAIT_SRC),
+    ];
+    for (site, src) in &all_sources {
+        for block in caller_hint_blocks(src) {
+            assert!(
+                block.len() <= CALLER_HINT_MAX_BYTES,
+                "{site} CALLER_HINT block is {} bytes, exceeds {} byte budget \
+                 (context flooding guard from #2591). Block: {block}",
+                block.len(),
+                CALLER_HINT_MAX_BYTES,
+            );
+        }
+    }
+}
+
 #[test]
 fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(RUN_CMD_DAEMON_SRC);
