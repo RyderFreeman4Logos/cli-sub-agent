@@ -110,7 +110,12 @@ impl BwrapCommandBuilder {
         }
 
         // Read-only readable paths. For /tmp files, only create parent dirs.
+        // Writable grants already imply readability; adding an overlapping
+        // read-only bind afterward would downgrade the writable mount.
         for path in &self.readable_paths {
+            if self.is_covered_by_writable_path(path) {
+                continue;
+            }
             let s = path.to_string_lossy();
             assert!(
                 path != tmp_prefix,
@@ -162,6 +167,13 @@ impl BwrapCommandBuilder {
         cmd.args(&self.tool_args);
 
         cmd
+    }
+
+    fn is_covered_by_writable_path(&self, readable_path: &Path) -> bool {
+        self.writable_paths.iter().any(|writable_path| {
+            let writable_path = writable_path.as_path();
+            readable_path == writable_path || readable_path.starts_with(writable_path)
+        })
     }
 
     fn sandbox_home(&self, host_home: Option<&Path>) -> Option<PathBuf> {

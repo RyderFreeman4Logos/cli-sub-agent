@@ -523,6 +523,31 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
 }
 
 #[test]
+fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path();
+    let path_str = path.to_string_lossy().into_owned();
+
+    let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+    builder.with_writable_path(path);
+    builder.with_readable_path(path);
+    let cmd = builder.build();
+    let args = command_args(&cmd);
+
+    assert!(
+        args.windows(3)
+            .any(|window| window[0] == "--bind" && window[1] == path_str && window[2] == path_str),
+        "duplicate readable+writable path must remain writable; args: {args:?}"
+    );
+    assert!(
+        !args.windows(3).any(|window| {
+            window[0] == "--ro-bind" && window[1] == path_str && window[2] == path_str
+        }),
+        "duplicate readable+writable path must not be remounted read-only; args: {args:?}"
+    );
+}
+
+#[test]
 fn test_bwrap_nested_tmp_path_creates_intermediate_dirs() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/deep/nested/dir"));
