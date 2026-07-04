@@ -413,15 +413,7 @@ fn emit_wait_completion_signal(
     }
     eprintln!("{signal}");
     eprintln!(
-        "<!-- CSA:CALLER_HINT action=\"next_session\" \
-         rule=\"If you have more sessions to wait for, call each 'csa session wait' \
-         in a SEPARATE Bash call. NEVER batch. \
-         Generate tokens between waits to keep your KV cache warm. \
-         If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
-         FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-         any manual polling wastes caller tokens with zero benefit. \
-         FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
-         suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->"
+        "<!-- CSA:CALLER_HINT action=\"next_session\" rule=\"More sessions? Wait each in a SEPARATE Bash call. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->"
     );
     let codex_hint = crate::process_tree::codex_yield_hint();
     if !codex_hint.is_empty() {

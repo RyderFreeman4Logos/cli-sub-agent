@@ -121,15 +121,7 @@ pub(crate) fn emit_wait_cap_outcome(
             "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=re-wait cmd=\"{wait_cmd_attr}\" -->"
         );
         eprintln!(
-            "<!-- CSA:CALLER_HINT action=\"retry_wait\" \
-             rule=\"Session is alive; this exit is healthy. Process this output NOW and generate tokens to warm your KV cache, \
-             then call {wait_cmd} again in a NEW Bash call. \
-             NEVER batch multiple session waits in one Bash call. \
-             If you background the wait (run_in_background: true), the completion task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top; that's pure redundancy and wastes tokens. \
-             FORBIDDEN: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-             any manual polling wastes caller tokens with zero benefit. \
-             FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
-             suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
+            "<!-- CSA:CALLER_HINT action=\"retry_wait\" rule=\"Session alive; re-wait in a NEW Bash call: {wait_cmd}. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->",
             wait_cmd = wait_cmd_attr,
         );
         let codex_hint = crate::process_tree::codex_yield_hint();

@@ -394,14 +394,7 @@ pub(crate) fn spawn_and_exit(
         attach_cmd = attach_cmd_attr,
     );
     eprintln!(
-        "<!-- CSA:CALLER_HINT action=\"wait\" \
-         rule=\"Call {wait_cmd} with run_in_background: true. \
-         The task-notification IS your wake signal — do NOT stack ScheduleWakeup, /loop, or sleep loops on top. \
-         NEVER batch multiple waits in a for/while loop; use one backgrounded Bash tool call per session. \
-         FORBIDDEN after backgrounding: ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID — \
-         any manual polling wastes caller tokens with zero benefit. \
-         FORBIDDEN: piping csa commands through 2>/dev/null. CSA errors on stderr are diagnostic — \
-         suppressing them hides invalid-argument errors and causes silent retry loops that waste thousands of tokens.\" -->",
+        "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->",
         wait_cmd = wait_cmd_attr,
     );
     let codex_hint = crate::process_tree::codex_yield_hint();
