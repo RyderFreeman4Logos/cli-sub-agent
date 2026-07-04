@@ -251,3 +251,52 @@ No blocking findings found.
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[test]
+fn issue_2601_pass_summary_chinese_positive_evidence_keeps_review_verdict_pass() {
+    let session_id = "01TEST2601CHINESEPASS";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-2601-chinese-positive-evidence", session_id);
+
+    write_extracted_empty_findings(&session_dir);
+    csa_session::persist_structured_output(
+        &session_dir,
+        concat!(
+            "<!-- CSA:SECTION:summary -->\n",
+            "PASS\n",
+            "<!-- CSA:SECTION:summary:END -->\n\n",
+            "<!-- CSA:SECTION:details -->\n",
+            "\u{7ed3}\u{8bba}\u{ff1a}\u{672a}\u{53d1}\u{73b0}",
+            "\u{9700}\u{8981}\u{963b}\u{65ad}\u{5408}\u{5e76}\u{7684}",
+            "\u{6b63}\u{786e}\u{6027}\u{3001}\u{5b89}\u{5168}\u{6216}",
+            "\u{5951}\u{7ea6}\u{95ee}\u{9898}\u{3002}\n\n",
+            "- P1/P2/C1: \u{9ed8}\u{8ba4} evidence \u{5173}\u{95ed}\u{3001}raw ",
+            "\u{5173}\u{95ed}\u{3001}XDG \u{9ed8}\u{8ba4}\u{8def}\u{5f84}",
+            "\u{4e0e}\u{8def}\u{5f84}\u{8986}\u{76d6}/\u{975e}\u{6cd5}",
+            "\u{8def}\u{5f84}\u{6821}\u{9a8c}\u{5728} settings \u{4e2d}",
+            "\u{5df2}\u{5b9e}\u{73b0}\u{5e76}\u{6d4b}\u{8bd5}\n",
+            "- P2: CLI \u{900f}\u{4f20}\u{5df2}\u{6709}\u{76f4}\u{63a5}",
+            "\u{6d4b}\u{8bd5}\n",
+            "- C1: \u{975e}\u{6cd5}\u{8def}\u{5f84}\u{5df2}\u{901a}\u{8fc7} ",
+            "settings \u{6821}\u{9a8c}\u{7f13}\u{89e3}\n",
+            "- P1: fallback \u{884c}\u{4e3a}\u{5df2}\u{6709}\u{673a}\u{68b0}",
+            "\u{6d4b}\u{8bd5}\n",
+            "- P2: reviewer summary \u{5df2}\u{8986}\u{76d6}\n",
+            "<!-- CSA:SECTION:details:END -->\n",
+        ),
+    )
+    .expect("persist structured output");
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    persist_review_verdict(&project_root, &meta, &[], Vec::new());
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Pass);
+    assert_eq!(verdict.verdict_legacy, "CLEAN");
+    assert!(verdict.severity_counts.values().all(|count| *count == 0));
+
+    let findings = read_findings_toml(&session_dir);
+    assert!(findings.findings.is_empty());
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}

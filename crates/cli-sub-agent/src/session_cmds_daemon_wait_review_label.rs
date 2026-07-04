@@ -2,6 +2,7 @@ use std::path::Path;
 
 use csa_core::types::ReviewDecision;
 use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact};
+use tracing::warn;
 
 pub(super) fn read_review_verdict_label(
     session_dir: &Path,
@@ -25,6 +26,16 @@ pub(super) fn read_review_verdict_label(
         }
         if summary_requires_failed_gate {
             return Some("FAIL".to_string());
+        }
+        if artifact.decision == ReviewDecision::Fail
+            && human_summary_is_exact_pass(session_dir, result)
+            && !review_artifact_or_meta_has_failure_diagnostic(meta.as_ref(), &artifact)
+        {
+            warn!(
+                session_dir = %session_dir.display(),
+                "Review verdict artifact is FAIL but the human summary is exactly PASS; showing PASS label"
+            );
+            return Some("PASS".to_string());
         }
         if artifact.decision == ReviewDecision::Pass {
             if meta
@@ -179,6 +190,29 @@ fn read_review_meta_for_label(session_dir: &Path) -> Option<ReviewSessionMeta> {
     serde_json::from_str::<ReviewSessionMeta>(&raw).ok()
 }
 
+fn human_summary_is_exact_pass(session_dir: &Path, result: &csa_session::SessionResult) -> bool {
+    crate::session_summary_text::human_session_summary(session_dir, &result.summary)
+        .is_some_and(|summary| summary.trim() == "PASS")
+}
+
+fn review_artifact_or_meta_has_failure_diagnostic(
+    meta: Option<&ReviewSessionMeta>,
+    artifact: &ReviewVerdictArtifact,
+) -> bool {
+    artifact.no_provider_launch.is_some()
+        || non_empty_label(artifact.primary_failure.as_deref())
+        || non_empty_label(artifact.failure_reason.as_deref())
+        || meta.is_some_and(|meta| {
+            non_empty_label(meta.status_reason.as_deref())
+                || non_empty_label(meta.primary_failure.as_deref())
+                || non_empty_label(meta.failure_reason.as_deref())
+        })
+}
+
+fn non_empty_label(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
 fn review_failure_reason_label(
     meta: Option<&ReviewSessionMeta>,
     artifact: &ReviewVerdictArtifact,
@@ -245,5 +279,90 @@ fn normalize_review_verdict_label(value: &str, result: &csa_session::SessionResu
         "PASS" | "CLEAN" => "PASS".to_string(),
         "FAIL" | "FAILED" | "HAS_ISSUES" => "FAIL".to_string(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn terminal_result(status: &str, exit_code: i32, summary: &str) -> csa_session::SessionResult {
+        let now = Utc::now();
+        csa_session::SessionResult {
+            status: status.to_string(),
+            exit_code,
+            summary: summary.to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_2601_review_label_exact_pass_summary_overrides_failed_prose_artifact() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        csa_session::persist_structured_output(
+            temp.path(),
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        )
+        .expect("persist pass summary");
+        let mut artifact = ReviewVerdictArtifact::from_parts(
+            "01TEST2601LABELPASS".to_string(),
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+            &[],
+            Vec::new(),
+        );
+        artifact
+            .severity_counts
+            .insert(csa_session::Severity::High, 1);
+        csa_session::write_review_verdict(temp.path(), &artifact).expect("write verdict");
+        csa_session::write_findings_toml(
+            temp.path(),
+            &csa_session::FindingsFile {
+                findings: vec![csa_session::ReviewFinding {
+                    id: "prose-001".to_string(),
+                    severity: csa_session::Severity::High,
+                    file_ranges: Vec::new(),
+                    is_regression_of_commit: None,
+                    suggested_test_scenario: None,
+                    description: "P1 positive evidence was misclassified".to_string(),
+                }],
+            },
+        )
+        .expect("write findings");
+
+        let label = read_review_verdict_label(temp.path(), &terminal_result("failure", 1, "PASS"));
+
+        assert_eq!(label.as_deref(), Some("PASS"));
+    }
+
+    #[test]
+    fn issue_2601_review_label_exact_pass_summary_does_not_hide_hard_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        csa_session::persist_structured_output(
+            temp.path(),
+            "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n",
+        )
+        .expect("persist pass summary");
+        let mut artifact = ReviewVerdictArtifact::from_parts(
+            "01TEST2601LABELFAIL".to_string(),
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+            &[],
+            Vec::new(),
+        );
+        artifact.failure_reason = Some("provider crashed before final review".to_string());
+        csa_session::write_review_verdict(temp.path(), &artifact).expect("write verdict");
+
+        let label = read_review_verdict_label(temp.path(), &terminal_result("failure", 1, "PASS"));
+
+        assert!(
+            label
+                .as_deref()
+                .is_some_and(|label| label.starts_with("FAIL"))
+        );
     }
 }

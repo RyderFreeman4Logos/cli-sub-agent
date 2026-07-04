@@ -45,6 +45,28 @@ const ACTIVE_PROBLEM_WORDS: &[&str] = &[
     "unsafe",
     "wrong",
 ];
+const CHINESE_RESOLUTION_PHRASES: &[&str] = &[
+    "\u{5df2}\u{5b9e}\u{73b0}\u{5e76}\u{6d4b}\u{8bd5}",
+    "\u{5df2}\u{6709}\u{76f4}\u{63a5}\u{6d4b}\u{8bd5}",
+    "\u{5df2}\u{6709}\u{673a}\u{68b0}\u{6d4b}\u{8bd5}",
+    "\u{5df2}\u{8986}\u{76d6}",
+];
+const CHINESE_ACTIVE_PROBLEM_PHRASES: &[&str] = &[
+    "\u{672a}\u{5b9e}\u{73b0}",
+    "\u{672a}\u{8986}\u{76d6}",
+    "\u{672a}\u{6d4b}\u{8bd5}",
+    "\u{672a}\u{7f13}\u{89e3}",
+    "\u{5c1a}\u{672a}",
+    "\u{4ecd}\u{672a}",
+    "\u{4ecd}\u{5b58}\u{5728}",
+    "\u{7f3a}\u{5c11}",
+    "\u{9057}\u{6f0f}",
+    "\u{5931}\u{8d25}",
+    "\u{9519}\u{8bef}",
+    "\u{98ce}\u{9669}",
+    "\u{95ee}\u{9898}\u{4ecd}",
+    "\u{8986}\u{76d6}\u{4e0d}\u{8db3}",
+];
 
 pub(super) fn review_signal_describes_resolved_issue(
     tokens: &[String],
@@ -82,13 +104,36 @@ pub(super) fn finding_text_describes_resolved_issue(text: &str) -> bool {
     if tokens
         .iter()
         .any(|token| ACTIVE_PROBLEM_WORDS.contains(&token.as_str()))
+        || chinese_active_problem_phrase_applies(text)
     {
         return false;
+    }
+    if chinese_resolution_phrase_applies(text) {
+        return true;
     }
     tokens
         .iter()
         .enumerate()
         .any(|(index, _)| resolution_token_applies(&tokens, index))
+}
+
+fn chinese_resolution_phrase_applies(text: &str) -> bool {
+    CHINESE_RESOLUTION_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+        || ordered_substrings_apply(text, "\u{5df2}\u{901a}\u{8fc7}", "\u{7f13}\u{89e3}")
+}
+
+fn chinese_active_problem_phrase_applies(text: &str) -> bool {
+    CHINESE_ACTIVE_PROBLEM_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+fn ordered_substrings_apply(text: &str, first: &str, second: &str) -> bool {
+    text.find(first)
+        .and_then(|start| text[start + first.len()..].find(second))
+        .is_some()
 }
 
 fn resolution_token_applies(tokens: &[String], index: usize) -> bool {

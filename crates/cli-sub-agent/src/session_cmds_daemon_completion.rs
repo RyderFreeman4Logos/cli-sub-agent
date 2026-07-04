@@ -320,8 +320,7 @@ fn daemon_completion_effective_outcome(
         // non-empty collected output (stdout), treat it as success rather
         // than forcing a misleading failure. (#2588)
         let stdout_path = session_dir.join("stdout.log");
-        let has_output = fs::read_to_string(&stdout_path)
-            .is_ok_and(|s| !s.trim().is_empty());
+        let has_output = fs::read_to_string(&stdout_path).is_ok_and(|s| !s.trim().is_empty());
         if has_output {
             return DaemonCompletionEffectiveOutcome {
                 status: "success".to_string(),
