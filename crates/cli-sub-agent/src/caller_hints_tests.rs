@@ -1,19 +1,17 @@
-//! Tests asserting `CSA:CALLER_HINT` emissions carry the no-stack-wakeup
-//! warning at every emit site.
+//! Tests asserting `CSA:CALLER_HINT` emissions are compact and carry
+//! the essential action/re-wait guidance.
 //!
-//! The warning is a stable contract callers depend on (AGENTS.md rules 042 +
-//! 046, GitHub issue #1132). Source-level assertions guard against accidental
-//! removal during future edits to the four daemon entry points.
+//! After #2591, CALLER_HINT markers are compact (≤200 bytes) instead of
+//! the previous ~1KB verbose rules. The core contract is:
+//!   1. Each daemon entry point emits exactly one CALLER_HINT
+//!   2. The hint contains the re-wait command or action
+//!   3. The hint warns against polling and loops
 #![cfg(test)]
 
 use std::path::Path;
 
-const NO_STACK_WAKEUP_WARNING: &str = "do NOT stack ScheduleWakeup, /loop, or sleep loops on top";
-const BACKGROUND_WAIT_RECOMMENDATION: &str = "with run_in_background: true";
-const TASK_NOTIFICATION_WAKE_SIGNAL: &str = "The task-notification IS your wake signal";
-const NO_MANUAL_POLLING_DIRECTIVE: &str =
-    "ls/cat/wc/grep on session-dir, state.toml reads, ps checks on daemon PID";
-const NO_STDERR_SUPPRESS_DIRECTIVE: &str = "piping csa commands through 2>/dev/null";
+const NO_POLLING_WARNING: &str = "no polling";
+const NO_LOOPS_WARNING: &str = "no loops";
 
 const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
@@ -46,36 +44,16 @@ fn assert_wait_hint_contract(block: &str, site: &str) {
         "{site} emits action=\"wait\""
     );
     assert!(
-        block.contains(BACKGROUND_WAIT_RECOMMENDATION),
-        "{site} CALLER_HINT must recommend backgrounding session wait with run_in_background: true"
+        block.contains("run_in_background"),
+        "{site} CALLER_HINT must recommend backgrounding session wait"
     );
     assert!(
-        block.contains("Call {wait_cmd} with run_in_background: true"),
-        "{site} CALLER_HINT must reuse the SESSION_STARTED wait_cmd variable"
+        block.contains(NO_POLLING_WARNING),
+        "{site} CALLER_HINT must warn against polling"
     );
     assert!(
-        !block.contains("{id}{cd}"),
-        "{site} CALLER_HINT must not rebuild the wait command by concatenating id and cd"
-    );
-    assert!(
-        block.contains(TASK_NOTIFICATION_WAKE_SIGNAL),
-        "{site} CALLER_HINT must state that task-notification is the wake signal"
-    );
-    assert!(
-        block.contains(NO_STACK_WAKEUP_WARNING),
-        "{site} CALLER_HINT must warn against ScheduleWakeup/loop stacking; missing warning: {NO_STACK_WAKEUP_WARNING}"
-    );
-    assert!(
-        !block.contains("in a SEPARATE Bash call"),
-        "{site} CALLER_HINT must not lead with the old foreground-wait phrasing"
-    );
-    assert!(
-        block.contains(NO_MANUAL_POLLING_DIRECTIVE),
-        "{site} CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
-    );
-    assert!(
-        block.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
-        "{site} CALLER_HINT must forbid stderr suppression (2>/dev/null)"
+        block.contains(NO_LOOPS_WARNING),
+        "{site} CALLER_HINT must warn against loops"
     );
 }
 
@@ -106,7 +84,6 @@ fn daemon_wait_command_shell_escapes_project_root_single_quotes() {
         "01KAS6M5XG7V4M4M6YDRS7P8R9",
         Path::new("/tmp/csa'; touch /tmp/csa-review-proof; echo '"),
     );
-
     assert!(
         command.contains("'\\''; touch /tmp/csa-review-proof; echo '\\'''"),
         "project root single quotes must remain inside the --cd shell argument: {command}"
@@ -144,8 +121,7 @@ fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
         /// CSA:CALLER_HINT action="wait" — described elsewhere in docs
         fn emit() {
             eprintln!(
-                "<!-- CSA:CALLER_HINT action=\"wait\" \
-                 rule=\"do NOT stack ScheduleWakeup, /loop, or sleep loops on top\" -->"
+                "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"no polling, no loops\" -->"
             );
         }
     "#;
@@ -217,16 +193,12 @@ fn session_cmds_daemon_wait_retry_wait_hint_warns_no_stack_wakeup() {
     );
     let retry = retry_blocks[0];
     assert!(
-        retry.contains(NO_STACK_WAKEUP_WARNING),
-        "retry_wait CALLER_HINT must warn against ScheduleWakeup/loop stacking"
+        retry.contains(NO_POLLING_WARNING),
+        "retry_wait CALLER_HINT must warn against polling"
     );
     assert!(
-        retry.contains(NO_MANUAL_POLLING_DIRECTIVE),
-        "retry_wait CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
-    );
-    assert!(
-        retry.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
-        "retry_wait CALLER_HINT must forbid stderr suppression (2>/dev/null)"
+        retry.contains(NO_LOOPS_WARNING),
+        "retry_wait CALLER_HINT must warn against loops"
     );
 }
 
@@ -244,15 +216,11 @@ fn session_cmds_daemon_wait_next_session_hint_warns_no_stack_wakeup() {
     );
     let next = next_blocks[0];
     assert!(
-        next.contains(NO_STACK_WAKEUP_WARNING),
-        "next_session CALLER_HINT must warn against ScheduleWakeup/loop stacking"
+        next.contains(NO_POLLING_WARNING),
+        "next_session CALLER_HINT must warn against polling"
     );
     assert!(
-        next.contains(NO_MANUAL_POLLING_DIRECTIVE),
-        "next_session CALLER_HINT must forbid manual polling (ls/cat/wc/grep on session-dir, state.toml reads, ps checks)"
-    );
-    assert!(
-        next.contains(NO_STDERR_SUPPRESS_DIRECTIVE),
-        "next_session CALLER_HINT must forbid stderr suppression (2>/dev/null)"
+        next.contains(NO_LOOPS_WARNING),
+        "next_session CALLER_HINT must warn against loops"
     );
 }
