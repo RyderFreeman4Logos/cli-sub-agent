@@ -205,7 +205,7 @@ impl KillDiagnostic {
         let details = self.detail_parts().join(", ");
         let suffix = match self.hint {
             KillHint::Earlyoom | KillHint::MemoryPressure | KillHint::PossibleMemoryPressure => {
-                "Re-dispatch when host memory frees."
+                "Re-dispatch when host memory frees. If earlyoom has a --prefer list that includes csa/cargo, consider removing it or raising the threshold (-m) to avoid premature kills."
             }
             KillHint::CsaTimeout => "The recorded timeout is the concrete kill reason.",
             KillHint::MemorySoftLimit => {
@@ -524,6 +524,19 @@ fn classify_signal_kill(
         KillHint::Earlyoom
     } else if strong_memory_pressure {
         KillHint::MemoryPressure
+    } else if observations.earlyoom_running
+        && exit_code == 143
+        && matches!(
+            terminal_reason.as_deref(),
+            Some("sigterm" | "daemon_sigterm")
+        )
+    {
+        // earlyoom is configured with --prefer lists that target CSA/cargo
+        // processes. Even when current MemAvailable looks healthy at
+        // diagnostic time, a transient spike or the prefer list can cause
+        // earlyoom to send SIGTERM. Report this as earlyoom rather than
+        // unknown_signal so the user gets actionable guidance (#2604, #2605).
+        KillHint::Earlyoom
     } else if possible_low_memory {
         KillHint::PossibleMemoryPressure
     } else if exit_code == 143
