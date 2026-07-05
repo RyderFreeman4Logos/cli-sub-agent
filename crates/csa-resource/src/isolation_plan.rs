@@ -14,6 +14,8 @@ mod claude_paths;
 mod codex_paths;
 #[path = "isolation_plan_runtime_path.rs"]
 mod runtime_path;
+#[path = "isolation_plan_rust_env.rs"]
+mod rust_env;
 #[path = "isolation_plan_validation.rs"]
 mod validation;
 #[cfg(test)]
@@ -284,7 +286,8 @@ impl IsolationPlanBuilder {
         self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
-        let sandbox_tmpdir = sandbox_tmpdir_for_capability(self.filesystem, session_dir);
+        let sandbox_tmpdir =
+            runtime_path::sandbox_tmpdir_for_capability(self.filesystem, session_dir);
         self.env_overrides.insert(
             "TMPDIR".to_string(),
             sandbox_tmpdir.to_string_lossy().into_owned(),
@@ -334,10 +337,20 @@ impl IsolationPlanBuilder {
             // can create it (the parent must exist).
             let default_cargo_home = home.join(".cargo");
             if let Ok(cargo_home_env) = std::env::var(csa_core::env::CARGO_HOME_ENV_KEY) {
-                let cargo_home = rust_state_path_or_default(&cargo_home_env, &default_cargo_home);
+                let cargo_home =
+                    rust_env::resolve_rust_state_path(&cargo_home_env, &default_cargo_home);
                 if cargo_home == default_cargo_home {
                     // CARGO_HOME points to the default — treat as if unset.
                     add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
+                    // Override the env var when the original pointed at a
+                    // read-only system prefix (e.g. /usr/local) so the child
+                    // process uses the writable default instead (#2607).
+                    rust_env::insert_env_override_if_needed(
+                        &mut self.env_overrides,
+                        csa_core::env::CARGO_HOME_ENV_KEY,
+                        &cargo_home_env,
+                        &default_cargo_home,
+                    );
                 } else {
                     // CARGO_HOME points elsewhere — only expose that directory.
                     // Do NOT add ~/.cargo (may contain credentials/config).
@@ -352,9 +365,16 @@ impl IsolationPlanBuilder {
             // CARGO_HOME: when explicitly set elsewhere, don't expose ~/.rustup.
             let default_rustup = home.join(".rustup");
             if let Ok(rustup_home) = std::env::var(csa_core::env::RUSTUP_HOME_ENV_KEY) {
-                let rustup_path = rust_state_path_or_default(&rustup_home, &default_rustup);
+                let rustup_path = rust_env::resolve_rust_state_path(&rustup_home, &default_rustup);
                 if rustup_path == default_rustup {
                     add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
+                    // Same env override as CARGO_HOME (#2607).
+                    rust_env::insert_env_override_if_needed(
+                        &mut self.env_overrides,
+                        csa_core::env::RUSTUP_HOME_ENV_KEY,
+                        &rustup_home,
+                        &default_rustup,
+                    );
                 } else {
                     // RUSTUP_HOME points elsewhere — only expose that directory.
                     add_dir_or_creatable_parent(&mut self.writable_paths, &rustup_path);
@@ -503,7 +523,7 @@ impl IsolationPlanBuilder {
             return;
         };
 
-        for socket_path in runtime_daemon_socket_paths(&runtime_root) {
+        for socket_path in runtime_path::runtime_daemon_socket_paths(&runtime_root) {
             if !socket_path.exists() || self.path_already_exposed(&socket_path) {
                 continue;
             }
@@ -530,98 +550,8 @@ impl IsolationPlanBuilder {
     }
 }
 
-fn runtime_daemon_socket_paths(runtime_root: &Path) -> [PathBuf; 2] {
-    [
-        runtime_root.join("bus"),
-        runtime_root.join("systemd/private"),
-    ]
-}
-
-fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: &Path) -> PathBuf {
-    match filesystem {
-        FilesystemCapability::Bwrap => PathBuf::from(DEFAULT_SANDBOX_TMPDIR),
-        FilesystemCapability::Landlock | FilesystemCapability::None => session_dir.join("tmp"),
-    }
-}
-
-fn rust_state_path_or_default(value: &str, default: &Path) -> PathBuf {
-    let path = PathBuf::from(value);
-    if value.trim().is_empty() || csa_core::env::rust_state_path_needs_session_override(&path) {
-        default.to_path_buf()
-    } else {
-        path
-    }
-}
-
-/// Add `dir` to `paths` if it exists, otherwise pre-create it when a
-/// non-root ancestor exists (bwrap `--bind` requires the source path to exist).
-///
-/// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
-/// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
-/// escaping the sandbox boundary.
 fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
-    if is_sensitive_system_path(dir) {
-        tracing::warn!(
-            path = %dir.display(),
-            "rejecting writable path under sensitive system directory"
-        );
-        return false;
-    }
-
-    if dir.exists() {
-        paths.push(dir.to_path_buf());
-        true
-    } else if dir
-        .ancestors()
-        .skip(1)
-        .find(|ancestor| ancestor.exists())
-        .is_some_and(|ancestor| ancestor != Path::new("/"))
-    {
-        // Pre-create the directory so bwrap --bind can mount it.
-        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME/shared npm cache) the
-        // dir or one of its intermediate parents won't exist yet; bwrap
-        // requires the source path to be present.
-        match std::fs::create_dir_all(dir) {
-            Ok(()) => {
-                paths.push(dir.to_path_buf());
-                true
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %dir.display(),
-                    error = %e,
-                    "failed to pre-create directory for sandbox writable mount, skipping"
-                );
-                false
-            }
-        }
-    } else {
-        false
-    }
-}
-
-#[cfg(test)]
-mod issue_2404_tests {
-    use super::*;
-
-    #[test]
-    fn issue_2404_user_daemon_ipc_disabled_by_default() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .build()
-            .expect("build should succeed in BestEffort mode");
-        assert!(!plan.user_daemon_ipc);
-    }
-
-    #[test]
-    fn issue_2404_user_daemon_ipc_enabled_via_builder() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_user_daemon_ipc()
-            .build()
-            .expect("build should succeed in BestEffort mode");
-        assert!(plan.user_daemon_ipc);
-    }
+    runtime_path::add_dir_or_creatable_parent(paths, dir)
 }
 
 #[cfg(test)]
@@ -646,3 +576,7 @@ mod tmpdir_tests;
 #[cfg(test)]
 #[path = "isolation_plan_claude_tests.rs"]
 mod claude_tests;
+
+#[cfg(test)]
+#[path = "isolation_plan_daemon_ipc_tests.rs"]
+mod daemon_ipc_tests;
