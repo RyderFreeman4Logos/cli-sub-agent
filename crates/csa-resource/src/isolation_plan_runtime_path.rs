@@ -1,4 +1,25 @@
+use crate::filesystem_sandbox::FilesystemCapability;
+
 use std::path::{Component, Path, PathBuf};
+
+pub(super) const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
+
+pub(super) fn runtime_daemon_socket_paths(runtime_root: &Path) -> [PathBuf; 2] {
+    [
+        runtime_root.join("bus"),
+        runtime_root.join("systemd/private"),
+    ]
+}
+
+pub(super) fn sandbox_tmpdir_for_capability(
+    filesystem: FilesystemCapability,
+    session_dir: &Path,
+) -> PathBuf {
+    match filesystem {
+        FilesystemCapability::Bwrap => PathBuf::from(DEFAULT_SANDBOX_TMPDIR),
+        FilesystemCapability::Landlock | FilesystemCapability::None => session_dir.join("tmp"),
+    }
+}
 
 pub(super) fn canonicalize_or_fallback(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -94,4 +115,51 @@ pub(super) fn is_sensitive_system_path(path: &Path) -> bool {
         }
     }
     path == Path::new("/")
+}
+
+/// Add `dir` to `paths` if it exists, otherwise pre-create it when a
+/// non-root ancestor exists (bwrap `--bind` requires the source path to exist).
+///
+/// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
+/// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
+/// escaping the sandbox boundary.
+pub(super) fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
+    if is_sensitive_system_path(dir) {
+        tracing::warn!(
+            path = %dir.display(),
+            "rejecting writable path under sensitive system directory"
+        );
+        return false;
+    }
+
+    if dir.exists() {
+        paths.push(dir.to_path_buf());
+        true
+    } else if dir
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.exists())
+        .is_some_and(|ancestor| ancestor != Path::new("/"))
+    {
+        // Pre-create the directory so bwrap --bind can mount it.
+        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME/shared npm cache) the
+        // dir or one of its intermediate parents won't exist yet; bwrap
+        // requires the source path to be present.
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => {
+                paths.push(dir.to_path_buf());
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %e,
+                    "failed to pre-create directory for sandbox writable mount, skipping"
+                );
+                false
+            }
+        }
+    } else {
+        false
+    }
 }

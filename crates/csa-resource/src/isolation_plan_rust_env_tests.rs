@@ -65,3 +65,38 @@ fn tool_defaults_do_not_expose_usr_local_as_rust_state_home() {
     assert!(plan.writable_paths.contains(&home.join(".rustup")));
     assert!(!plan.writable_paths.contains(&PathBuf::from("/usr/local")));
 }
+
+#[test]
+fn tool_defaults_override_cargo_home_env_when_usr_local_is_readonly() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(home.join(".cargo")).unwrap();
+    std::fs::create_dir_all(home.join(".rustup")).unwrap();
+    let _home = ScopedEnvVar::set("HOME", &home);
+    let _xdg = ScopedEnvVar::unset("XDG_STATE_HOME");
+    let _cargo_home = ScopedEnvVar::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local");
+    let _rustup_home = ScopedEnvVar::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults(
+            "codex",
+            &PathBuf::from("/tmp/project"),
+            &PathBuf::from("/tmp/session"),
+        )
+        .build()
+        .expect("should succeed");
+
+    // The env var must be overridden to the writable default (#2607).
+    assert_eq!(
+        plan.env_overrides.get(csa_core::env::CARGO_HOME_ENV_KEY),
+        Some(&home.join(".cargo").to_string_lossy().to_string()),
+        "CARGO_HOME must be overridden to writable ~/.cargo when original is /usr/local"
+    );
+    assert_eq!(
+        plan.env_overrides.get(csa_core::env::RUSTUP_HOME_ENV_KEY),
+        Some(&home.join(".rustup").to_string_lossy().to_string()),
+        "RUSTUP_HOME must be overridden to writable ~/.rustup when original is /usr/local"
+    );
+}
