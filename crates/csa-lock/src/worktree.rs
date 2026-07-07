@@ -7,7 +7,6 @@ use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Guard for a write-capable CSA session sharing one git worktree.
 ///
@@ -195,10 +194,10 @@ pub fn worktree_write_lock_is_held_by_session(
 /// PID liveness; `csa-lock` stays independent of the session registry crate.
 ///
 /// `holder_session_is_terminal` lets callers reclaim a stale lock when the
-/// session registry says the holder is already done but the holder process is
-/// still alive. In that path the holder PID is asked to terminate before the
-/// lock is retried, and the retry only proceeds after the fd-level flock is
-/// available.
+/// session registry says the holder is done (phase Retired/ToolExhausted).
+/// Recovery is gated by `is_flock_available`: if the OS reports no process
+/// holds the flock, the lock is reclaimed. No SIGTERM is sent — flock
+/// availability is the sole safety guarantee.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
@@ -284,17 +283,24 @@ pub fn acquire_worktree_write_lock(
                 }
             }
 
+            // Terminal-session flock recovery: if the holder session's phase
+            // indicates it has completed (Retired/ToolExhausted) AND the flock
+            // is actually free (no live process holds it), reclaim the lock.
+            // This handles the case where the holder process exited without
+            // running its Drop guard (e.g. crash, SIGKILL) but the PID hasn't
+            // been recycled — is_pid_dead returns false but flock is free.
+            // We do NOT send SIGTERM — flock availability is the sole safety
+            // guarantee, provided atomically by the OS.
             if let Some(diag) = diagnostic.as_ref()
                 && let Some(holder_session_id) = diag.holder_session_id.as_deref()
                 && holder_session_is_terminal(holder_session_id)
-                && terminate_holder_process(diag.pid, diag.pid_start_time_ticks)
-                && wait_for_flock_available_after_termination(&lock_path)
+                && is_flock_available(&lock_path)
             {
                 tracing::warn!(
                     lock_path = %lock_path.display(),
                     holder_pid = diag.pid,
                     holder_session = holder_session_id,
-                    "removing stale worktree write lock (holder session is terminal, holder PID was terminated)"
+                    "removing stale worktree write lock (holder session is terminal, flock is free)"
                 );
                 match retry_acquire_worktree_write_lock(
                     &lock_path,
@@ -307,7 +313,7 @@ pub fn acquire_worktree_write_lock(
                     Err(retry_error) => {
                         anyhow::bail!(
                             "concurrent write session blocked: terminal holder session detected \
-                             and holder process was terminated, but retry failed: {}. {}",
+                             and flock is free, but retry failed: {}. {}",
                             retry_error,
                             lock_error
                         );
@@ -372,91 +378,6 @@ fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
         return current_ticks != expected_ticks;
     }
     // Can't verify start time; assume the process is alive (conservative).
-    false
-}
-
-fn terminate_holder_process(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
-    if pid == std::process::id() {
-        tracing::warn!(
-            holder_pid = pid,
-            "refusing to terminate current process while reclaiming worktree write lock"
-        );
-        return false;
-    }
-
-    // Validate PID identity using start-time ticks to prevent killing a
-    // recycled PID that belongs to an unrelated process.
-    if let Some(expected_ticks) = pid_start_time_ticks {
-        match crate::process_start_time_ticks(pid) {
-            Some(current_ticks) if current_ticks == expected_ticks => { /* identity confirmed */ }
-            Some(current_ticks) => {
-                tracing::warn!(
-                    holder_pid = pid,
-                    expected_ticks,
-                    current_ticks,
-                    "refusing to terminate holder process: PID start time mismatch (recycled PID)"
-                );
-                return false;
-            }
-            None => {
-                tracing::warn!(
-                    holder_pid = pid,
-                    "refusing to terminate holder process: could not read current start time"
-                );
-                return false;
-            }
-        }
-    } else {
-        // No start-time available — fail closed for safety.
-        tracing::warn!(
-            holder_pid = pid,
-            "refusing to terminate holder process: no pid_start_time_ticks recorded, cannot verify identity"
-        );
-        return false;
-    }
-
-    // Safe conversion: reject out-of-range PIDs that would wrap on Unix.
-    let pid_i32 = match i32::try_from(pid) {
-        Ok(v) => v,
-        Err(_) => {
-            tracing::warn!(
-                holder_pid = pid,
-                "refusing to terminate holder process: PID exceeds i32 range"
-            );
-            return false;
-        }
-    };
-
-    // SAFETY: `kill(pid, SIGTERM)` requests termination of a process whose
-    // identity was verified above. It does not dereference pointers or
-    // share memory.
-    let ret = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
-    if ret == 0 {
-        return true;
-    }
-
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        return true;
-    }
-    tracing::warn!(
-        holder_pid = pid,
-        error = %error,
-        "failed to terminate terminal worktree-lock holder process"
-    );
-    false
-}
-
-fn wait_for_flock_available_after_termination(lock_path: &Path) -> bool {
-    const ATTEMPTS: usize = 50;
-    const WAIT: Duration = Duration::from_millis(20);
-
-    for _ in 0..ATTEMPTS {
-        if is_flock_available(lock_path) {
-            return true;
-        }
-        std::thread::sleep(WAIT);
-    }
     false
 }
 

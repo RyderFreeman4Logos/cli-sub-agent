@@ -127,7 +127,14 @@ fn holder_session_is_active(project_root: &Path, session_id: &str) -> bool {
 
 fn holder_session_is_terminal(project_root: &Path, session_id: &str) -> bool {
     match csa_session::load_session(project_root, session_id) {
-        Ok(state) => state.phase != SessionPhase::Active,
+        // Only Retired and ToolExhausted indicate the session lifecycle has
+        // fully completed and the worktree lock guard has been dropped.
+        // Available means the session was compacted but may still hold the
+        // lock during post-exec finalization.
+        Ok(state) => matches!(
+            state.phase,
+            SessionPhase::Retired | SessionPhase::ToolExhausted
+        ),
         Err(err) => {
             tracing::debug!(
                 session_id,
@@ -220,15 +227,15 @@ mod tests {
     }
 
     #[test]
-    fn holder_session_is_terminal_when_phase_is_not_active() {
+    fn holder_session_is_terminal_when_phase_is_retired() {
         let temp = tempfile::tempdir().unwrap();
         let mut holder =
-            csa_session::create_session_fresh(temp.path(), Some("available"), None, Some("codex"))
+            csa_session::create_session_fresh(temp.path(), Some("retired"), None, Some("codex"))
                 .expect("create holder session");
         holder
-            .apply_phase_event(PhaseEvent::Compressed)
-            .expect("holder should become Available");
-        save_session(&holder).expect("save Available holder");
+            .apply_phase_event(PhaseEvent::Retired)
+            .expect("holder should become Retired");
+        save_session(&holder).expect("save Retired holder");
 
         assert!(super::holder_session_is_terminal(
             temp.path(),

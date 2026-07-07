@@ -245,7 +245,7 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn worktree_write_lock_reclaims_terminal_session_with_live_holder_pid() {
+fn worktree_write_lock_reclaims_terminal_session_after_holder_crash() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");
     let _state_guard = EnvVarGuard::set_os("XDG_STATE_HOME", state_home.path());
@@ -257,8 +257,11 @@ fn worktree_write_lock_reclaims_terminal_session_with_live_holder_pid() {
         worktree_root.path(),
         "01TERMINAL",
         &ready_path,
+        true, // exit after ready — simulate crashed holder
     );
     wait_for_ready_marker(&ready_path);
+    // Wait for holder to exit so flock is released
+    holder.wait_for_exit();
 
     let lock = acquire_worktree_write_lock(
         worktree_root.path(),
@@ -267,10 +270,9 @@ fn worktree_write_lock_reclaims_terminal_session_with_live_holder_pid() {
         |_| false,
         |holder_session_id| holder_session_id == "01TERMINAL",
     )
-    .expect("terminal holder session should be terminated and reclaimed");
+    .expect("terminal holder session with free flock should be reclaimed");
 
     assert!(!lock.is_lineage_reentry());
-    holder.wait_for_exit();
 }
 
 #[test]
@@ -286,6 +288,7 @@ fn worktree_write_lock_keeps_live_nonterminal_holder_blocked() {
         worktree_root.path(),
         "01ACTIVE",
         &ready_path,
+        false, // stay alive — simulate live holder holding flock
     );
     wait_for_ready_marker(&ready_path);
 
@@ -323,6 +326,13 @@ fn terminal_reclaim_holder_child_entrypoint() {
     .expect("child holder should acquire worktree write lock");
     fs::write(ready_path, b"ready").expect("write ready marker");
 
+    // Check if this child should exit immediately (simulating a crashed holder
+    // that released flock but left stale metadata) or stay alive (simulating
+    // a live holder still holding flock).
+    if std::env::var_os("CSA_LOCK_TERMINAL_RECLAIM_EXIT").is_some() {
+        std::process::exit(0);
+    }
+
     loop {
         std::thread::sleep(Duration::from_secs(60));
     }
@@ -350,16 +360,19 @@ fn spawn_terminal_reclaim_holder(
     worktree_root: &Path,
     holder_session_id: &str,
     ready_path: &Path,
+    exit_after_ready: bool,
 ) -> ChildGuard {
-    let child = Command::new(std::env::current_exe().expect("current test binary"))
-        .arg("terminal_reclaim_holder_child_entrypoint")
+    let mut cmd = Command::new(std::env::current_exe().expect("current test binary"));
+    cmd.arg("terminal_reclaim_holder_child_entrypoint")
         .arg("--nocapture")
         .env("XDG_STATE_HOME", state_home)
         .env("CSA_LOCK_TERMINAL_RECLAIM_WORKTREE", worktree_root)
         .env("CSA_LOCK_TERMINAL_RECLAIM_HOLDER", holder_session_id)
-        .env("CSA_LOCK_TERMINAL_RECLAIM_READY", ready_path)
-        .spawn()
-        .expect("spawn holder child process");
+        .env("CSA_LOCK_TERMINAL_RECLAIM_READY", ready_path);
+    if exit_after_ready {
+        cmd.env("CSA_LOCK_TERMINAL_RECLAIM_EXIT", "1");
+    }
+    let child = cmd.spawn().expect("spawn holder child process");
     ChildGuard { child }
 }
 
