@@ -192,11 +192,18 @@ pub fn worktree_write_lock_is_held_by_session(
 ///
 /// `holder_session_is_live` must read caller-owned session state, not process
 /// PID liveness; `csa-lock` stays independent of the session registry crate.
+///
+/// `holder_session_is_terminal` lets callers reclaim a stale lock when the
+/// session registry says the holder is done (phase Retired/ToolExhausted).
+/// Recovery is gated by `is_flock_available`: if the OS reports no process
+/// holds the flock, the lock is reclaimed. No SIGTERM is sent — flock
+/// availability is the sole safety guarantee.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
     holder_session_is_live: impl Fn(&str) -> bool,
+    holder_session_is_terminal: impl Fn(&str) -> bool,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -257,26 +264,56 @@ pub fn acquire_worktree_write_lock(
                     holder_session = ?diag.holder_session_id,
                     "removing stale worktree write lock (holder PID is dead, flock is free)"
                 );
-                match acquire_lock_at_path_with_metadata(
+                match retry_acquire_worktree_write_lock(
                     &lock_path,
                     &lock_name,
                     &reason,
-                    Some(session_id),
-                    Some(&canonical_root),
+                    session_id,
+                    &canonical_root,
                 ) {
-                    Ok(lock) => {
-                        return Ok(WorktreeWriteLock {
-                            inner: WorktreeWriteLockKind::Acquired {
-                                _lock: lock,
-                                owner_session_id: session_id.to_string(),
-                            },
-                            lock_path,
-                        });
-                    }
+                    Ok(lock) => return Ok(lock),
                     Err(retry_error) => {
                         anyhow::bail!(
                             "concurrent write session blocked: stale lock detected but retry \
                              failed: {}. {}",
+                            retry_error,
+                            lock_error
+                        );
+                    }
+                }
+            }
+
+            // Terminal-session flock recovery: if the holder session's phase
+            // indicates it has completed (Retired/ToolExhausted) AND the flock
+            // is actually free (no live process holds it), reclaim the lock.
+            // This handles the case where the holder process exited without
+            // running its Drop guard (e.g. crash, SIGKILL) but the PID hasn't
+            // been recycled — is_pid_dead returns false but flock is free.
+            // We do NOT send SIGTERM — flock availability is the sole safety
+            // guarantee, provided atomically by the OS.
+            if let Some(diag) = diagnostic.as_ref()
+                && let Some(holder_session_id) = diag.holder_session_id.as_deref()
+                && holder_session_is_terminal(holder_session_id)
+                && is_flock_available(&lock_path)
+            {
+                tracing::warn!(
+                    lock_path = %lock_path.display(),
+                    holder_pid = diag.pid,
+                    holder_session = holder_session_id,
+                    "removing stale worktree write lock (holder session is terminal, flock is free)"
+                );
+                match retry_acquire_worktree_write_lock(
+                    &lock_path,
+                    &lock_name,
+                    &reason,
+                    session_id,
+                    &canonical_root,
+                ) {
+                    Ok(lock) => return Ok(lock),
+                    Err(retry_error) => {
+                        anyhow::bail!(
+                            "concurrent write session blocked: terminal holder session detected \
+                             and flock is free, but retry failed: {}. {}",
                             retry_error,
                             lock_error
                         );
@@ -298,6 +335,29 @@ pub fn acquire_worktree_write_lock(
             )
         }
     }
+}
+
+fn retry_acquire_worktree_write_lock(
+    lock_path: &Path,
+    lock_name: &str,
+    reason: &str,
+    session_id: &str,
+    canonical_root: &Path,
+) -> Result<WorktreeWriteLock> {
+    let lock = acquire_lock_at_path_with_metadata(
+        lock_path,
+        lock_name,
+        reason,
+        Some(session_id),
+        Some(canonical_root),
+    )?;
+    Ok(WorktreeWriteLock {
+        inner: WorktreeWriteLockKind::Acquired {
+            _lock: lock,
+            owner_session_id: session_id.to_string(),
+        },
+        lock_path: lock_path.to_path_buf(),
+    })
 }
 
 /// Check whether a PID is dead by sending signal 0 (no-op probe).

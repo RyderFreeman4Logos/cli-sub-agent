@@ -59,11 +59,14 @@ fn acquire_active_holder_worktree_lock(
 ) -> (String, csa_lock::WorktreeWriteLock) {
     let holder =
         csa_session::create_session(project_root, Some("holder"), None, Some("codex")).unwrap();
-    let lock =
-        csa_lock::acquire_worktree_write_lock(project_root, &holder.meta_session_id, &[], |_| {
-            false
-        })
-        .expect("holder worktree write lock should succeed");
+    let lock = csa_lock::acquire_worktree_write_lock(
+        project_root,
+        &holder.meta_session_id,
+        &[],
+        |_| false,
+        |_| false,
+    )
+    .expect("holder worktree write lock should succeed");
     (holder.meta_session_id, lock)
 }
 
@@ -254,11 +257,14 @@ async fn run_commit_child_reenters_under_ancestor_worktree_write_lock() {
 
     let holder =
         csa_session::create_session(project_root, Some("holder"), None, Some("codex")).unwrap();
-    let _worktree_lock =
-        csa_lock::acquire_worktree_write_lock(project_root, &holder.meta_session_id, &[], |_| {
-            false
-        })
-        .expect("ancestor worktree write lock should succeed");
+    let _worktree_lock = csa_lock::acquire_worktree_write_lock(
+        project_root,
+        &holder.meta_session_id,
+        &[],
+        |_| false,
+        |_| false,
+    )
+    .expect("ancestor worktree write lock should succeed");
     let child = csa_session::create_session(
         project_root,
         Some("skill:commit"),
@@ -371,11 +377,14 @@ async fn review_fix_reenters_under_ancestor_worktree_write_lock() {
     // Ancestor session holds the per-worktree write lock.
     let holder =
         csa_session::create_session(project_root, Some("holder"), None, Some("codex")).unwrap();
-    let _worktree_lock =
-        csa_lock::acquire_worktree_write_lock(project_root, &holder.meta_session_id, &[], |_| {
-            false
-        })
-        .expect("ancestor worktree write lock should succeed");
+    let _worktree_lock = csa_lock::acquire_worktree_write_lock(
+        project_root,
+        &holder.meta_session_id,
+        &[],
+        |_| false,
+        |_| false,
+    )
+    .expect("ancestor worktree write lock should succeed");
 
     // A `--fix` child WITHIN the holder's lineage must re-enter the lock, not
     // fail fast (#1828 reuses #1672's lineage re-entry path).
