@@ -146,50 +146,63 @@ pub(super) async fn run_persistent_with_timeout(
     no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<AttemptExecution> {
-    match tokio::time::timeout(
-        timeout_duration,
-        execute_persistent(
-            executor,
-            current_tool,
-            effective_prompt,
-            output_format,
-            effective_session_arg,
-            description,
-            skill_session_tag,
-            parent,
-            project_root,
-            config,
-            extra_env,
-            subtree_pin,
-            allow_git_push,
-            resolved_tier_name,
-            context_load_options,
-            stream_mode,
-            idle_timeout_seconds,
-            initial_response_timeout_seconds,
-            Some(timeout_duration),
-            memory_injection,
-            global_config,
-            pre_session_hook,
-            resource_overrides,
-            fork_resolution,
-            fresh_spawn_preflight_override,
-            executed_session_id,
-            pre_created_fork_session_id,
-            no_fs_sandbox,
-            allow_user_daemon_ipc,
-            extra_writable,
-            extra_readable,
-            error_marker_scan_override,
-            no_hook_bypass_scan,
-            startup_env,
-        ),
+    // The pipeline's internal timeout (execute_transport_with_signal) receives
+    // Some(remaining) and handles graceful timeout: it returns a normal
+    // timed-out TransportResult that flows through complete_session_execution
+    // (session retirement, post-exec artifacts, etc.).
+    //
+    // We do NOT wrap execute_persistent in tokio::time::timeout because that
+    // creates a race: when the outer timeout wins (which it always does once
+    // transport starts after setup, since both use the same duration), it
+    // cancels the inner future before session-level completion can run (#2621).
+    //
+    // Instead, execute_persistent receives Some(timeout_duration) which is
+    // already the remaining budget computed from run_started_at by the caller
+    // (run_cmd_attempt.rs:resolve_remaining_run_timeout). The internal timeout
+    // in execute_transport_with_signal uses this duration directly, preserving
+    // graceful session-level completion on timeout.
+    //
+    // Note: the internal timeout starts after session setup, so setup time is
+    // not counted against the transport budget. This is acceptable because
+    // resolve_remaining_run_timeout at the top of each loop iteration catches
+    // fully exhausted budgets before this function is called.
+    execute_persistent(
+        executor,
+        current_tool,
+        effective_prompt,
+        output_format,
+        effective_session_arg,
+        description,
+        skill_session_tag,
+        parent,
+        project_root,
+        config,
+        extra_env,
+        subtree_pin,
+        allow_git_push,
+        resolved_tier_name,
+        context_load_options,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        Some(timeout_duration),
+        memory_injection,
+        global_config,
+        pre_session_hook,
+        resource_overrides,
+        fork_resolution,
+        fresh_spawn_preflight_override,
+        executed_session_id,
+        pre_created_fork_session_id,
+        no_fs_sandbox,
+        allow_user_daemon_ipc,
+        extra_writable,
+        extra_readable,
+        error_marker_scan_override,
+        no_hook_bypass_scan,
+        startup_env,
     )
     .await
-    {
-        Ok(result) => result,
-        Err(_) => Ok(AttemptExecution::TimedOut),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

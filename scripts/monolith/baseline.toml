@@ -788,7 +788,7 @@ rationale = "pre-existing monolith debt; file at 9430 tokens on origin/main; #26
 [[files]]
 path = "crates/cli-sub-agent/src/run_cmd_attempt.rs"
 kind = "source"
-baseline_tokens = 9210
-baseline_lines = 648
+baseline_tokens = 9260
+baseline_lines = 653
 issue = "2615"
 rationale = "run-level outer timeout fix adds synthetic ExecutionResult + RunLoopOutcome for both pre-attempt and mid-attempt timeout branches (~60 lines); pre-existing at ~8400 tokens"
