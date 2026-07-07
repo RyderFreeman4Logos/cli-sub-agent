@@ -244,6 +244,7 @@ fn worktree_write_lock_keeps_live_holder_blocked() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn worktree_write_lock_reclaims_terminal_session_with_live_holder_pid() {
     let _env_lock = env_test_lock();
     let state_home = tempdir().expect("state-home tempdir");

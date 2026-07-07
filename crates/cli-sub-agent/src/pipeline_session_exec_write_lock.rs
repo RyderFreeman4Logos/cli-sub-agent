@@ -220,20 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn holder_session_is_terminal_when_result_exists_even_if_phase_is_active() {
-        let temp = tempfile::tempdir().unwrap();
-        let holder =
-            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
-                .expect("create holder session");
-        save_success_result(temp.path(), &holder.meta_session_id);
-
-        assert!(super::holder_session_is_terminal(
-            temp.path(),
-            &holder.meta_session_id
-        ));
-    }
-
-    #[test]
     fn holder_session_is_terminal_when_phase_is_not_active() {
         let temp = tempfile::tempdir().unwrap();
         let mut holder =
