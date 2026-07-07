@@ -784,3 +784,11 @@ baseline_tokens = 9545
 baseline_lines = 737
 issue = "2611"
 rationale = "pre-existing monolith debt; file at 9430 tokens on origin/main; #2611 adds 2-line SIGINT guard for review finding; no further growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/run_cmd_attempt.rs"
+kind = "source"
+baseline_tokens = 9210
+baseline_lines = 648
+issue = "2615"
+rationale = "run-level outer timeout fix adds synthetic ExecutionResult + RunLoopOutcome for both pre-attempt and mid-attempt timeout branches (~60 lines); pre-existing at ~8400 tokens"

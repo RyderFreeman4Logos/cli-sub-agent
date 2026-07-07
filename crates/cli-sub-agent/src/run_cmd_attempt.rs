@@ -280,7 +280,47 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 request.skill,
                 timeout_resume_session.as_deref(),
             )?;
-            return Ok(Exit(exit_code));
+            // Break with synthetic timeout result instead of Exit, so the
+            // completion path (restore_cg + Completed) runs consistently.
+            let timeout_result = csa_process::ExecutionResult {
+                output: String::new(),
+                stderr_output: String::new(),
+                summary: format!(
+                    "wall-clock timeout ({}s)",
+                    request
+                        .run_timeout_seconds
+                        .expect("run timeout should be present")
+                ),
+                exit_code,
+                peak_memory_mb: None,
+                model_completed: Some(false),
+                terminal_reason: Some("timeout".to_owned()),
+                raw_process_exit_code: Some(exit_code),
+                exit_signal: None,
+                kill_hint: None,
+                resource_diagnostics: None,
+                csa_gate_failure: None,
+                warnings: Vec::new(),
+            };
+            let (mut result, changed_paths, commit_created) = (
+                timeout_result,
+                merge_changed(
+                    accumulated_changed_paths.clone(),
+                    all_attempt_change_snapshots_available,
+                    None,
+                ),
+                None,
+            );
+            restore_cg(g, commit_created, Some(&mut result))?;
+            return Ok(RunLoopCompletion::Completed(Box::new(RunLoopOutcome {
+                result,
+                current_tool,
+                executed_session_id,
+                changed_paths,
+                commit_created,
+                fork_resolution,
+                fallback_chain,
+            })));
         }
 
         let attempt_started_at = Instant::now();
@@ -417,7 +457,41 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                     request.skill,
                     timeout_resume_session.as_deref(),
                 )?;
-                return Ok(Exit(exit_code));
+                // Construct a synthetic timeout result and break to flow
+                // through restore_cg + Completed (instead of Exit), so that
+                // complete_session_execution runs (session state update,
+                // require-commit suppression for timeouts per #2611, commit-
+                // skill workspace guard restoration, and uncommitted tracking).
+                // Previously this path short-circuited completion (#2615).
+                let timeout_result = csa_process::ExecutionResult {
+                    output: String::new(),
+                    stderr_output: String::new(),
+                    summary: format!(
+                        "wall-clock timeout ({}s)",
+                        request
+                            .run_timeout_seconds
+                            .expect("run timeout should be present")
+                    ),
+                    exit_code,
+                    peak_memory_mb: None,
+                    model_completed: Some(false),
+                    terminal_reason: Some("timeout".to_owned()),
+                    raw_process_exit_code: Some(exit_code),
+                    exit_signal: None,
+                    kill_hint: None,
+                    resource_diagnostics: None,
+                    csa_gate_failure: None,
+                    warnings: Vec::new(),
+                };
+                break (
+                    timeout_result,
+                    merge_changed(
+                        accumulated_changed_paths.clone(),
+                        all_attempt_change_snapshots_available,
+                        None,
+                    ),
+                    None,
+                );
             }
             AttemptExecution::Exit(exit_code) => {
                 return Ok(Exit(exit_code));
