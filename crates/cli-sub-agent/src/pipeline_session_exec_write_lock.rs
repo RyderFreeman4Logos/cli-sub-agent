@@ -44,6 +44,7 @@ pub(super) fn acquire_if_needed(
         &session.meta_session_id,
         &ancestor_session_ids,
         |holder_session_id| holder_session_is_active(project_root, holder_session_id),
+        |holder_session_id| holder_session_is_terminal(project_root, holder_session_id),
     )
     .map(Some)
 }
@@ -124,6 +125,30 @@ fn holder_session_is_active(project_root: &Path, session_id: &str) -> bool {
     }
 }
 
+fn holder_session_is_terminal(project_root: &Path, session_id: &str) -> bool {
+    match csa_session::load_result(project_root, session_id) {
+        Ok(Some(_)) => return true,
+        Ok(None) => {}
+        Err(err) => tracing::debug!(
+            session_id,
+            error = %err,
+            "ignoring unreadable holder result while checking terminal worktree-lock holder"
+        ),
+    }
+
+    match csa_session::load_session(project_root, session_id) {
+        Ok(state) => state.phase != SessionPhase::Active,
+        Err(err) => {
+            tracing::debug!(
+                session_id,
+                error = %err,
+                "treating unreadable holder session as non-terminal"
+            );
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,6 +183,7 @@ mod tests {
             &holder.meta_session_id,
             &[],
             |_| false,
+            |_| false,
         )
         .expect("holder lock");
         let lock_path = holder_lock.lock_path().to_path_buf();
@@ -188,6 +214,7 @@ mod tests {
             &holder.meta_session_id,
             &[],
             |_| false,
+            |_| false,
         )
         .expect("holder lock");
         let candidate =
@@ -200,6 +227,50 @@ mod tests {
 
         assert!(err.contains("concurrent write session blocked"));
         assert!(err.contains(&holder.meta_session_id));
+    }
+
+    #[test]
+    fn holder_session_is_terminal_when_result_exists_even_if_phase_is_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
+                .expect("create holder session");
+        save_success_result(temp.path(), &holder.meta_session_id);
+
+        assert!(super::holder_session_is_terminal(
+            temp.path(),
+            &holder.meta_session_id
+        ));
+    }
+
+    #[test]
+    fn holder_session_is_terminal_when_phase_is_not_active() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut holder =
+            csa_session::create_session_fresh(temp.path(), Some("available"), None, Some("codex"))
+                .expect("create holder session");
+        holder
+            .apply_phase_event(PhaseEvent::Compressed)
+            .expect("holder should become Available");
+        save_session(&holder).expect("save Available holder");
+
+        assert!(super::holder_session_is_terminal(
+            temp.path(),
+            &holder.meta_session_id
+        ));
+    }
+
+    #[test]
+    fn holder_session_is_not_terminal_when_active_without_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
+                .expect("create holder session");
+
+        assert!(!super::holder_session_is_terminal(
+            temp.path(),
+            &holder.meta_session_id
+        ));
     }
 
     #[tokio::test]

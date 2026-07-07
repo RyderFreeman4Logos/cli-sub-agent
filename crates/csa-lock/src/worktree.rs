@@ -7,6 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Guard for a write-capable CSA session sharing one git worktree.
 ///
@@ -192,11 +193,18 @@ pub fn worktree_write_lock_is_held_by_session(
 ///
 /// `holder_session_is_live` must read caller-owned session state, not process
 /// PID liveness; `csa-lock` stays independent of the session registry crate.
+///
+/// `holder_session_is_terminal` lets callers reclaim a stale lock when the
+/// session registry says the holder is already done but the holder process is
+/// still alive. In that path the holder PID is asked to terminate before the
+/// lock is retried, and the retry only proceeds after the fd-level flock is
+/// available.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
     holder_session_is_live: impl Fn(&str) -> bool,
+    holder_session_is_terminal: impl Fn(&str) -> bool,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -257,26 +265,49 @@ pub fn acquire_worktree_write_lock(
                     holder_session = ?diag.holder_session_id,
                     "removing stale worktree write lock (holder PID is dead, flock is free)"
                 );
-                match acquire_lock_at_path_with_metadata(
+                match retry_acquire_worktree_write_lock(
                     &lock_path,
                     &lock_name,
                     &reason,
-                    Some(session_id),
-                    Some(&canonical_root),
+                    session_id,
+                    &canonical_root,
                 ) {
-                    Ok(lock) => {
-                        return Ok(WorktreeWriteLock {
-                            inner: WorktreeWriteLockKind::Acquired {
-                                _lock: lock,
-                                owner_session_id: session_id.to_string(),
-                            },
-                            lock_path,
-                        });
-                    }
+                    Ok(lock) => return Ok(lock),
                     Err(retry_error) => {
                         anyhow::bail!(
                             "concurrent write session blocked: stale lock detected but retry \
                              failed: {}. {}",
+                            retry_error,
+                            lock_error
+                        );
+                    }
+                }
+            }
+
+            if let Some(diag) = diagnostic.as_ref()
+                && let Some(holder_session_id) = diag.holder_session_id.as_deref()
+                && holder_session_is_terminal(holder_session_id)
+                && terminate_holder_process(diag.pid)
+                && wait_for_flock_available_after_termination(&lock_path)
+            {
+                tracing::warn!(
+                    lock_path = %lock_path.display(),
+                    holder_pid = diag.pid,
+                    holder_session = holder_session_id,
+                    "removing stale worktree write lock (holder session is terminal, holder PID was terminated)"
+                );
+                match retry_acquire_worktree_write_lock(
+                    &lock_path,
+                    &lock_name,
+                    &reason,
+                    session_id,
+                    &canonical_root,
+                ) {
+                    Ok(lock) => return Ok(lock),
+                    Err(retry_error) => {
+                        anyhow::bail!(
+                            "concurrent write session blocked: terminal holder session detected \
+                             and holder process was terminated, but retry failed: {}. {}",
                             retry_error,
                             lock_error
                         );
@@ -300,6 +331,29 @@ pub fn acquire_worktree_write_lock(
     }
 }
 
+fn retry_acquire_worktree_write_lock(
+    lock_path: &Path,
+    lock_name: &str,
+    reason: &str,
+    session_id: &str,
+    canonical_root: &Path,
+) -> Result<WorktreeWriteLock> {
+    let lock = acquire_lock_at_path_with_metadata(
+        lock_path,
+        lock_name,
+        reason,
+        Some(session_id),
+        Some(canonical_root),
+    )?;
+    Ok(WorktreeWriteLock {
+        inner: WorktreeWriteLockKind::Acquired {
+            _lock: lock,
+            owner_session_id: session_id.to_string(),
+        },
+        lock_path: lock_path.to_path_buf(),
+    })
+}
+
 /// Check whether a PID is dead by sending signal 0 (no-op probe).
 /// Returns true if the PID does not exist or its start time no longer
 /// matches (recycled PID). On platforms where start-time detection is
@@ -318,6 +372,47 @@ fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
         return current_ticks != expected_ticks;
     }
     // Can't verify start time; assume the process is alive (conservative).
+    false
+}
+
+fn terminate_holder_process(pid: u32) -> bool {
+    if pid == std::process::id() {
+        tracing::warn!(
+            holder_pid = pid,
+            "refusing to terminate current process while reclaiming worktree write lock"
+        );
+        return false;
+    }
+
+    // SAFETY: `kill(pid, SIGTERM)` requests termination of a process identified
+    // by the diagnostic. It does not dereference pointers or share memory.
+    let ret = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if ret == 0 {
+        return true;
+    }
+
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return true;
+    }
+    tracing::warn!(
+        holder_pid = pid,
+        error = %error,
+        "failed to terminate terminal worktree-lock holder process"
+    );
+    false
+}
+
+fn wait_for_flock_available_after_termination(lock_path: &Path) -> bool {
+    const ATTEMPTS: usize = 50;
+    const WAIT: Duration = Duration::from_millis(20);
+
+    for _ in 0..ATTEMPTS {
+        if is_flock_available(lock_path) {
+            return true;
+        }
+        std::thread::sleep(WAIT);
+    }
     false
 }
 

@@ -246,7 +246,7 @@ fn handle_session_wait_on_resume_wrapper_treats_wrapper_worktree_lock_as_live_in
     save_session(&worker).unwrap();
     csa_session::write_resume_target(project, &wrapper_id, &worker_id).unwrap();
     let _worktree_lock =
-        csa_lock::acquire_worktree_write_lock(project, &wrapper_id, &[], |_| false)
+        csa_lock::acquire_worktree_write_lock(project, &wrapper_id, &[], |_| false, |_| false)
             .expect("wrapper worktree lock should be held");
 
     let mut emitted_completion = false;

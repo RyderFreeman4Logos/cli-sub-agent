@@ -213,7 +213,7 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
     let session_id = session.meta_session_id.clone();
     save_session(&session).expect("save stale active session");
     let _worktree_lock =
-        csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false)
+        csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false, |_| false)
             .expect("worktree write lock should be held by session");
 
     let mut emitted_completion: Option<(String, String, i32, bool)> = None;
@@ -265,7 +265,7 @@ fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
     let session_id = session.meta_session_id.clone();
     save_session(&session).expect("save stale active session");
     let _worktree_lock =
-        csa_lock::acquire_worktree_write_lock(&repo_root, &session_id, &[], |_| false)
+        csa_lock::acquire_worktree_write_lock(&repo_root, &session_id, &[], |_| false, |_| false)
             .expect("writer lock should be held at git toplevel");
     assert!(
         csa_lock::worktree_write_lock_is_held_by_session(&repo_root, &session_id)
@@ -326,8 +326,9 @@ fn handle_session_wait_defers_terminal_result_while_worktree_lock_is_live() {
         ..make_result("failure", 1)
     };
     save_result(project, &session_id, &terminal_result).expect("save terminal result");
-    let worktree_lock = csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false)
-        .expect("worktree write lock should be held by session");
+    let worktree_lock =
+        csa_lock::acquire_worktree_write_lock(project, &session_id, &[], |_| false, |_| false)
+            .expect("worktree write lock should be held by session");
 
     let mut emitted_completion: Option<(String, String, i32, bool)> = None;
     let exit_code = handle_session_wait_with_hooks(
