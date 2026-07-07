@@ -635,3 +635,37 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
         "~/.config/gh-aider should be explicitly re-bound read-only so sandboxed gh commands can still read the aider auth config; args: {args:?}"
     );
 }
+
+#[test]
+fn test_bwrap_canonicalizes_symlink_writable_path() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let real = tmp.path().join("real-claude");
+    std::fs::create_dir(&real).expect("create real dir");
+    let link = tmp.path().join("link-claude");
+    symlink(&real, &link).expect("create symlink");
+
+    let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+    builder.with_writable_path(&link);
+
+    let cmd = builder.build();
+    let args = command_args(&cmd);
+
+    // The --bind source should be the resolved (canonical) path, not the symlink
+    let bind_idx = args
+        .iter()
+        .position(|a| a == "--bind")
+        .expect("--bind not found");
+    let src = &args[bind_idx + 1];
+    let dest = &args[bind_idx + 2];
+    assert!(
+        src.contains("real-claude"),
+        "bind source should be canonicalized real path, got: {src}"
+    );
+    assert_eq!(
+        dest,
+        &link.to_string_lossy().to_string(),
+        "bind destination should preserve original logical path"
+    );
+}

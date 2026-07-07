@@ -90,9 +90,11 @@ impl BwrapCommandBuilder {
         // Bind after tmpfs. /tmp itself is an explicit host tmpdir grant.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
-            let s = path.to_string_lossy();
+            let resolved = resolve_for_bind(path);
+            let s = resolved.to_string_lossy();
+            let dest = path.to_string_lossy();
             if path == tmp_prefix {
-                cmd.args(["--bind", &s, &s]);
+                cmd.args(["--bind", &s, &dest]);
             } else if path.starts_with(tmp_prefix) {
                 if let Some(parent) = path.parent()
                     && parent != tmp_prefix
@@ -101,11 +103,11 @@ impl BwrapCommandBuilder {
                     cmd.args(["--dir", &p]);
                 }
                 if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
-                    cmd.args(["--dir", &s]);
+                    cmd.args(["--dir", &dest]);
                 }
-                cmd.args(["--bind", &s, &s]);
+                cmd.args(["--bind", &s, &dest]);
             } else {
-                cmd.args(["--bind", &s, &s]);
+                cmd.args(["--bind", &s, &dest]);
             }
         }
 
@@ -116,7 +118,9 @@ impl BwrapCommandBuilder {
             if self.is_covered_by_writable_path(path) {
                 continue;
             }
-            let s = path.to_string_lossy();
+            let resolved = resolve_for_bind(path);
+            let s = resolved.to_string_lossy();
+            let dest = path.to_string_lossy();
             assert!(
                 path != tmp_prefix,
                 "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
@@ -127,7 +131,7 @@ impl BwrapCommandBuilder {
             {
                 cmd.args(["--dir", &parent.to_string_lossy()]);
             }
-            cmd.args(["--ro-bind", &s, &s]);
+            cmd.args(["--ro-bind", &s, &dest]);
         }
 
         // Extra read-only bind mounts.  When the dest path differs from src
@@ -140,6 +144,7 @@ impl BwrapCommandBuilder {
             .cloned()
             .chain(self.implicit_ro_binds(home))
         {
+            let src = resolve_for_bind(&src);
             if src != dest
                 && let Some(parent) = dest.parent()
             {
@@ -257,6 +262,13 @@ pub fn from_isolation_plan(
     }
 
     Some(builder.build())
+}
+
+/// Resolve a bind source path by following symlinks. bwrap operates in the
+/// root namespace where symlink targets must be real paths — if `~/.claude`
+/// is a symlink to `/ssd/.../.claude`, bwrap needs the resolved target.
+fn resolve_for_bind(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
