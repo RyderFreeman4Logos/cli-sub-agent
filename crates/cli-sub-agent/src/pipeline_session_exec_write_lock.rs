@@ -126,16 +126,6 @@ fn holder_session_is_active(project_root: &Path, session_id: &str) -> bool {
 }
 
 fn holder_session_is_terminal(project_root: &Path, session_id: &str) -> bool {
-    match csa_session::load_result(project_root, session_id) {
-        Ok(Some(_)) => return true,
-        Ok(None) => {}
-        Err(err) => tracing::debug!(
-            session_id,
-            error = %err,
-            "ignoring unreadable holder result while checking terminal worktree-lock holder"
-        ),
-    }
-
     match csa_session::load_session(project_root, session_id) {
         Ok(state) => state.phase != SessionPhase::Active,
         Err(err) => {
