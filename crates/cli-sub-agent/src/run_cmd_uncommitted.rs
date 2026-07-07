@@ -128,6 +128,14 @@ pub(crate) fn record_run_dirty(
         .ok()
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
         .unwrap_or(false);
+    // SIGINT (user cancelled) and timeout should not be reclassified as a
+    // require-commit contract failure; the completion layer already suppressed
+    // rescue for these terminal reasons.
+    let is_user_interrupted = result.exit_signal == Some(libc::SIGINT);
+    let is_timed_out = result.terminal_reason.as_deref() == Some("timeout");
+    let effective_require_commit = effective_writer_must_commit(cli_require_commit, config)
+        && !is_user_interrupted
+        && !is_timed_out;
     let large_diff_config = config
         .map(|cfg| cfg.run.large_diff_warning.clone())
         .unwrap_or_default();
@@ -137,7 +145,7 @@ pub(crate) fn record_run_dirty(
         result,
         WriterUncommittedRecord {
             sa_mode,
-            require_commit: effective_writer_must_commit(cli_require_commit, config),
+            require_commit: effective_require_commit,
             changed_paths,
             commit_created,
             large_diff_config: &large_diff_config,
