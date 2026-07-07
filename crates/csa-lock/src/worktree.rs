@@ -287,7 +287,7 @@ pub fn acquire_worktree_write_lock(
             if let Some(diag) = diagnostic.as_ref()
                 && let Some(holder_session_id) = diag.holder_session_id.as_deref()
                 && holder_session_is_terminal(holder_session_id)
-                && terminate_holder_process(diag.pid)
+                && terminate_holder_process(diag.pid, diag.pid_start_time_ticks)
                 && wait_for_flock_available_after_termination(&lock_path)
             {
                 tracing::warn!(
@@ -375,7 +375,7 @@ fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
     false
 }
 
-fn terminate_holder_process(pid: u32) -> bool {
+fn terminate_holder_process(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
     if pid == std::process::id() {
         tracing::warn!(
             holder_pid = pid,
@@ -384,9 +384,53 @@ fn terminate_holder_process(pid: u32) -> bool {
         return false;
     }
 
-    // SAFETY: `kill(pid, SIGTERM)` requests termination of a process identified
-    // by the diagnostic. It does not dereference pointers or share memory.
-    let ret = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    // Validate PID identity using start-time ticks to prevent killing a
+    // recycled PID that belongs to an unrelated process.
+    if let Some(expected_ticks) = pid_start_time_ticks {
+        match crate::process_start_time_ticks(pid) {
+            Some(current_ticks) if current_ticks == expected_ticks => { /* identity confirmed */ }
+            Some(current_ticks) => {
+                tracing::warn!(
+                    holder_pid = pid,
+                    expected_ticks,
+                    current_ticks,
+                    "refusing to terminate holder process: PID start time mismatch (recycled PID)"
+                );
+                return false;
+            }
+            None => {
+                tracing::warn!(
+                    holder_pid = pid,
+                    "refusing to terminate holder process: could not read current start time"
+                );
+                return false;
+            }
+        }
+    } else {
+        // No start-time available — fail closed for safety.
+        tracing::warn!(
+            holder_pid = pid,
+            "refusing to terminate holder process: no pid_start_time_ticks recorded, cannot verify identity"
+        );
+        return false;
+    }
+
+    // Safe conversion: reject out-of-range PIDs that would wrap on Unix.
+    let pid_i32 = match i32::try_from(pid) {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!(
+                holder_pid = pid,
+                "refusing to terminate holder process: PID exceeds i32 range"
+            );
+            return false;
+        }
+    };
+
+    // SAFETY: `kill(pid, SIGTERM)` requests termination of a process whose
+    // identity was verified above. It does not dereference pointers or
+    // share memory.
+    let ret = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
     if ret == 0 {
         return true;
     }
