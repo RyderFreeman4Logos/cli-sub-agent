@@ -6,7 +6,7 @@ pub(crate) fn record_signal_session_metadata(
     result: &SessionResult,
     terminal_reason: Option<&str>,
 ) {
-    if !matches!(result.exit_code, 137 | 143) {
+    if !matches!(result.exit_code, 124 | 130 | 137 | 143) {
         return;
     }
     session.termination_reason = Some(

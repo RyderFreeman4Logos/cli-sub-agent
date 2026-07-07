@@ -62,6 +62,8 @@ pub(crate) use resume::{
     run_error_timeout_seconds, session_matches_interrupted_skill, signal_interruption_exit_code,
     skill_session_description, wall_timeout_seconds_from_error,
 };
+#[cfg(test)]
+pub(crate) use uncommitted::record_run_dirty;
 
 #[derive(Debug)]
 pub(crate) struct SubagentRunConfig {

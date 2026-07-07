@@ -195,7 +195,7 @@ fn record_writer_uncommitted_changes_with_config(
                 .is_some_and(|probe| !probe.is_clean()));
     let contract_changes = dirty_tracked_changes;
 
-    let maybe_signal_exit = matches!(result.exit_code, 137 | 143);
+    let maybe_signal_exit = matches!(result.exit_code, 124 | 130 | 137 | 143);
     if changes.is_none() && !require_commit_contract_failure && !maybe_signal_exit {
         return warning;
     }

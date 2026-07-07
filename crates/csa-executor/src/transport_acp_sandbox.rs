@@ -314,6 +314,39 @@ async fn kill_after_fresh_sandboxed_prompt_error<F, Fut>(
     }
 }
 
+pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        return truncate_line(last_non_empty_line(stdout), SUMMARY_MAX_CHARS);
+    }
+
+    let stdout_line = last_non_empty_line(stdout);
+    if !stdout_line.is_empty() {
+        return truncate_line(stdout_line, SUMMARY_MAX_CHARS);
+    }
+
+    let stderr_line = last_non_empty_line(stderr);
+    if !stderr_line.is_empty() {
+        return truncate_line(stderr_line, SUMMARY_MAX_CHARS);
+    }
+
+    format!("exit code {exit_code}")
+}
+
+fn last_non_empty_line(output: &str) -> &str {
+    output
+        .lines()
+        .rev()
+        .find(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with("<!-- CSA:SECTION:")
+        })
+        .unwrap_or_default()
+}
+
+fn truncate_line(line: &str, max_chars: usize) -> String {
+    line.chars().take(max_chars).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -397,37 +430,4 @@ mod tests {
             "successful sandboxed ACP prompts must not use the prompt-error kill path"
         );
     }
-}
-
-pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
-    if exit_code == 0 {
-        return truncate_line(last_non_empty_line(stdout), SUMMARY_MAX_CHARS);
-    }
-
-    let stdout_line = last_non_empty_line(stdout);
-    if !stdout_line.is_empty() {
-        return truncate_line(stdout_line, SUMMARY_MAX_CHARS);
-    }
-
-    let stderr_line = last_non_empty_line(stderr);
-    if !stderr_line.is_empty() {
-        return truncate_line(stderr_line, SUMMARY_MAX_CHARS);
-    }
-
-    format!("exit code {exit_code}")
-}
-
-fn last_non_empty_line(output: &str) -> &str {
-    output
-        .lines()
-        .rev()
-        .find(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && !trimmed.starts_with("<!-- CSA:SECTION:")
-        })
-        .unwrap_or_default()
-}
-
-fn truncate_line(line: &str, max_chars: usize) -> String {
-    line.chars().take(max_chars).collect()
 }

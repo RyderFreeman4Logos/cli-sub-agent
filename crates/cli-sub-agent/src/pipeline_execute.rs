@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::warn;
 
+use csa_core::transport_events::StreamingMetadata;
 use csa_executor::{ExecuteOptions, Executor, PeakMemoryContext, SessionConfig, TransportResult};
 use csa_session::{
     MetaSessionState, PhaseEvent, SessionPhase, SessionResult, ToolState, save_result, save_session,
@@ -55,35 +56,32 @@ pub(crate) async fn execute_transport_with_signal(
                         wall_timeout_secs = ?wall_timeout.map(|timeout| timeout.as_secs()),
                         "Session received SIGTERM; classifying as external signal, not CSA idle or wall-clock timeout"
                     );
-                    let diagnostic = record_session_termination(
+                    record_session_interruption_state(
                         project_root,
                         session,
-                        executor.tool_name(),
-                        execution_start_time,
                         "sigterm",
-                        "interrupted",
-                        143,
-                        "Execution interrupted by SIGTERM",
                         cleanup_guard,
                     );
-                    return Err(anyhow::anyhow!(
-                        "{}",
-                        diagnostic.unwrap_or_else(|| "Execution interrupted by SIGTERM".to_string())
+                    return Ok(signal_interrupted_transport_result(
+                        143,
+                        Some(libc::SIGTERM),
+                        "sigterm",
+                        "Execution interrupted by SIGTERM",
                     ));
                 }
                 _ = sigint.recv() => {
-                    let _ = record_session_termination(
+                    record_session_interruption_state(
                         project_root,
                         session,
-                        executor.tool_name(),
-                        execution_start_time,
                         "sigint",
-                        "interrupted",
-                        130,
-                        "Execution interrupted by SIGINT",
                         cleanup_guard,
                     );
-                    return Err(anyhow::anyhow!("Execution interrupted by SIGINT"));
+                    return Ok(signal_interrupted_transport_result(
+                        130,
+                        Some(libc::SIGINT),
+                        "sigint",
+                        "Execution interrupted by SIGINT",
+                    ));
                 }
                 _ = &mut timeout_future => {
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
@@ -95,19 +93,17 @@ pub(crate) async fn execute_transport_with_signal(
                         timeout_secs,
                         "Session wall-clock timeout fired"
                     );
-                    let _ = record_session_termination(
+                    record_session_interruption_state(
                         project_root,
                         session,
-                        executor.tool_name(),
-                        execution_start_time,
                         "timeout",
-                        "timed_out",
-                        RUN_TIMEOUT_EXIT_CODE,
-                        &summary,
                         cleanup_guard,
                     );
-                    return Err(anyhow::anyhow!(
-                        "Execution interrupted by WALL_TIMEOUT timeout_secs={timeout_secs}"
+                    return Ok(signal_interrupted_transport_result(
+                        RUN_TIMEOUT_EXIT_CODE,
+                        None,
+                        "timeout",
+                        &summary,
                     ));
                 }
                 exec = executor.execute_with_transport(
@@ -140,19 +136,17 @@ pub(crate) async fn execute_transport_with_signal(
                     Err(_) => {
                         let timeout_secs = timeout.as_secs().max(1);
                         let summary = format!("Execution timed out after {timeout_secs}s");
-                        let _ = record_session_termination(
+                        record_session_interruption_state(
                             project_root,
                             session,
-                            executor.tool_name(),
-                            execution_start_time,
                             "timeout",
-                            "timed_out",
-                            RUN_TIMEOUT_EXIT_CODE,
-                            &summary,
                             cleanup_guard,
                         );
-                        return Err(anyhow::anyhow!(
-                            "Execution interrupted by WALL_TIMEOUT timeout_secs={timeout_secs}"
+                        return Ok(signal_interrupted_transport_result(
+                            RUN_TIMEOUT_EXIT_CODE,
+                            None,
+                            "timeout",
+                            &summary,
                         ));
                     }
                 }
@@ -264,6 +258,30 @@ pub(crate) async fn execute_transport_with_signal(
     }
 }
 
+fn signal_interrupted_transport_result(
+    exit_code: i32,
+    exit_signal: Option<i32>,
+    terminal_reason: &str,
+    summary: &str,
+) -> TransportResult {
+    TransportResult {
+        execution: csa_process::ExecutionResult {
+            output: String::new(),
+            stderr_output: summary.to_string(),
+            summary: summary.to_string(),
+            exit_code,
+            model_completed: Some(false),
+            terminal_reason: Some(terminal_reason.to_string()),
+            raw_process_exit_code: Some(exit_code),
+            exit_signal,
+            ..Default::default()
+        },
+        provider_session_id: None,
+        events: Vec::new(),
+        metadata: StreamingMetadata::default(),
+    }
+}
+
 fn log_signal_exit_diagnostic(
     session: &MetaSessionState,
     execution: &csa_process::ExecutionResult,
@@ -317,54 +335,15 @@ fn diagnose_signal_exit(
     "external_signal"
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_session_termination(
+fn record_session_interruption_state(
     project_root: &Path,
     session: &MetaSessionState,
-    tool_name: &str,
-    execution_start_time: chrono::DateTime<chrono::Utc>,
     termination_reason: &str,
-    status: &str,
-    exit_code: i32,
-    summary: &str,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
-) -> Option<String> {
+) {
     let completed_at = chrono::Utc::now();
     let mut updated_session = session.clone();
     updated_session.termination_reason = Some(termination_reason.to_string());
-    let mut updated_result = SessionResult {
-        post_exec_gate: None,
-        status: status.to_string(),
-        exit_code,
-        summary: summary.to_string(),
-        tool: tool_name.to_string(),
-        original_tool: None,
-        fallback_tool: None,
-        fallback_reason: None,
-        started_at: execution_start_time,
-        completed_at,
-        events_count: 0,
-        artifacts: Vec::new(),
-        ..Default::default()
-    };
-    let diagnostic_line = match crate::session_kill_diagnostics::save_result_with_signal_diagnostic(
-        project_root,
-        session,
-        tool_name,
-        &mut updated_result,
-        Some(termination_reason),
-        None,
-        None,
-    ) {
-        Ok(line) => line,
-        Err(e) => {
-            warn!(
-                "Failed to save session result after {}: {}",
-                termination_reason, e
-            );
-            None
-        }
-    };
     // Best-effort cooldown marker
     csa_session::write_cooldown_marker_for_project(
         project_root,
@@ -380,5 +359,26 @@ fn record_session_termination(
     if let Some(cg) = cleanup_guard {
         cg.defuse();
     }
-    diagnostic_line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_interrupted_transport_result_models_sigterm_as_incomplete_turn() {
+        let result = signal_interrupted_transport_result(
+            143,
+            Some(libc::SIGTERM),
+            "sigterm",
+            "Execution interrupted by SIGTERM",
+        );
+
+        assert_eq!(result.execution.exit_code, 143);
+        assert_eq!(result.execution.raw_process_exit_code, Some(143));
+        assert_eq!(result.execution.exit_signal, Some(libc::SIGTERM));
+        assert_eq!(result.execution.terminal_reason.as_deref(), Some("sigterm"));
+        assert_eq!(result.execution.model_completed, Some(false));
+        assert!(result.events.is_empty());
+    }
 }
