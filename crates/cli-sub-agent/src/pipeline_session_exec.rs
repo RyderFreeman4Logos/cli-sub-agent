@@ -123,6 +123,15 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
+
+    // For resumed sessions, clear any stale result.toml before acquiring the
+    // worktree lock. This prevents the alive-stale-holder reclaim path from
+    // treating a resumed session's old result as evidence of a stuck holder.
+    if session_arg.is_some() {
+        let result_path = session_dir.join("result.toml");
+        let _ = std::fs::remove_file(&result_path);
+    }
+
     let _worktree_write_lock = session_exec_write_lock::acquire_or_persist_failure(
         project_root,
         &mut session,

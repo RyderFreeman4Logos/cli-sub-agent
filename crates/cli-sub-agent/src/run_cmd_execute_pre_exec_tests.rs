@@ -322,6 +322,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         &[],
         |_| false,
         |_| false,
+        |_| false,
     )
     .expect("holder worktree write lock should succeed");
 

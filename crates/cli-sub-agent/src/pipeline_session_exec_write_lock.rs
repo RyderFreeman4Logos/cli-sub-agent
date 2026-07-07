@@ -45,6 +45,7 @@ pub(super) fn acquire_if_needed(
         &ancestor_session_ids,
         |holder_session_id| holder_session_is_active(project_root, holder_session_id),
         |holder_session_id| holder_session_is_terminal(project_root, holder_session_id),
+        |holder_session_id| holder_session_result_is_stale(project_root, holder_session_id),
     )
     .map(Some)
 }
@@ -146,6 +147,23 @@ fn holder_session_is_terminal(project_root: &Path, session_id: &str) -> bool {
     }
 }
 
+fn holder_session_result_is_stale(project_root: &Path, session_id: &str) -> bool {
+    const STALE_THRESHOLD: chrono::Duration = chrono::Duration::minutes(5);
+
+    let session_dir = match csa_session::get_session_dir(project_root, session_id) {
+        Ok(dir) => dir,
+        Err(_) => return false,
+    };
+    let result_path = session_dir.join("result.toml");
+    let result_mtime = match std::fs::metadata(&result_path).and_then(|meta| meta.modified()) {
+        Ok(time) => time,
+        Err(_) => return false,
+    };
+
+    let result_mtime: chrono::DateTime<chrono::Utc> = result_mtime.into();
+    chrono::Utc::now().signed_duration_since(result_mtime) > STALE_THRESHOLD
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +199,7 @@ mod tests {
             &[],
             |_| false,
             |_| false,
+            |_| false,
         )
         .expect("holder lock");
         let lock_path = holder_lock.lock_path().to_path_buf();
@@ -210,6 +229,7 @@ mod tests {
             temp.path(),
             &holder.meta_session_id,
             &[],
+            |_| false,
             |_| false,
             |_| false,
         )
@@ -251,6 +271,55 @@ mod tests {
                 .expect("create holder session");
 
         assert!(!super::holder_session_is_terminal(
+            temp.path(),
+            &holder.meta_session_id
+        ));
+    }
+
+    #[test]
+    fn holder_session_result_is_not_stale_when_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
+                .expect("create holder session");
+
+        assert!(!super::holder_session_result_is_stale(
+            temp.path(),
+            &holder.meta_session_id
+        ));
+    }
+
+    #[test]
+    fn holder_session_result_is_not_stale_when_fresh() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
+                .expect("create holder session");
+        save_success_result(temp.path(), &holder.meta_session_id);
+
+        assert!(!super::holder_session_result_is_stale(
+            temp.path(),
+            &holder.meta_session_id
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn holder_session_result_is_stale_after_threshold() {
+        let temp = tempfile::tempdir().unwrap();
+        let holder =
+            csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
+                .expect("create holder session");
+        save_success_result(temp.path(), &holder.meta_session_id);
+        let session_dir = csa_session::get_session_dir(temp.path(), &holder.meta_session_id)
+            .expect("session dir");
+        // Backdate result.toml to simulate a holder whose transport completed
+        // >5 minutes ago. Resumed sessions have their result.toml cleared
+        // before acquiring the lock, so this correctly identifies a stuck
+        // holder in the current execution.
+        set_file_mtime_seconds_ago(&session_dir.join("result.toml"), 301);
+
+        assert!(super::holder_session_result_is_stale(
             temp.path(),
             &holder.meta_session_id
         ));
@@ -369,5 +438,27 @@ mod tests {
             },
         )
         .expect("save result");
+    }
+
+    #[cfg(unix)]
+    fn set_file_mtime_seconds_ago(path: &Path, seconds_ago: u64) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch");
+        let target = now.saturating_sub(std::time::Duration::from_secs(seconds_ago));
+        let tv_sec = target.as_secs() as libc::time_t;
+        let tv_nsec = target.subsec_nanos() as libc::c_long;
+        let times = [
+            libc::timespec { tv_sec, tv_nsec },
+            libc::timespec { tv_sec, tv_nsec },
+        ];
+        let c_path = CString::new(path.as_os_str().as_bytes()).expect("path contains NUL");
+        // SAFETY: `utimensat` is called with a valid NUL-terminated path and
+        // a stack-allocated timespec array.
+        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(rc, 0, "utimensat failed for {}", path.display());
     }
 }
