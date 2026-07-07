@@ -131,7 +131,7 @@ pub(crate) async fn process_execution_result(
     let execution_end_time = chrono::Utc::now();
     let mut session_result = SessionResult {
         post_exec_gate: None,
-        status: SessionResult::status_from_exit_code(result.exit_code),
+        status: initial_session_status(result),
         exit_code: result.exit_code,
         summary: result.summary.clone(),
         tool: ctx.executor.tool_name().to_string(),
@@ -515,6 +515,14 @@ pub(crate) async fn process_execution_result(
     Ok(())
 }
 
+fn initial_session_status(result: &csa_process::ExecutionResult) -> String {
+    match result.terminal_reason.as_deref() {
+        Some("sigterm" | "sigint") => "interrupted".to_string(),
+        Some("timeout") => "timed_out".to_string(),
+        _ => SessionResult::status_from_exit_code(result.exit_code),
+    }
+}
+
 fn maybe_record_fix_finding_uncommitted_changes(
     ctx: &PostExecContext<'_>,
     session: &MetaSessionState,
@@ -562,6 +570,10 @@ mod blocked;
 #[cfg(test)]
 #[path = "pipeline_tests_post_exec.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_post_exec_initial_status_tests.rs"]
+mod initial_status_tests;
 
 #[cfg(test)]
 #[path = "pipeline_tests_token_usage.rs"]

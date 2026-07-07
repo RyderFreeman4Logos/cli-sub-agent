@@ -776,3 +776,11 @@ baseline_tokens = 37088
 baseline_lines = 2801
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880; cap re-baselined for PR title default derivation (#2050); no-growth ratchet"
+
+[[files]]
+path = "crates/cli-sub-agent/src/pipeline_session_exec_completion.rs"
+kind = "source"
+baseline_tokens = 9545
+baseline_lines = 737
+issue = "2611"
+rationale = "pre-existing monolith debt; file at 9430 tokens on origin/main; #2611 adds 2-line SIGINT guard for review finding; no further growth ratchet"

@@ -205,9 +205,11 @@ mod tests {
 
     #[test]
     fn progress_digest_renders_elapsed_tool_and_last_event() {
-        let mut state = csa_session::MetaSessionState::default();
-        state.created_at = Utc.with_ymd_and_hms(2026, 6, 30, 5, 25, 0).unwrap();
-        state.last_accessed = Utc.with_ymd_and_hms(2026, 6, 30, 5, 34, 0).unwrap();
+        let state = csa_session::MetaSessionState {
+            created_at: Utc.with_ymd_and_hms(2026, 6, 30, 5, 25, 0).unwrap(),
+            last_accessed: Utc.with_ymd_and_hms(2026, 6, 30, 5, 34, 0).unwrap(),
+            ..Default::default()
+        };
 
         let now = Utc.with_ymd_and_hms(2026, 6, 30, 5, 34, 30).unwrap();
         let digest = WaitProgressDigest::from_state_and_tool(now, &state, Some("codex"));

@@ -283,9 +283,7 @@ mod tests {
         assert!(pages.len() > 1);
         assert_eq!(pages.concat(), content);
         assert!(
-            pages
-                .iter()
-                .all(|page| page.len() <= PAGE_HARD_CAP_BYTES - 1),
+            pages.iter().all(|page| page.len() < PAGE_HARD_CAP_BYTES),
             "page split must not exceed cap even for multibyte text"
         );
     }

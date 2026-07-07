@@ -224,9 +224,14 @@ model:
 
     #[test]
     fn provider_ttl_falls_back_to_default() {
-        let mut config = KvCacheConfig::default();
-        config.default_ttl_seconds = 123;
-        config.provider_ttls.glm = 0;
+        let config = KvCacheConfig {
+            default_ttl_seconds: 123,
+            provider_ttls: crate::ProviderTtls {
+                glm: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         assert_eq!(provider_ttl(ModelProvider::Glm, &config), 123);
     }

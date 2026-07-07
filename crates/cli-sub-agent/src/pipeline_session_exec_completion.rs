@@ -116,8 +116,12 @@ pub(super) async fn complete_session_execution(
     let mut rescued_changed_paths = None;
     let mut commit_created = None;
     if commit_guard_enabled {
-        let effective_require_commit_on_mutation =
-            require_commit_on_mutation && !is_fix_finding_session(session);
+        let is_user_interrupted = result.exit_signal == Some(libc::SIGINT);
+        let is_timed_out = result.terminal_reason.as_deref() == Some("timeout");
+        let effective_require_commit_on_mutation = require_commit_on_mutation
+            && !is_fix_finding_session(session)
+            && !is_user_interrupted
+            && !is_timed_out;
         commit_created = pre_run_workspace
             .as_ref()
             .zip(post_run_workspace.as_ref())
