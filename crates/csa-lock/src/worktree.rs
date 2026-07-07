@@ -7,6 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Guard for a write-capable CSA session sharing one git worktree.
 ///
@@ -198,12 +199,18 @@ pub fn worktree_write_lock_is_held_by_session(
 /// Recovery is gated by `is_flock_available`: if the OS reports no process
 /// holds the flock, the lock is reclaimed. No SIGTERM is sent — flock
 /// availability is the sole safety guarantee.
+///
+/// `holder_session_result_is_stale` lets callers identify a post-transport
+/// holder that is still alive but has had a completed `result.toml` for longer
+/// than the caller-owned stale threshold. In that narrow case, this layer sends
+/// SIGTERM to the verified holder PID and waits briefly for flock release.
 pub fn acquire_worktree_write_lock(
     worktree_root: &Path,
     session_id: &str,
     ancestor_session_ids: &[String],
     holder_session_is_live: impl Fn(&str) -> bool,
     holder_session_is_terminal: impl Fn(&str) -> bool,
+    holder_session_result_is_stale: impl Fn(&str) -> bool,
 ) -> Result<WorktreeWriteLock> {
     let session_id = session_id.trim();
     if session_id.is_empty() {
@@ -321,6 +328,51 @@ pub fn acquire_worktree_write_lock(
                 }
             }
 
+            // Alive-stale-holder recovery: if transport completed long enough
+            // ago that the caller considers the holder stale, ask the still-live
+            // holder to terminate gracefully. We only signal when the recorded
+            // PID start time still matches the current process identity.
+            if let Some(diag) = diagnostic.as_ref()
+                && !is_pid_dead(diag.pid, diag.pid_start_time_ticks)
+                && let Some(holder_session_id) = diag.holder_session_id.as_deref()
+                && holder_session_result_is_stale(holder_session_id)
+                && pid_identity_matches(diag.pid, diag.pid_start_time_ticks)
+                && send_sigterm(diag.pid)
+            {
+                if wait_for_flock_available(&lock_path, Duration::from_secs(10)) {
+                    tracing::warn!(
+                        lock_path = %lock_path.display(),
+                        holder_pid = diag.pid,
+                        holder_session = holder_session_id,
+                        "reclaimed worktree write lock after SIGTERM (holder was alive but stale)"
+                    );
+                    match retry_acquire_worktree_write_lock(
+                        &lock_path,
+                        &lock_name,
+                        &reason,
+                        session_id,
+                        &canonical_root,
+                    ) {
+                        Ok(lock) => return Ok(lock),
+                        Err(retry_error) => {
+                            anyhow::bail!(
+                                "concurrent write session blocked: SIGTERM sent to stale holder, \
+                                 flock released, but retry failed: {}. {}",
+                                retry_error,
+                                lock_error
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        lock_path = %lock_path.display(),
+                        holder_pid = diag.pid,
+                        holder_session = holder_session_id,
+                        "SIGTERM sent but flock not released within 10s grace period"
+                    );
+                }
+            }
+
             let holder = diagnostic
                 .as_ref()
                 .and_then(|diag| diag.holder_session_id.as_deref())
@@ -403,6 +455,38 @@ fn is_flock_available(lock_path: &Path) -> bool {
     }
 }
 
+fn pid_identity_matches(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
+    let Some(expected_ticks) = pid_start_time_ticks else {
+        return false;
+    };
+    crate::process_start_time_ticks(pid) == Some(expected_ticks)
+}
+
+fn send_sigterm(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: `kill(pid, SIGTERM)` sends a signal to a PID whose identity was
+    // verified by `pid_identity_matches`; the return value is checked.
+    (unsafe { libc::kill(pid, libc::SIGTERM) }) == 0
+}
+
+fn wait_for_flock_available(lock_path: &Path, timeout: Duration) -> bool {
+    let start = Instant::now();
+    let interval = Duration::from_millis(100);
+    while start.elapsed() < timeout {
+        if is_flock_available(lock_path) {
+            return true;
+        }
+        std::thread::sleep(interval);
+    }
+    false
+}
+
 #[cfg(test)]
 #[path = "worktree_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "worktree_reclaim_tests.rs"]
+mod reclaim_tests;

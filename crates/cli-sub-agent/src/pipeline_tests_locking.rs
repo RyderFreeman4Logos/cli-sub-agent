@@ -65,6 +65,7 @@ fn acquire_active_holder_worktree_lock(
         &[],
         |_| false,
         |_| false,
+        |_| false,
     )
     .expect("holder worktree write lock should succeed");
     (holder.meta_session_id, lock)
@@ -263,6 +264,7 @@ async fn run_commit_child_reenters_under_ancestor_worktree_write_lock() {
         &[],
         |_| false,
         |_| false,
+        |_| false,
     )
     .expect("ancestor worktree write lock should succeed");
     let child = csa_session::create_session(
@@ -381,6 +383,7 @@ async fn review_fix_reenters_under_ancestor_worktree_write_lock() {
         project_root,
         &holder.meta_session_id,
         &[],
+        |_| false,
         |_| false,
         |_| false,
     )
