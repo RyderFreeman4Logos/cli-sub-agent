@@ -439,3 +439,174 @@ fn require_commit_rescue_is_not_attempted_when_head_already_changed() {
 
     assert!(!super::require_commit::should_attempt_require_commit_rescue(true, Some(&guard)));
 }
+
+#[tokio::test]
+async fn sigint_killed_require_commit_run_does_not_rescue_dirty_workspace() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    init_git_repo(project_root);
+    let initial_head = git_capture(project_root, &["rev-parse", "HEAD"]);
+    let before =
+        crate::run_cmd::capture_git_workspace_snapshot(project_root, false).expect("snapshot");
+
+    std::fs::write(project_root.join("tracked.txt"), "dirty\n").expect("write change");
+
+    let mut session = create_session(
+        project_root,
+        Some("sigint cancelled require commit"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_dir = get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::current(),
+    };
+    let plan = SessionCompletionPlan {
+        merged_env: Default::default(),
+        hooks_config: Default::default(),
+        sessions_root: session_dir
+            .parent()
+            .expect("sessions root")
+            .display()
+            .to_string(),
+        edit_guard: None,
+        new_file_guard: None,
+        result_file_cleared: false,
+        execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+        commit_guard_enabled: true,
+        require_commit_on_mutation: true,
+        hook_bypass_scan_enabled: true,
+        is_git: true,
+        inside_git_worktree: true,
+        pre_run_workspace: Some(before),
+        pre_exec_snapshot: None,
+        timeout_diagnostics: None,
+        sa_mode: false,
+    };
+
+    let mut sigint_result = signal_transport_result(130, "sigint");
+    sigint_result.execution.exit_signal = Some(libc::SIGINT);
+
+    let completed = complete_session_execution(
+        CompletionInput {
+            executor: &executor,
+            tool: &csa_core::types::ToolName::Codex,
+            prompt: "Fix, verify, and commit the work",
+            output_format: &OutputFormat::Json,
+            task_type: Some("run"),
+            readonly_project_root: false,
+            project_root,
+            config: None,
+            global_config: None,
+            session_dir: &session_dir,
+            memory_project_key: None,
+            effective_prompt: "Fix, verify, and commit the work".to_string(),
+            plan,
+            transport_result: sigint_result,
+        },
+        &mut session,
+    )
+    .await
+    .expect("complete session");
+
+    let new_head = git_capture(project_root, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        new_head, initial_head,
+        "SIGINT should not trigger rescue commit"
+    );
+    assert!(
+        !completed
+            .execution
+            .stderr_output
+            .contains("CSA require-commit rescue"),
+        "no rescue commit expected for SIGINT"
+    );
+}
+
+#[tokio::test]
+async fn timeout_killed_require_commit_run_does_not_rescue_dirty_workspace() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    init_git_repo(project_root);
+    let initial_head = git_capture(project_root, &["rev-parse", "HEAD"]);
+    let before =
+        crate::run_cmd::capture_git_workspace_snapshot(project_root, false).expect("snapshot");
+
+    std::fs::write(project_root.join("tracked.txt"), "dirty\n").expect("write change");
+
+    let mut session = create_session(
+        project_root,
+        Some("timeout cancelled require commit"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_dir = get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: CodexRuntimeMetadata::current(),
+    };
+    let plan = SessionCompletionPlan {
+        merged_env: Default::default(),
+        hooks_config: Default::default(),
+        sessions_root: session_dir
+            .parent()
+            .expect("sessions root")
+            .display()
+            .to_string(),
+        edit_guard: None,
+        new_file_guard: None,
+        result_file_cleared: false,
+        execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+        commit_guard_enabled: true,
+        require_commit_on_mutation: true,
+        hook_bypass_scan_enabled: true,
+        is_git: true,
+        inside_git_worktree: true,
+        pre_run_workspace: Some(before),
+        pre_exec_snapshot: None,
+        timeout_diagnostics: None,
+        sa_mode: false,
+    };
+
+    let completed = complete_session_execution(
+        CompletionInput {
+            executor: &executor,
+            tool: &csa_core::types::ToolName::Codex,
+            prompt: "Fix, verify, and commit the work",
+            output_format: &OutputFormat::Json,
+            task_type: Some("run"),
+            readonly_project_root: false,
+            project_root,
+            config: None,
+            global_config: None,
+            session_dir: &session_dir,
+            memory_project_key: None,
+            effective_prompt: "Fix, verify, and commit the work".to_string(),
+            plan,
+            transport_result: signal_transport_result(124, "timeout"),
+        },
+        &mut session,
+    )
+    .await
+    .expect("complete session");
+
+    let new_head = git_capture(project_root, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        new_head, initial_head,
+        "timeout should not trigger rescue commit"
+    );
+    assert!(
+        !completed
+            .execution
+            .stderr_output
+            .contains("CSA require-commit rescue"),
+        "no rescue commit expected for timeout"
+    );
+}
