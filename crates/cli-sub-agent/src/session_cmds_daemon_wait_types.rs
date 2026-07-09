@@ -53,6 +53,7 @@ impl WaitBehavior {
 pub(super) struct WaitExecutionOptions {
     pub(super) behavior: WaitBehavior,
     pub(super) output_mode: SessionWaitOutputMode,
+    pub(super) caller_identity: super::WaitCallerIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

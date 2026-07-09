@@ -26,6 +26,7 @@ pub(crate) fn dispatch(
     cmd: SessionCommands,
     output_format: OutputFormat,
     startup_env: &StartupSubtreeEnv,
+    wait_caller_identity: session_cmds::WaitCallerIdentity,
 ) -> Result<()> {
     match cmd {
         SessionCommands::List {
@@ -186,6 +187,7 @@ pub(crate) fn dispatch(
             json,
             cd,
         } => {
+            let wait_caller_identity = wait_caller_identity.validate_for_wait()?;
             let sid = resolve_session_id(session_id, session)?;
             let wait_timeout = resolve_wait_ttl(model_provider, cd.as_deref());
             let resolved_memory_warn_mb =
@@ -197,6 +199,7 @@ pub(crate) fn dispatch(
                 wait_timeout,
                 resolved_memory_warn_mb,
                 output_mode,
+                wait_caller_identity,
             )?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();

@@ -29,7 +29,16 @@ mod types;
 pub(crate) use completion::SESSION_WAIT_MEMORY_WARN_EXIT_CODE;
 #[cfg(test)]
 pub(crate) use completion::resolve_wait_completion_status_and_exit;
+pub(crate) use lock::WaitCallerIdentity;
+#[cfg(test)]
+pub(crate) use lock::parent_pid;
+#[cfg(test)]
+pub(crate) use lock::process_start_time_ticks;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use lock::process_state;
+#[cfg(test)]
 pub(crate) use lock::try_acquire_session_wait_lock;
+pub(crate) use lock::try_acquire_session_wait_lock_with_caller;
 pub(crate) use next_step::synthesized_wait_next_step;
 #[cfg(test)]
 pub(crate) use result_loader::expected_in_flight_turn_result_artifact_path_for_test;
@@ -78,6 +87,7 @@ pub(crate) fn handle_session_wait_with_memory_warn(
         wait_timeout_secs,
         memory_warn_mb,
         SessionWaitOutputMode::from_flags(false, false),
+        WaitCallerIdentity::capture(),
     )
 }
 
@@ -87,12 +97,14 @@ pub(crate) fn handle_session_wait_with_options(
     wait_timeout_secs: u64,
     memory_warn_mb: Option<u64>,
     output_mode: SessionWaitOutputMode,
+    caller_identity: WaitCallerIdentity,
 ) -> Result<i32> {
     handle_session_wait_with_hooks_output_mode(
         session,
         cd,
         WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
         output_mode,
+        caller_identity,
         |project_root, session_id, trigger| {
             let reconciled = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
                 project_root,
@@ -114,6 +126,7 @@ pub(crate) fn handle_session_wait_for_mcp(
     wait_timeout_secs: u64,
     memory_warn_mb: Option<u64>,
     output_mode: SessionWaitOutputMode,
+    caller_identity: WaitCallerIdentity,
 ) -> Result<SessionWaitMcpOutput> {
     let compact_json = output_mode == SessionWaitOutputMode::CompactJson;
     let mut cached_memory_sampler: Option<csa_session::SessionTreeMemorySampler> = None;
@@ -125,6 +138,7 @@ pub(crate) fn handle_session_wait_for_mcp(
         WaitExecutionOptions {
             behavior: WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
             output_mode,
+            caller_identity,
         },
         core::WaitEmitters {
             reconcile_dead_active_session: Box::new(|project_root, session_id, trigger| {
@@ -292,6 +306,7 @@ where
         cd,
         wait_behavior,
         SessionWaitOutputMode::from_flags(false, false),
+        WaitCallerIdentity::capture(),
         reconcile_dead_active_session,
         emit_completion_signal,
     )
@@ -302,6 +317,7 @@ fn handle_session_wait_with_hooks_output_mode<R, E>(
     cd: Option<String>,
     wait_behavior: WaitBehavior,
     output_mode: SessionWaitOutputMode,
+    caller_identity: WaitCallerIdentity,
     mut reconcile_dead_active_session: R,
     mut emit_completion_signal: E,
 ) -> Result<i32>
@@ -316,6 +332,7 @@ where
         WaitExecutionOptions {
             behavior: wait_behavior,
             output_mode,
+            caller_identity,
         },
         &mut reconcile_dead_active_session,
         &mut emit_completion_signal,
@@ -357,6 +374,7 @@ where
         WaitExecutionOptions {
             behavior: wait_behavior,
             output_mode: SessionWaitOutputMode::from_flags(false, false),
+            caller_identity: WaitCallerIdentity::capture(),
         },
         reconcile_dead_active_session,
         emit_completion_signal,
@@ -390,6 +408,24 @@ where
         emit_memory_warn_marker,
     )
 }
+
+#[cfg(test)]
+pub(crate) fn handle_session_wait_with_identity_for_test(
+    session: String,
+    cd: Option<String>,
+    wait_timeout_secs: u64,
+    caller_identity: WaitCallerIdentity,
+) -> Result<i32> {
+    handle_session_wait_with_options(
+        session,
+        cd,
+        wait_timeout_secs,
+        None,
+        SessionWaitOutputMode::from_flags(false, false),
+        caller_identity,
+    )
+}
+
 fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
     if let Some(directive) = synthesized_wait_next_step(session_dir)? {
         println!("{directive}");
