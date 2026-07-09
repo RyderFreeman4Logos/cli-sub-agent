@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Serialize, Deserialize)]
 struct SlotDiagnostic {
     pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pid_start_time_ticks: Option<u64>,
     tool_name: String,
     slot_index: u32,
     acquired_at: DateTime<Utc>,
@@ -172,36 +174,25 @@ pub fn try_acquire_slot(
 
         let fd = file.as_raw_fd();
 
-        // SAFETY: `fd` is a valid file descriptor from the `File` we just opened.
-        // `LOCK_EX | LOCK_NB` requests an exclusive non-blocking lock.
-        let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-
-        if ret == 0 {
-            // Slot acquired. Write diagnostic info.
-            let mut slot = ToolSlot {
-                file,
-                slot_path,
-                tool_name: tool_name.to_string(),
-                slot_index: index,
-                released: false,
-            };
-
-            let diagnostic = SlotDiagnostic {
-                pid: std::process::id(),
-                tool_name: tool_name.to_string(),
-                slot_index: index,
-                acquired_at: Utc::now(),
-                session_id: session_id.map(|s| s.to_string()),
-            };
-
-            if let Ok(json) = serde_json::to_string(&diagnostic) {
-                let _ = slot.file.set_len(0);
-                let _ = slot.file.write_all(json.as_bytes());
-                let _ = slot.file.flush();
-            }
-
-            return Ok(SlotAcquireResult::Acquired(slot));
+        // First attempt: non-blocking flock.
+        // SAFETY: fd is valid, LOCK_EX | LOCK_NB is a non-blocking advisory lock.
+        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(SlotAcquireResult::Acquired(try_acquire_slot_file_owned(
+                file, slot_path, tool_name, index, session_id, fd,
+            )?));
         }
+
+        // flock failed. If the on-disk diagnostic shows a dead PID, the kernel
+        // has already released the flock — retry flock on the SAME fd without
+        // removing the file (avoids TOCTOU: remove_file could unlink a live slot).
+        if is_slot_diagnostic_pid_dead(&slot_path)
+            && unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0
+        {
+            return Ok(SlotAcquireResult::Acquired(try_acquire_slot_file_owned(
+                file, slot_path, tool_name, index, session_id, fd,
+            )?));
+        }
+
         // This slot is held; try the next one.
         occupied += 1;
     }
@@ -247,6 +238,64 @@ pub fn try_acquire_slot(
         max_slots: max_concurrent,
         occupied: max_concurrent,
     }))
+}
+
+fn try_acquire_slot_file_owned(
+    file: File,
+    slot_path: PathBuf,
+    tool_name: &str,
+    slot_index: u32,
+    session_id: Option<&str>,
+    fd: std::os::unix::io::RawFd,
+) -> Result<ToolSlot> {
+    crate::set_fd_cloexec(fd, &slot_path)?;
+
+    let mut slot = ToolSlot {
+        file,
+        slot_path,
+        tool_name: tool_name.to_string(),
+        slot_index,
+        released: false,
+    };
+
+    let diagnostic = SlotDiagnostic {
+        pid: std::process::id(),
+        pid_start_time_ticks: crate::process_start_time_ticks(std::process::id()),
+        tool_name: tool_name.to_string(),
+        slot_index,
+        acquired_at: Utc::now(),
+        session_id: session_id.map(ToString::to_string),
+    };
+
+    if let Ok(json) = serde_json::to_string(&diagnostic) {
+        let _ = slot.file.set_len(0);
+        let _ = slot.file.write_all(json.as_bytes());
+        let _ = slot.file.flush();
+    }
+
+    Ok(slot)
+}
+
+fn is_slot_diagnostic_pid_dead(slot_path: &Path) -> bool {
+    let Some(diagnostic) = read_slot_diagnostic(slot_path) else {
+        return false;
+    };
+    if !crate::is_pid_dead(diagnostic.pid, diagnostic.pid_start_time_ticks) {
+        return false;
+    }
+
+    tracing::warn!(
+        slot_path = %slot_path.display(),
+        holder_pid = diagnostic.pid,
+        holder_session = ?diagnostic.session_id,
+        "retrying slot flock after detecting dead holder PID (no file removal — avoids TOCTOU)"
+    );
+    true
+}
+
+fn read_slot_diagnostic(slot_path: &Path) -> Option<SlotDiagnostic> {
+    let contents = fs::read_to_string(slot_path).ok()?;
+    serde_json::from_str(&contents).ok()
 }
 
 /// Block-wait for a slot with timeout.
@@ -434,9 +483,94 @@ mod tests {
         let diag: SlotDiagnostic = serde_json::from_str(&content).unwrap();
 
         assert_eq!(diag.pid, std::process::id());
+        assert_eq!(
+            diag.pid_start_time_ticks,
+            crate::process_start_time_ticks(std::process::id())
+        );
         assert_eq!(diag.tool_name, "test-tool");
         assert_eq!(diag.slot_index, 0);
         assert_eq!(diag.session_id.as_deref(), Some("session-123"));
+    }
+
+    #[test]
+    fn test_slot_fd_sets_cloexec() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        let result = try_acquire_slot(slots_dir, "codex", 1, Some("session-123")).unwrap();
+        let SlotAcquireResult::Acquired(slot) = result else {
+            panic!("expected acquired slot");
+        };
+
+        assert_fd_cloexec(slot.file.as_raw_fd());
+    }
+
+    #[test]
+    fn test_slot_recovers_dead_pid_when_flock_released() {
+        // When the holder PID is dead, the kernel has already released the flock.
+        // The on-disk diagnostic still shows the dead PID. try_acquire_slot should
+        // detect the dead PID, retry flock on the same fd, and succeed.
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+        let tool_dir = slots_dir.join("codex");
+        fs::create_dir_all(&tool_dir).unwrap();
+        let slot_path = tool_dir.join("slot-00.lock");
+
+        // Write a stale diagnostic with a definitely-dead PID.
+        // No ManualSlotFlock — the flock is free because the dead process released it.
+        write_slot_diagnostic(
+            &slot_path,
+            i32::MAX as u32,
+            None,
+            "codex",
+            0,
+            Some("01STALE"),
+        );
+
+        let result = try_acquire_slot(slots_dir, "codex", 1, Some("01FRESH")).unwrap();
+        let SlotAcquireResult::Acquired(slot) = result else {
+            panic!("dead PID diagnostic with free flock should be reclaimed");
+        };
+        assert_eq!(slot.slot_index(), 0);
+
+        let content = fs::read_to_string(&slot_path).unwrap();
+        let diag: SlotDiagnostic = serde_json::from_str(&content).unwrap();
+        assert_eq!(diag.pid, std::process::id());
+        assert_eq!(diag.tool_name, "codex");
+        assert_eq!(diag.slot_index, 0);
+        assert_eq!(diag.session_id.as_deref(), Some("01FRESH"));
+    }
+
+    #[test]
+    fn test_slot_dead_pid_with_held_flock_does_not_steal() {
+        // If the diagnostic PID is dead BUT another live process now holds the flock
+        // (e.g., it acquired between our first flock attempt and our dead-PID check),
+        // we must NOT steal the slot. The retry flock should fail.
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+        let tool_dir = slots_dir.join("codex");
+        fs::create_dir_all(&tool_dir).unwrap();
+        let slot_path = tool_dir.join("slot-00.lock");
+        write_slot_diagnostic(
+            &slot_path,
+            i32::MAX as u32,
+            None,
+            "codex",
+            0,
+            Some("01STALE"),
+        );
+        // A live process holds the flock now.
+        let _live_flock = ManualSlotFlock::acquire(&slot_path);
+
+        let result = try_acquire_slot(slots_dir, "codex", 1, Some("01FRESH")).unwrap();
+        match result {
+            SlotAcquireResult::Exhausted(status) => {
+                assert_eq!(status.occupied, 1);
+            }
+            SlotAcquireResult::Acquired(_) => {
+                panic!("must not steal slot held by live flock even if diagnostic PID is dead");
+            }
+        }
     }
 
     #[test]
@@ -725,5 +859,64 @@ mod tests {
             "error should include file path: {msg}"
         );
         assert!(msg.contains("Hint:"), "error should include hint: {msg}");
+    }
+
+    fn write_slot_diagnostic(
+        slot_path: &Path,
+        pid: u32,
+        pid_start_time_ticks: Option<u64>,
+        tool_name: &str,
+        slot_index: u32,
+        session_id: Option<&str>,
+    ) {
+        let diagnostic = SlotDiagnostic {
+            pid,
+            pid_start_time_ticks,
+            tool_name: tool_name.to_string(),
+            slot_index,
+            acquired_at: Utc::now(),
+            session_id: session_id.map(ToString::to_string),
+        };
+        fs::write(slot_path, serde_json::to_string(&diagnostic).unwrap())
+            .expect("write slot diagnostic");
+    }
+
+    struct ManualSlotFlock {
+        file: File,
+    }
+
+    impl ManualSlotFlock {
+        fn acquire(slot_path: &Path) -> Self {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(slot_path)
+                .expect("open slot file for manual flock");
+            // SAFETY: `file` owns a valid fd, and LOCK_EX | LOCK_NB requests a
+            // non-blocking advisory lock for the stale-slot setup.
+            let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            assert_eq!(ret, 0, "manual stale slot flock should acquire lock");
+            Self { file }
+        }
+    }
+
+    impl Drop for ManualSlotFlock {
+        fn drop(&mut self) {
+            // SAFETY: `file` owns a valid fd; unlock before close for deterministic cleanup.
+            unsafe {
+                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            }
+        }
+    }
+
+    fn assert_fd_cloexec(fd: std::os::unix::io::RawFd) {
+        // SAFETY: `fd` is owned by a live slot guard in the calling test.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert_ne!(flags, -1, "F_GETFD should succeed");
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "slot fd should be marked close-on-exec"
+        );
     }
 }

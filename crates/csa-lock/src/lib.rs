@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
 /// Diagnostic information written to lock files
@@ -132,7 +132,7 @@ pub(crate) fn acquire_lock_at_path_with_metadata(
     let diagnostic = read_lock_diagnostic(lock_path)?;
     let error_msg = diagnostic
         .as_ref()
-        .map(format_lock_diagnostic)
+        .map(|diagnostic| format_lock_diagnostic(lock_path, diagnostic))
         .unwrap_or_else(|| "Session is locked (unable to read diagnostic info)".to_string());
 
     // Resource-scoped locks such as the worktree write lock layer their own
@@ -188,6 +188,8 @@ fn try_acquire_lock_at_path(
     let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 
     if ret == 0 {
+        set_fd_cloexec(fd, lock_path)?;
+
         // Lock acquired successfully. Write diagnostic information.
         let mut lock = SessionLock {
             file,
@@ -221,6 +223,24 @@ fn try_acquire_lock_at_path(
     }
 }
 
+pub(crate) fn set_fd_cloexec(fd: RawFd, path: &Path) -> Result<()> {
+    // SAFETY: `fd` is owned by a live `File`; F_GETFD reads descriptor flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("Failed to read fd flags for {}", path.display()));
+    }
+
+    // SAFETY: `fd` is valid, and F_SETFD updates only close-on-exec flags.
+    let ret = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if ret == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("Failed to set FD_CLOEXEC on {}", path.display()));
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn process_start_time_ticks(pid: u32) -> Option<u64> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -234,7 +254,7 @@ pub(crate) fn process_start_time_ticks(_pid: u32) -> Option<u64> {
 }
 
 /// Check whether a PID is dead or has been recycled since it acquired the lock.
-fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
+pub(crate) fn is_pid_dead(pid: u32, pid_start_time_ticks: Option<u64>) -> bool {
     let Ok(pid_i32) = i32::try_from(pid) else {
         return false;
     };
@@ -284,7 +304,7 @@ fn clear_stale_lock_file(lock_path: &Path) -> bool {
     }
 }
 
-fn format_lock_diagnostic(diagnostic: &LockDiagnostic) -> String {
+fn format_lock_diagnostic(lock_path: &Path, diagnostic: &LockDiagnostic) -> String {
     let holder = diagnostic
         .holder_session_id
         .as_deref()
@@ -295,9 +315,18 @@ fn format_lock_diagnostic(diagnostic: &LockDiagnostic) -> String {
         .as_deref()
         .map(|path| format!(", resource_path: {path}"))
         .unwrap_or_default();
+    let pid_status = if is_pid_dead(diagnostic.pid, diagnostic.pid_start_time_ticks) {
+        "dead_or_recycled"
+    } else {
+        "alive"
+    };
     format!(
-        "Session locked by PID {} (tool: {}, reason: {}, acquired: {}{}{})",
+        "Session locked by PID {} (lock_path: {}, pid_status: {}, \
+         pid_start_time_ticks: {:?}, tool: {}, reason: {}, acquired: {}{}{})",
         diagnostic.pid,
+        lock_path.display(),
+        pid_status,
+        diagnostic.pid_start_time_ticks,
         diagnostic.tool_name,
         diagnostic.reason,
         diagnostic.acquired_at,

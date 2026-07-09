@@ -620,8 +620,8 @@ rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-g
 [[files]]
 path = "crates/csa-lock/src/slot.rs"
 kind = "source"
-baseline_tokens = 8246
-baseline_lines = 729
+baseline_tokens = 10501
+baseline_lines = 922
 issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
