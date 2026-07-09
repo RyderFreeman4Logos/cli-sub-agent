@@ -120,6 +120,17 @@ fn test_second_lock_fails() {
 }
 
 #[test]
+fn session_lock_sets_fd_cloexec() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let session_dir = temp_dir.path();
+
+    let lock =
+        acquire_lock(session_dir, "codex", "running task").expect("lock acquisition should work");
+
+    assert_fd_cloexec(lock.file.as_raw_fd());
+}
+
+#[test]
 fn session_lock_recovers_dead_pid_with_held_stale_flock() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let lock_path = temp_dir.path().join("locks/codex.lock");
@@ -348,6 +359,30 @@ fn test_second_lock_error_contains_diagnostic() {
 }
 
 #[test]
+fn lock_error_includes_path_pid_liveness_and_start_ticks() {
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let session_dir = temp_dir.path();
+
+    let _lock =
+        acquire_lock(session_dir, "codex", "first task").expect("First lock should succeed");
+
+    let err = acquire_lock(session_dir, "codex", "second task")
+        .unwrap_err()
+        .to_string();
+
+    let expected_path = session_dir.join("locks/codex.lock");
+    assert!(
+        err.contains(&format!("lock_path: {}", expected_path.display())),
+        "missing lock path: {err}"
+    );
+    assert!(err.contains("pid_status: alive"), "missing liveness: {err}");
+    assert!(
+        err.contains("pid_start_time_ticks:"),
+        "missing start time ticks: {err}"
+    );
+}
+
+#[test]
 fn test_parent_fork_lock_serializes_same_parent() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let state_root = temp_dir.path();
@@ -498,4 +533,15 @@ impl Drop for ManualFlock {
             libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
         }
     }
+}
+
+fn assert_fd_cloexec(fd: std::os::unix::io::RawFd) {
+    // SAFETY: `fd` is owned by a live lock guard in the calling test.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    assert_ne!(flags, -1, "F_GETFD should succeed");
+    assert_ne!(
+        flags & libc::FD_CLOEXEC,
+        0,
+        "lock fd should be marked close-on-exec"
+    );
 }
