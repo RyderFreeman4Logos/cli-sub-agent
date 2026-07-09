@@ -797,7 +797,7 @@ rationale = "run-level outer timeout fix adds synthetic ExecutionResult + RunLoo
 [[files]]
 path = "crates/cli-sub-agent/src/session_cmds_tests_tail_wait_resume_wrapper.rs"
 kind = "test"
-baseline_tokens = 8003
-baseline_lines = 643
+baseline_tokens = 8883
+baseline_lines = 722
 issue = "2618"
-rationale = "3-line addition for new holder_session_result_is_stale callback parameter"
+rationale = "stale-PID recovery tests + FD_CLOEXEC test for #2636 wait-lock fix"
