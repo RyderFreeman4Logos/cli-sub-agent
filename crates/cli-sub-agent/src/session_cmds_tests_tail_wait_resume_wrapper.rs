@@ -641,3 +641,82 @@ fn handle_session_wait_on_resume_wrapper_uses_target_wait_lock() {
         "wrapper-id wait should not acquire an independent wrapper lock"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn wait_lock_stale_pid_diagnostic_with_free_flock_is_reclaimed() {
+    use std::io::Write;
+
+    let td = tempdir().unwrap();
+    let session_dir = td.path();
+
+    // Write a stale diagnostic with a definitely-dead PID.
+    // No process holds the flock — the kernel released it when the dead process exited.
+    let stale_json = serde_json::json!({"pid": i32::MAX, "pid_start_time_ticks": null});
+    let mut f = std::fs::File::create(session_dir.join(".wait.lock")).unwrap();
+    writeln!(f, "{stale_json}").unwrap();
+    drop(f);
+
+    let lock = try_acquire_session_wait_lock(session_dir)
+        .expect("acquire should not error")
+        .expect("dead PID diagnostic with free flock should be reclaimed");
+
+    // Verify the diagnostic was updated with the current PID.
+    let content = std::fs::read_to_string(session_dir.join(".wait.lock")).unwrap();
+    let diag: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(diag["pid"].as_u64(), Some(u64::from(std::process::id())));
+
+    drop(lock);
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_lock_dead_pid_with_held_flock_does_not_steal() {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+
+    let td = tempdir().unwrap();
+    let session_dir = td.path();
+
+    // Write a stale diagnostic with a dead PID.
+    let stale_json = serde_json::json!({"pid": i32::MAX, "pid_start_time_ticks": null});
+    let mut f = std::fs::File::create(session_dir.join(".wait.lock")).unwrap();
+    writeln!(f, "{stale_json}").unwrap();
+    drop(f);
+
+    // A live process holds the flock now.
+    let live_flock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(session_dir.join(".wait.lock"))
+        .unwrap();
+    // SAFETY: live_flock owns a valid fd; LOCK_EX | LOCK_NB is a non-blocking advisory lock.
+    unsafe {
+        libc::flock(live_flock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB);
+    }
+
+    let result = try_acquire_session_wait_lock(session_dir).expect("acquire should not error");
+    assert!(
+        result.is_none(),
+        "must not steal wait lock held by live flock even if diagnostic PID is dead"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_lock_fd_sets_cloexec() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path();
+
+    let lock = try_acquire_session_wait_lock(session_dir)
+        .expect("acquire should not error")
+        .expect("should acquire on fresh lock");
+
+    // SAFETY: read-only F_GETFD on a valid fd.
+    let flags = unsafe { libc::fcntl(lock.raw_fd(), libc::F_GETFD) };
+    assert!(
+        flags & libc::FD_CLOEXEC != 0,
+        "wait lock fd must have FD_CLOEXEC set"
+    );
+
+    drop(lock);
+}
