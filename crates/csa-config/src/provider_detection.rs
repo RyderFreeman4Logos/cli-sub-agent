@@ -4,39 +4,41 @@ use crate::global::{DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig};
 
 const HERMES_MODEL_PROVIDER_ENV: &str = "HERMES_MODEL_PROVIDER";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelProvider {
-    Claude,
-    OpenAI,
-    Glm,
-    Other,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModelProvider(String);
 
 impl ModelProvider {
+    pub fn new(name: &str) -> Self {
+        Self(normalize_provider_name(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     fn from_hermes_value(value: &str) -> Option<Self> {
         let normalized = normalize_provider_name(value);
         if normalized.is_empty() {
             return None;
         }
         Some(match normalized.as_str() {
-            "anthropic" | "claude" => Self::Claude,
-            "openai" => Self::OpenAI,
-            "zai" | "zhipu" | "zhipuai" | "glm" => Self::Glm,
-            _ => Self::Other,
+            "anthropic" | "claude" => Self::new("claude"),
+            "openai" => Self::new("openai"),
+            "zai" | "zhipu" | "zhipuai" | "glm" => Self::new("glm"),
+            "xai" | "xai-oauth" | "grok" => Self::new("xai"),
+            _ => Self(normalized),
         })
     }
 }
 
 pub fn parse_model_provider(value: &str) -> Result<ModelProvider, String> {
     let normalized = normalize_provider_name(value);
-    match normalized.as_str() {
-        "anthropic" | "claude" => Ok(ModelProvider::Claude),
-        "openai" => Ok(ModelProvider::OpenAI),
-        "zai" | "zhipu" | "zhipuai" | "glm" => Ok(ModelProvider::Glm),
-        "other" => Ok(ModelProvider::Other),
-        _ => Err(format!(
-            "unsupported model provider '{value}'; expected claude, openai, glm, or other"
-        )),
+    if normalized.is_empty() {
+        Err(format!(
+            "unsupported model provider '{value}'; expected a non-empty provider name"
+        ))
+    } else {
+        Ok(ModelProvider(normalized))
     }
 }
 
@@ -48,13 +50,13 @@ pub fn detect_model_provider() -> Option<ModelProvider> {
 /// Provider TTLs exceeding this cap are clamped to prevent excessively long waits.
 pub const MAX_WAIT_TTL_SECONDS: u64 = 3000;
 
-pub fn provider_ttl(provider: ModelProvider, config: &KvCacheConfig) -> u64 {
-    let provider_seconds = match provider {
-        ModelProvider::Claude => config.provider_ttls.claude,
-        ModelProvider::OpenAI => config.provider_ttls.openai,
-        ModelProvider::Glm => config.provider_ttls.glm,
-        ModelProvider::Other => config.provider_ttls.other,
-    };
+pub fn provider_ttl(provider: &ModelProvider, config: &KvCacheConfig) -> u64 {
+    let provider_seconds = config
+        .provider_ttls
+        .0
+        .get(provider.as_str())
+        .copied()
+        .unwrap_or_default();
     let resolved = if provider_seconds > 0 {
         provider_seconds
     } else {
@@ -191,7 +193,7 @@ mod tests {
     fn detect_model_provider_from_env() {
         let _guard = EnvVarGuard::set(HERMES_MODEL_PROVIDER_ENV, "zhipuai");
 
-        assert_eq!(detect_model_provider(), Some(ModelProvider::Glm));
+        assert_eq!(detect_model_provider(), Some(ModelProvider::new("glm")));
     }
 
     #[test]
@@ -211,47 +213,82 @@ model:
         )
         .unwrap();
 
-        assert_eq!(detect_model_provider(), Some(ModelProvider::Claude));
+        assert_eq!(detect_model_provider(), Some(ModelProvider::new("claude")));
     }
 
     #[test]
     fn provider_ttl_uses_correct_configured_value() {
         let mut config = KvCacheConfig::default();
-        config.provider_ttls.openai = 1800;
+        config.provider_ttls.0.insert("openai".to_string(), 1800);
 
-        assert_eq!(provider_ttl(ModelProvider::OpenAI, &config), 1800);
+        assert_eq!(provider_ttl(&ModelProvider::new("openai"), &config), 1800);
+    }
+
+    #[test]
+    fn from_hermes_value_detects_xai_oauth() {
+        assert_eq!(
+            ModelProvider::from_hermes_value("xai-oauth"),
+            Some(ModelProvider::new("xai"))
+        );
+    }
+
+    #[test]
+    fn from_hermes_value_preserves_unknown_provider() {
+        assert_eq!(
+            ModelProvider::from_hermes_value("gemini"),
+            Some(ModelProvider::new("gemini"))
+        );
+    }
+
+    #[test]
+    fn parse_model_provider_accepts_custom_provider() {
+        assert_eq!(
+            parse_model_provider("gemini"),
+            Ok(ModelProvider::new("gemini"))
+        );
     }
 
     #[test]
     fn provider_ttl_falls_back_to_default() {
+        let mut provider_ttls = crate::ProviderTtls::default();
+        provider_ttls.0.insert("glm".to_string(), 0);
         let config = KvCacheConfig {
             default_ttl_seconds: 123,
-            provider_ttls: crate::ProviderTtls {
-                glm: 0,
-                ..Default::default()
-            },
+            provider_ttls,
             ..Default::default()
         };
 
-        assert_eq!(provider_ttl(ModelProvider::Glm, &config), 123);
+        assert_eq!(provider_ttl(&ModelProvider::new("glm"), &config), 123);
+    }
+
+    #[test]
+    fn provider_ttl_missing_custom_provider_falls_back_to_default() {
+        let config = KvCacheConfig {
+            default_ttl_seconds: 123,
+            ..Default::default()
+        };
+
+        assert_eq!(provider_ttl(&ModelProvider::new("gemini"), &config), 123);
     }
 
     #[test]
     fn issue_2538_provider_ttl_clamped_to_max_cap() {
+        let provider_ttls = crate::ProviderTtls(std::collections::BTreeMap::from([
+            ("claude".to_string(), 5000),
+            ("openai".to_string(), 0),
+            ("glm".to_string(), 0),
+            ("xai".to_string(), 0),
+            ("other".to_string(), 0),
+        ]));
         let config = KvCacheConfig {
             default_ttl_seconds: 540,
             long_poll_seconds: 540,
             frequent_poll_seconds: 30,
-            provider_ttls: crate::ProviderTtls {
-                claude: 5000,
-                openai: 0,
-                glm: 0,
-                other: 0,
-            },
+            provider_ttls,
         };
         // Claude TTL 5000 > 3000 cap → clamped to 3000
-        assert_eq!(provider_ttl(ModelProvider::Claude, &config), 3000);
+        assert_eq!(provider_ttl(&ModelProvider::new("claude"), &config), 3000);
         // OpenAI falls back to default 540 < 3000 → not clamped
-        assert_eq!(provider_ttl(ModelProvider::OpenAI, &config), 540);
+        assert_eq!(provider_ttl(&ModelProvider::new("openai"), &config), 540);
     }
 }

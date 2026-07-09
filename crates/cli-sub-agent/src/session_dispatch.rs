@@ -258,7 +258,7 @@ fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>, cd: Option<&str>)
                 GlobalConfig::default()
             }
         };
-        return provider_ttl(provider, &config.kv_cache);
+        return provider_ttl(&provider, &config.kv_cache);
     }
 
     resolve_daemon_wait_timeout(cd)
@@ -398,7 +398,10 @@ openai = 1666
 "#,
         );
 
-        assert_eq!(resolve_wait_ttl(Some(ModelProvider::OpenAI), None), 1666);
+        assert_eq!(
+            resolve_wait_ttl(Some(ModelProvider::new("openai")), None),
+            1666
+        );
     }
 
     #[test]
