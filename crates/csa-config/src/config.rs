@@ -680,6 +680,7 @@ default_ttl_seconds = 240
 claude = 3300
 openai = 1700
 glm = 540
+xai = 1700
 other = 270
 [gc]
 transcript_max_age_days = 30

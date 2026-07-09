@@ -319,7 +319,7 @@ pub enum SessionCommands {
         memory_warn_mb: Option<u64>,
 
         /// Override the auto-detected caller provider for wait TTL selection.
-        /// Accepted values: claude, openai, glm, other.
+        /// Accepted values: any key from [kv_cache.provider_ttls] (e.g. claude, openai, glm, xai, other).
         #[arg(long, value_parser = csa_config::parse_model_provider)]
         model_provider: Option<csa_config::ModelProvider>,
 

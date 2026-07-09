@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const DEFAULT_KV_CACHE_FREQUENT_POLL_SECS: u64 = 60;
@@ -6,8 +7,17 @@ pub const DEFAULT_KV_CACHE_LONG_POLL_SECS: u64 = 240;
 pub const DEFAULT_KV_CACHE_CLAUDE_TTL_SECS: u64 = 3300;
 pub const DEFAULT_KV_CACHE_OPENAI_TTL_SECS: u64 = 1700;
 pub const DEFAULT_KV_CACHE_GLM_TTL_SECS: u64 = 540;
+pub const DEFAULT_KV_CACHE_XAI_TTL_SECS: u64 = 1700;
 pub const DEFAULT_KV_CACHE_OTHER_TTL_SECS: u64 = 270;
 pub const LEGACY_SESSION_WAIT_FALLBACK_SECS: u64 = 250;
+
+const DEFAULT_PROVIDER_TTLS: [(&str, u64); 5] = [
+    ("claude", DEFAULT_KV_CACHE_CLAUDE_TTL_SECS),
+    ("openai", DEFAULT_KV_CACHE_OPENAI_TTL_SECS),
+    ("glm", DEFAULT_KV_CACHE_GLM_TTL_SECS),
+    ("xai", DEFAULT_KV_CACHE_XAI_TTL_SECS),
+    ("other", DEFAULT_KV_CACHE_OTHER_TTL_SECS),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvCacheValueSource {
@@ -38,55 +48,37 @@ impl ResolvedKvCacheValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProviderTtls {
-    #[serde(default = "default_kv_cache_claude_ttl_seconds")]
-    pub claude: u64,
-    #[serde(default = "default_kv_cache_openai_ttl_seconds")]
-    pub openai: u64,
-    #[serde(default = "default_kv_cache_glm_ttl_seconds")]
-    pub glm: u64,
-    #[serde(default = "default_kv_cache_other_ttl_seconds")]
-    pub other: u64,
-}
+/// Provider-specific TTL values keyed by normalized provider name.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderTtls(pub BTreeMap<String, u64>);
 
 impl Default for ProviderTtls {
     fn default() -> Self {
-        Self {
-            claude: default_kv_cache_claude_ttl_seconds(),
-            openai: default_kv_cache_openai_ttl_seconds(),
-            glm: default_kv_cache_glm_ttl_seconds(),
-            other: default_kv_cache_other_ttl_seconds(),
-        }
+        Self(default_provider_ttls())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderTtls {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let overrides = BTreeMap::<String, u64>::deserialize(deserializer)?;
+        let mut provider_ttls = default_provider_ttls();
+        provider_ttls.extend(overrides);
+        Ok(Self(provider_ttls))
     }
 }
 
 impl ProviderTtls {
     fn sanitized(mut self, path: Option<&Path>) -> Self {
-        self.claude = sanitize_kv_cache_seconds(
-            self.claude,
-            "kv_cache.provider_ttls.claude",
-            DEFAULT_KV_CACHE_CLAUDE_TTL_SECS,
-            path,
-        );
-        self.openai = sanitize_kv_cache_seconds(
-            self.openai,
-            "kv_cache.provider_ttls.openai",
-            DEFAULT_KV_CACHE_OPENAI_TTL_SECS,
-            path,
-        );
-        self.glm = sanitize_kv_cache_seconds(
-            self.glm,
-            "kv_cache.provider_ttls.glm",
-            DEFAULT_KV_CACHE_GLM_TTL_SECS,
-            path,
-        );
-        self.other = sanitize_kv_cache_seconds(
-            self.other,
-            "kv_cache.provider_ttls.other",
-            DEFAULT_KV_CACHE_OTHER_TTL_SECS,
-            path,
-        );
+        for (provider, default) in DEFAULT_PROVIDER_TTLS {
+            let entry = self.0.entry(provider.to_string()).or_insert(default);
+            if *entry == 0 {
+                let key = format!("kv_cache.provider_ttls.{provider}");
+                *entry = sanitize_kv_cache_seconds(*entry, &key, default, path);
+            }
+        }
         self
     }
 }
@@ -151,20 +143,11 @@ fn default_kv_cache_long_poll_seconds() -> u64 {
     DEFAULT_KV_CACHE_LONG_POLL_SECS
 }
 
-fn default_kv_cache_claude_ttl_seconds() -> u64 {
-    DEFAULT_KV_CACHE_CLAUDE_TTL_SECS
-}
-
-fn default_kv_cache_openai_ttl_seconds() -> u64 {
-    DEFAULT_KV_CACHE_OPENAI_TTL_SECS
-}
-
-fn default_kv_cache_glm_ttl_seconds() -> u64 {
-    DEFAULT_KV_CACHE_GLM_TTL_SECS
-}
-
-fn default_kv_cache_other_ttl_seconds() -> u64 {
-    DEFAULT_KV_CACHE_OTHER_TTL_SECS
+fn default_provider_ttls() -> BTreeMap<String, u64> {
+    DEFAULT_PROVIDER_TTLS
+        .into_iter()
+        .map(|(provider, seconds)| (provider.to_string(), seconds))
+        .collect()
 }
 
 impl Default for KvCacheConfig {
@@ -223,6 +206,7 @@ fn sanitize_kv_cache_seconds(value: u64, key: &str, default: u64, path: Option<&
 #[cfg(test)]
 mod tests {
     use super::{KvCacheConfig, ProviderTtls};
+    use std::collections::BTreeMap;
 
     #[test]
     fn kv_cache_defaults_include_provider_ttls() {
@@ -230,10 +214,11 @@ mod tests {
 
         assert_eq!(config.default_ttl_seconds, 240);
         assert_eq!(config.long_poll_seconds, 240);
-        assert_eq!(config.provider_ttls.claude, 3300);
-        assert_eq!(config.provider_ttls.openai, 1700);
-        assert_eq!(config.provider_ttls.glm, 540);
-        assert_eq!(config.provider_ttls.other, 270);
+        assert_eq!(config.provider_ttls.0["claude"], 3300);
+        assert_eq!(config.provider_ttls.0["openai"], 1700);
+        assert_eq!(config.provider_ttls.0["glm"], 540);
+        assert_eq!(config.provider_ttls.0["xai"], 1700);
+        assert_eq!(config.provider_ttls.0["other"], 270);
     }
 
     #[test]
@@ -243,6 +228,37 @@ mod tests {
         assert_eq!(config.default_ttl_seconds, 240);
         assert_eq!(config.long_poll_seconds, 240);
         assert_eq!(config.provider_ttls, ProviderTtls::default());
+    }
+
+    #[test]
+    fn provider_ttls_parse_defaults_and_custom_keys() {
+        let config: KvCacheConfig = toml::from_str(
+            r#"
+[provider_ttls]
+openai = 1800
+gemini = 900
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.provider_ttls.0["claude"], 3300);
+        assert_eq!(config.provider_ttls.0["openai"], 1800);
+        assert_eq!(config.provider_ttls.0["xai"], 1700);
+        assert_eq!(config.provider_ttls.0["gemini"], 900);
+    }
+
+    #[test]
+    fn provider_ttls_sanitize_zero_known_defaults_and_keep_custom() {
+        let provider_ttls = ProviderTtls(BTreeMap::from([
+            ("claude".to_string(), 0),
+            ("custom".to_string(), 0),
+        ]));
+
+        let provider_ttls = provider_ttls.sanitized(None);
+
+        assert_eq!(provider_ttls.0["claude"], 3300);
+        assert_eq!(provider_ttls.0["custom"], 0);
+        assert_eq!(provider_ttls.0["xai"], 1700);
     }
 
     #[test]
