@@ -233,3 +233,32 @@ fn issue_2516_mixed_resolution_and_active_problem_stays_blocking() {
         "sentence with 'still remains' must not be classified as resolved"
     );
 }
+
+#[test]
+fn issue_2637_compound_priority_spec_not_extracted_as_finding() {
+    // "P1/P2/P3: code paths now classify..." is acceptance-criteria prose,
+    // not a finding. It must not be extracted as a HIGH finding.
+    let text = "## Findings\nP1/P2/P3: code paths now classify status, connect, timeout into bounded cause labels.\n";
+    let findings = extract_review_findings_from_prose(text);
+    assert!(
+        findings.is_empty(),
+        "compound P1/P2/P3 spec should not be extracted as a finding"
+    );
+}
+
+#[test]
+fn issue_2637_single_priority_with_colon_still_parses() {
+    // Single "P1:" should still be parsed as HIGH severity.
+    let text = "## Findings\nP1: critical race in lock acquisition path\n";
+    let findings = extract_review_findings_from_prose(text);
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::High);
+}
+
+#[test]
+fn issue_2637_compound_priority_not_blocking_signal() {
+    // Compound spec should not trigger blocking signal extraction either.
+    assert!(!contains_blocking_review_signal(
+        "P1/P2/P3: code paths now classify status into bounded cause labels."
+    ));
+}
