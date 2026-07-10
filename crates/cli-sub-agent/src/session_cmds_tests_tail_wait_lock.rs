@@ -1,11 +1,12 @@
 use super::*;
 use crate::session_cmds_daemon::{
-    WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
-    try_acquire_session_wait_lock,
+    WaitBehavior, WaitCallerIdentity, WaitLoopTiming, WaitReconciliationOutcome,
+    handle_session_wait_with_hooks, handle_session_wait_with_identity_for_test,
+    try_acquire_session_wait_lock, try_acquire_session_wait_lock_with_caller,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use std::io::Write;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
@@ -37,6 +38,19 @@ impl Drop for EnvVarGuard {
     }
 }
 
+fn caller_output_pipe() -> (OwnedFd, OwnedFd, WaitCallerIdentity) {
+    let mut pipe_fds = [0i32; 2];
+    // SAFETY: `pipe_fds` has space for both descriptors initialized by pipe().
+    assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+    // SAFETY: pipe() succeeded and returned two new descriptors, each adopted
+    // exactly once by an OwnedFd.
+    let read_end = unsafe { OwnedFd::from_raw_fd(pipe_fds[0]) };
+    // SAFETY: see the ownership argument above for the pipe write descriptor.
+    let write_end = unsafe { OwnedFd::from_raw_fd(pipe_fds[1]) };
+    let caller_identity = WaitCallerIdentity::from_output_fd_for_test(write_end.as_raw_fd());
+    (read_end, write_end, caller_identity)
+}
+
 #[test]
 fn session_wait_lock_creates_dot_wait_lock_file_and_rejects_duplicates() {
     let td = tempdir().expect("tempdir");
@@ -54,6 +68,118 @@ fn session_wait_lock_creates_dot_wait_lock_file_and_rejects_duplicates() {
         second_lock.is_none(),
         "second concurrent wait lock attempt should be rejected"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn session_wait_lock_persists_caller_output_identity() {
+    let td = tempdir().expect("tempdir");
+    let (_caller_read_end, _wait_output_end, caller_identity) = caller_output_pipe();
+    let (output_device, output_inode) = caller_identity
+        .diagnostic_parts_for_test()
+        .expect("pipe output should have a stable descriptor identity");
+
+    let _lock = try_acquire_session_wait_lock_with_caller(td.path(), caller_identity)
+        .expect("wait lock acquisition")
+        .expect("wait lock should be acquired");
+    let diagnostic: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(td.path().join(".wait.lock")).expect("read wait lock diagnostic"),
+    )
+    .expect("parse wait lock diagnostic");
+
+    assert_eq!(
+        diagnostic["caller_output_device"].as_u64(),
+        Some(output_device)
+    );
+    assert_eq!(
+        diagnostic["caller_output_inode"].as_u64(),
+        Some(output_inode)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn session_wait_rejects_closed_caller_output_before_lock_acquisition() {
+    let (caller_read_end, _wait_output_end, caller_identity) = caller_output_pipe();
+    drop(caller_read_end);
+
+    let error = caller_identity
+        .validate_for_wait()
+        .expect_err("closed caller output must not pass startup validation");
+    assert!(
+        error.to_string().contains("caller output closed"),
+        "unexpected caller validation error: {error}"
+    );
+}
+
+#[test]
+fn session_wait_releases_lock_when_caller_output_closes() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+    let session = create_session(
+        project,
+        Some("caller-output-lifecycle"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let _worktree_lock = csa_lock::acquire_worktree_write_lock(
+        project,
+        &session_id,
+        &[],
+        |_| false,
+        |_| false,
+        |_| false,
+    )
+    .expect("live session worktree lock");
+    let (caller_read_end, _wait_output_end, caller_identity) = caller_output_pipe();
+    let wait_project = project.to_string_lossy().into_owned();
+    let wait_session_id = session_id.clone();
+    let wait_handle = std::thread::spawn(move || {
+        handle_session_wait_with_identity_for_test(
+            wait_session_id,
+            Some(wait_project),
+            5,
+            caller_identity,
+        )
+        .expect("wait should observe caller output closure")
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match try_acquire_session_wait_lock(&session_dir).expect("probe wait lock") {
+            None => break,
+            Some(lock) => drop(lock),
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "wait did not acquire its lock before the caller lifecycle test deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // The output pipe was inherited before the waiter could sample any PPID.
+    // Closing its caller-owned read end must release the lock without a parent
+    // identity baseline, even if process reparenting has already happened.
+    drop(caller_read_end);
+    assert_eq!(wait_handle.join().expect("wait thread should not panic"), 1);
+    assert!(
+        load_result(project, &session_id)
+            .expect("load result after caller output closure")
+            .is_none(),
+        "caller output closure must exit without synthesizing a session result"
+    );
+    let released_lock = try_acquire_session_wait_lock(&session_dir)
+        .expect("probe released wait lock")
+        .expect("caller output closure must release the wait lock");
+    drop(released_lock);
 }
 
 #[test]

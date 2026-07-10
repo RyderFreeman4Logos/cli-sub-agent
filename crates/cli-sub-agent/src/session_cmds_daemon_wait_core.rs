@@ -22,7 +22,7 @@ use super::target::resolve_wait_target;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
     emit_wait_terminal_output, load_completed_daemon_result_with_fallback, refresh_result_for_wait,
-    suppress_pending_tier_failover_result, try_acquire_session_wait_lock,
+    suppress_pending_tier_failover_result, try_acquire_session_wait_lock_with_caller,
 };
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::session_cmds_daemon::{
@@ -107,11 +107,20 @@ pub(crate) fn handle_session_wait_with_emitters(
     let is_cross_project = resolved.foreign_project_root.is_some();
     let mut wait_target = resolve_wait_target(effective_root, &resolved.session_id, &session_dir)?;
     let worktree_lock_root = super::resolve_session_wait_worktree_lock_root(effective_root);
-    let mut wait_lock = match try_acquire_session_wait_lock(&wait_target.session_dir)? {
+    if wait_options.caller_identity.is_dead() {
+        eprintln!(
+            "ERROR: session wait caller output closed before lock acquisition; re-issue from the current caller."
+        );
+        return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+    }
+    let mut wait_lock = match try_acquire_session_wait_lock_with_caller(
+        &wait_target.session_dir,
+        wait_options.caller_identity,
+    )? {
         Some(lock) => lock,
         None => {
             eprintln!(
-                "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
+                "ERROR: another csa session wait is already running for session {} and the lock could not be safely reclaimed. If the previous wait's caller is gone (Hermes restart, context compaction), kill that wait process and re-issue.",
                 wait_target.session_id
             );
             return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
@@ -166,16 +175,25 @@ pub(crate) fn handle_session_wait_with_emitters(
     }
 
     loop {
+        if wait_options.caller_identity.is_dead() {
+            tracing::warn!(
+                session_id = %wait_target.session_id,
+                "session wait caller output closed; releasing wait lock"
+            );
+            return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+        }
         if !wait_target.follows_resume_target {
             let updated_target =
                 resolve_wait_target(effective_root, &resolved.session_id, &session_dir)?;
             if updated_target.follows_resume_target {
-                let updated_lock = match try_acquire_session_wait_lock(&updated_target.session_dir)?
-                {
+                let updated_lock = match try_acquire_session_wait_lock_with_caller(
+                    &updated_target.session_dir,
+                    wait_lock.caller_identity(),
+                )? {
                     Some(lock) => lock,
                     None => {
                         eprintln!(
-                            "ERROR: another csa session wait is already running for session {} (lock held). The existing wait will notify you on completion. Do NOT re-issue.",
+                            "ERROR: another csa session wait is already running for session {} and the lock could not be safely reclaimed. If the previous wait's caller is gone (Hermes restart, context compaction), kill that wait process and re-issue.",
                             updated_target.session_id
                         );
                         return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);

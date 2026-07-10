@@ -1,15 +1,63 @@
 use super::*;
 use crate::session_cmds_daemon::{
-    SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
-    handle_session_wait_with_hooks, handle_session_wait_with_hooks_and_sampler,
-    render_wait_result_summary, try_acquire_session_wait_lock,
+    SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitCallerIdentity, WaitLoopTiming,
+    WaitReconciliationOutcome, handle_session_wait_with_hooks,
+    handle_session_wait_with_hooks_and_sampler, handle_session_wait_with_identity_for_test,
+    parent_pid, process_start_time_ticks, process_state, render_wait_result_summary,
+    try_acquire_session_wait_lock, try_acquire_session_wait_lock_with_caller,
 };
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
+#[cfg(target_os = "linux")]
+struct ForkedChildGuard(libc::pid_t);
+
+#[cfg(target_os = "linux")]
+impl ForkedChildGuard {
+    fn try_wait_nohang(&mut self) -> libc::pid_t {
+        let mut status: libc::c_int = 0;
+        // SAFETY: self.0 is a child PID owned by this guard, status points to
+        // writable storage, and WNOHANG makes the ownership check non-blocking.
+        let rc = unsafe { libc::waitpid(self.0, &mut status, libc::WNOHANG) };
+        let ownership_released = rc == self.0
+            || (rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD));
+        if ownership_released {
+            self.0 = 0;
+        }
+        rc
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ForkedChildGuard {
+    fn drop(&mut self) {
+        if self.0 == 0 {
+            return;
+        }
+        // SAFETY: self.0 is a child PID returned by fork(); kill targets only
+        // that child, and waitpid receives a valid status pointer with EINTR
+        // retried until the child is reaped or is already gone.
+        unsafe {
+            libc::kill(self.0, libc::SIGKILL);
+            loop {
+                let mut status: libc::c_int = 0;
+                let rc = libc::waitpid(self.0, &mut status, 0);
+                if rc == self.0 {
+                    break;
+                }
+                if rc == -1 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    break;
+                }
+            }
+        }
+    }
+}
 
 #[path = "session_cmds_tests_tail_wait_resume_wrapper_alias_assert.rs"]
 mod alias_assert;
@@ -719,4 +767,372 @@ fn wait_lock_fd_sets_cloexec() {
     );
 
     drop(lock);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wait_lock_orphaned_pid_not_reclaimed_when_parent_alive() {
+    // A live wait process with a matching parent PID should NOT be reclaimed.
+    // We verify that when our own PID (alive, parent unchanged) holds the flock,
+    // a second acquire correctly fails — the orphan check doesn't fire.
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+
+    let td = tempdir().unwrap();
+    let session_dir = td.path();
+
+    // Write diagnostic with our PID and a valid start-time.
+    let my_pid = std::process::id();
+    let my_start_time =
+        process_start_time_ticks(my_pid).expect("Linux test process should expose a start time");
+    let my_ppid = parent_pid(my_pid).expect("Linux test process should expose a parent PID");
+    let diag_json = serde_json::json!({"pid": my_pid, "pid_start_time_ticks": my_start_time, "parent_pid": my_ppid});
+    let mut f = std::fs::File::create(session_dir.join(".wait.lock")).unwrap();
+    writeln!(f, "{diag_json}").unwrap();
+    drop(f);
+
+    // Hold the flock ourselves (alive, parent PID unchanged).
+    let live_flock = std::fs::OpenOptions::new()
+        .write(true)
+        .open(session_dir.join(".wait.lock"))
+        .unwrap();
+    // SAFETY: live_flock owns a valid fd; LOCK_EX | LOCK_NB is a non-blocking advisory lock.
+    let flock_rc = unsafe { libc::flock(live_flock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(
+        flock_rc,
+        0,
+        "test holder should acquire flock: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let result = try_acquire_session_wait_lock(session_dir).expect("acquire should not error");
+    assert!(
+        result.is_none(),
+        "must not reclaim lock held by live process with a live parent"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wait_lock_rewritten_diagnostic_cannot_signal_non_holder() {
+    let td = tempdir().unwrap();
+    let lock_path = td.path().join(".wait.lock");
+
+    // Fork the diagnostic victim before opening the lock so it cannot inherit
+    // the locked open-file description.
+    // SAFETY: the child branch calls only async-signal-safe libc functions
+    // before _exit().
+    let victim_pid = unsafe { libc::fork() };
+    assert!(victim_pid >= 0, "fork failed");
+    if victim_pid == 0 {
+        // SAFETY: pause() and _exit() are async-signal-safe after fork().
+        unsafe {
+            libc::pause();
+            libc::_exit(0);
+        }
+    }
+    let mut victim_guard = ForkedChildGuard(victim_pid);
+
+    let victim_start_time = process_start_time_ticks(victim_pid as u32)
+        .expect("diagnostic victim should expose a start time");
+    let victim_parent_pid =
+        parent_pid(victim_pid as u32).expect("diagnostic victim should expose its parent PID");
+    let different_parent_pid = victim_parent_pid
+        .checked_add(1)
+        .unwrap_or(victim_parent_pid - 1);
+
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    // SAFETY: holder owns a valid fd; LOCK_EX | LOCK_NB requests an exclusive
+    // non-blocking advisory flock.
+    assert_eq!(
+        unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "test holder should acquire flock"
+    );
+
+    // Advisory flock does not prevent this concurrent diagnostic rewrite. The
+    // diagnostic names a live reparented-looking process that is not the holder.
+    let diagnostic = serde_json::json!({
+        "pid": victim_pid,
+        "pid_start_time_ticks": victim_start_time,
+        "parent_pid": different_parent_pid,
+    });
+    std::fs::write(&lock_path, format!("{diagnostic}\n")).unwrap();
+
+    let acquired = try_acquire_session_wait_lock(td.path()).expect("lock probe should not error");
+    assert!(
+        acquired.is_none(),
+        "rewritten diagnostics must not bypass the holder's flock"
+    );
+
+    let victim_wait = victim_guard.try_wait_nohang();
+    assert_eq!(
+        victim_wait, 0,
+        "takeover must preserve the diagnostic PID when it does not hold the flock"
+    );
+
+    drop(holder);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wait_lock_diagnostic_probe_does_not_reap_unowned_child() {
+    let td = tempdir().unwrap();
+    let lock_path = td.path().join(".wait.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    // SAFETY: lock_file owns a valid fd and the flags request a non-blocking
+    // exclusive advisory lock before fork().
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "parent should acquire flock before forking its holder"
+    );
+
+    // SAFETY: the child branch calls only async-signal-safe libc functions
+    // before _exit(); it inherits the locked open-file description.
+    let holder_pid = unsafe { libc::fork() };
+    assert!(holder_pid >= 0, "holder fork failed");
+    if holder_pid == 0 {
+        // SAFETY: pause() and _exit() are async-signal-safe after fork().
+        unsafe {
+            libc::pause();
+            libc::_exit(0);
+        }
+    }
+    let _holder_guard = ForkedChildGuard(holder_pid);
+    drop(lock_file);
+
+    // SAFETY: the child exits immediately using the async-signal-safe _exit().
+    let exited_pid = unsafe { libc::fork() };
+    assert!(exited_pid >= 0, "exited-child fork failed");
+    if exited_pid == 0 {
+        // SAFETY: _exit() is async-signal-safe after fork().
+        unsafe { libc::_exit(0) };
+    }
+    let mut exited_guard = ForkedChildGuard(exited_pid);
+    let exited_pid_u32 = exited_pid as u32;
+    let exited_start_time = process_start_time_ticks(exited_pid_u32)
+        .expect("exited child should expose a Linux start time until reaped");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while process_state(exited_pid_u32) != Some('Z') {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "child did not become waitable before the test deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    for diagnostic_pid in [exited_pid_u32, 0] {
+        let diagnostic = serde_json::json!({
+            "pid": diagnostic_pid,
+            "pid_start_time_ticks": exited_start_time,
+            "parent_pid": 1,
+        });
+        std::fs::write(&lock_path, format!("{diagnostic}\n")).unwrap();
+        let acquired =
+            try_acquire_session_wait_lock(td.path()).expect("lock probe should not error");
+        assert!(
+            acquired.is_none(),
+            "advisory diagnostic must not bypass another process's flock"
+        );
+    }
+
+    assert_eq!(
+        exited_guard.try_wait_nohang(),
+        exited_pid,
+        "advisory liveness probes must leave child reaping to its owner"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wait_lock_legacy_orphaned_pid_is_reclaimed() {
+    // Positive compatibility test: create a live holder whose legacy recorded
+    // parent differs from its actual parent, then verify lock acquisition
+    // reclaims the holder via SIGTERM.
+    //
+    // Design:
+    // - Acquire flock BEFORE fork on a parent-opened fd. After fork the child
+    //   inherits the locked open-file description. The parent closes its dup
+    //   so only the child holds the lock. This avoids calling flock() after
+    //   fork (not on the POSIX async-signal-safe list).
+    // - RAII ChildGuard kills+reaps the child in Drop (with EINTR retry),
+    //   preventing zombies or hung pause() children even if assertions fail.
+
+    let td = tempdir().unwrap();
+    let session_dir = td.path();
+    let lock_path = session_dir.join(".wait.lock");
+
+    // Open lock file and acquire flock BEFORE fork.
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    let lock_fd = std::os::unix::io::AsRawFd::as_raw_fd(&lock_file);
+    // SAFETY: lock_file owns lock_fd, and the flags request a non-blocking advisory lock.
+    let flock_rc = unsafe { libc::flock(lock_fd, libc::LOCK_EX | libc::LOCK_NB) };
+    assert!(flock_rc == 0, "parent should acquire flock before fork");
+
+    // Protocol byte for success (avoid b"\x00" which triggers clippy::manual-c-str-literals).
+    let ok_byte: [u8; 1] = [0];
+
+    // Create pipe for readiness handshake.
+    let mut pipe_fds = [0i32; 2];
+    // SAFETY: pipe_fds has space for the two file descriptors written by pipe().
+    assert!(
+        unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == 0,
+        "pipe failed"
+    );
+    let read_fd = pipe_fds[0];
+    let write_fd = pipe_fds[1];
+
+    // Fork holder child. The child inherits the locked fd.
+    // SAFETY: the child branch calls only async-signal-safe libc functions before _exit().
+    let child_pid = unsafe { libc::fork() };
+    assert!(child_pid >= 0, "fork failed");
+
+    if child_pid == 0 {
+        // Holder child — only async-signal-safe calls from here.
+        // The inherited lock_fd already holds the flock.
+        // SAFETY: read_fd is the child's valid inherited read end and is no longer needed.
+        unsafe { libc::close(read_fd) };
+
+        // Signal readiness immediately (flock already held). Retry EINTR a
+        // bounded number of times; the parent independently enforces the
+        // overall five-second handshake deadline.
+        // SAFETY: write_fd is valid, ok_byte supplies one readable byte, errno
+        // is read only after a failed write, and all child syscalls used here
+        // are async-signal-safe after fork().
+        unsafe {
+            let mut interrupted_writes = 0;
+            loop {
+                let rc = libc::write(write_fd, ok_byte.as_ptr().cast(), 1);
+                if rc == 1 {
+                    break;
+                }
+                let was_interrupted = rc == -1 && *libc::__errno_location() == libc::EINTR;
+                if was_interrupted && interrupted_writes < 16 {
+                    interrupted_writes += 1;
+                    continue;
+                }
+                libc::_exit(1);
+            }
+            libc::close(write_fd);
+        }
+
+        // Wait to be SIGTERM'd by the reclaimer.
+        // SAFETY: pause() and _exit() are async-signal-safe after fork().
+        unsafe {
+            libc::pause();
+            libc::_exit(0);
+        }
+    }
+
+    // --- Parent continues here ---
+    // Close parent's copy of lock_fd so only the child holds the lock.
+    drop(lock_file);
+
+    // RAII guard kills and reaps the child on every parent exit path.
+    let _guard = ForkedChildGuard(child_pid);
+
+    // SAFETY: write_fd is the parent's inherited write end and is no longer needed.
+    unsafe { libc::close(write_fd) };
+
+    // Bounded pipe read: use poll() with 5s timeout to avoid infinite hang.
+    // Retry poll() and read() on EINTR.
+    let mut readiness = [0u8; 1];
+    let nbytes: isize;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let remaining = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis()
+            .min(u32::MAX as u128) as libc::c_int;
+        if remaining <= 0 {
+            nbytes = -1;
+            break;
+        }
+        let mut pollfd = libc::pollfd {
+            fd: read_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: pollfd points to one initialized descriptor entry for this call.
+        let poll_rc = unsafe { libc::poll(&mut pollfd, 1, remaining) };
+        if poll_rc == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            nbytes = -1;
+            break;
+        }
+        if poll_rc > 0 {
+            // SAFETY: read_fd is open and readiness provides one writable byte.
+            let rc = unsafe { libc::read(read_fd, readiness.as_mut_ptr() as *mut _, 1) };
+            if rc == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                nbytes = -1;
+                break;
+            }
+            nbytes = rc;
+            break;
+        }
+        // poll_rc == 0: timeout
+        nbytes = -1;
+        break;
+    }
+    // SAFETY: read_fd is the parent's valid read end and is no longer needed.
+    unsafe { libc::close(read_fd) };
+
+    assert!(nbytes == 1, "child should signal readiness within 5s");
+    assert!(
+        readiness[0] == ok_byte[0],
+        "child should have successfully acquired flock"
+    );
+
+    // SAFETY: kill(pid, 0) probes the forked child's liveness without sending a signal.
+    let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+    assert!(alive, "child should be alive and holding flock");
+
+    // Derive a legacy recorded parent guaranteed to differ from the child's
+    // actual parent, including when the test process is PID-namespace init.
+    let child_start_time =
+        process_start_time_ticks(child_pid as u32).expect("should have start-time on Linux");
+    let child_parent_pid =
+        parent_pid(child_pid as u32).expect("child should expose its parent PID on Linux");
+    let different_parent_pid = child_parent_pid
+        .checked_add(1)
+        .unwrap_or(child_parent_pid - 1);
+    assert_ne!(different_parent_pid, child_parent_pid);
+    let diag = serde_json::json!({
+        "pid": child_pid,
+        "pid_start_time_ticks": child_start_time,
+        "parent_pid": different_parent_pid,
+    });
+    std::fs::write(&lock_path, format!("{diag}\n")).unwrap();
+
+    // Now try to acquire — should reclaim the lock via SIGTERM + retry.
+    let lock = try_acquire_session_wait_lock(session_dir).expect("acquire should not error");
+    assert!(lock.is_some(), "should reclaim lock from orphaned holder");
+
+    // ChildGuard::drop will kill+reap the child.
 }

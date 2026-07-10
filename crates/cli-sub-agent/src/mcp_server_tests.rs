@@ -283,6 +283,7 @@ async fn mcp_session_wait_returns_nonzero_session_result_without_mcp_error() {
     let _cwd_guard = CurrentDirGuard::set(&project_root);
     let state = McpServerState {
         startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+        wait_caller_identity: crate::session_cmds::WaitCallerIdentity::default(),
     };
 
     let response = handle_tool_call(
@@ -323,6 +324,7 @@ async fn mcp_session_wait_json_returns_parseable_document_with_wait_exit_code() 
     let _cwd_guard = CurrentDirGuard::set(&project_root);
     let state = McpServerState {
         startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+        wait_caller_identity: crate::session_cmds::WaitCallerIdentity::default(),
     };
 
     let response = handle_tool_call(
@@ -388,6 +390,7 @@ async fn mcp_session_wait_alive_at_timeout_returns_rewait_content() {
     let _cwd_guard = CurrentDirGuard::set(&project_root);
     let state = McpServerState {
         startup_env: crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV.clone(),
+        wait_caller_identity: crate::session_cmds::WaitCallerIdentity::default(),
     };
 
     let response = handle_tool_call(
@@ -431,6 +434,7 @@ async fn mcp_gc_reap_runtime_protects_hosting_session_runtime() {
             csa_core::env::CSA_SESSION_ID_ENV_KEY,
             session_id,
         )])),
+        wait_caller_identity: crate::session_cmds::WaitCallerIdentity::default(),
     };
 
     let response = handle_tool_call(

@@ -26,11 +26,16 @@ const DEFAULT_MCP_SESSION_WAIT_TIMEOUT_SECONDS: u64 =
 /// MCP server implementation
 ///
 /// Exposes CSA session management as MCP tools over JSON-RPC 2.0 stdio protocol.
-pub(crate) async fn run_mcp_server(startup_env: &StartupSubtreeEnv) -> Result<()> {
+pub(crate) async fn run_mcp_server(
+    startup_env: &StartupSubtreeEnv,
+    wait_caller_identity: crate::session_cmds::WaitCallerIdentity,
+) -> Result<()> {
+    let wait_caller_identity = wait_caller_identity.validate_for_wait()?;
     info!("Starting MCP server on stdio");
 
     let state = McpServerState {
         startup_env: startup_env.clone(),
+        wait_caller_identity,
     };
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -80,6 +85,7 @@ pub(crate) async fn run_mcp_server(startup_env: &StartupSubtreeEnv) -> Result<()
 #[derive(Debug, Clone)]
 struct McpServerState {
     startup_env: StartupSubtreeEnv,
+    wait_caller_identity: crate::session_cmds::WaitCallerIdentity,
 }
 
 /// JSON-RPC 2.0 Request
@@ -353,7 +359,7 @@ async fn handle_tool_call(params: Option<Value>, state: &McpServerState) -> Resu
     match name {
         "csa_session_list" => handle_session_list_tool(arguments).await,
         "csa_session_delete" => handle_session_delete_tool(arguments).await,
-        "csa_session_wait" => handle_session_wait_tool(arguments).await,
+        "csa_session_wait" => handle_session_wait_tool(arguments, state.wait_caller_identity).await,
         "csa_gc" => handle_gc_tool(arguments, &state.startup_env).await,
         "csa_run" => handle_run_tool(arguments, &state.startup_env).await,
         _ => anyhow::bail!("Unknown tool: {name}"),
@@ -450,7 +456,10 @@ async fn handle_session_delete_tool(args: Value) -> Result<Value> {
     }))
 }
 
-async fn handle_session_wait_tool(args: Value) -> Result<Value> {
+async fn handle_session_wait_tool(
+    args: Value,
+    caller_identity: crate::session_cmds::WaitCallerIdentity,
+) -> Result<Value> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -478,6 +487,7 @@ async fn handle_session_wait_tool(args: Value) -> Result<Value> {
             timeout_seconds,
             memory_warn_mb,
             output_mode,
+            caller_identity,
         )
     })
     .await

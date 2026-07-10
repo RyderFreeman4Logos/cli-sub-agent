@@ -39,7 +39,11 @@ pub(crate) use completion::{
 #[cfg(test)]
 pub(crate) use wait::expected_in_flight_turn_result_artifact_path_for_test;
 #[cfg(test)]
+pub(crate) use wait::parent_pid;
+#[cfg(test)]
 pub(crate) use wait::parse_output_result_artifact_for_test;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use wait::process_state;
 #[cfg(test)]
 pub(crate) use wait::render_wait_result_summary;
 #[cfg(test)]
@@ -48,11 +52,13 @@ pub(crate) use wait::resolve_wait_completion_status_and_exit;
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait, handle_session_wait_with_hooks,
-    handle_session_wait_with_hooks_and_sampler, synthesized_wait_next_step,
-    try_acquire_session_wait_lock,
+    handle_session_wait_with_hooks_and_sampler, handle_session_wait_with_identity_for_test,
+    process_start_time_ticks, synthesized_wait_next_step, try_acquire_session_wait_lock,
+    try_acquire_session_wait_lock_with_caller,
 };
 pub(crate) use wait::{
-    SessionWaitOutputMode, handle_session_wait_for_mcp, handle_session_wait_with_options,
+    SessionWaitOutputMode, WaitCallerIdentity, handle_session_wait_for_mcp,
+    handle_session_wait_with_options,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

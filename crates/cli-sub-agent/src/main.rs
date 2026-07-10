@@ -174,8 +174,12 @@ mod sa_mode;
 #[cfg(test)]
 pub(crate) use sa_mode::validate_sa_mode;
 
+fn main() {
+    async_main(session_cmds::WaitCallerIdentity::capture());
+}
+
 #[tokio::main]
-async fn main() {
+async fn async_main(wait_caller_identity: session_cmds::WaitCallerIdentity) {
     // Restore SIGPIPE to default (terminate) so that piping output into a closed
     // reader exits cleanly instead of panicking with "failed printing to stdout:
     // Broken pipe" (issue #2408). Rust resets SIGPIPE to SIG_IGN at startup.
@@ -187,7 +191,7 @@ async fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    if let Err(err) = run().await {
+    if let Err(err) = run(wait_caller_identity).await {
         eprintln!("{}", error_report::render_user_facing_error(&err));
         if let Some(hint) = error_hints::suggest_fix(&err) {
             eprintln!();
@@ -197,7 +201,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<()> {
+async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<()> {
     link_bug_class_pipeline();
 
     let mut startup_env = startup_env::StartupSubtreeEnv::capture_from_process_env();
@@ -503,7 +507,9 @@ async fn run() -> Result<()> {
                     .await?;
             exit_current_process(exit_code);
         }
-        Commands::Session { cmd } => session_dispatch::dispatch(cmd, output_format, &startup_env)?,
+        Commands::Session { cmd } => {
+            session_dispatch::dispatch(cmd, output_format, &startup_env, wait_caller_identity)?
+        }
         Commands::Push(args) => push_cmd::handle_push(args)?,
         Commands::Merge(args) => merge_cmd::handle_merge(args)?,
         Commands::Audit { command } => {
@@ -633,7 +639,7 @@ async fn run() -> Result<()> {
             );
         }
         Commands::McpServer => {
-            mcp_server::run_mcp_server(&startup_env).await?;
+            mcp_server::run_mcp_server(&startup_env, wait_caller_identity).await?;
         }
         Commands::McpHub { cmd } => match cmd {
             McpHubCommands::Serve {

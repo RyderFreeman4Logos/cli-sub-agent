@@ -797,7 +797,15 @@ rationale = "run-level outer timeout fix adds synthetic ExecutionResult + RunLoo
 [[files]]
 path = "crates/cli-sub-agent/src/session_cmds_tests_tail_wait_resume_wrapper.rs"
 kind = "test"
-baseline_tokens = 8883
-baseline_lines = 722
-issue = "2618"
-rationale = "stale-PID recovery tests + FD_CLOEXEC test for #2636 wait-lock fix"
+baseline_tokens = 14176
+baseline_lines = 1138
+issue = "2642"
+rationale = "legacy orphan reclaim regressions for #2642 cover ownership-bound signaling, advisory diagnostic rewrites, side-effect-free liveness probes for child and zero PIDs, PID-namespace-safe synthetic PPIDs, bounded EINTR handling, and unsafe-call contracts; stale-PID recovery tests + FD_CLOEXEC test for #2636 wait-lock fix"
+
+[[files]]
+path = "crates/cli-sub-agent/src/session_cmds_daemon_wait_core.rs"
+kind = "source"
+baseline_tokens = 8300
+baseline_lines = 568
+issue = "2642"
+rationale = "caller-output lifecycle checks and honest alive-orphan recovery messages (#2642)"

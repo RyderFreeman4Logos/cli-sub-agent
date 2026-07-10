@@ -82,9 +82,18 @@ fn handle_session_wait_on_fix_finding_wrapper_rebinds_when_alias_appears_after_w
 
     let wait_project_arg = project.to_string_lossy().into_owned();
     let wait_wrapper_id = wrapper_id.clone();
+    let caller_identity = WaitCallerIdentity::capture();
+    let (caller_output_device, caller_output_inode) = caller_identity
+        .diagnostic_parts_for_test()
+        .expect("test output should expose a stable descriptor identity");
     let wait_handle = std::thread::spawn(move || {
-        handle_session_wait(wait_wrapper_id, Some(wait_project_arg), 5)
-            .expect("wait should complete after alias and completion appear")
+        handle_session_wait_with_identity_for_test(
+            wait_wrapper_id,
+            Some(wait_project_arg),
+            5,
+            caller_identity,
+        )
+        .expect("wait should complete after alias and completion appear")
     });
     std::thread::sleep(std::time::Duration::from_millis(50));
 
@@ -114,6 +123,25 @@ fn handle_session_wait_on_fix_finding_wrapper_rebinds_when_alias_appears_after_w
         Some(fix_session_id.clone())
     );
     wait_until_wait_lock_is_held(&fix_dir);
+    let target_diagnostic: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fix_dir.join(".wait.lock"))
+            .expect("read transferred target wait diagnostic"),
+    )
+    .expect("parse transferred target wait diagnostic");
+    assert_eq!(
+        target_diagnostic["caller_output_device"].as_u64(),
+        Some(caller_output_device),
+        "late target lock must inherit the caller output device"
+    );
+    assert_eq!(
+        target_diagnostic["caller_output_inode"].as_u64(),
+        Some(caller_output_inode),
+        "late target lock must inherit the caller output inode"
+    );
+    let wrapper_probe = try_acquire_session_wait_lock_with_caller(&wrapper_dir, caller_identity)
+        .expect("probe released wrapper wait lock")
+        .expect("late target transition must release the wrapper wait lock");
+    drop(wrapper_probe);
     std::fs::write(
         wrapper_dir.join("daemon-completion.toml"),
         "exit_code = 1\nstatus = \"failure\"\n",
