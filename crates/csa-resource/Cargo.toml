@@ -14,7 +14,6 @@ tokio.workspace = true
 anyhow.workspace = true
 libc.workspace = true
 tracing.workspace = true
-which.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true

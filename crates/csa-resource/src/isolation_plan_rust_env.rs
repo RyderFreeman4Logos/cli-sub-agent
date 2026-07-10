@@ -39,25 +39,3 @@ pub(crate) fn insert_env_override_if_needed(
         false
     }
 }
-
-/// Detect the parent directory of the resolved `rustc` binary on the caller's
-/// PATH. The sandbox uses this to add a readable bind-mount so that bwrap's
-/// PATH stripping does not hide the Rust toolchain from the sandboxed process
-/// (#2661).
-///
-/// Returns `None` when `rustc` is not on PATH (non-Rust projects).
-pub(crate) fn resolve_rust_binary_parent_dir() -> Option<PathBuf> {
-    let rustc_path = std::env::var_os("RUSTC")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(which_rustc_in_path)?;
-    rustc_path
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-}
-
-/// Look up `rustc` via the `which` crate (same resolution as `$PATH` lookup).
-fn which_rustc_in_path() -> Option<PathBuf> {
-    which::which("rustc").ok()
-}

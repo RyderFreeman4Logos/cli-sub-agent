@@ -289,7 +289,9 @@ mod tests {
 
     #[test]
     fn codex_review_soft_limit_admission_allows_codex_default_limit() {
-        let plan = isolation_plan(ResourceCapability::CgroupV2, Some(12_288), None);
+        // Use 16_384 MB — the current Codex default profile (#2650).
+        // Previously 12_288 MB was the cap but caused SIGKILL under nextest.
+        let plan = isolation_plan(ResourceCapability::CgroupV2, Some(16_384), None);
 
         assert_eq!(
             memory_soft_limit_admission_denial(

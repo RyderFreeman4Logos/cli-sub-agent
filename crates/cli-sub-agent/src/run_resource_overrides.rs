@@ -68,7 +68,7 @@ memory_max_mb = 16384
             overrides.resolve_memory_max_mb(Some(&cfg), "codex"),
             Some(8192)
         );
-        assert_eq!(overrides.resolve_memory_max_mb(None, "codex"), Some(12_288));
+        assert_eq!(overrides.resolve_memory_max_mb(None, "codex"), Some(16_384));
     }
 
     #[test]

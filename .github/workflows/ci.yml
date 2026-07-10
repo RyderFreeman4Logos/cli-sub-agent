@@ -113,9 +113,15 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Run workspace tests (default features)
+        env:
+          NEXTEST_DOUBLE_SPAWN: '0'
         run: cargo nextest run --workspace --no-fail-fast
       - name: Run workspace tests (all features)
+        env:
+          NEXTEST_DOUBLE_SPAWN: '0'
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - name: Run cli-sub-agent e2e tests
         if: matrix.os == 'ubuntu-latest'
+        env:
+          NEXTEST_DOUBLE_SPAWN: '0'
         run: cargo nextest run --package cli-sub-agent --test e2e --all-features --no-fail-fast

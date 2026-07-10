@@ -16,9 +16,9 @@ set dotenv-load := true
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
 _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
 # Default Cargo/rustc fan-out for Just recipes is auto-detected from available
-# memory; override with `CARGO_BUILD_JOBS=<n> just ...`. Do not default
-# NEXTEST_TEST_THREADS here: full-suite runs need nextest's normal parallelism
-# to avoid serializing thousands of tests.
+# memory; override with `CARGO_BUILD_JOBS=<n> just ...`.
+# NEXTEST_TEST_THREADS defaults to 16 in the `test` recipe below (#2650);
+# see comment there for rationale.
 _auto_build_jobs := `scripts/detect-build-jobs.sh`
 export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", _auto_build_jobs)
 # Disable nextest's double-spawn test execution mode. With symlinked target/
@@ -217,7 +217,9 @@ deny:
 # when running the full test suite under a CSA sandbox. With ~7000 tests,
 # unlimited parallelism causes OOM SIGKILL and fork() EAGAIN (#2650).
 # Override with NEXTEST_TEST_THREADS=<n> just test.
-_nextest_threads := env_var_or_default("NEXTEST_TEST_THREADS", "16")
+# Validate via shell to prevent shell injection from untrusted env values.
+# Use case (not grep) to reject multiline values that contain embedded newlines.
+_nextest_threads := `_v="${NEXTEST_TEST_THREADS:-16}"; case "$_v" in *[!0-9]*|'') echo 16 ;; *) echo "$_v" ;; esac`
 
 # Run all tests in the workspace across default and feature builds.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;

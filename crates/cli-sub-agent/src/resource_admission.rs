@@ -368,7 +368,7 @@ memory_max_mb = 16384
 
     #[test]
     fn spawn_projection_uses_tool_default_without_config() {
-        assert_eq!(spawn_memory_projection_mb(None, "codex"), 12_288);
+        assert_eq!(spawn_memory_projection_mb(None, "codex"), 16_384);
     }
 
     #[test]

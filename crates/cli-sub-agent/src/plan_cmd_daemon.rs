@@ -293,10 +293,6 @@ pub(crate) fn spawn_and_exit(
     };
 
     let result = csa_process::daemon::spawn_daemon(config)?;
-    // Verify session registration is readable BEFORE emitting SESSION_STARTED.
-    // Without this, a daemon spawn failure can leave a session ID in the
-    // caller's output that `csa session wait` cannot resolve (#2648).
-    crate::run_cmd_daemon::verify_daemon_session_waitable(&project_root, &result.session_id)?;
     println!("{}", result.session_id);
     let wait_cmd =
         crate::daemon_caller_hints::format_session_wait_command(&result.session_id, &project_root);

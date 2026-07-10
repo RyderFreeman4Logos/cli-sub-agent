@@ -655,7 +655,7 @@ kind = "source"
 baseline_tokens = 8427
 baseline_lines = 620
 issue = "2661"
-rationale = "sandbox Rust toolchain propagation adds RUSTUP_TOOLCHAIN + rustc binary dir resolution; tighten after extracting toolchain-env logic"
+rationale = "Rust toolchain env-var documentation and sandbox path planning; tighten after extracting toolchain-env logic"
 
 [[files]]
 path = "crates/csa-resource/src/isolation_plan_tests.rs"

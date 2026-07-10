@@ -383,28 +383,12 @@ impl IsolationPlanBuilder {
                 add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
             }
 
-            // RUSTUP_TOOLCHAIN: when the caller pins a specific toolchain
-            // (e.g. via mise or rustup override), the sandbox must propagate
-            // this env var so rustup resolves the correct toolchain inside the
-            // sandbox. Without it, the sandboxed process may fall back to the
-            // default toolchain or fail with "rustup not found" (#2661).
-            if let Ok(rustup_toolchain) = std::env::var("RUSTUP_TOOLCHAIN")
-                && !rustup_toolchain.trim().is_empty()
-            {
-                self.env_overrides
-                    .entry("RUSTUP_TOOLCHAIN".to_string())
-                    .or_insert(rustup_toolchain);
-            }
-
-            // Ensure the resolved rustc/cargo binary directory is readable
-            // inside the sandbox. When PATH is stripped by bwrap, the sandboxed
-            // process cannot find rustc/cargo even when RUSTUP_HOME and
-            // RUSTUP_TOOLCHAIN are set (#2661). We detect the actual binary
-            // location via `which rustc` and add its parent directory to
-            // readable_paths so the symlinks resolve correctly.
-            if let Some(rustc_dir) = rust_env::resolve_rust_binary_parent_dir() {
-                self.readable_paths.push(rustc_dir);
-            }
+            // RUSTUP_TOOLCHAIN: ambient value is inherited by the child
+            // process normally. Explicit tool configuration via extra_env
+            // overrides ambient values through build_merged_env(). We do not
+            // add RUSTUP_TOOLCHAIN to env_overrides here because bwrap
+            // --setenv is applied after the merged execution_env and would
+            // override configured values (#2661).
 
             // Do not make mise-managed toolchain install dirs writable; only the
             // registry/git cache subdirs above need write access.
