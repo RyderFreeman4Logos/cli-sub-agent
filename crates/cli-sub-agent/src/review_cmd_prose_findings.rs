@@ -333,11 +333,6 @@ fn parse_severity_prefixed_finding(
     allow_description_only: bool,
 ) -> Option<ParsedProseFinding> {
     let (label, rest) = body.split_once(':')?;
-    // Reject compound priority specs like "P1/P2/P3" — these are acceptance-criteria
-    // descriptions, not single severity labels.
-    if label.contains('/') {
-        return None;
-    }
     let severity = severity_from_label(label).or_else(|| leading_severity_from_title(label))?;
     let rest = rest.trim();
     if severity_prefixed_rest_is_zero_count(rest) {
@@ -393,16 +388,24 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 }
 
 fn leading_severity_from_title(title: &str) -> Option<Severity> {
-    // Reject compound specs like "P1/P2/P3" — the first alphanumeric run
-    // (e.g., "P1") is part of a compound, not a standalone severity label.
-    if title.contains('/') {
+    let mut segments = title.split('/');
+    let severity = leading_severity_from_title_segment(segments.next()?)?;
+
+    // Reject compound specs like "P1/P2/P3" and
+    // "High-severity/Medium-severity", while allowing descriptive segments
+    // such as "High correctness / sandbox violation".
+    if segments.any(|segment| leading_severity_from_title_segment(segment).is_some()) {
         return None;
     }
-    let first_word = title
-        .trim_start()
+
+    Some(severity)
+}
+
+fn leading_severity_from_title_segment(segment: &str) -> Option<Severity> {
+    segment
         .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .find(|word| !word.is_empty())?;
-    severity_from_label(first_word)
+        .find(|word| !word.is_empty())
+        .and_then(severity_from_label)
 }
 
 fn severity_prefixed_description(label: &str, rest: &str) -> String {
