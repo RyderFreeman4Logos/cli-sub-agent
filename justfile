@@ -21,6 +21,11 @@ _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
 # to avoid serializing thousands of tests.
 _auto_build_jobs := `scripts/detect-build-jobs.sh`
 export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", _auto_build_jobs)
+# Disable nextest's double-spawn test execution mode. With symlinked target/
+# directories the double-spawn re-exec fails with "No such file or directory"
+# (#1742). The `double-spawn` key was removed from nextest's TOML config schema;
+# the NEXTEST_DOUBLE_SPAWN environment variable is the official replacement.
+export NEXTEST_DOUBLE_SPAWN := "0"
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
