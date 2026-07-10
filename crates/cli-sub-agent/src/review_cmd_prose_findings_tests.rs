@@ -262,3 +262,54 @@ fn issue_2637_compound_priority_not_blocking_signal() {
         "P1/P2/P3: code paths now classify status into bounded cause labels."
     ));
 }
+
+#[test]
+fn issue_2652_title_leading_severities_allow_slashes_in_descriptions() {
+    for (title, expected_severity) in [
+        ("Critical security / isolation failure", Severity::Critical),
+        ("High correctness / sandbox violation", Severity::High),
+        ("Medium regression / test gap", Severity::Medium),
+        ("Low docs / help mismatch", Severity::Low),
+        ("Info docs / help mismatch", Severity::Low),
+        ("P0 security / isolation failure", Severity::Critical),
+        ("P1 correctness / lock race", Severity::High),
+        ("P2 regression / test gap", Severity::Medium),
+        ("P3 docs / help mismatch", Severity::Low),
+    ] {
+        let text = format!("## Findings\n1. {title}: active problem remains\n");
+        let findings = extract_review_findings_from_prose(&text);
+        assert_eq!(findings.len(), 1, "title should parse: {title}");
+        assert_eq!(findings[0].severity, expected_severity, "title: {title}");
+    }
+}
+
+#[test]
+fn issue_2652_decorated_title_leading_severities_still_parse() {
+    for (title, expected_severity) in [
+        ("**High correctness / sandbox violation**", Severity::High),
+        ("`P1` correctness / lock race", Severity::High),
+        ("_Medium_ regression / test gap", Severity::Medium),
+    ] {
+        let text = format!("## Findings\n1. {title}: active problem remains\n");
+        let findings = extract_review_findings_from_prose(&text);
+        assert_eq!(findings.len(), 1, "decorated title should parse: {title}");
+        assert_eq!(findings[0].severity, expected_severity, "title: {title}");
+    }
+}
+
+#[test]
+fn issue_2652_compound_severity_prefix_stays_rejected() {
+    for title in [
+        "High/Medium",
+        "P1/P2/P3",
+        "High-severity/Medium-severity",
+        "**High** / **Medium**",
+    ] {
+        let text = format!("## Findings\n{title}: acceptance criteria summary\n");
+        let findings = extract_review_findings_from_prose(&text);
+        assert!(
+            findings.is_empty(),
+            "compound severity prefix should not parse: {title}"
+        );
+    }
+}
