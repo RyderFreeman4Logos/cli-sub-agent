@@ -650,6 +650,14 @@ issue = "1880"
 rationale = "pre-existing monolith debt grandfathered by #1880 calibration; no-growth ratchet"
 
 [[files]]
+path = "crates/csa-resource/src/isolation_plan.rs"
+kind = "source"
+baseline_tokens = 8427
+baseline_lines = 620
+issue = "2661"
+rationale = "sandbox Rust toolchain propagation adds RUSTUP_TOOLCHAIN + rustc binary dir resolution; tighten after extracting toolchain-env logic"
+
+[[files]]
 path = "crates/csa-resource/src/isolation_plan_tests.rs"
 kind = "test"
 baseline_tokens = 8395
