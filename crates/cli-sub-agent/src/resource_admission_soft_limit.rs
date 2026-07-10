@@ -2,10 +2,11 @@ use csa_resource::{IsolationPlan, ResourceCapability, memory_policy};
 
 const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
 const WRITER_TASK_TYPE: &str = "run";
-// Codex's default profile is 12288MB because the old 8192MB cap still failed
-// large Rust workspaces. For reviewer sessions, the monitor threshold itself
-// must stay at least at that old cap; otherwise 8192MB at the default 70%
-// soft limit recreates #2254's 5734MB no-verdict kill window.
+// Codex's default profile is 16384MB because the old 12288MB cap still
+// SIGKILLed under nextest test suites (#2650). For reviewer sessions, the
+// monitor threshold itself must stay at least at that old cap; otherwise
+// 8192MB at the default 70% soft limit recreates #2254's 5734MB no-verdict
+// kill window.
 const CODEX_REVIEW_MIN_SOFT_LIMIT_MB: u64 = 8192;
 // Writer sessions can mutate the worktree before validation/commit. Keep their
 // soft threshold above the observed 8.6GiB Codex writer kill window from #2277
@@ -77,7 +78,7 @@ impl SoftLimitAdmissionDenial {
                 format!(
                     "Raise --memory-max-mb, resources.memory_max_mb, or tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB for this soft_limit_percent."
                 ),
-                "Remove a lower memory override so Codex can use its 12288MB default when that satisfies the reviewer floor.".to_string(),
+                "Remove a lower memory override so Codex can use its 16384MB default when that satisfies the reviewer floor.".to_string(),
                 "If host admission then fails, wait/free memory, lower only resources.min_free_memory_mb when safe, or use another configured reviewer/native fallback after a bounded retry.".to_string(),
             ],
             CodexSoftLimitAdmissionKind::Writer => vec![
@@ -96,7 +97,7 @@ impl SoftLimitAdmissionDenial {
             CodexSoftLimitAdmissionKind::Reviewer => format!(
                 "Raise --memory-max-mb, resources.memory_max_mb, or \
                  tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB, remove a lower \
-                 memory override so Codex can use its 12288MB default, or raise \
+                 memory override so Codex can use its 16384MB default, or raise \
                  resources.soft_limit_percent only when host RAM makes that safe."
             ),
             CodexSoftLimitAdmissionKind::Writer => format!(
@@ -282,7 +283,7 @@ mod tests {
         assert!(err.to_string().contains("tools.codex.memory_max_mb"));
         assert!(
             err.to_string()
-                .contains("remove a lower memory override so Codex can use its 12288MB default")
+                .contains("remove a lower memory override so Codex can use its 16384MB default")
         );
     }
 

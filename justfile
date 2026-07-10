@@ -213,15 +213,21 @@ deny:
 # 🧪 Testing
 # ==============================================================================
 
+# Cap nextest parallelism to avoid exhausting memory and process/thread limits
+# when running the full test suite under a CSA sandbox. With ~7000 tests,
+# unlimited parallelism causes OOM SIGKILL and fork() EAGAIN (#2650).
+# Override with NEXTEST_TEST_THREADS=<n> just test.
+_nextest_threads := env_var_or_default("NEXTEST_TEST_THREADS", "16")
+
 # Run all tests in the workspace across default and feature builds.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
-# NEXTEST_TEST_THREADS is caller-controlled.
+# NEXTEST_TEST_THREADS caps nextest parallelism (default 16, see #2650).
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace
+    {{_cargo}} nextest run --workspace --test-threads {{_nextest_threads}}
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace --all-features
+    {{_cargo}} nextest run --workspace --all-features --test-threads {{_nextest_threads}}
 
 # Run e2e tests only.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
