@@ -406,7 +406,7 @@ pub(crate) fn spawn_and_exit(
     std::process::exit(0);
 }
 
-fn verify_daemon_session_waitable(project_root: &Path, session_id: &str) -> Result<()> {
+pub(crate) fn verify_daemon_session_waitable(project_root: &Path, session_id: &str) -> Result<()> {
     let resolved = crate::session_cmds::resolve_session_prefix_with_global_fallback(
         project_root,
         session_id,

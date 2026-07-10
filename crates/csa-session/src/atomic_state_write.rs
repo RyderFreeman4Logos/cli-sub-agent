@@ -38,6 +38,14 @@ pub(super) fn write_state_atomically(
         )
     })?;
 
+    // fsync the parent directory so the rename is durable on disk. Without
+    // this, a crash or process death immediately after the rename may leave
+    // the state.toml invisible to readers, causing session-registry loss
+    // between SESSION_STARTED and the first `csa session wait` (#2648).
+    if let Ok(dir) = std::fs::File::open(session_dir) {
+        let _ = dir.sync_all();
+    }
+
     Ok(())
 }
 
