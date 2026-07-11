@@ -171,7 +171,6 @@ impl Executor {
 
     /// Construct executor from model spec.
     pub fn from_spec(spec: &ModelSpec) -> Result<Self> {
-        let model = Some(spec.model.clone());
         let budget = Some(spec.thinking_budget.clone());
         let tool = match spec.tool.as_str() {
             "gemini-cli" => ToolName::GeminiCli,
@@ -183,6 +182,11 @@ impl Executor {
             "antigravity-cli" => ToolName::AntigravityCli,
             other => anyhow::bail!("Unknown tool '{other}' in model spec"),
         };
+        let model = Some(if matches!(tool, ToolName::Opencode) {
+            format!("{}/{}", spec.provider, spec.model)
+        } else {
+            spec.model.clone()
+        });
         if matches!(tool, ToolName::Hermes) {
             return Ok(Self::Hermes {
                 provider_override: Some(spec.provider.clone()),
@@ -567,11 +571,17 @@ impl Executor {
                 provider_override,
                 model_override,
                 thinking_budget,
-            } => Some(HermesRunConfig::new(
-                provider_override.clone(),
-                model_override.clone(),
-                thinking_budget.clone(),
-            )),
+            } => {
+                let (provider, model) = hermes_dispatch_identity(
+                    provider_override.as_deref(),
+                    model_override.as_deref(),
+                );
+                Some(HermesRunConfig::new(
+                    provider.map(str::to_string),
+                    model.map(str::to_string),
+                    thinking_budget.clone(),
+                ))
+            }
             _ => None,
         }
     }

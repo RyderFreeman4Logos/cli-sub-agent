@@ -284,4 +284,54 @@ mod hermes_identity_tests {
             (Some("openai"), Some("gpt"))
         );
     }
+
+    #[cfg(feature = "acp")]
+    #[test]
+    fn hermes_acp_metadata_normalizes_constructed_and_deserialized_executors() {
+        let constructed = Executor::Hermes {
+            provider_override: Some("openai".to_string()),
+            model_override: Some("anthropic/claude".to_string()),
+            thinking_budget: None,
+        };
+        let serialized = serde_json::to_string(&constructed).expect("serialize executor");
+        let deserialized: Executor =
+            serde_json::from_str(&serialized).expect("deserialize executor");
+
+        for executor in [constructed, deserialized] {
+            let config = executor.hermes_run_config().expect("Hermes run config");
+            assert_eq!(config.provider.as_deref(), Some("anthropic"));
+            assert_eq!(config.model.as_deref(), Some("claude"));
+            assert_eq!(
+                config.meta_options(),
+                Some(serde_json::json!({
+                    "provider": "anthropic",
+                    "model": "claude"
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_model_spec_preserves_provider_in_spawned_argv() {
+        let spec = super::ModelSpec::parse("opencode/google/gemini-2.5-pro/high")
+            .expect("valid OpenCode model spec");
+        let executor = Executor::from_spec(&spec).expect("OpenCode executor");
+        assert_eq!(executor.model_override(), Some("google/gemini-2.5-pro"));
+        let mut command = Command::new("opencode");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "-m",
+                "google/gemini-2.5-pro",
+                "--variant",
+                "high"
+            ]
+        );
+    }
 }
