@@ -62,26 +62,40 @@ if [ "${output_dir}" != "${expected_output_dir}" ]; then
   echo "ERROR: --output-dir must resolve to the exact commit output path ${expected_output_dir}." >&2
   exit 2
 fi
-if [ -e "${output_dir}" ] || [ -L "${output_dir}" ]; then
-  if [ -L "${output_dir}" ] \
-    || [ ! -d "${output_dir}" ] \
-    || [ ! -f "${output_dir}/SOURCE_COMMIT" ] \
-    || [ "$(cat "${output_dir}/SOURCE_COMMIT")" != "${head}" ] \
-    || [ ! -x "${output_dir}/csa" ] \
-    || [ ! -x "${output_dir}/weave" ]; then
-    echo "ERROR: refusing to replace unmarked or invalid exact-build output: ${output_dir}." >&2
-    exit 2
-  fi
-fi
+
+is_valid_exact_output() {
+  local candidate="$1"
+  [ ! -L "${candidate}" ] \
+    && [ -d "${candidate}" ] \
+    && [ -f "${candidate}/SOURCE_COMMIT" ] \
+    && [ "$(cat "${candidate}/SOURCE_COMMIT")" = "${head}" ] \
+    && [ -x "${candidate}/csa" ] \
+    && [ -x "${candidate}/weave" ]
+}
 
 scratch_parent="${TMPDIR:-/tmp}"
 mkdir -p "${scratch_parent}"
 scratch="$(mktemp -d "${scratch_parent%/}/csa-exact-build.XXXXXX")"
 staged_output=""
+previous_output=""
+restore_previous_output() {
+  if [ -z "${previous_output}" ] \
+    || { [ ! -e "${previous_output}" ] && [ ! -L "${previous_output}" ]; }; then
+    return
+  fi
+  if [ ! -e "${output_dir}" ] && [ ! -L "${output_dir}" ] \
+    && mv -T -- "${previous_output}" "${output_dir}"; then
+    previous_output=""
+  fi
+}
 cleanup() {
   rm -rf "${scratch}"
   if [ -n "${staged_output}" ]; then
     rm -rf "${staged_output}"
+  fi
+  restore_previous_output
+  if [ -n "${previous_output}" ]; then
+    echo "WARNING: preserved prior output at ${previous_output}; destination was concurrently occupied." >&2
   fi
 }
 trap cleanup EXIT
@@ -162,7 +176,27 @@ staged_output="$(mktemp -d "${output_parent}/.exact-binaries.XXXXXX")"
 install -m 0755 "${target_dir}/release/csa" "${staged_output}/csa"
 install -m 0755 "${target_dir}/release/weave" "${staged_output}/weave"
 printf '%s\n' "${head}" >"${staged_output}/SOURCE_COMMIT"
-rm -rf "${output_dir}"
-mv "${staged_output}" "${output_dir}"
+if [ -e "${output_dir}" ] || [ -L "${output_dir}" ]; then
+  previous_output="$(mktemp -d "${output_parent}/.exact-previous.XXXXXX")"
+  rmdir "${previous_output}"
+  if ! mv -T -- "${output_dir}" "${previous_output}"; then
+    previous_output=""
+    echo "ERROR: failed to atomically quarantine existing exact-build output: ${output_dir}." >&2
+    exit 1
+  fi
+  if ! is_valid_exact_output "${previous_output}"; then
+    restore_previous_output
+    echo "ERROR: refusing to replace unmarked or invalid exact-build output: ${output_dir}." >&2
+    exit 2
+  fi
+fi
+if ! mv -T -- "${staged_output}" "${output_dir}"; then
+  echo "ERROR: destination changed during exact-build publication: ${output_dir}." >&2
+  exit 1
+fi
 staged_output=""
+if [ -n "${previous_output}" ]; then
+  rm -rf "${previous_output}"
+  previous_output=""
+fi
 printf 'Built exact-head binaries from %s at %s\n' "${head}" "${output_dir}"

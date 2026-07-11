@@ -4,7 +4,12 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 builder="${repo_root}/scripts/build-exact-head-binaries.sh"
 tmp="$(mktemp -d)"
+race_builder_pid=""
 cleanup() {
+  if [ -n "${race_builder_pid}" ]; then
+    kill "${race_builder_pid}" 2>/dev/null || true
+    wait "${race_builder_pid}" 2>/dev/null || true
+  fi
   rm -rf "${tmp}"
 }
 trap cleanup EXIT
@@ -33,10 +38,16 @@ cat >"${fixture}/crates/cli-sub-agent/Cargo.toml" <<'EOF'
 name = "cli-sub-agent"
 version = "0.0.0"
 edition = "2024"
+build = "build.rs"
 
 [[bin]]
 name = "csa"
 path = "src/main.rs"
+EOF
+cat >"${fixture}/crates/cli-sub-agent/build.rs" <<'EOF'
+fn main() {
+    std::thread::sleep(std::time::Duration::from_secs(2));
+}
 EOF
 cat >"${fixture}/crates/cli-sub-agent/src/main.rs" <<'EOF'
 fn main() {
@@ -124,6 +135,40 @@ grep -q 'refusing to replace unmarked or invalid exact-build output' \
 [ "$(cat "${output}/sentinel")" = "unrelated" ]
 rm -rf "${output}"
 
+race_tmp="${tmp}/race-tmp"
+mkdir -p "${race_tmp}"
+TMPDIR="${race_tmp}" "${builder}" \
+  --repo "${fixture}" \
+  --head "${head}" \
+  --output-dir "${output}" \
+  >"${tmp}/race-output.stdout" 2>"${tmp}/race-output.stderr" &
+race_builder_pid="$!"
+scratch_seen=false
+for _ in $(seq 1 500); do
+  for candidate in "${race_tmp}"/csa-exact-build.*; do
+    if [ -d "${candidate}" ]; then
+      scratch_seen=true
+      break 2
+    fi
+  done
+  sleep 0.01
+done
+if [ "${scratch_seen}" != true ]; then
+  echo "ERROR: exact-build race fixture never reached the build barrier" >&2
+  exit 1
+fi
+mkdir -p "${output}"
+printf 'raced-in\n' >"${output}/sentinel"
+if wait "${race_builder_pid}"; then
+  race_builder_pid=""
+  echo "ERROR: exact builder replaced output created after initial validation" >&2
+  exit 1
+fi
+race_builder_pid=""
+grep -q 'refusing to replace unmarked or invalid exact-build output' \
+  "${tmp}/race-output.stderr"
+[ "$(cat "${output}/sentinel")" = "raced-in" ]
+rm -rf "${output}"
 mkdir -p "${fixture}/.cargo"
 cat >"${fixture}/.cargo/config.toml" <<'EOF'
 [build]
