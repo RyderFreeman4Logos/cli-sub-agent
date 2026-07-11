@@ -12,8 +12,9 @@ pub(crate) fn register_configured_specs(
     config: &ProjectConfig,
     global_path: Option<&Path>,
     project_path: &Path,
+    project_raw: Option<toml::Value>,
 ) -> Result<()> {
-    let sources = ConfiguredSources::load(global_path, project_path);
+    let sources = ConfiguredSources::new(global_path, project_path, project_raw);
 
     for (tier_name, tier) in &config.tiers {
         for (index, spec) in tier.models.iter().enumerate() {
@@ -146,7 +147,7 @@ pub(crate) fn register_configured_tier_specs(
     config: &ProjectConfig,
     project_path: &Path,
 ) -> Result<()> {
-    register_configured_specs(catalog, config, None, project_path)
+    register_configured_specs(catalog, config, None, project_path, None)
 }
 
 fn register_operation_model(
@@ -427,10 +428,11 @@ struct ConfiguredSources {
 }
 
 impl ConfiguredSources {
-    fn load(global_path: Option<&Path>, project_path: &Path) -> Self {
-        let project_raw = std::fs::read_to_string(project_path)
-            .ok()
-            .and_then(|contents| toml::from_str(&contents).ok());
+    fn new(
+        global_path: Option<&Path>,
+        project_path: &Path,
+        project_raw: Option<toml::Value>,
+    ) -> Self {
         Self {
             global_path: global_path.map(Path::to_path_buf),
             project_path: project_path.to_path_buf(),

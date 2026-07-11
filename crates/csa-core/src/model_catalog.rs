@@ -442,11 +442,35 @@ impl EffectiveModelCatalog {
         Ok(catalog)
     }
 
+    /// Build one catalog generation from already captured source bytes.
+    pub fn load_from_captured_sources(
+        global: Option<(&Path, &str)>,
+        project: Option<(&Path, &str)>,
+    ) -> Result<Self, CatalogLoadError> {
+        let mut catalog = Self::shipped()?;
+        if let Some((path, contents)) = global {
+            catalog.apply_contents(path, contents, true)?;
+        }
+        if let Some((path, contents)) = project {
+            catalog.apply_contents(path, contents, false)?;
+        }
+        Ok(catalog)
+    }
+
     fn apply_file(&mut self, path: &Path, global: bool) -> Result<(), CatalogLoadError> {
         let contents = std::fs::read_to_string(path).map_err(|source| CatalogLoadError::Read {
             path: path.to_path_buf(),
             source,
         })?;
+        self.apply_contents(path, &contents, global)
+    }
+
+    fn apply_contents(
+        &mut self,
+        path: &Path,
+        contents: &str,
+        global: bool,
+    ) -> Result<(), CatalogLoadError> {
         let provenance = if global {
             CatalogProvenance::Global {
                 path: path.to_path_buf(),
@@ -458,7 +482,7 @@ impl EffectiveModelCatalog {
                 key: "model_catalog".to_string(),
             }
         };
-        if let Some(layer) = parse_layer(&contents, &provenance)? {
+        if let Some(layer) = parse_layer(contents, &provenance)? {
             self.apply_layer(layer, &provenance)?;
         }
         Ok(())

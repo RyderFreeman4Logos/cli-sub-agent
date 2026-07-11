@@ -21,6 +21,8 @@ use crate::global::{
 use crate::memory::MemoryConfig;
 use crate::paths;
 
+mod captured;
+
 /// Sandbox enforcement mode for resource limits (cgroups, rlimits).
 ///
 /// Controls whether CSA enforces memory/PID limits on child tool processes.
@@ -295,28 +297,13 @@ impl ProjectConfig {
     fn load_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
-        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
-            warn_deprecated_keys(&raw, &path.display().to_string());
-            reject_removed_refs(&raw, path, "")?;
-            crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
-                .with_context(|| format!("Invalid config: {}", path.display()))?;
-        }
-        let mut config: Self = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config: {}", path.display()))?;
-        config.sanitize_filesystem_sandbox();
-        crate::validate::validate_tool_transport_overrides(&config)?;
-        Ok(Some(config))
+        Self::parse_user_contents(path, &content)
     }
 
     fn load_project_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
-        let config_str = pruned_project_config_str(content, path)?;
-        let mut config: Self = toml::from_str(&config_str)
-            .with_context(|| format!("Failed to parse config: {}", path.display()))?;
-        config.sanitize_filesystem_sandbox();
-        crate::validate::validate_tool_transport_overrides(&config)?;
-        Ok(Some(config))
+        Self::parse_project_contents(path, &content)
     }
 
     /// Deep-merge user config (base) with project config (overlay).
@@ -330,64 +317,7 @@ impl ProjectConfig {
         let overlay_str = std::fs::read_to_string(overlay_path).with_context(|| {
             format!("Failed to read project config: {}", overlay_path.display())
         })?;
-
-        let base_val: toml::Value = toml::from_str(&base_str)
-            .with_context(|| format!("Failed to parse user config: {}", base_path.display()))?;
-        let mut overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
-            format!("Failed to parse project config: {}", overlay_path.display())
-        })?;
-
-        warn_deprecated_keys(&base_val, &base_path.display().to_string());
-        warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
-        reject_removed_refs(&base_val, base_path, "user ")?;
-        prune_project_removed_refs(&mut overlay_val, overlay_path);
-        reject_project_tier_policy(&overlay_val, &overlay_path.display().to_string())
-            .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
-            .with_context(|| format!("Invalid user config: {}", base_path.display()))?;
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&overlay_val)
-            .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
-
-        // Preserve the higher schema_version before merging so that
-        // check_schema_version() catches incompatibility from either source.
-        // Only override when at least one file explicitly sets it; otherwise
-        // let serde's `default_schema_version()` apply during deserialization.
-        let base_schema = base_val.get("schema_version").and_then(|v| v.as_integer());
-        let overlay_schema = overlay_val
-            .get("schema_version")
-            .and_then(|v| v.as_integer());
-
-        // Strip project-only review keys from global config before merge.
-        // These fields are meaningful only in project config.
-        let mut base_for_merge = base_val.clone();
-        strip_review_project_only_from_global(&mut base_for_merge);
-
-        let mut merged = merge_toml_values(base_for_merge, overlay_val);
-        // Set schema_version to max of both sources (only when at least one is explicit)
-        if let Some(max_ver) = match (base_schema, overlay_schema) {
-            (Some(b), Some(o)) => Some(b.max(o)),
-            (Some(v), None) | (None, Some(v)) => Some(v),
-            (None, None) => None,
-        } && let toml::Value::Table(ref mut table) = merged
-        {
-            table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
-        }
-
-        // Global-disable-wins: re-apply `enabled = false` from the global (base)
-        // config.  Global disablement is a hard override that project configs
-        // cannot reverse — this prevents stale project configs from resurrecting
-        // tools the user explicitly disabled at the global level.
-        enforce_global_tool_disables(&base_val, &mut merged);
-        crate::validate::validate_tool_transport_overrides_in_raw_config(&merged)
-            .context("Invalid merged config after layering")?;
-
-        // Roundtrip through string for reliable deserialization
-        let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;
-        let mut config: Self =
-            toml::from_str(&merged_str).context("Failed to deserialize merged config")?;
-        config.sanitize_filesystem_sandbox();
-        crate::validate::validate_tool_transport_overrides(&config)?;
-        Ok(Some(config))
+        Self::parse_merged_contents(base_path, &base_str, overlay_path, &overlay_str)
     }
 
     fn sanitize_filesystem_sandbox(&mut self) {

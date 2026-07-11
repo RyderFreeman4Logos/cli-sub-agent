@@ -1,5 +1,5 @@
 use crate::{EffectiveModelCatalog, GlobalConfig, ProjectConfig};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Immutable model-sensitive configuration assembled once for a command.
@@ -20,16 +20,42 @@ impl EffectiveConfig {
     }
 
     pub(crate) fn load_with_paths(user_path: Option<&Path>, project_path: &Path) -> Result<Self> {
-        let mut model_catalog =
-            EffectiveModelCatalog::load_with_paths(user_path, Some(project_path))?;
-        let global = GlobalConfig::load_from_path(user_path)?;
-        let project = ProjectConfig::load_with_paths(user_path, project_path)?;
+        Self::load_with_paths_and_reader(user_path, project_path, read_optional_source)
+    }
+
+    fn load_with_paths_and_reader<F>(
+        user_path: Option<&Path>,
+        project_path: &Path,
+        mut read_source: F,
+    ) -> Result<Self>
+    where
+        F: FnMut(&Path) -> Result<Option<String>>,
+    {
+        let user_content = user_path.map(&mut read_source).transpose()?.flatten();
+        let project_content = read_source(project_path)?;
+        let mut model_catalog = EffectiveModelCatalog::load_from_captured_sources(
+            user_path.zip(user_content.as_deref()),
+            project_content
+                .as_deref()
+                .map(|contents| (project_path, contents)),
+        )?;
+        let global = GlobalConfig::load_from_captured_source(user_path, user_content.as_deref())?;
+        let project = ProjectConfig::load_from_captured_sources(
+            user_path,
+            user_content.as_deref(),
+            project_path,
+            project_content.as_deref(),
+        )?;
+        let project_raw = project_content
+            .as_deref()
+            .and_then(|contents| toml::from_str(contents).ok());
         if let Some(config) = project.as_ref() {
             crate::configured_models::register_configured_specs(
                 &mut model_catalog,
                 config,
                 user_path,
                 project_path,
+                project_raw,
             )?;
         }
         Ok(Self {
@@ -37,6 +63,16 @@ impl EffectiveConfig {
             global,
             model_catalog,
         })
+    }
+}
+
+fn read_optional_source(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to read config source: {}", path.display()))
+        }
     }
 }
 
@@ -308,5 +344,64 @@ thinking = "high"
             assert!(message.contains("review.model"), "{message}");
             assert!(message.contains("whitespace"), "{message}");
         }
+    }
+
+    #[test]
+    fn snapshot_reads_each_source_once_and_uses_captured_bytes_for_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global.toml");
+        let project_path = dir.path().join("project.toml");
+        let global_generation = r#"
+[preferences]
+primary_writer_spec = "codex/openai/gpt-future-snapshot/high"
+"#;
+        let captured_project_generation = "";
+        let later_project_generation = r#"
+[preferences]
+primary_writer_spec = "codex/openai/gpt-future-snapshot/high"
+
+[model_catalog]
+mode = "extend"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "gpt-future-snapshot"
+enabled = false
+reasoning_efforts = ["high"]
+"#;
+        write(&project_path, later_project_generation);
+
+        let global_reads = std::cell::Cell::new(0);
+        let project_reads = std::cell::Cell::new(0);
+        let snapshot = EffectiveConfig::load_with_paths_and_reader(
+            Some(&global_path),
+            &project_path,
+            |path| {
+                if path == global_path {
+                    global_reads.set(global_reads.get() + 1);
+                    Ok(Some(global_generation.to_string()))
+                } else if path == project_path {
+                    project_reads.set(project_reads.get() + 1);
+                    Ok(Some(captured_project_generation.to_string()))
+                } else {
+                    panic!("unexpected config path: {}", path.display());
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(global_reads.get(), 1);
+        assert_eq!(project_reads.get(), 1);
+        let admission = snapshot
+            .model_catalog
+            .validate_parts("codex", "openai", "gpt-future-snapshot", "high")
+            .expect("captured generation has no tombstone");
+        assert!(matches!(
+            admission.provenance,
+            CatalogProvenance::Global { ref path, ref key }
+                if path == &global_path && key == "preferences.primary_writer_spec"
+        ));
     }
 }

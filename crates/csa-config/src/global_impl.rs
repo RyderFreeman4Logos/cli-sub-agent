@@ -38,19 +38,34 @@ impl GlobalConfig {
         let Some(path) = path else {
             return Ok(Self::default());
         };
-        if !path.exists() {
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to read global config: {}", path.display()));
+            }
+        };
+        Self::load_from_captured_source(Some(path), Some(&content))
+    }
+
+    pub(crate) fn load_from_captured_source(
+        path: Option<&Path>,
+        content: Option<&str>,
+    ) -> Result<Self> {
+        let (Some(path), Some(content)) = (path, content) else {
             return Ok(Self::default());
-        }
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read global config: {}", path.display()))?;
-        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
+        };
+        if let Ok(raw) = toml::from_str::<toml::Value>(content) {
             crate::validate::reject_removed_gemini_cli_in_raw_config(
                 &raw,
                 &path.display().to_string(),
             )
             .with_context(|| format!("Invalid global config: {}", path.display()))?;
         }
-        let config: Self = toml::from_str(&content)
+        let config: Self = toml::from_str(content)
             .with_context(|| format!("Failed to parse global config: {}", path.display()))?;
         Ok(config.sanitized(Some(path)))
     }
