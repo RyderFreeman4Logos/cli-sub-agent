@@ -337,6 +337,9 @@ fn build_executor_model_spec_override_with_thinking_suffix() {
     }
 }
 
+#[path = "run_helpers_full_spec_tests.rs"]
+mod full_spec_tests;
+
 #[test]
 fn build_executor_thinking_only() {
     let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None, false).unwrap();

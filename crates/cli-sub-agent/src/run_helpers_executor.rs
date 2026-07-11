@@ -85,12 +85,27 @@ pub(crate) fn build_executor(
 
     if model_spec.is_some() {
         if let Some(explicit_model) = model {
-            let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(explicit_model);
-            executor.override_model(clean.to_string());
-            if thinking.is_none()
-                && let Some(budget) = suffix_budget
-            {
-                executor.override_thinking_budget(budget);
+            let resolved_model = config
+                .map(|cfg| cfg.resolve_alias(explicit_model))
+                .unwrap_or_else(|| explicit_model.to_string());
+            if resolved_model.matches('/').count() == 3 {
+                let parsed = ModelSpec::parse(&resolved_model)?;
+                if parsed.tool != tool.as_str() {
+                    anyhow::bail!(
+                        "tool/model-spec mismatch: selected tool {} cannot execute model override {resolved_model} because it selects tool {}; refusing to dispatch through the wrong provider",
+                        tool.as_str(),
+                        parsed.tool
+                    );
+                }
+                executor = Executor::from_spec(&parsed)?;
+            } else {
+                let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(&resolved_model);
+                executor.override_model(clean.to_string());
+                if thinking.is_none()
+                    && let Some(budget) = suffix_budget
+                {
+                    executor.override_thinking_budget(budget);
+                }
             }
         }
         if let Some(explicit_thinking) = thinking {

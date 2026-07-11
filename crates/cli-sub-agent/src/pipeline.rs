@@ -415,14 +415,10 @@ pub(crate) async fn build_and_validate_executor(
     }
 
     let final_model_request = model.map(|requested| {
-        if model_spec.is_none() {
-            configs
-                .project
-                .map(|cfg| cfg.resolve_alias(requested))
-                .unwrap_or_else(|| requested.to_string())
-        } else {
-            requested.to_string()
-        }
+        configs
+            .project
+            .map(|cfg| cfg.resolve_alias(requested))
+            .unwrap_or_else(|| requested.to_string())
     });
     let final_model_request = final_model_request
         .as_deref()
