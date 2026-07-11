@@ -298,6 +298,38 @@ push-reviewed base="main":
     fi
     scripts/hooks/post-pr-create.sh --base "{{base}}"
 
+# Exact-head reviewed push: rebuild csa from the current checkout, force all
+# nested workflow calls to resolve that binary, then reuse push-reviewed.
+push-reviewed-exact base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "ERROR: push-reviewed-exact requires a clean tracked worktree so release binaries match HEAD." >&2
+        echo "Commit or stash tracked changes, then retry." >&2
+        exit 1
+    fi
+    {{_cargo}} build --release --locked -p cli-sub-agent -p weave
+    exact_csa="{{_repo_root}}/target/release/csa"
+    exact_weave="{{_repo_root}}/target/release/weave"
+    for binary in "${exact_csa}" "${exact_weave}"; do
+        if [ ! -x "${binary}" ]; then
+            echo "ERROR: exact-head binary was not produced at ${binary}." >&2
+            exit 1
+        fi
+    done
+    export PATH="{{_repo_root}}/target/release:${PATH}"
+    hash -r
+    resolved_csa="$(command -v csa)"
+    resolved_weave="$(command -v weave)"
+    if [ "${resolved_csa}" != "${exact_csa}" ] || [ "${resolved_weave}" != "${exact_weave}" ]; then
+        echo "ERROR: expected csa=${exact_csa} and weave=${exact_weave}; resolved csa=${resolved_csa}, weave=${resolved_weave}." >&2
+        exit 1
+    fi
+    echo "=== Exact-head binaries: ${resolved_csa}, ${resolved_weave} ==="
+    csa --version
+    weave --version
+    just push-reviewed "{{base}}"
+
 # Push to all submodules and the main repo (useful for monorepos).
 git-push-all:
     git submodule foreach 'git push origin --all'
