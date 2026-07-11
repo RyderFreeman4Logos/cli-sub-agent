@@ -52,6 +52,10 @@ mod session_hooks;
 mod admitted_executor;
 pub(crate) use admitted_executor::{AdmittedExecutor, DispatchExecutor};
 
+#[path = "pipeline_catalog_admission.rs"]
+mod catalog_admission;
+use catalog_admission::validate_final_executor_identity;
+
 #[path = "pipeline_model_failover_session.rs"]
 pub(crate) mod model_failover_session;
 
@@ -410,7 +414,25 @@ pub(crate) async fn build_and_validate_executor(
         }
     }
 
-    let admission = validate_final_executor_identity(&executor, model_spec, model_catalog)?;
+    let final_model_request = model.map(|requested| {
+        if model_spec.is_none() {
+            configs
+                .project
+                .map(|cfg| cfg.resolve_alias(requested))
+                .unwrap_or_else(|| requested.to_string())
+        } else {
+            requested.to_string()
+        }
+    });
+    let final_model_request = final_model_request
+        .as_deref()
+        .or(default_model_resolved.as_deref());
+    let admission = validate_final_executor_identity(
+        &executor,
+        model_spec,
+        final_model_request,
+        model_catalog,
+    )?;
 
     if executor.tool_name() == "openai-compat" {
         let model_hint = model_spec.or(model).or(default_model_resolved.as_deref());
@@ -439,51 +461,6 @@ pub(crate) async fn build_and_validate_executor(
         anyhow::bail!("{e}");
     }
     Ok(AdmittedExecutor::new(executor, admission))
-}
-
-fn validate_final_executor_identity(
-    executor: &Executor,
-    original_model_spec: Option<&str>,
-    model_catalog: &csa_config::EffectiveModelCatalog,
-) -> Result<Option<csa_config::CatalogAdmission>> {
-    let raw_model = executor.model_override().unwrap_or("default");
-    let original = original_model_spec
-        .map(csa_executor::ModelSpec::parse)
-        .transpose()?;
-    let (provider, model) = if let Some((provider, model)) = raw_model.split_once('/') {
-        (provider.to_string(), model.to_string())
-    } else if let Some(provider) = executor.provider_override() {
-        (provider.to_string(), raw_model.to_string())
-    } else if let Some(spec) = original.as_ref() {
-        (spec.provider.clone(), raw_model.to_string())
-    } else {
-        (
-            model_catalog
-                .resolve_provider_for_model(executor.tool_name(), raw_model)
-                .map_err(|error| {
-                    anyhow::anyhow!("execution-boundary catalog rejection: {error}")
-                })?,
-            raw_model.to_string(),
-        )
-    };
-    let final_spec = csa_executor::ModelSpec {
-        tool: executor.tool_name().to_string(),
-        provider,
-        model,
-        thinking_budget: executor
-            .thinking_budget()
-            .cloned()
-            .unwrap_or(csa_executor::ThinkingBudget::DefaultBudget),
-    };
-    // The executor tool is already a parsed `ToolName`; the effective catalog is the
-    // authority for whether its provider/model/reasoning identity is admissible.
-    // Restrict this validation call to the selected typed tool instead of applying
-    // a second, potentially stale global tool list at the execution boundary.
-    let known_tools = [executor.tool_name()];
-    final_spec
-        .validate_with_catalog(model_catalog, &known_tools)
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("execution-boundary catalog rejection: {error}"))
 }
 
 async fn ensure_tool_runtime_prerequisites(

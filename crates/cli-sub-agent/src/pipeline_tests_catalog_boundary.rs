@@ -54,6 +54,60 @@ async fn final_boundary_rejects_undeclared_explicit_model_override() {
 }
 
 #[tokio::test]
+async fn final_boundary_rejects_tombstoned_provider_qualified_override() {
+    let catalog = csa_config::EffectiveModelCatalog::from_toml_str(
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "base"
+reasoning_efforts = ["high"]
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "overridden"
+reasoning_efforts = ["high"]
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "anthropic"
+model = "overridden"
+enabled = false
+reasoning_efforts = ["high"]
+"#,
+        "provider-qualified override tombstone test",
+    )
+    .expect("test catalog");
+
+    let error = build_and_validate_executor(
+        &ToolName::Codex,
+        Some("codex/openai/base/high"),
+        Some("anthropic/overridden"),
+        None,
+        ConfigRefs {
+            project: None,
+            global: None,
+            model_catalog: Some(&catalog),
+        },
+        false,
+        false,
+        false,
+    )
+    .await
+    .expect_err("the explicit tombstoned provider must remain authoritative");
+
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("execution-boundary catalog rejection"));
+    assert!(rendered.contains("anthropic"), "{rendered}");
+    assert!(rendered.contains("disabled"), "{rendered}");
+}
+
+#[tokio::test]
 async fn final_boundary_rejects_unsupported_explicit_thinking_override() {
     let catalog = closed_catalog();
     let error = build_and_validate_executor(
@@ -174,7 +228,7 @@ reasoning_efforts = ["default"]
     )
     .expect("test catalog");
     let executor = csa_executor::Executor::from_tool_name(&ToolName::ClaudeCode, None, None);
-    let error = validate_final_executor_identity(&executor, None, &catalog)
+    let error = validate_final_executor_identity(&executor, None, None, &catalog)
         .expect_err("implicit tool default tombstone must remain a hard error");
     let rendered = format!("{error:#}");
     assert!(rendered.contains("execution-boundary catalog rejection"));

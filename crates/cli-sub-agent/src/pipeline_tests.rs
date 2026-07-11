@@ -89,7 +89,7 @@ fn final_executor_validation_preserves_configured_warning_for_dispatch() {
         Some(csa_executor::ThinkingBudget::High),
     );
 
-    let admission = validate_final_executor_identity(&executor, None, &catalog)
+    let admission = validate_final_executor_identity(&executor, None, None, &catalog)
         .unwrap()
         .expect("model override should be validated");
     let warning = admission
