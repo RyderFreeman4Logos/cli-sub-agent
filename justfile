@@ -85,6 +85,10 @@ find-monolith-files:
 monolith-test:
     bash scripts/tests/monolith-check-tests.sh
 
+# Verify exact-head release builds ignore live checkout and dotenv contamination.
+exact-build-test:
+    bash scripts/tests/build-exact-head-binaries-tests.sh
+
 # Fail if generated or scratch artifacts are staged for commit.
 check-generated-artifacts:
     #!/usr/bin/env bash
@@ -116,6 +120,7 @@ check-version-bumped:
 pre-commit-fast:
     just find-monolith-files
     just monolith-test
+    just exact-build-test
     just check-path-includes
     just check-generated-artifacts
     just check-version-bumped
@@ -342,8 +347,9 @@ push-reviewed base="main" expected_head="" expected_branch="":
         --expected-branch "${current_branch}" \
         --expected-head "${review_head}"
 
-# Exact-head reviewed push: rebuild csa from one captured checkout, force all
-# nested workflow calls to resolve that binary, then reuse push-reviewed.
+# Exact-head reviewed push: build from an isolated archive of one captured SHA,
+# force all nested workflow calls to resolve those binaries, then reuse
+# push-reviewed.
 push-reviewed-exact base="main":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -362,7 +368,11 @@ push-reviewed-exact base="main":
         echo "ERROR: push-reviewed-exact requires an attached feature branch." >&2
         exit 1
     }
-    {{_cargo}} build --release --locked -p cli-sub-agent -p weave
+    exact_bin_dir="{{_repo_root}}/target/exact-head/${exact_head}"
+    "{{_repo_root}}/scripts/build-exact-head-binaries.sh" \
+        --repo "{{_repo_root}}" \
+        --head "${exact_head}" \
+        --output-dir "${exact_bin_dir}"
     built_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
     if [ "$(git rev-parse HEAD)" != "${exact_head}" ] \
         || [ "${built_branch}" != "${exact_branch}" ] \
@@ -371,15 +381,19 @@ push-reviewed-exact base="main":
         echo "ERROR: HEAD, branch, or tracked files changed during exact-head build; refusing to continue." >&2
         exit 1
     fi
-    exact_csa="{{_repo_root}}/target/release/csa"
-    exact_weave="{{_repo_root}}/target/release/weave"
+    if [ "$(cat "${exact_bin_dir}/SOURCE_COMMIT")" != "${exact_head}" ]; then
+        echo "ERROR: exact-head build provenance does not match ${exact_head}." >&2
+        exit 1
+    fi
+    exact_csa="${exact_bin_dir}/csa"
+    exact_weave="${exact_bin_dir}/weave"
     for binary in "${exact_csa}" "${exact_weave}"; do
         if [ ! -x "${binary}" ]; then
             echo "ERROR: exact-head binary was not produced at ${binary}." >&2
             exit 1
         fi
     done
-    export PATH="{{_repo_root}}/target/release:${PATH}"
+    export PATH="${exact_bin_dir}:${PATH}"
     hash -r
     resolved_csa="$(command -v csa)"
     resolved_weave="$(command -v weave)"
