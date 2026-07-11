@@ -58,6 +58,7 @@ pub(super) async fn run_synthesis_review(
         ctx.args.error_marker_scan_override(),
         ctx.args.resource_overrides(),
         ctx.current_depth,
+        crate::pipeline::SessionCreationMode::FreshChild,
         parent_startup_env,
     )
     .await;

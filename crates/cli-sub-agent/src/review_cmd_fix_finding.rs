@@ -143,6 +143,7 @@ pub(crate) async fn handle_fix_finding(
         args.error_marker_scan_override(),
         args.resource_overrides(),
         current_depth,
+        crate::pipeline::SessionCreationMode::DaemonManaged,
         startup_env,
     );
 

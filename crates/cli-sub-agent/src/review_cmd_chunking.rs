@@ -343,6 +343,7 @@ pub(super) async fn run_chunked_review(ctx: ChunkedReviewContext<'_>) -> Result<
                 error_marker_scan_override,
                 resource_overrides,
                 current_depth,
+                crate::pipeline::SessionCreationMode::FreshChild,
                 &startup_env,
             )
             .await

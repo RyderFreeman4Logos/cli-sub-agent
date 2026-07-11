@@ -217,6 +217,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 reviewer_error_marker_scan_override,
                 reviewer_resource_overrides,
                 current_depth,
+                crate::pipeline::SessionCreationMode::FreshChild,
                 &startup_env,
             )
             .await

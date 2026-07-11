@@ -162,10 +162,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
     let _lock = match acquire_lock(&session_dir, executor.tool_name(), &lock_reason) {
         Ok(lock) => lock,
         Err(e) => {
-            let err = anyhow::anyhow!(e).context(format!(
-                "Failed to acquire lock for session {}",
+            // Pre-exec persistence and `session wait` render the top-level error
+            // with Display, so retain the csa-lock owner/path/liveness evidence
+            // in that message instead of leaving it only in the source chain.
+            let err = anyhow::anyhow!(
+                "Failed to acquire lock for session {}: {e:#}",
                 session.meta_session_id
-            ));
+            );
             return Err(persist_pipeline_pre_exec_failure(
                 project_root,
                 &mut session,

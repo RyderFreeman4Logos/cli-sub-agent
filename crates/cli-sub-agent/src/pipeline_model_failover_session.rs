@@ -14,12 +14,22 @@ pub(crate) fn resolve_model_attempt_session(
     attempt_index: usize,
     requested_session: Option<&str>,
     failed_attempt_session: Option<&str>,
+    initial_creation_mode: SessionCreationMode,
+    initial_parent: Option<&str>,
 ) -> ModelAttemptSessionPlan {
     if attempt_index == 0 {
+        let resumes_requested_session = requested_session.is_some();
         return ModelAttemptSessionPlan {
             session_arg: requested_session.map(str::to_string),
-            parent: None,
-            creation_mode: SessionCreationMode::DaemonManaged,
+            parent: (!resumes_requested_session
+                && initial_creation_mode == SessionCreationMode::FreshChild)
+                .then(|| initial_parent.map(str::to_string))
+                .flatten(),
+            creation_mode: if resumes_requested_session {
+                SessionCreationMode::DaemonManaged
+            } else {
+                initial_creation_mode
+            },
         };
     }
 
@@ -51,15 +61,42 @@ mod tests {
 
     #[test]
     fn cross_model_attempt_uses_fresh_child_linked_to_failed_session() {
-        let first = resolve_model_attempt_session(0, Some("requested"), None);
+        let first = resolve_model_attempt_session(
+            0,
+            Some("requested"),
+            None,
+            SessionCreationMode::DaemonManaged,
+            None,
+        );
         assert_eq!(first.session_arg.as_deref(), Some("requested"));
         assert_eq!(first.parent, None);
         assert_eq!(first.creation_mode, SessionCreationMode::DaemonManaged);
 
-        let fallback = resolve_model_attempt_session(1, Some("requested"), Some("failed-attempt"));
+        let fallback = resolve_model_attempt_session(
+            1,
+            Some("requested"),
+            Some("failed-attempt"),
+            SessionCreationMode::DaemonManaged,
+            None,
+        );
         assert_eq!(fallback.session_arg, None);
         assert_eq!(fallback.parent.as_deref(), Some("failed-attempt"));
         assert_eq!(fallback.creation_mode, SessionCreationMode::FreshChild);
+    }
+
+    #[test]
+    fn first_orchestrated_reviewer_uses_fresh_child_linked_to_daemon_parent() {
+        let first = resolve_model_attempt_session(
+            0,
+            None,
+            None,
+            SessionCreationMode::FreshChild,
+            Some("daemon-parent"),
+        );
+
+        assert_eq!(first.session_arg, None);
+        assert_eq!(first.parent.as_deref(), Some("daemon-parent"));
+        assert_eq!(first.creation_mode, SessionCreationMode::FreshChild);
     }
 
     #[test]

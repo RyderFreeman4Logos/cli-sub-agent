@@ -157,6 +157,8 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             attempt_index,
             request.args.session.as_deref(),
             failed_attempt_session.as_deref(),
+            crate::pipeline::SessionCreationMode::DaemonManaged,
+            request.startup_env.session_id(),
         );
         let mut resume_session = session_plan.session_arg;
         let attempt_parent = session_plan.parent;

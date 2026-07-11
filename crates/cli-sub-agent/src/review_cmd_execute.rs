@@ -174,6 +174,7 @@ pub(crate) async fn execute_review(
         error_marker_scan_override,
         RunResourceOverrides::default(),
         0,
+        crate::pipeline::SessionCreationMode::DaemonManaged,
         &startup_env,
     )
     .await
@@ -215,6 +216,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     error_marker_scan_override: Option<bool>,
     resource_overrides: RunResourceOverrides,
     current_depth: u32,
+    initial_creation_mode: crate::pipeline::SessionCreationMode,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
@@ -333,6 +335,8 @@ pub(crate) async fn execute_review_with_tier_filter(
             attempt_index,
             session.as_deref(),
             failed_attempt_session.as_deref(),
+            initial_creation_mode,
+            startup_env.session_id(),
         );
 
         let mut execution = match execute_review_once_with_artifact_guard(

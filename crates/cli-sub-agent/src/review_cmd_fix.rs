@@ -169,6 +169,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.error_marker_scan_override,
             ctx.resource_overrides,
             ctx.current_depth,
+            crate::pipeline::SessionCreationMode::DaemonManaged,
             ctx.startup_env,
         );
 
