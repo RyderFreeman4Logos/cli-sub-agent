@@ -51,7 +51,14 @@ if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
     mkdir -p "$CARGO_INSTALL_ROOT"
 fi
 
-export CARGO_TARGET_DIR="${repo_root}/target"
+if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" = "1" ]; then
+    if [ -z "${CARGO_TARGET_DIR:-}" ] || ! ensure_writable_dir "${CARGO_TARGET_DIR}"; then
+        echo "error: CSA_PRESERVE_CARGO_TARGET_DIR=1 requires an explicit writable CARGO_TARGET_DIR" >&2
+        exit 1
+    fi
+else
+    export CARGO_TARGET_DIR="${repo_root}/target"
+fi
 
 mise_rust_home="${MISE_DATA_DIR:-/usr/local/share/mise}/installs/rust/stable"
 if rust_state_needs_override "${RUSTUP_HOME:-}" \

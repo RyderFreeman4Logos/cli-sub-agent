@@ -11,7 +11,10 @@ trap cleanup EXIT
 
 fixture="${tmp}/fixture"
 output="${tmp}/output"
-mkdir -p "${fixture}/scripts"
+mkdir -p \
+  "${fixture}/scripts" \
+  "${fixture}/crates/cli-sub-agent/src" \
+  "${fixture}/crates/weave/src"
 git -C "${tmp}" init -q fixture
 git -C "${fixture}" config user.name "Exact Build Test"
 git -C "${fixture}" config user.email "exact-build@example.invalid"
@@ -22,37 +25,44 @@ cat >"${fixture}/.gitignore" <<'EOF'
 EOF
 cat >"${fixture}/Cargo.toml" <<'EOF'
 [workspace]
-members = []
+members = ["crates/cli-sub-agent", "crates/weave"]
+resolver = "2"
 EOF
-cat >"${fixture}/scripts/cargo-env-normalize.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[ "$1" = "cargo" ]
-[ "$2" = "build" ]
-[ ! -e .env ]
-[ ! -e .cargo/config.toml ]
-for forbidden in RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_BOOTSTRAP CARGO_PROFILE_RELEASE_OPT_LEVEL; do
-  if [ -n "${!forbidden+x}" ]; then
-    echo "forbidden build variable survived: ${forbidden}" >&2
-    exit 1
-  fi
-done
-case "${CARGO_HOME}" in
-  "${PWD}"/*|"${HOME}/.cargo")
-    echo "Cargo home is not isolated from live configuration: ${CARGO_HOME}" >&2
-    exit 1
-    ;;
-esac
-mkdir -p "${CARGO_TARGET_DIR}/release"
-for binary in csa weave; do
-  cat >"${CARGO_TARGET_DIR}/release/${binary}" <<BIN
-#!/usr/bin/env bash
-printf '%s\n' 'exact archive binary: ${binary}'
-BIN
-  chmod +x "${CARGO_TARGET_DIR}/release/${binary}"
-done
+cat >"${fixture}/crates/cli-sub-agent/Cargo.toml" <<'EOF'
+[package]
+name = "cli-sub-agent"
+version = "0.0.0"
+edition = "2024"
+
+[[bin]]
+name = "csa"
+path = "src/main.rs"
 EOF
+cat >"${fixture}/crates/cli-sub-agent/src/main.rs" <<'EOF'
+fn main() {
+    println!("exact archive binary: csa");
+}
+EOF
+cat >"${fixture}/crates/weave/Cargo.toml" <<'EOF'
+[package]
+name = "weave"
+version = "0.0.0"
+edition = "2024"
+EOF
+cat >"${fixture}/crates/weave/src/main.rs" <<'EOF'
+fn main() {
+    println!("exact archive binary: weave");
+}
+EOF
+cp "${repo_root}/scripts/cargo-env-normalize.sh" \
+  "${fixture}/scripts/cargo-env-normalize.sh"
 chmod +x "${fixture}/scripts/cargo-env-normalize.sh"
+env -u RUSTC_WRAPPER \
+  -u RUSTC_WORKSPACE_WRAPPER \
+  -u RUSTFLAGS \
+  -u CARGO_ENCODED_RUSTFLAGS \
+  -u RUSTC_BOOTSTRAP \
+  /usr/local/bin/cargo generate-lockfile --manifest-path "${fixture}/Cargo.toml"
 git -C "${fixture}" add .
 git -C "${fixture}" commit -qm "fixture"
 head="$(git -C "${fixture}" rev-parse HEAD)"

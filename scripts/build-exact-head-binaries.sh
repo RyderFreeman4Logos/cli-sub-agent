@@ -81,6 +81,7 @@ clean_env=(
   "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   "CARGO_HOME=${cargo_home}"
   "CARGO_TARGET_DIR=${target_dir}"
+  "CSA_PRESERVE_CARGO_TARGET_DIR=1"
   "MISE_TRUSTED_CONFIG_PATHS=${checkout}"
   "NEXTEST_DOUBLE_SPAWN=0"
 )
