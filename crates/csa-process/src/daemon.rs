@@ -412,7 +412,7 @@ where
                 &result,
             ));
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         SpawnedProcessLiveness::AlreadyReaped(status) => {
             let exited_err = anyhow::anyhow!(
                 "daemon process {pid} exited before readiness verification completed: {status}"

@@ -15,12 +15,12 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 ///
 /// Negative-PGID signals are only legal for `ProcessGroupAnchor`: reaping the
 /// leader releases its PID and can let an unrelated process group reuse the
-/// numeric PGID. `AlreadyReaped` and `WaitStateUnknown` therefore permit only
-/// exact systemd-unit cleanup: a wait error may itself mean child ownership was
-/// consumed outside this handle.
+/// numeric PGID. On non-Unix platforms `AlreadyReaped` and `WaitStateUnknown`
+/// therefore permit only exact unit cleanup: a wait error may itself mean child
+/// ownership was consumed outside this handle.
 pub(super) enum SpawnedProcessCleanup<'a> {
     ProcessGroupAnchor(&'a mut Child),
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     AlreadyReaped,
     WaitStateUnknown,
 }
@@ -28,14 +28,14 @@ pub(super) enum SpawnedProcessCleanup<'a> {
 pub(super) enum SpawnedProcessLiveness {
     Running,
     Exited(String),
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     AlreadyReaped(ExitStatus),
 }
 
 pub(super) fn inspect_spawned_process_without_reaping(
     child: &mut Child,
 ) -> Result<SpawnedProcessLiveness> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         let pid = child.id();
         anyhow::ensure!(pid > 1, "invalid spawned daemon PID {pid}");
@@ -67,7 +67,7 @@ pub(super) fn inspect_spawned_process_without_reaping(
         )))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     match child
         .try_wait()
         .context("failed to inspect spawned daemon after readiness verification")?
@@ -88,7 +88,7 @@ pub(super) fn terminate_and_reap_spawned_daemon(
     };
     let process_cleanup = match process {
         SpawnedProcessCleanup::ProcessGroupAnchor(child) => terminate_and_reap_process_group(child),
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(unix))]
         SpawnedProcessCleanup::AlreadyReaped => Ok(()),
         SpawnedProcessCleanup::WaitStateUnknown => Ok(()),
     };

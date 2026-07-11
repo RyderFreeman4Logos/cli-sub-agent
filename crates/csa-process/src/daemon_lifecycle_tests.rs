@@ -79,6 +79,11 @@ fn process_is_live(pid: libc::pid_t) -> bool {
     !matches!(after_comm.as_bytes().first(), Some(b'Z' | b'X'))
 }
 
+#[cfg(not(target_os = "linux"))]
+fn process_is_live(pid: libc::pid_t) -> bool {
+    process_exists(pid)
+}
+
 #[test]
 fn systemd_scope_stop_times_out_and_reaps_the_systemctl_process() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -183,7 +188,6 @@ fn publication_failure_cleans_the_still_owned_daemon() {
     assert!(session_dir.join("stderr.log").exists());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn early_exited_direct_leader_remains_anchor_until_descendants_are_killed() {
     let _guard = force_direct_daemon_spawn_for_test();
