@@ -17,7 +17,10 @@ use anyhow::{Context, Result};
 mod cleanup;
 #[cfg(test)]
 use cleanup::stop_systemd_scope_with_timeout;
-use cleanup::{SpawnedProcessCleanup, terminate_and_reap_spawned_daemon};
+use cleanup::{
+    SpawnedProcessCleanup, SpawnedProcessLiveness, inspect_spawned_process_without_reaping,
+    terminate_and_reap_spawned_daemon,
+};
 
 const DAEMON_INDEPENDENT_SCOPE_ENV: &str = "CSA_DAEMON_INDEPENDENT_SCOPE";
 
@@ -378,14 +381,10 @@ where
         }
     };
 
-    // Detach only after all caller-supplied pre-marker checks pass. A scoped
-    // spawn uses synchronous `systemd-run --scope`, so its launcher remains
-    // alive for exactly as long as the scoped command. In either mode, an
-    // already-exited owned child means there is no live daemon to announce.
-    let child_status = match child
-        .try_wait()
-        .context("failed to inspect spawned daemon after readiness verification")
-    {
+    // Detach only after all caller-supplied pre-marker checks pass. On Linux,
+    // inspect with waitid(WNOWAIT) so an exited leader remains the owned PGID
+    // anchor until failure cleanup terminates every descendant.
+    let child_liveness = match inspect_spawned_process_without_reaping(&mut child) {
         Ok(status) => status,
         Err(error) => {
             return Err(cleanup_after_spawn_error(
@@ -398,20 +397,35 @@ where
             ));
         }
     };
-    if let Some(status) = child_status {
-        // try_wait consumed the child status, so the numeric PID/PGID is no
-        // longer an ownership token. Only exact-unit cleanup remains safe.
-        let exited_err = anyhow::anyhow!(
-            "daemon process {pid} exited before readiness verification completed: {status}"
-        );
-        return Err(cleanup_after_spawn_error(
-            exited_err,
-            "spawned daemon exited early",
-            SpawnedProcessCleanup::AlreadyReaped,
-            &effective_spawn_mode,
-            systemctl,
-            &result,
-        ));
+    match child_liveness {
+        SpawnedProcessLiveness::Running => {}
+        SpawnedProcessLiveness::Exited(status) => {
+            let exited_err = anyhow::anyhow!(
+                "daemon process {pid} exited before readiness verification completed: {status}"
+            );
+            return Err(cleanup_after_spawn_error(
+                exited_err,
+                "spawned daemon exited early",
+                SpawnedProcessCleanup::ProcessGroupAnchor(&mut child),
+                &effective_spawn_mode,
+                systemctl,
+                &result,
+            ));
+        }
+        #[cfg(not(target_os = "linux"))]
+        SpawnedProcessLiveness::AlreadyReaped(status) => {
+            let exited_err = anyhow::anyhow!(
+                "daemon process {pid} exited before readiness verification completed: {status}"
+            );
+            return Err(cleanup_after_spawn_error(
+                exited_err,
+                "spawned daemon exited early",
+                SpawnedProcessCleanup::AlreadyReaped,
+                &effective_spawn_mode,
+                systemctl,
+                &result,
+            ));
+        }
     }
 
     if let Err(error) = publish(&result, verified) {

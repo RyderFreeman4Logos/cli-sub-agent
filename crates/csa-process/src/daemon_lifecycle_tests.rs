@@ -185,7 +185,7 @@ fn publication_failure_cleans_the_still_owned_daemon() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn already_reaped_direct_liveness_failure_does_not_signal_old_process_group() {
+fn early_exited_direct_leader_remains_anchor_until_descendants_are_killed() {
     let _guard = force_direct_daemon_spawn_for_test();
     let tmp = tempfile::tempdir().expect("tempdir");
     let descendant_pid_file = tmp.path().join("descendant.pid");
@@ -223,11 +223,12 @@ fn already_reaped_direct_liveness_failure_does_not_signal_old_process_group() {
         .trim()
         .parse::<libc::pid_t>()
         .expect("parse descendant pid");
-    let _process_guard = ProcessGuard::new(descendant_pid);
+    let mut process_guard = ProcessGuard::new(descendant_pid);
     assert!(
-        process_is_live(descendant_pid),
-        "cleanup must not signal an old PGID after try_wait reaped its leader"
+        wait_until(Duration::from_secs(1), || !process_is_live(descendant_pid)),
+        "anchored cleanup must kill descendant {descendant_pid} after the leader exits"
     );
+    process_guard.disarm();
     assert!(!session_dir.join("daemon.pid").exists());
     assert!(!session_dir.join("daemon.scope").exists());
     assert!(session_dir.join("stderr.log").exists());
@@ -298,7 +299,7 @@ fn term_fast_exit_keeps_leader_anchored_until_descendants_are_killed() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn already_reaped_scoped_liveness_failure_stops_only_the_recorded_unit() {
+fn exited_scoped_launcher_stops_unit_and_anchored_process_group() {
     let _guard = force_independent_scope_for_test();
     let tmp = tempfile::tempdir().expect("tempdir");
     let session_dir = tmp.path().join("session-reaped-scope");
@@ -348,11 +349,12 @@ fn already_reaped_scoped_liveness_failure_stops_only_the_recorded_unit() {
         .trim()
         .parse::<libc::pid_t>()
         .expect("parse descendant pid");
-    let _process_guard = ProcessGuard::new(descendant_pid);
+    let mut process_guard = ProcessGuard::new(descendant_pid);
     assert!(
-        process_is_live(descendant_pid),
-        "already-reaped cleanup must not signal the launcher's old PGID"
+        wait_until(Duration::from_secs(1), || !process_is_live(descendant_pid)),
+        "anchored scoped cleanup must kill descendant {descendant_pid}"
     );
+    process_guard.disarm();
     assert_eq!(
         std::fs::read_to_string(systemctl_log).expect("systemctl invocation should be logged"),
         "--user\nstop\ncsa-daemon-TEST_REAPED_SCOPE.scope\n"

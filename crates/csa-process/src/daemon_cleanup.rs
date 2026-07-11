@@ -20,8 +20,61 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// consumed outside this handle.
 pub(super) enum SpawnedProcessCleanup<'a> {
     ProcessGroupAnchor(&'a mut Child),
+    #[cfg(not(target_os = "linux"))]
     AlreadyReaped,
     WaitStateUnknown,
+}
+
+pub(super) enum SpawnedProcessLiveness {
+    Running,
+    Exited(String),
+    #[cfg(not(target_os = "linux"))]
+    AlreadyReaped(ExitStatus),
+}
+
+pub(super) fn inspect_spawned_process_without_reaping(
+    child: &mut Child,
+) -> Result<SpawnedProcessLiveness> {
+    #[cfg(target_os = "linux")]
+    {
+        let pid = child.id();
+        anyhow::ensure!(pid > 1, "invalid spawned daemon PID {pid}");
+        // SAFETY: waitid writes siginfo_t. WNOWAIT leaves an exited child
+        // waitable, preserving its PID as the process-group ownership anchor.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == -1 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to inspect spawned daemon with waitid(WNOWAIT)");
+        }
+        // SAFETY: waitid initialized info; si_pid == 0 means no state change.
+        let exited_pid = unsafe { info.si_pid() };
+        if exited_pid == 0 {
+            return Ok(SpawnedProcessLiveness::Running);
+        }
+        // SAFETY: this is a SIGCHLD wait result from waitid(P_PID, ...).
+        let status = unsafe { info.si_status() };
+        Ok(SpawnedProcessLiveness::Exited(format!(
+            "wait code {} status {status}",
+            info.si_code
+        )))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    match child
+        .try_wait()
+        .context("failed to inspect spawned daemon after readiness verification")?
+    {
+        Some(status) => Ok(SpawnedProcessLiveness::AlreadyReaped(status)),
+        None => Ok(SpawnedProcessLiveness::Running),
+    }
 }
 
 pub(super) fn terminate_and_reap_spawned_daemon(
@@ -35,7 +88,9 @@ pub(super) fn terminate_and_reap_spawned_daemon(
     };
     let process_cleanup = match process {
         SpawnedProcessCleanup::ProcessGroupAnchor(child) => terminate_and_reap_process_group(child),
-        SpawnedProcessCleanup::AlreadyReaped | SpawnedProcessCleanup::WaitStateUnknown => Ok(()),
+        #[cfg(not(target_os = "linux"))]
+        SpawnedProcessCleanup::AlreadyReaped => Ok(()),
+        SpawnedProcessCleanup::WaitStateUnknown => Ok(()),
     };
 
     match (scope_cleanup, process_cleanup) {
