@@ -520,7 +520,7 @@ fn write_project_config_with_tier(project_root: &Path) {
         "default".to_string(),
         csa_config::config::TierConfig {
             description: "Test tier".to_string(),
-            models: vec!["codex/gpt-5-codex/medium".to_string()],
+            models: vec!["codex/openai/gpt-5-codex/medium".to_string()],
             strategy: csa_config::TierStrategy::default(),
             token_budget: None,
             max_turns: None,

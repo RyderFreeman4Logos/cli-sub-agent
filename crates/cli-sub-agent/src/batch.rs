@@ -4,66 +4,23 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
-use crate::pipeline::{determine_project_root, execute_with_session};
-use crate::run_helpers::build_executor;
+use crate::pipeline::{ConfigRefs, determine_project_root, execute_with_session};
 use crate::startup_env::StartupSubtreeEnv;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
-use csa_process::check_tool_installed;
 use csa_resource::{ResourceGuard, ResourceLimits};
 
-/// Batch configuration loaded from TOML file.
-#[derive(Debug, Deserialize)]
-struct BatchConfig {
-    tasks: Vec<BatchTask>,
-}
+#[path = "batch_catalog.rs"]
+mod batch_catalog;
+use batch_catalog::register_batch_model_specs;
 
-/// A single task in the batch.
-#[derive(Debug, Clone, Deserialize)]
-struct BatchTask {
-    /// Task name (unique identifier)
-    name: String,
-
-    /// Tool to use (opencode, codex, claude-code)
-    tool: String,
-
-    /// Task prompt
-    prompt: String,
-
-    /// Execution mode: sequential (default) or parallel
-    #[serde(default)]
-    mode: TaskMode,
-
-    /// Task dependencies (must complete before this task starts)
-    #[serde(default)]
-    depends_on: Vec<String>,
-
-    /// Optional model override
-    #[serde(default)]
-    model: Option<String>,
-}
-
-/// Task execution mode.
-#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum TaskMode {
-    #[default]
-    Sequential,
-    Parallel,
-}
-
-/// Task execution result.
-#[derive(Debug)]
-struct TaskResult {
-    name: String,
-    exit_code: i32,
-    duration_secs: f64,
-    error: Option<String>,
-}
+include!("batch_types.rs");
+include!("batch_resource.rs");
 
 /// Handle the batch command.
 pub(crate) async fn handle_batch(
@@ -76,8 +33,12 @@ pub(crate) async fn handle_batch(
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
 
-    // 2. Load config (optional)
-    let config = ProjectConfig::load(&project_root)?;
+    // 2. Load one immutable model-sensitive snapshot for the whole command.
+    let csa_config::EffectiveConfig {
+        project: config,
+        global: global_config,
+        mut model_catalog,
+    } = csa_config::EffectiveConfig::load(&project_root)?;
 
     // 3. Check recursion depth
     let max_depth = config
@@ -112,6 +73,14 @@ pub(crate) async fn handle_batch(
 
     // 5. Validate tasks
     validate_tasks(&batch_config.tasks)?;
+    register_batch_model_specs(
+        &mut model_catalog,
+        &batch_config.tasks,
+        &batch_path,
+        config.as_ref(),
+        &global_config,
+        &project_root,
+    )?;
 
     // 6. Build execution plan
     let execution_plan = build_execution_plan(&batch_config.tasks)?;
@@ -127,11 +96,16 @@ pub(crate) async fn handle_batch(
         "Executing {} tasks from batch file",
         batch_config.tasks.len()
     );
+    let config = config.map(Arc::new);
+    let global_config = Arc::new(global_config);
+    let model_catalog = Arc::new(model_catalog);
     let results = execute_batch(
         &execution_plan,
         &batch_config.tasks,
         &project_root,
-        config.as_ref(),
+        config,
+        global_config,
+        model_catalog,
         startup_env,
     )
     .await?;
@@ -296,14 +270,16 @@ async fn execute_batch(
     plan: &ExecutionPlan,
     tasks: &[BatchTask],
     project_root: &Path,
-    config: Option<&ProjectConfig>,
+    config: Option<Arc<ProjectConfig>>,
+    global_config: Arc<csa_config::GlobalConfig>,
+    model_catalog: Arc<csa_config::EffectiveModelCatalog>,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<Vec<TaskResult>> {
     let mut results = Vec::new();
     let task_map: HashMap<&str, &BatchTask> = tasks.iter().map(|t| (t.name.as_str(), t)).collect();
 
     // Create resource guard if config exists
-    let mut resource_guard = if let Some(cfg) = config {
+    let mut resource_guard = if let Some(cfg) = config.as_deref() {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
         };
@@ -349,7 +325,9 @@ async fn execute_batch(
             let parallel_results = execute_parallel_tasks(
                 &parallel_tasks,
                 project_root,
-                config,
+                config.clone(),
+                Arc::clone(&global_config),
+                Arc::clone(&model_catalog),
                 startup_env,
                 level_idx + 1,
             )
@@ -361,12 +339,16 @@ async fn execute_batch(
         for (seq_idx, task) in sequential_tasks.iter().enumerate() {
             let result = execute_task(
                 task,
-                project_root,
-                config,
-                &mut resource_guard,
-                level_idx + 1,
-                seq_idx + 1,
-                startup_env,
+                BatchTaskExecutionContext {
+                    project_root,
+                    config: config.as_deref(),
+                    global_config: &global_config,
+                    model_catalog: &model_catalog,
+                    resource_guard: &mut resource_guard,
+                    level: level_idx + 1,
+                    seq: seq_idx + 1,
+                    startup_env,
+                },
             )
             .await;
             results.push(result);
@@ -376,33 +358,13 @@ async fn execute_batch(
     Ok(results)
 }
 
-fn check_level_resource_availability(
-    level: &[String],
-    task_map: &HashMap<&str, &BatchTask>,
-    resource_guard: &mut Option<ResourceGuard>,
-) -> Result<()> {
-    let Some(guard) = resource_guard else {
-        return Ok(());
-    };
-
-    for task_name in level {
-        let Some(task) = task_map.get(task_name.as_str()) else {
-            continue;
-        };
-        let tool_name = parse_tool_name(&task.tool)?;
-        guard
-            .check_availability(tool_name.as_str())
-            .with_context(|| format!("task='{}' tool='{}'", task.name, tool_name.as_str()))?;
-    }
-
-    Ok(())
-}
-
 /// Execute parallel tasks concurrently using JoinSet.
 async fn execute_parallel_tasks(
     tasks: &[BatchTask],
     project_root: &Path,
-    config: Option<&ProjectConfig>,
+    config: Option<Arc<ProjectConfig>>,
+    global_config: Arc<csa_config::GlobalConfig>,
+    model_catalog: Arc<csa_config::EffectiveModelCatalog>,
     startup_env: &StartupSubtreeEnv,
     level: usize,
 ) -> Result<Vec<TaskResult>> {
@@ -413,18 +375,24 @@ async fn execute_parallel_tasks(
     for task in tasks {
         let task = task.clone();
         let project_root = project_root.clone();
-        let config = config.cloned();
+        let config = config.clone();
+        let global_config = Arc::clone(&global_config);
+        let model_catalog = Arc::clone(&model_catalog);
         let startup_env = startup_env.clone();
 
         join_set.spawn(async move {
             execute_task(
                 &task,
-                &project_root,
-                config.as_ref(),
-                &mut None, // No resource guard in parallel (to avoid contention)
-                level,
-                0,
-                &startup_env,
+                BatchTaskExecutionContext {
+                    project_root: &project_root,
+                    config: config.as_deref(),
+                    global_config: &global_config,
+                    model_catalog: &model_catalog,
+                    resource_guard: &mut None, // Parallel tasks avoid shared guard contention.
+                    level,
+                    seq: 0,
+                    startup_env: &startup_env,
+                },
             )
             .await
         });
@@ -445,15 +413,17 @@ async fn execute_parallel_tasks(
 }
 
 /// Execute a single task.
-async fn execute_task(
-    task: &BatchTask,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    resource_guard: &mut Option<ResourceGuard>,
-    level: usize,
-    seq: usize,
-    startup_env: &StartupSubtreeEnv,
-) -> TaskResult {
+async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) -> TaskResult {
+    let BatchTaskExecutionContext {
+        project_root,
+        config,
+        global_config,
+        model_catalog,
+        resource_guard,
+        level,
+        seq,
+        startup_env,
+    } = context;
     let start = Instant::now();
     let task_label = if seq > 0 {
         format!("[{}/{}] {}", level, seq, task.name)
@@ -513,31 +483,34 @@ async fn execute_task(
         }
     }
 
-    // Build executor
-    let executor =
-        match build_executor(&tool_name, None, task.model.as_deref(), None, config, false) {
-            Ok(e) => e,
-            Err(e) => {
-                error!("{} - Failed to build executor: {}", task_label, e);
-                return TaskResult {
-                    name: task.name.clone(),
-                    exit_code: 1,
-                    duration_secs: start.elapsed().as_secs_f64(),
-                    error: Some(format!("Failed to build executor: {e}")),
-                };
-            }
-        };
-
-    // Check tool is installed (using runtime binary name for ACP-aware check)
-    if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
-        error!("{} - Tool not installed: {}", task_label, e);
-        return TaskResult {
-            name: task.name.clone(),
-            exit_code: 1,
-            duration_secs: start.elapsed().as_secs_f64(),
-            error: Some(format!("Tool not installed: {e}")),
-        };
-    }
+    // Build and admit the final executor before dispatch.
+    let executor = match crate::pipeline::build_and_validate_executor(
+        &tool_name,
+        None,
+        task.model.as_deref(),
+        None,
+        ConfigRefs {
+            project: config,
+            global: Some(global_config),
+            model_catalog: Some(model_catalog),
+        },
+        false,
+        false,
+        false,
+    )
+    .await
+    {
+        Ok(executor) => executor,
+        Err(error) => {
+            error!("{} - Failed to build executor: {}", task_label, error);
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("Failed to build executor: {error}")),
+            };
+        }
+    };
 
     // Check resource availability
     if let Some(guard) = resource_guard
@@ -552,18 +525,6 @@ async fn execute_task(
         };
     }
 
-    // Load global config for env injection and slot control
-    let global_config = match csa_config::GlobalConfig::load() {
-        Ok(gc) => gc,
-        Err(e) => {
-            return TaskResult {
-                name: task.name.clone(),
-                exit_code: 1,
-                duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Failed to load global config: {e}")),
-            };
-        }
-    };
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),

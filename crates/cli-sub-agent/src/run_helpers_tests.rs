@@ -287,6 +287,12 @@ fn model_name_for_tier_validation_strips_thinking_suffix() {
 }
 
 #[test]
+fn model_name_for_tier_validation_preserves_full_spec_for_exact_tier_check() {
+    let spec = "codex/openai/future-batch/high";
+    assert_eq!(model_name_for_tier_validation(Some(spec)), Some(spec));
+}
+
+#[test]
 fn build_executor_model_thinking_suffix_overridden_by_explicit_thinking() {
     let result = build_executor(
         &ToolName::GeminiCli,
@@ -388,6 +394,44 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
     let debug = format!("{exec:?}");
     assert!(debug.contains("gpt-5.4"), "default model missing: {debug}");
     assert!(debug.contains("Xhigh"), "default thinking missing: {debug}");
+}
+
+#[test]
+fn build_executor_promotes_full_spec_default_alias() {
+    let config: ProjectConfig = toml::from_str(
+        r#"
+[tools.codex]
+default_model = "fast"
+
+[aliases]
+fast = "codex/openai/gpt-5.4/high"
+"#,
+    )
+    .unwrap();
+
+    let executor = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
+
+    assert_eq!(executor.model_override(), Some("gpt-5.4"));
+    assert_eq!(executor.thinking_budget(), Some(&ThinkingBudget::High));
+}
+
+#[test]
+fn build_executor_rejects_full_spec_alias_for_different_tool() {
+    let config: ProjectConfig = toml::from_str(
+        r#"
+[tools.codex]
+default_model = "fast"
+
+[aliases]
+fast = "claude-code/anthropic/claude-future/high"
+"#,
+    )
+    .unwrap();
+
+    let error =
+        build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap_err();
+
+    assert!(error.to_string().contains("tool/model-spec mismatch"));
 }
 
 #[test]

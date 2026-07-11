@@ -28,7 +28,7 @@ const ACP_TIMEOUT_FOOTER_SUFFIX: &str = "s; process killed";
 pub(super) struct GeminiRetryPhase {
     pub(super) attempt: u8,
     auth_mode: &'static str,
-    model: &'static str,
+    model: String,
 }
 
 #[cfg(feature = "acp")]
@@ -41,7 +41,7 @@ impl GeminiRetryPhase {
             } else {
                 "oauth"
             },
-            model: gemini_retry_model(attempt).unwrap_or("inherit"),
+            model: gemini_retry_model(attempt).unwrap_or_else(|| "inherit".to_string()),
         }
     }
 }

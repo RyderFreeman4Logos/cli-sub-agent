@@ -8,7 +8,7 @@ use csa_executor::ContextLoadOptions;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::pipeline::MemoryInjectionOptions;
+use crate::pipeline::{ConfigRefs, MemoryInjectionOptions};
 use crate::run_cmd_fork::ForkResolution;
 use crate::run_helpers_branch_guard::BranchGuardRuntime;
 use crate::startup_env::StartupSubtreeEnv;
@@ -25,6 +25,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) project_root: &'a Path,
     pub(crate) config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
+    pub(crate) model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub(crate) prompt_text: &'a str,
     pub(crate) skill: Option<&'a str>,
     pub(crate) skill_session_tag: Option<String>,
@@ -81,6 +82,16 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) extra_readable: Vec<PathBuf>,
     pub(crate) branch_guard: BranchGuardRuntime,
     pub(crate) startup_env: &'a StartupSubtreeEnv,
+}
+
+impl<'a> RunLoopRequest<'a> {
+    pub(crate) fn config_refs(&self) -> ConfigRefs<'a> {
+        ConfigRefs {
+            project: self.config,
+            global: Some(self.global_config),
+            model_catalog: Some(self.model_catalog),
+        }
+    }
 }
 
 pub(crate) enum RunLoopCompletion {

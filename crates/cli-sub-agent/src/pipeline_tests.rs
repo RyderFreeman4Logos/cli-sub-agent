@@ -69,6 +69,36 @@ min_free_memory_mb = 1
 }
 
 #[test]
+fn final_executor_validation_preserves_configured_warning_for_dispatch() {
+    let mut catalog = csa_config::EffectiveModelCatalog::shipped().unwrap();
+    catalog
+        .register_configured_spec(
+            "codex",
+            "openai",
+            "gpt-future-dispatch",
+            "high",
+            csa_config::CatalogProvenance::Project {
+                path: std::path::PathBuf::from(".csa/config.toml"),
+                key: "tools.codex.default_model".to_string(),
+            },
+        )
+        .unwrap();
+    let executor = csa_executor::Executor::from_tool_name(
+        &csa_core::types::ToolName::Codex,
+        Some("gpt-future-dispatch".to_string()),
+        Some(csa_executor::ThinkingBudget::High),
+    );
+
+    let admission = validate_final_executor_identity(&executor, None, &catalog)
+        .unwrap()
+        .expect("model override should be validated");
+    let warning = admission
+        .warning()
+        .expect("configured warning must reach final dispatch");
+    assert!(warning.to_string().contains("gpt-future-dispatch"));
+}
+
+#[test]
 fn determine_project_root_with_valid_path() {
     let tmp = tempfile::tempdir().unwrap();
     let result = determine_project_root(Some(tmp.path().to_str().unwrap())).unwrap();
@@ -586,6 +616,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_s
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -619,6 +650,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_whitelist_check() 
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -654,6 +686,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_m
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -686,6 +719,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_model_name_check()
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -711,6 +745,8 @@ fn enforce_result_toml_contract_now(
     enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, 0, true, result);
 }
 
+#[path = "pipeline_tests_catalog_boundary.rs"]
+mod catalog_boundary_tests;
 #[path = "pipeline_tests_contract.rs"]
 mod contract_tests;
 #[path = "pipeline_tests_effective_timeout.rs"]

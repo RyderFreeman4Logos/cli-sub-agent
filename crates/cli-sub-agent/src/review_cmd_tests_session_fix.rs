@@ -13,6 +13,10 @@ use csa_core::types::ToolName;
 use std::collections::HashMap;
 use std::path::Path;
 
+fn shipped_catalog() -> csa_config::EffectiveModelCatalog {
+    csa_config::EffectiveModelCatalog::shipped().expect("shipped catalog")
+}
+
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
@@ -197,6 +201,7 @@ fn review_session_fix_skips_non_concrete_metadata_and_uses_result_tool() {
         project_dir.path(),
         Some(&config),
         &GlobalConfig::default(),
+        &shipped_catalog(),
         Some("claude-code"),
     )
     .expect("session fix selection should use concrete result tool");
@@ -237,6 +242,7 @@ fn review_session_fix_suppresses_cross_tool_tier_candidates_after_selection() {
         args: &args,
         project_config: Some(&config),
         global_config: &global_config,
+        model_catalog: &shipped_catalog(),
         parent_tool: Some("claude-code"),
         project_root: project_dir.path(),
         effective_tier: Some("quality"),
@@ -307,6 +313,7 @@ fn review_session_fix_rejects_tier_fallback_when_recorded_result_tool_missing_fr
         project_dir.path(),
         Some(&config),
         &GlobalConfig::default(),
+        &shipped_catalog(),
         Some("claude-code"),
     )
     .expect_err("recorded tool missing from tier must not fall back to another tool");
@@ -351,6 +358,7 @@ fn review_session_fix_runtime_resolution_rejects_tier_fallback_to_non_recorded_t
         args: &args,
         project_config: Some(&config),
         global_config: &global_config,
+        model_catalog: &shipped_catalog(),
         parent_tool: Some("claude-code"),
         project_root: project_dir.path(),
         effective_tier: Some("quality"),
@@ -393,6 +401,7 @@ fn review_session_fix_selects_original_tool_without_direct_tool_restriction() {
         project_dir.path(),
         Some(&config),
         &GlobalConfig::default(),
+        &shipped_catalog(),
         Some("claude-code"),
     )
     .expect("session fix selection should resolve");

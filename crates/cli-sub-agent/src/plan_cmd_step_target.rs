@@ -191,7 +191,14 @@ fn resolve_default_tier_target(config: &ProjectConfig) -> Result<Option<StepTarg
     };
     let spec = ModelSpec::parse(&model_spec)?;
     let tool = parse_tool_name(&spec.tool)?;
-    Ok(Some(StepTarget::csa(tool, Some(model_spec))))
+    let tier_name = config
+        .resolve_tier_name_for_task("default")
+        .map(str::to_owned);
+    Ok(Some(StepTarget::CsaTool {
+        tool_name: tool,
+        model_spec: Some(model_spec),
+        tier_name,
+    }))
 }
 
 fn is_deterministic_step_tool(explicit_tool: Option<&str>) -> bool {

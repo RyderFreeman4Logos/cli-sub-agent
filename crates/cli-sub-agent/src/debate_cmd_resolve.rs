@@ -101,6 +101,7 @@ pub(crate) fn resolve_debate_selection(
     arg_model_spec: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
@@ -123,6 +124,7 @@ pub(crate) fn resolve_debate_selection(
                 thinking: None, // thinking not relevant for debate command
                 config: project_config,
                 global_config: Some(global_config),
+                model_catalog: Some(model_catalog),
                 project_root,
                 force: false,
                 force_override_user_config,
@@ -168,15 +170,15 @@ pub(crate) fn resolve_debate_selection(
             && let Some(cfg) = project_config
         {
             let tier_preference_order = vec![tool.as_str().to_string()];
-            let resolution =
-                crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
-                    tier,
-                    cfg,
-                    Some(global_config),
-                    parent_tool,
-                    &tier_preference_order,
-                    &[],
-                )?;
+            let resolution = crate::run_helpers::resolve_preferred_tool_from_tier_with_catalog(
+                tier,
+                cfg,
+                Some(global_config),
+                model_catalog,
+                parent_tool,
+                &tier_preference_order,
+                &[],
+            )?;
             return Ok(ResolvedDebateSelection {
                 tool: resolution.tool,
                 mode: DebateMode::Heterogeneous,
@@ -212,12 +214,13 @@ pub(crate) fn resolve_debate_selection(
         })?;
 
         let tier_tools = cfg.list_tools_in_tier(tier);
-        let filtered_tools = crate::run_helpers::collect_available_tier_models_with_global_config(
+        let filtered_tools = crate::run_helpers::collect_available_tier_models_with_catalog(
             tier,
             cfg,
             Some(global_config),
+            model_catalog,
             &[],
-        );
+        )?;
         maybe_guard_debate_narrowing(
             tier,
             &tier_tools,
@@ -225,14 +228,15 @@ pub(crate) fn resolve_debate_selection(
             global_config.debate.require_heterogeneous,
         )?;
 
-        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_global_config(
+        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_catalog(
             tier,
             cfg,
             Some(global_config),
+            model_catalog,
             parent_tool,
             &tier_preference_order,
             &[],
-        ) {
+        )? {
             return Ok(ResolvedDebateSelection {
                 tool: resolution.tool,
                 mode: DebateMode::Heterogeneous,
@@ -311,11 +315,13 @@ pub(crate) fn resolve_debate_tool(
     cli_tier: Option<&str>,
     force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, DebateMode, Option<String>)> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped()?;
     let resolved = resolve_debate_selection(
         arg_tool,
         arg_model_spec,
         project_config,
         global_config,
+        &catalog,
         parent_tool,
         project_root,
         force_override_user_config,

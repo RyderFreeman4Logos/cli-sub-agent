@@ -15,6 +15,7 @@ pub(super) struct FailoverAvailabilityRequest<'a> {
     pub exhausted_providers: &'a [ModelFamily],
     pub config: &'a ProjectConfig,
     pub global_config: Option<&'a GlobalConfig>,
+    pub model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub original_error: &'a str,
 }
 
@@ -37,6 +38,7 @@ pub(super) fn decide_available_failover(
         exhausted_providers,
         config,
         global_config,
+        model_catalog,
         original_error,
     } = request;
     let FailoverAvailabilityState {
@@ -104,6 +106,22 @@ pub(super) fn decide_available_failover(
             continue;
         }
 
+        if let Err(reason) = crate::run_helpers::validate_tier_model_spec_compatibility_with_catalog(
+            &new_model_spec,
+            model_catalog,
+        ) {
+            warn!(
+                tool = %new_tool,
+                model_spec = %new_model_spec,
+                reason = ?reason,
+                "[csa-failover] skipping catalog-rejected fallback candidate"
+            );
+            if !tried_specs.iter().any(|spec| spec == &new_model_spec) {
+                tried_specs.push(new_model_spec);
+            }
+            continue;
+        }
+
         let extra_env = global_config
             .and_then(|cfg| cfg.build_execution_env(&new_tool, ExecutionEnvOptions::default()));
         match crate::run_helpers::tool_runtime_availability_with_env(
@@ -149,3 +167,7 @@ fn explicit_tool_exhausted_reason(tool: &str) -> String {
         "no executable {tool} fallback candidates remain; explicit --tool {tool} prevents cross-tool tier failover"
     )
 }
+
+#[cfg(test)]
+#[path = "run_cmd_post_failover_catalog_tests.rs"]
+mod catalog_tests;

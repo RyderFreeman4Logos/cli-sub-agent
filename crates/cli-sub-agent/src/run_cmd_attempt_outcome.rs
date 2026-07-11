@@ -20,8 +20,8 @@ use super::super::resume::{
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
 use crate::run_cmd_post::{
     ErrorRateLimitFailoverRequest, RateLimitAction, RateLimitFailoverRequest,
-    detect_permanent_tool_exhaustion_result, evaluate_error_rate_limit_failover_with_global_config,
-    evaluate_rate_limit_failover_with_global_config, is_permanent_tool_exhaustion_error,
+    detect_permanent_tool_exhaustion_result, evaluate_error_rate_limit_failover_with_catalog,
+    evaluate_rate_limit_failover_with_catalog, is_permanent_tool_exhaustion_error,
 };
 use crate::run_cmd_tool_selection::take_next_runtime_fallback_tool;
 
@@ -35,6 +35,7 @@ pub(super) enum AttemptRetryAction {
         new_tool: ToolName,
         new_model_spec: Option<String>,
         failover_context: FailoverContextUpdate,
+        source_session_id: Option<String>,
     },
 }
 
@@ -51,6 +52,9 @@ pub(super) struct AttemptRetryState<'a> {
     pub(super) model: &'a mut Option<String>,
     pub(super) fork_resolution: &'a mut Option<ForkResolution>,
     pub(super) effective_session: &'a mut Option<String>,
+    pub(super) session_parent: &'a mut Option<String>,
+    pub(super) session_creation_mode: &'a mut crate::pipeline::SessionCreationMode,
+    pub(super) executed_session_id: &'a mut Option<String>,
     pub(super) is_fork: bool,
 }
 
@@ -60,7 +64,9 @@ impl AttemptRetryState<'_> {
             new_tool,
             new_model_spec,
             failover_context,
+            source_session_id,
         } = action;
+        let identity_changed = *self.tool != new_tool || *self.model_spec != new_model_spec;
 
         if let FailoverContextUpdate::Replace(new_context) = failover_context {
             *self.failover_context = new_context;
@@ -69,7 +75,12 @@ impl AttemptRetryState<'_> {
         *self.model_spec = new_model_spec;
         *self.model = None;
         *self.fork_resolution = None;
-        if self.is_fork {
+        if identity_changed {
+            *self.effective_session = None;
+            *self.session_parent = source_session_id;
+            *self.session_creation_mode = crate::pipeline::SessionCreationMode::FreshChild;
+            *self.executed_session_id = None;
+        } else if self.is_fork {
             *self.effective_session = None;
         }
     }
@@ -98,6 +109,7 @@ pub(super) struct AttemptErrorRequest<'a> {
     pub(super) prompt_text: &'a str,
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) global_config: &'a GlobalConfig,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub(super) task_needs_edit: Option<bool>,
     pub(super) attempt_elapsed: Duration,
 }
@@ -218,32 +230,39 @@ pub(super) fn handle_attempt_error(
             new_tool: next_tool,
             new_model_spec: None,
             failover_context: FailoverContextUpdate::Preserve,
+            source_session_id: request
+                .executed_session_id
+                .or(request.effective_session_arg)
+                .map(str::to_owned),
         }));
     }
 
-    match evaluate_error_rate_limit_failover_with_global_config(ErrorRateLimitFailoverRequest {
-        tool_name_str: request.tool_name,
-        error_message: &full_error_chain,
-        attempts: request.attempts,
-        max_failover_attempts: request.max_failover_attempts,
-        tried_tools,
-        tried_specs,
-        tier_auto_select: request.tier_auto_select,
-        failover_on_crash_enabled: request.failover_on_crash_enabled,
-        resolved_tier_name: request.resolved_tier_name,
-        tier_failover_tool_filter: request.tier_failover_tool_filter,
-        executed_session_id: request.executed_session_id,
-        effective_session_arg: request.effective_session_arg,
-        ephemeral: request.ephemeral,
-        prompt_text: request.prompt_text,
-        project_root: request.project_root,
-        config: request.config,
-        global_config: Some(request.global_config),
-        task_needs_edit: request.task_needs_edit,
-        current_model_spec: request.current_model_spec,
-        fallback_chain,
-        attempt_elapsed: Some(request.attempt_elapsed),
-    })? {
+    match evaluate_error_rate_limit_failover_with_catalog(
+        ErrorRateLimitFailoverRequest {
+            tool_name_str: request.tool_name,
+            error_message: &full_error_chain,
+            attempts: request.attempts,
+            max_failover_attempts: request.max_failover_attempts,
+            tried_tools,
+            tried_specs,
+            tier_auto_select: request.tier_auto_select,
+            failover_on_crash_enabled: request.failover_on_crash_enabled,
+            resolved_tier_name: request.resolved_tier_name,
+            tier_failover_tool_filter: request.tier_failover_tool_filter,
+            executed_session_id: request.executed_session_id,
+            effective_session_arg: request.effective_session_arg,
+            ephemeral: request.ephemeral,
+            prompt_text: request.prompt_text,
+            project_root: request.project_root,
+            config: request.config,
+            global_config: Some(request.global_config),
+            task_needs_edit: request.task_needs_edit,
+            current_model_spec: request.current_model_spec,
+            fallback_chain,
+            attempt_elapsed: Some(request.attempt_elapsed),
+        },
+        request.model_catalog,
+    )? {
         RateLimitAction::Retry {
             new_tool,
             new_model_spec,
@@ -255,6 +274,10 @@ pub(super) fn handle_attempt_error(
                 new_tool,
                 new_model_spec,
                 failover_context: FailoverContextUpdate::Replace(failover_context),
+                source_session_id: request
+                    .executed_session_id
+                    .or(request.effective_session_arg)
+                    .map(str::to_owned),
             }))
         }
         RateLimitAction::ExhaustedFailovers { reason } => {
@@ -296,6 +319,7 @@ pub(super) struct PostAttemptRequest<'a> {
     pub(super) project_root: &'a Path,
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) global_config: &'a GlobalConfig,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub(super) task_needs_edit: Option<bool>,
     pub(super) attempt_elapsed: Duration,
 }
@@ -378,6 +402,10 @@ pub(super) fn evaluate_post_attempt_retry(
             new_tool: next_tool,
             new_model_spec: None,
             failover_context: FailoverContextUpdate::Preserve,
+            source_session_id: request
+                .executed_session_id
+                .or(request.effective_session_arg)
+                .map(str::to_owned),
         }));
     }
 
@@ -385,28 +413,31 @@ pub(super) fn evaluate_post_attempt_retry(
         return Ok(PostAttemptAction::Break(request.exec_changed_paths));
     }
 
-    match evaluate_rate_limit_failover_with_global_config(RateLimitFailoverRequest {
-        tool_name_str: request.tool_name,
-        exec_result: request.exec_result,
-        attempts: request.attempts,
-        max_failover_attempts: request.max_failover_attempts,
-        tried_tools,
-        tried_specs,
-        tier_auto_select: request.tier_auto_select,
-        resolved_tier_name: request.resolved_tier_name,
-        tier_failover_tool_filter: request.tier_failover_tool_filter,
-        executed_session_id: request.executed_session_id,
-        effective_session_arg: request.effective_session_arg,
-        ephemeral: request.ephemeral,
-        prompt_text: request.prompt_text,
-        project_root: request.project_root,
-        config: request.config,
-        global_config: Some(request.global_config),
-        task_needs_edit: request.task_needs_edit,
-        current_model_spec: request.current_model_spec,
-        fallback_chain,
-        attempt_elapsed: Some(request.attempt_elapsed),
-    })? {
+    match evaluate_rate_limit_failover_with_catalog(
+        RateLimitFailoverRequest {
+            tool_name_str: request.tool_name,
+            exec_result: request.exec_result,
+            attempts: request.attempts,
+            max_failover_attempts: request.max_failover_attempts,
+            tried_tools,
+            tried_specs,
+            tier_auto_select: request.tier_auto_select,
+            resolved_tier_name: request.resolved_tier_name,
+            tier_failover_tool_filter: request.tier_failover_tool_filter,
+            executed_session_id: request.executed_session_id,
+            effective_session_arg: request.effective_session_arg,
+            ephemeral: request.ephemeral,
+            prompt_text: request.prompt_text,
+            project_root: request.project_root,
+            config: request.config,
+            global_config: Some(request.global_config),
+            task_needs_edit: request.task_needs_edit,
+            current_model_spec: request.current_model_spec,
+            fallback_chain,
+            attempt_elapsed: Some(request.attempt_elapsed),
+        },
+        request.model_catalog,
+    )? {
         RateLimitAction::Retry {
             new_tool,
             new_model_spec,
@@ -423,6 +454,10 @@ pub(super) fn evaluate_post_attempt_retry(
                 new_tool,
                 new_model_spec,
                 failover_context: FailoverContextUpdate::Replace(failover_context),
+                source_session_id: request
+                    .executed_session_id
+                    .or(request.effective_session_arg)
+                    .map(str::to_owned),
             }))
         }
         RateLimitAction::ExhaustedFailovers { reason } => {
@@ -477,80 +512,8 @@ fn annotate_issue_budget_exhaustion(
     exec_result.stderr_output.push('\n');
 }
 
+include!("run_cmd_attempt_outcome_budget_tests.rs");
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn issue_budget_exhaustion_stops_retry_before_runtime_fallback() {
-        let project_root = tempfile::tempdir().expect("project root");
-        let mut result = csa_process::ExecutionResult {
-            exit_code: 1,
-            summary: "failed".to_string(),
-            ..Default::default()
-        };
-        let mut global_config = GlobalConfig::default();
-        global_config.budget.max_tokens_per_issue = 10;
-
-        let mut tried_tools = Vec::new();
-        let mut tried_specs = Vec::new();
-        let mut runtime_fallback_candidates = vec![ToolName::ClaudeCode];
-        let mut runtime_fallback_attempts = 0;
-        let mut fallback_chain: csa_scheduler::FallbackChain = Vec::new();
-        let mut accumulated_changed_paths = Vec::new();
-        let mut all_attempt_change_snapshots_available = true;
-        let mut pre_created_fork_session_id = None;
-
-        let action = evaluate_post_attempt_retry(
-            PostAttemptRequest {
-                exec_result: &mut result,
-                exec_changed_paths: None,
-                issue_tokens_used: 10,
-                runtime_fallback_enabled: true,
-                max_runtime_fallback_attempts: 3,
-                current_tool: ToolName::Codex,
-                tool_name: ToolName::Codex.as_str(),
-                current_model_spec: None,
-                attempts: 1,
-                max_failover_attempts: 3,
-                tier_auto_select: false,
-                resolved_tier_name: None,
-                tier_failover_tool_filter: None,
-                executed_session_id: None,
-                effective_session_arg: None,
-                ephemeral: false,
-                prompt_text: "do work",
-                project_root: project_root.path(),
-                config: None,
-                global_config: &global_config,
-                task_needs_edit: None,
-                attempt_elapsed: Duration::ZERO,
-            },
-            PostAttemptState {
-                tried_tools: &mut tried_tools,
-                tried_specs: &mut tried_specs,
-                runtime_fallback_candidates: &mut runtime_fallback_candidates,
-                runtime_fallback_attempts: &mut runtime_fallback_attempts,
-                fallback_chain: &mut fallback_chain,
-                accumulated_changed_paths: &mut accumulated_changed_paths,
-                all_attempt_change_snapshots_available: &mut all_attempt_change_snapshots_available,
-                pre_created_fork_session_id: &mut pre_created_fork_session_id,
-            },
-        )
-        .expect("post-attempt evaluation should succeed");
-
-        assert!(matches!(action, PostAttemptAction::Break(None)));
-        assert_eq!(runtime_fallback_attempts, 0);
-        assert!(tried_tools.is_empty());
-        assert!(
-            result.warnings.iter().any(
-                |warning| warning.contains("Issue token budget exhausted; stopping retry loop")
-            )
-        );
-        assert!(
-            result
-                .stderr_output
-                .contains("Issue token budget exhausted; stopping retry loop (used=10, max=10).")
-        );
-    }
-}
+#[path = "run_cmd_attempt_outcome_catalog_tests.rs"]
+mod catalog_tests;

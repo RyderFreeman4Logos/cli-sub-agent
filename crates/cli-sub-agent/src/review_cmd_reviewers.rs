@@ -43,25 +43,24 @@ fn collect_tier_reviewer_specs(
     resolved_tier_name: Option<&str>,
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
-) -> Vec<crate::run_helpers::TierToolResolution> {
-    resolved_tier_name
-        .and_then(|tier_name| {
-            config.map(|cfg| {
-                let effective_selection = cfg
-                    .review
-                    .as_ref()
-                    .map(|review| &review.tool)
-                    .unwrap_or(&global_config.review.tool);
-                crate::run_helpers::collect_preferred_tier_models_with_global_config(
-                    tier_name,
-                    cfg,
-                    Some(global_config),
-                    &effective_selection.preference_order(),
-                    &[],
-                )
-            })
-        })
-        .unwrap_or_default()
+    model_catalog: &csa_config::EffectiveModelCatalog,
+) -> Result<Vec<crate::run_helpers::TierToolResolution>> {
+    let (Some(tier_name), Some(cfg)) = (resolved_tier_name, config) else {
+        return Ok(Vec::new());
+    };
+    let effective_selection = cfg
+        .review
+        .as_ref()
+        .map(|review| &review.tool)
+        .unwrap_or(&global_config.review.tool);
+    crate::run_helpers::collect_preferred_tier_models_with_catalog(
+        tier_name,
+        cfg,
+        Some(global_config),
+        model_catalog,
+        &effective_selection.preference_order(),
+        &[],
+    )
 }
 
 fn effective_review_tool_preferences(
@@ -160,8 +159,17 @@ fn repeat_reviewer_pool(pool: &[ToolName], reviewer_count: usize) -> Vec<ToolNam
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_auto_reviewer_selection(
     request: &AutoReviewerRequest<'_>,
+) -> Option<AutoReviewerSelection> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped().ok()?;
+    resolve_auto_reviewer_selection_with_catalog(request, &catalog)
+}
+
+pub(crate) fn resolve_auto_reviewer_selection_with_catalog(
+    request: &AutoReviewerRequest<'_>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> Option<AutoReviewerSelection> {
     if request.requested_reviewers != 1
         || request.explicit_reviewer_count
@@ -179,7 +187,9 @@ pub(crate) fn resolve_auto_reviewer_selection(
         request.resolved_tier_name,
         request.config,
         request.global_config,
-    );
+        model_catalog,
+    )
+    .ok()?;
     let tier_reviewer_tools = collect_unique_tier_tools(&tier_reviewer_specs);
     let unique_pool = build_auto_heterogeneous_tool_subset(
         request.primary_tool,
@@ -195,10 +205,21 @@ pub(crate) fn resolve_auto_reviewer_selection(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_effective_reviewer_selection(
     request: &AutoReviewerRequest<'_>,
 ) -> EffectiveReviewerSelection {
-    let auto_reviewer_selection = resolve_auto_reviewer_selection(request);
+    let catalog =
+        csa_config::EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    resolve_effective_reviewer_selection_with_catalog(request, &catalog)
+}
+
+pub(crate) fn resolve_effective_reviewer_selection_with_catalog(
+    request: &AutoReviewerRequest<'_>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
+) -> EffectiveReviewerSelection {
+    let auto_reviewer_selection =
+        resolve_auto_reviewer_selection_with_catalog(request, model_catalog);
     if let Some(selection) = auto_reviewer_selection {
         let tool_list = selection
             .selected_tools
@@ -233,24 +254,29 @@ pub(crate) fn resolve_effective_reviewer_selection_for_args(
     resolved_tier_name: Option<&str>,
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> EffectiveReviewerSelection {
-    resolve_effective_reviewer_selection(&AutoReviewerRequest {
-        requested_reviewers: args.requested_reviewers() as usize,
-        explicit_reviewer_count: args.reviewers.is_some(),
-        single: args.single,
-        fix: args.fix,
-        session_present: args.session.is_some(),
-        scope_is_range: args.range.is_some(),
-        large_diff_auto_escalation,
-        explicit_tool: super::prior_rounds::explicit_review_tool(args),
-        explicit_model_spec: args.model_spec.as_deref(),
-        primary_tool,
-        resolved_tier_name,
-        config,
-        global_config,
-    })
+    resolve_effective_reviewer_selection_with_catalog(
+        &AutoReviewerRequest {
+            requested_reviewers: args.requested_reviewers() as usize,
+            explicit_reviewer_count: args.reviewers.is_some(),
+            single: args.single,
+            fix: args.fix,
+            session_present: args.session.is_some(),
+            scope_is_range: args.range.is_some(),
+            large_diff_auto_escalation,
+            explicit_tool: super::prior_rounds::explicit_review_tool(args),
+            explicit_model_spec: args.model_spec.as_deref(),
+            primary_tool,
+            resolved_tier_name,
+            config,
+            global_config,
+        },
+        model_catalog,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_multi_reviewer_pool(
     reviewers: usize,
     selected_reviewer_tools: Option<&[ToolName]>,
@@ -260,33 +286,62 @@ pub(crate) fn resolve_multi_reviewer_pool(
     config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
 ) -> Result<MultiReviewerPool> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped()?;
+    resolve_multi_reviewer_pool_with_catalog(
+        MultiReviewerRequest {
+            reviewers,
+            selected_reviewer_tools,
+            explicit_tool,
+            primary_tool,
+        },
+        resolved_tier_name,
+        config,
+        global_config,
+        &catalog,
+    )
+}
+
+pub(crate) struct MultiReviewerRequest<'a> {
+    pub(crate) reviewers: usize,
+    pub(crate) selected_reviewer_tools: Option<&'a [ToolName]>,
+    pub(crate) explicit_tool: Option<ToolName>,
+    pub(crate) primary_tool: ToolName,
+}
+
+pub(crate) fn resolve_multi_reviewer_pool_with_catalog(
+    request: MultiReviewerRequest<'_>,
+    resolved_tier_name: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
+) -> Result<MultiReviewerPool> {
     let tier_reviewer_specs =
-        collect_tier_reviewer_specs(resolved_tier_name, config, global_config);
+        collect_tier_reviewer_specs(resolved_tier_name, config, global_config, model_catalog)?;
     let tier_reviewer_tools = collect_unique_tier_tools(&tier_reviewer_specs);
     let preference_order = effective_review_tool_preferences(config, global_config);
 
     if let Some(tier_name) = resolved_tier_name {
         let unique_reviewer_tools = validate_multi_reviewer_tier_pool(
             tier_name,
-            reviewers,
-            primary_tool,
+            request.reviewers,
+            request.primary_tool,
             &tier_reviewer_tools,
         )?;
-        if reviewers > unique_reviewer_tools {
+        if request.reviewers > unique_reviewer_tools {
             warn!(
                 tier = tier_name,
-                requested_reviewers = reviewers,
+                requested_reviewers = request.reviewers,
                 unique_tools = unique_reviewer_tools,
                 "Multi-reviewer tier pool will reuse tools because fewer unique tier reviewers are available than requested"
             );
         }
     }
 
-    let reviewer_tools = if let Some(selected_tools) = selected_reviewer_tools {
+    let reviewer_tools = if let Some(selected_tools) = request.selected_reviewer_tools {
         selected_tools.to_vec()
-    } else if resolved_tier_name.is_some() && explicit_tool.is_none() {
+    } else if resolved_tier_name.is_some() && request.explicit_tool.is_none() {
         let pool = build_selected_tool_subset(
-            primary_tool,
+            request.primary_tool,
             &tier_reviewer_tools,
             usize::MAX,
             &preference_order,
@@ -294,15 +349,15 @@ pub(crate) fn resolve_multi_reviewer_pool(
         if pool.is_empty() {
             anyhow::bail!("Review tier resolved no reviewer tools");
         }
-        repeat_reviewer_pool(&pool, reviewers)
+        repeat_reviewer_pool(&pool, request.reviewers)
     } else {
         build_reviewer_tools(
-            explicit_tool,
-            primary_tool,
+            request.explicit_tool,
+            request.primary_tool,
             config,
             Some(global_config),
             resolved_tier_name.map(|_| tier_reviewer_tools.as_slice()),
-            reviewers,
+            request.reviewers,
         )
     };
 

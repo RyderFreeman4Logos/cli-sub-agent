@@ -52,7 +52,7 @@ fn codex_accepts_o4_mini_high_as_distinct_model() {
 
 #[test]
 fn codex_accepts_all_known_compatible_models() {
-    for &model in CODEX_CHATGPT_COMPATIBLE_MODELS {
+    for model in CODEX_CHATGPT_COMPATIBLE_MODELS.iter() {
         let result = validate_tool_model_compat(ToolName::Codex, model, None);
         assert!(
             result.is_ok(),

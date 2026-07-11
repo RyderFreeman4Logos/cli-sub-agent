@@ -1,47 +1,4 @@
-use anyhow::Result;
-use csa_config::{GlobalConfig, ProjectConfig};
-use std::time::Instant;
-use tracing::warn;
-
-use super::attempt_exec::{
-    AttemptExecution, EphemeralRunRequest, run_ephemeral_with_timeout,
-    run_ephemeral_without_timeout, run_persistent_with_timeout, run_persistent_without_timeout,
-};
-use super::attempt_support::{
-    CommitSkillWorkspaceGuard as Cg, allow_cross_tool_failover,
-    capture_commit_skill_workspace_guard as capture_cg, codex_fast_mode_enabled as codex_fast,
-    merge_run_loop_changed_paths as merge_changed,
-    persist_fork_timeout_result_if_missing as persist_timeout,
-    resolve_attempt_initial_response_timeout_seconds as initial_timeout,
-    resolve_max_failover_attempts as max_failovers,
-    resolve_runtime_fallback_enabled as runtime_fallback,
-    restore_failed_commit_skill_workspace as restore_cg, strategy_is_explicit,
-};
-use super::resume::{emit_run_timeout, resolve_remaining_run_timeout};
-use crate::pipeline;
-use crate::run_cmd_fork::{ForkResolution, pre_create_native_fork_session, resolve_fork};
-use crate::run_cmd_tool_selection::resolve_slot_wait_timeout_seconds;
-use crate::run_helpers::parse_token_usage;
-
-#[path = "run_cmd_attempt_types.rs"]
-mod types;
-use RunLoopCompletion::Exit;
-pub(crate) use types::{RunLoopCompletion, RunLoopOutcome, RunLoopRequest};
-#[path = "run_cmd_attempt_outcome.rs"]
-mod outcome;
-use outcome::{
-    AttemptErrorAction, AttemptErrorRequest, AttemptErrorState, AttemptRetryState,
-    PostAttemptAction, PostAttemptRequest, PostAttemptState, evaluate_post_attempt_retry,
-    handle_attempt_error,
-};
-#[path = "run_cmd_attempt_slot.rs"]
-mod slot;
-use slot::{AttemptSlotOutcome, AttemptSlotRequest, acquire_attempt_slot};
-#[path = "run_cmd_attempt_prompt.rs"]
-mod prompt;
-#[cfg(test)]
-use prompt::resolve_attempt_subtree_model_pin_spec;
-use prompt::{AttemptPromptRequest, build_attempt_prompt};
+include!("run_cmd_attempt_prelude.rs");
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
     let mut g = capture_cg(request.project_root, request.skill)?;
@@ -53,6 +10,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
 }
 
 async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion> {
+    let config_refs = request.config_refs();
     let max_failover_attempts =
         max_failovers(request.no_failover, request.config, request.global_config);
 
@@ -83,6 +41,8 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
     let mut is_auto_seed_fork = request.is_auto_seed_fork;
     let mut session_arg = request.session_arg;
     let mut effective_session_arg = request.effective_session_arg;
+    let mut attempt_parent = request.parent.clone();
+    let mut session_creation_mode = pipeline::SessionCreationMode::DaemonManaged;
     let mut vcs_probe_cache = crate::run_helpers_branch_guard::VcsProbeCache::default();
     let enforce_tier =
         !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
@@ -97,10 +57,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             current_model_spec.as_deref(),
             current_model.as_deref(),
             request.thinking,
-            pipeline::ConfigRefs {
-                project: request.config,
-                global: Some(request.global_config),
-            },
+            config_refs,
             enforce_tier,
             request.force_override_user_config,
             strategy_is_explicit(&request.strategy),
@@ -350,7 +307,8 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                     effective_session_arg.clone(),
                     request.description.clone(),
                     request.skill_session_tag.clone(),
-                    request.parent.clone(),
+                    attempt_parent.clone(),
+                    session_creation_mode,
                     request.project_root,
                     request.config,
                     extra_env.as_ref(),
@@ -402,7 +360,8 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 effective_session_arg.clone(),
                 request.description.clone(),
                 request.skill_session_tag.clone(),
-                request.parent.clone(),
+                attempt_parent.clone(),
+                session_creation_mode,
                 request.project_root,
                 request.config,
                 extra_env.as_ref(),
@@ -527,6 +486,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                         prompt_text: request.prompt_text,
                         config: request.config,
                         global_config: request.global_config,
+                        model_catalog: request.model_catalog,
                         task_needs_edit: request.task_needs_edit,
                         attempt_elapsed: attempt_started_at.elapsed(),
                     },
@@ -553,6 +513,9 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                             model: &mut current_model,
                             fork_resolution: &mut fork_resolution,
                             effective_session: &mut effective_session_arg,
+                            session_parent: &mut attempt_parent,
+                            session_creation_mode: &mut session_creation_mode,
+                            executed_session_id: &mut executed_session_id,
                             is_fork,
                         }
                         .apply(action);
@@ -589,6 +552,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 project_root: request.project_root,
                 config: request.config,
                 global_config: request.global_config,
+                model_catalog: request.model_catalog,
                 task_needs_edit: request.task_needs_edit,
                 attempt_elapsed: attempt_started_at.elapsed(),
             },
@@ -611,6 +575,9 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                     model: &mut current_model,
                     fork_resolution: &mut fork_resolution,
                     effective_session: &mut effective_session_arg,
+                    session_parent: &mut attempt_parent,
+                    session_creation_mode: &mut session_creation_mode,
+                    executed_session_id: &mut executed_session_id,
                     is_fork,
                 }
                 .apply(action);
@@ -638,15 +605,4 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
     })))
 }
 
-#[cfg(test)]
-#[path = "run_cmd_attempt_codex_quota_tests.rs"]
-mod codex_quota_tests;
-#[cfg(test)]
-#[path = "run_cmd_attempt_git_push_tests.rs"]
-mod git_push_tests;
-#[cfg(test)]
-#[path = "run_cmd_attempt_http_failover_tests.rs"]
-mod http_failover_tests;
-#[cfg(test)]
-#[path = "run_cmd_attempt_tests.rs"]
-mod tests;
+include!("run_cmd_attempt_test_modules.rs");

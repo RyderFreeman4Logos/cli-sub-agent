@@ -6,12 +6,13 @@ use tracing::{info, warn};
 use csa_core::types::ToolName;
 
 use super::plan_cmd_exec::{
-    CsaStepExecutionOptions, StepExecutionOutcome, execute_csa_step, run_with_heartbeat,
+    CsaStepExecutionOptions, CsaStepExecutionRequest, StepExecutionOutcome, execute_csa_step,
+    run_with_heartbeat,
 };
 use super::plan_cmd_steps::StepExecutionContext;
 use crate::tier_model_fallback::{
     TierAttemptFailure, classify_next_model_failure_with_elapsed, format_all_models_failed_reason,
-    ordered_tier_candidates,
+    ordered_tier_candidates_with_catalog,
 };
 
 pub(super) struct TierFailoverParams<'a> {
@@ -35,16 +36,18 @@ pub(super) async fn execute_csa_step_with_tier_failover(
     step_ctx: &StepExecutionContext<'_>,
     step_started_at: Instant,
 ) -> Result<StepExecutionOutcome> {
-    let global_config = csa_config::GlobalConfig::load().ok();
-    let candidates = ordered_tier_candidates(
+    let candidates = ordered_tier_candidates_with_catalog(
         *params.initial_tool,
         params.initial_model_spec,
         params.tier_name,
         step_ctx.config,
-        global_config.as_ref(),
-        params.tier_name.is_some(),
-        &[],
-    );
+        Some(step_ctx.global_config),
+        step_ctx.model_catalog,
+        crate::tier_model_fallback::TierFallbackOptions {
+            enabled: params.tier_name.is_some(),
+            preference_order: &[],
+        },
+    )?;
 
     let mut failures: Vec<TierAttemptFailure> = Vec::new();
 
@@ -68,11 +71,15 @@ pub(super) async fn execute_csa_step_with_tier_failover(
         let result = run_with_heartbeat(
             label,
             execute_csa_step(
-                label,
-                prompt,
-                tool,
-                step_ctx.project_root,
-                step_ctx.config,
+                CsaStepExecutionRequest {
+                    label,
+                    prompt,
+                    tool_name: tool,
+                    project_root: step_ctx.project_root,
+                    config: step_ctx.config,
+                    global_config: step_ctx.global_config,
+                    model_catalog: step_ctx.model_catalog,
+                },
                 CsaStepExecutionOptions {
                     model_spec: model_spec.as_deref(),
                     forwarded_session: if is_fallback {
@@ -142,5 +149,7 @@ pub(super) async fn execute_csa_step_with_tier_failover(
         }
     }
 
-    unreachable!("candidates list is never empty")
+    Err(anyhow::anyhow!(
+        "plan tier resolution exhausted without producing a candidate outcome"
+    ))
 }

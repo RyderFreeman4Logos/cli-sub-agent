@@ -262,6 +262,30 @@ impl Executor {
         }
     }
 
+    /// Returns the model identity that will be handed to the selected tool.
+    pub fn model_override(&self) -> Option<&str> {
+        match self {
+            Self::GeminiCli { model_override, .. }
+            | Self::Opencode { model_override, .. }
+            | Self::Codex { model_override, .. }
+            | Self::ClaudeCode { model_override, .. }
+            | Self::OpenaiCompat { model_override, .. }
+            | Self::Hermes { model_override, .. }
+            | Self::AntigravityCli { model_override, .. } => model_override.as_deref(),
+        }
+    }
+
+    /// Returns an executor-level provider override when the transport carries
+    /// one independently from the model string.
+    pub fn provider_override(&self) -> Option<&str> {
+        match self {
+            Self::Hermes {
+                provider_override, ..
+            } => provider_override.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Override the thinking budget (thinking_lock replaces whatever was set).
     pub fn override_thinking_budget(&mut self, budget: ThinkingBudget) {
         match self {

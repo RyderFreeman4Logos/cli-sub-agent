@@ -18,6 +18,8 @@ fn make_chunked_run_ctx<'a>(
         project_root,
         workflow_path,
         config: None,
+        global_config: super::test_global_config(),
+        model_catalog: super::test_model_catalog(),
         tool_override: None,
         model_spec_override: None,
         journal,

@@ -136,9 +136,9 @@ fn test_classify_codex_exec_initial_stall_xhigh_retries_once() {
     assert!(
         matches!(
             classification.retry_effort,
-            Some(crate::model_spec::ThinkingBudget::High)
+            Some(crate::model_spec::ThinkingBudget::Xhigh)
         ),
-        "xhigh stall should request one retry at high"
+        "xhigh stall should request one retry at the configured effort"
     );
 }
 
@@ -593,10 +593,10 @@ async fn test_gemini_3phase_oauth_fails_apikey_same_model_succeeds() {
 }
 
 /// Phase 1 (OAuth) and Phase 2 (API key, same model) both fail.
-/// Phase 3 (API key, flash model) succeeds.
-/// Verifies: model log shows [inherit, inherit, flash], API key injected on attempts 2,3.
+/// Phase 3 (API key, same configured model) succeeds.
+/// Verifies: model log always inherits, API key injected on attempts 2,3.
 #[tokio::test]
-async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
+async fn test_gemini_3phase_same_configured_model_succeeds_on_third_attempt() {
     let (_temp, mut env, model_log_path) = setup_fake_gemini_environment(3);
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "test-key-3phase".to_string());
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
@@ -608,7 +608,7 @@ async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
 
     let result = transport
         .execute_in(
-            "test 3phase all-fail-until-flash",
+            "test 3phase all-fail-until-third-attempt",
             std::path::Path::new("/tmp"),
             Some(&env),
             None,
@@ -618,7 +618,7 @@ async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
             super::ResolvedTimeout(None),
         )
         .await
-        .expect("execute_in should succeed on attempt 3 (API key, flash model)");
+        .expect("execute_in should succeed on attempt 3 with the configured model");
 
     assert_eq!(result.execution.exit_code, 0);
     assert!(
@@ -627,16 +627,16 @@ async fn test_gemini_3phase_all_oauth_and_apikey_same_fail_flash_succeeds() {
         result.execution.output
     );
 
-    // Model log: phase 1,2 keep original, phase 3 switches to flash
+    // Model log: every transport retry preserves the configured model.
     let models = read_model_log(&model_log_path);
     assert_eq!(
         models,
         vec![
             "inherit".to_string(),
             "inherit".to_string(),
-            "gemini-3-flash-preview".to_string(),
+            "inherit".to_string(),
         ],
-        "phase 3 should downgrade to flash model"
+        "transport retries must not switch models"
     );
 
     // Auth log: attempt 1 = oauth, attempts 2,3 = api_key
@@ -694,7 +694,7 @@ async fn test_gemini_3phase_all_fail_returns_last_error() {
         vec![
             "inherit".to_string(),
             "inherit".to_string(),
-            "gemini-3-flash-preview".to_string(),
+            "inherit".to_string(),
         ],
         "retry loop should execute all 3 phases before giving up"
     );

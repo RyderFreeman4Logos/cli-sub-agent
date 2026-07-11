@@ -1,5 +1,6 @@
-use super::{
-    MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
+use crate::pipeline::{
+    DispatchExecutor, MemoryInjectionOptions, ParentSessionSource, SessionCreationMode,
+    SessionExecutionResult,
 };
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
@@ -9,7 +10,6 @@ use crate::startup_env::StartupSubtreeEnv;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::Executor;
 use csa_lock::acquire_lock;
 use csa_session::get_session_dir;
 use std::{
@@ -57,8 +57,10 @@ pub(crate) use session_exec_api::execute_with_session_and_meta;
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]
-pub(crate) async fn execute_with_session_and_meta_with_parent_source(
-    executor: &Executor,
+pub(crate) async fn execute_with_session_and_meta_with_parent_source<
+    D: DispatchExecutor + ?Sized,
+>(
+    executor: &D,
     tool: &ToolName,
     prompt: &str,
     output_format: OutputFormat,
@@ -96,6 +98,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     cli_no_hook_bypass_scan: bool,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<SessionExecutionResult> {
+    let dispatch_executor = executor;
+    let executor = dispatch_executor.executor();
     let memory_project_key = resolve_memory_project_key(project_root, startup_env.project_root());
     let session_exec_bootstrap::SessionBootstrap {
         mut session,
@@ -274,6 +278,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         completion,
     } = runtime;
     let execution_start_time = completion.execution_start_time;
+    dispatch_executor.emit_catalog_warning();
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,
         &effective_prompt,

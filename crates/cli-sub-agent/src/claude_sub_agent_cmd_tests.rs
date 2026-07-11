@@ -118,6 +118,7 @@ fn resolve_model_spec_bypasses_tier_block_for_auto_selected_claude_sub_agent_too
             thinking: None, // thinking not needed for test
             config: Some(&cfg),
             global_config: Some(&global),
+            model_catalog: None,
             project_root: std::path::Path::new("/tmp/test-project"),
             force: false,
             force_override_user_config: false,

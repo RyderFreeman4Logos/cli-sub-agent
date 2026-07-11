@@ -12,6 +12,8 @@ pub(crate) mod config_session;
 mod config_tier_helpers;
 mod config_tiers;
 pub mod config_tool;
+mod configured_models;
+mod effective_config;
 pub mod gc;
 pub mod global;
 mod global_caller_hints;
@@ -48,6 +50,12 @@ pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use config_tool::{TransportKind, default_transport_for_tool};
+pub use csa_core::model_catalog::{
+    CatalogAdmission, CatalogErrorKind, CatalogLegalityError, CatalogLoadError, CatalogProvenance,
+    CatalogWarning, CatalogWarningKind, ConfiguredSpecError, EffectiveModelCatalog,
+    ReasoningEffort,
+};
+pub use effective_config::EffectiveConfig;
 pub use gc::GcConfig;
 pub use global::{
     AiConfigSymlinkCheckConfig, BudgetConfig, DEFAULT_CLAUDE_STATE_DIR, DEFAULT_CODEX_STATE_DIR,

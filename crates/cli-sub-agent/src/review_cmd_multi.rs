@@ -29,7 +29,7 @@ use super::prior_rounds::explicit_review_tool;
 use super::result_handling::{
     build_reviewer_outcome, build_unavailable_reviewer_outcome, reviewer_unavailable_error_reason,
 };
-use super::reviewers::resolve_multi_reviewer_pool;
+use super::reviewers::resolve_multi_reviewer_pool_with_catalog;
 use csa_session::ReviewDiffSize;
 use csa_session::state::ReviewSessionMeta;
 use std::path::Path;
@@ -60,6 +60,7 @@ pub(super) struct MultiReviewerReviewContext<'a> {
     pub project_root: &'a Path,
     pub config: &'a Option<ProjectConfig>,
     pub global_config: &'a GlobalConfig,
+    pub model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub review_routing: ReviewRoutingMetadata,
     pub diff_size: Option<&'a ReviewDiffSize>,
@@ -88,14 +89,17 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
     }
 
     let consensus_strategy = parse_consensus_strategy(&ctx.args.consensus)?;
-    let reviewer_pool = resolve_multi_reviewer_pool(
-        ctx.reviewers,
-        ctx.selected_reviewer_tools.as_deref(),
-        explicit_review_tool(ctx.args),
-        ctx.tool,
+    let reviewer_pool = resolve_multi_reviewer_pool_with_catalog(
+        super::reviewers::MultiReviewerRequest {
+            reviewers: ctx.reviewers,
+            selected_reviewer_tools: ctx.selected_reviewer_tools.as_deref(),
+            explicit_tool: explicit_review_tool(ctx.args),
+            primary_tool: ctx.tool,
+        },
         ctx.resolved_tier_name.as_deref(),
         ctx.config.as_ref(),
         ctx.global_config,
+        ctx.model_catalog,
     )?;
     let reviewer_tools = reviewer_pool.reviewer_tools;
     let reviewer_tool_plan = reviewer_tools.clone();
@@ -128,6 +132,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         let reviewer_project_root = ctx.project_root.to_path_buf();
         let reviewer_config = ctx.config.as_ref().cloned();
         let reviewer_global = ctx.global_config.clone();
+        let reviewer_model_catalog = ctx.model_catalog.clone();
         let reviewer_pre_session_hook = ctx.pre_session_hook.clone();
         let reviewer_description = format!(
             "review[{}]: {}",
@@ -191,6 +196,7 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
                 &reviewer_project_root,
                 reviewer_config.as_ref(),
                 &reviewer_global,
+                &reviewer_model_catalog,
                 reviewer_pre_session_hook,
                 reviewer_routing,
                 stream_mode,
@@ -368,118 +374,9 @@ fn parent_startup_env_for_multi_review(
     Ok(startup_env.clone())
 }
 
-pub(super) fn warn_if_fast_mode_has_no_codex_reviewer(
-    fast_but_more_cost: bool,
-    reviewer_tools: &[ToolName],
-    tier_reviewer_specs: &[crate::run_helpers::TierToolResolution],
-) {
-    if fast_but_more_cost
-        && !reviewer_tools.contains(&ToolName::Codex)
-        && !tier_reviewer_specs
-            .iter()
-            .any(|resolution| resolution.tool == ToolName::Codex)
-    {
-        eprintln!(
-            "warning: --fast-but-more-cost only affects codex; no codex review attempt is in the resolved candidate set."
-        );
-    }
-}
-
-fn consensus_response_from_outcome(outcome: &ReviewerOutcome) -> AgentResponse {
-    AgentResponse {
-        agent: format!(
-            "reviewer-{}:{}",
-            outcome.reviewer_index + 1,
-            outcome.tool.as_str()
-        ),
-        content: outcome.verdict.to_string(),
-        weight: 1.0,
-        timed_out: !outcome.produced_usable_verdict(),
-    }
-}
-
-fn consensus_outcomes_for_final_verdict(outcomes: &[ReviewerOutcome]) -> Vec<&ReviewerOutcome> {
-    let has_usable_verdict = outcomes
-        .iter()
-        .any(ReviewerOutcome::produced_usable_verdict);
-    outcomes
-        .iter()
-        .filter(|outcome| !(has_usable_verdict && outcome_has_permanent_quota_unavailable(outcome)))
-        .collect()
-}
-
-fn permanent_quota_unavailable_reviewer_indices(outcomes: &[ReviewerOutcome]) -> Vec<usize> {
-    let has_usable_verdict = outcomes
-        .iter()
-        .any(ReviewerOutcome::produced_usable_verdict);
-    if !has_usable_verdict {
-        return Vec::new();
-    }
-    outcomes
-        .iter()
-        .filter(|outcome| outcome_has_permanent_quota_unavailable(outcome))
-        .map(|outcome| outcome.reviewer_index)
-        .collect()
-}
-
-fn outcome_has_permanent_quota_unavailable(outcome: &ReviewerOutcome) -> bool {
-    permanent_quota_unavailable_fallback_attempt(outcome).is_some()
-}
-
-fn permanent_quota_unavailable_fallback_chain(
-    outcomes: &[ReviewerOutcome],
-) -> Vec<FallbackAttempt> {
-    let has_usable_verdict = outcomes
-        .iter()
-        .any(ReviewerOutcome::produced_usable_verdict);
-    if !has_usable_verdict {
-        return Vec::new();
-    }
-    outcomes
-        .iter()
-        .filter_map(permanent_quota_unavailable_fallback_attempt)
-        .collect()
-}
-
-fn permanent_quota_unavailable_fallback_attempt(
-    outcome: &ReviewerOutcome,
-) -> Option<FallbackAttempt> {
-    let diagnostic = outcome.diagnostic.as_deref()?;
-    let kind = FailoverSkipKind::classify(diagnostic);
-    (outcome.verdict == UNAVAILABLE && kind.is_quota()).then(|| FallbackAttempt {
-        tool: outcome.tool.as_str().to_string(),
-        model_spec: None,
-        skip_reason: kind.category().to_string(),
-        quota_exhausted: true,
-        timestamp: chrono::Utc::now(),
-    })
-}
-
-fn persist_excluded_reviewer_routing(
-    project_root: &Path,
-    review_routing: &ReviewRoutingMetadata,
-    outcomes: &[ReviewerOutcome],
-    fallback_chain: &[FallbackAttempt],
-) {
-    if fallback_chain.is_empty() {
-        return;
-    }
-    for outcome in outcomes
-        .iter()
-        .filter(|outcome| outcome.produced_usable_verdict())
-    {
-        persist_review_routing_artifact_with_fallback_chain(
-            project_root,
-            &outcome.session_id,
-            review_routing,
-            fallback_chain,
-        );
-    }
-}
-
-fn multi_reviewer_exit_code(final_verdict: &str) -> i32 {
-    if final_verdict == CLEAN { 0 } else { 1 }
-}
+#[path = "review_cmd_multi_helpers.rs"]
+mod helpers;
+use helpers::*;
 
 pub(super) async fn collect_reviewer_outcomes(
     join_set: &mut JoinSet<Result<ReviewerOutcome>>,

@@ -30,14 +30,18 @@ impl GlobalConfig {
     /// Returns `Default` if the file does not exist or if the config
     /// directory cannot be determined (e.g., no HOME in containers).
     pub fn load() -> Result<Self> {
-        let path = match paths::config_dir() {
-            Some(dir) => dir.join("config.toml"),
-            None => return Ok(Self::default()),
+        let path = paths::config_dir().map(|dir| dir.join("config.toml"));
+        Self::load_from_path(path.as_deref())
+    }
+
+    pub(crate) fn load_from_path(path: Option<&Path>) -> Result<Self> {
+        let Some(path) = path else {
+            return Ok(Self::default());
         };
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(&path)
+        let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read global config: {}", path.display()))?;
         if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             crate::validate::reject_removed_gemini_cli_in_raw_config(
@@ -48,7 +52,7 @@ impl GlobalConfig {
         }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse global config: {}", path.display()))?;
-        Ok(config.sanitized(Some(&path)))
+        Ok(config.sanitized(Some(path)))
     }
 
     /// Resolve the `csa session wait` fallback TTL from the global config.

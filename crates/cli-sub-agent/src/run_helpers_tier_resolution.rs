@@ -1,5 +1,5 @@
 use anyhow::Result;
-use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
+use csa_config::{EffectiveModelCatalog, ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{ModelSpec, model_spec::ModelSpecValidationError};
 use tracing::warn;
@@ -23,24 +23,17 @@ pub(crate) struct TierToolResolution {
 /// `skip_specs` (already-attempted models in the current failover) are dropped
 /// from both halves: they are tracked as attempt failures elsewhere, so
 /// recording them here too would double-count them in the chain.
-pub(crate) fn evaluate_tier_models(
-    tier_name: &str,
-    config: &ProjectConfig,
-    skip_specs: &[String],
-) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
-    evaluate_tier_models_with_global_config(tier_name, config, None, skip_specs)
-}
-
-pub(crate) fn evaluate_tier_models_with_global_config(
+pub(crate) fn evaluate_tier_models_with_catalog(
     tier_name: &str,
     config: &ProjectConfig,
     global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
     skip_specs: &[String],
-) -> (Vec<TierToolResolution>, Vec<TierModelExclusion>) {
+) -> Result<(Vec<TierToolResolution>, Vec<TierModelExclusion>)> {
     let mut included = Vec::new();
     let mut excluded = Vec::new();
     let Some(tier) = config.tiers.get(tier_name) else {
-        return (included, excluded);
+        return Ok((included, excluded));
     };
 
     for spec in &tier.models {
@@ -65,7 +58,8 @@ pub(crate) fn evaluate_tier_models_with_global_config(
             });
             continue;
         };
-        if let Err(kind) = validate_tier_model_spec_compatibility(spec) {
+        reject_disabled_tier_model_spec(spec, catalog)?;
+        if let Err(kind) = validate_tier_model_spec_compatibility_with_catalog(spec, catalog) {
             excluded.push(TierModelExclusion {
                 model_spec: spec.clone(),
                 tool: Some(tool),
@@ -110,49 +104,99 @@ pub(crate) fn evaluate_tier_models_with_global_config(
         });
     }
 
-    (included, excluded)
+    Ok((included, excluded))
 }
 
-pub(crate) fn validate_tier_model_spec_compatibility(
+fn reject_disabled_tier_model_spec(spec: &str, catalog: &EffectiveModelCatalog) -> Result<()> {
+    let Ok(parsed) = ModelSpec::parse(spec) else {
+        return Ok(());
+    };
+    let known_tools: Vec<&'static str> = csa_config::global::all_known_tools()
+        .iter()
+        .map(|tool| tool.as_str())
+        .collect();
+    if let Err(error @ ModelSpecValidationError::DisabledModel { .. }) =
+        parsed.validate_with_catalog(catalog, &known_tools)
+    {
+        anyhow::bail!("tier model '{spec}' is tombstoned and cannot be skipped: {error}");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_tier_model_spec_compatibility_with_catalog(
     spec: &str,
+    catalog: &EffectiveModelCatalog,
 ) -> std::result::Result<(), FailoverSkipKind> {
     let parsed = ModelSpec::parse(spec).map_err(|_| FailoverSkipKind::MalformedSpec)?;
     let known_tools: Vec<&'static str> = csa_config::global::all_known_tools()
         .iter()
         .map(|tool| tool.as_str())
         .collect();
-    match parsed.validate_with_catalog(&known_tools) {
-        Ok(()) => Ok(()),
+    match parsed.validate_with_catalog(catalog, &known_tools) {
+        Ok(_) => Ok(()),
         Err(ModelSpecValidationError::UnknownProvider { .. })
-        | Err(ModelSpecValidationError::UnknownModel { .. }) => {
+        | Err(ModelSpecValidationError::UnknownModel { .. })
+        | Err(ModelSpecValidationError::DisabledModel { .. })
+        | Err(ModelSpecValidationError::UnsupportedReasoningEffort { .. })
+        | Err(ModelSpecValidationError::UnsupportedCustomReasoning { .. }) => {
             Err(FailoverSkipKind::IncompatibleModel)
         }
-        Err(ModelSpecValidationError::UnknownTool { .. }) => Err(FailoverSkipKind::MalformedSpec),
+        Err(ModelSpecValidationError::UnknownTool { .. })
+        | Err(ModelSpecValidationError::MalformedIdentity { .. }) => {
+            Err(FailoverSkipKind::MalformedSpec)
+        }
     }
 }
 
 /// Available tier models in definition order. Thin wrapper over
-/// [`evaluate_tier_models`] that discards exclusion bookkeeping; behaviour is
+/// [`evaluate_tier_models_with_catalog`] that discards exclusion bookkeeping; behaviour is
 /// identical to the pre-#1714 filter.
+pub(crate) fn collect_available_tier_models_with_catalog(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
+    skip_specs: &[String],
+) -> Result<Vec<TierToolResolution>> {
+    Ok(evaluate_tier_models_with_catalog(tier_name, config, global_config, catalog, skip_specs)?.0)
+}
+
+/// Available tier models using the shipped catalog for compatibility callers.
+#[cfg(test)]
 pub(crate) fn collect_available_tier_models_with_global_config(
     tier_name: &str,
     config: &ProjectConfig,
     global_config: Option<&GlobalConfig>,
     skip_specs: &[String],
 ) -> Vec<TierToolResolution> {
-    evaluate_tier_models_with_global_config(tier_name, config, global_config, skip_specs).0
+    let catalog = EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    collect_available_tier_models_with_catalog(
+        tier_name,
+        config,
+        global_config,
+        &catalog,
+        skip_specs,
+    )
+    .expect("shipped tier candidates must not contain tombstoned models")
 }
 
-pub(crate) fn resolve_runtime_available_tier_fallback_with_global_config(
+pub(crate) fn resolve_runtime_available_tier_fallback_with_catalog(
     config: &ProjectConfig,
     global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
     task_type: &str,
     needs_edit: bool,
-) -> Option<TierToolResolution> {
-    let tier_name = config.resolve_tier_name_for_task(task_type)?;
-    collect_available_tier_models_with_global_config(tier_name, config, global_config, &[])
-        .into_iter()
-        .find(|resolution| !needs_edit || config.is_tool_write_capable(resolution.tool.as_str()))
+) -> Result<Option<TierToolResolution>> {
+    let Some(tier_name) = config.resolve_tier_name_for_task(task_type) else {
+        return Ok(None);
+    };
+    Ok(
+        collect_available_tier_models_with_catalog(tier_name, config, global_config, catalog, &[])?
+            .into_iter()
+            .find(|resolution| {
+                !needs_edit || config.is_tool_write_capable(resolution.tool.as_str())
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -171,6 +215,7 @@ pub(crate) fn collect_preferred_tier_models(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn collect_preferred_tier_models_with_global_config(
     tier_name: &str,
     config: &ProjectConfig,
@@ -184,6 +229,36 @@ pub(crate) fn collect_preferred_tier_models_with_global_config(
         global_config,
         skip_specs,
     );
+    order_preferred_models(tier_name, available, preference_order)
+}
+
+pub(crate) fn collect_preferred_tier_models_with_catalog(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Result<Vec<TierToolResolution>> {
+    let available = collect_available_tier_models_with_catalog(
+        tier_name,
+        config,
+        global_config,
+        catalog,
+        skip_specs,
+    )?;
+    Ok(order_preferred_models(
+        tier_name,
+        available,
+        preference_order,
+    ))
+}
+
+fn order_preferred_models(
+    tier_name: &str,
+    available: Vec<TierToolResolution>,
+    preference_order: &[String],
+) -> Vec<TierToolResolution> {
     if preference_order.is_empty() {
         return available;
     }
@@ -251,10 +326,32 @@ pub(crate) fn resolve_preferred_tool_from_tier(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_preferred_tool_from_tier_with_global_config(
     tier_name: &str,
     config: &ProjectConfig,
     global_config: Option<&GlobalConfig>,
+    parent_tool: Option<&str>,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Result<TierToolResolution> {
+    let catalog = EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    resolve_preferred_tool_from_tier_with_catalog(
+        tier_name,
+        config,
+        global_config,
+        &catalog,
+        parent_tool,
+        preference_order,
+        skip_specs,
+    )
+}
+
+pub(crate) fn resolve_preferred_tool_from_tier_with_catalog(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
     parent_tool: Option<&str>,
     preference_order: &[String],
     skip_specs: &[String],
@@ -274,7 +371,7 @@ pub(crate) fn resolve_preferred_tool_from_tier_with_global_config(
         }
     }
     let (available, excluded) =
-        evaluate_tier_models_with_global_config(tier_name, config, global_config, skip_specs);
+        evaluate_tier_models_with_catalog(tier_name, config, global_config, catalog, skip_specs)?;
 
     // #1836: a `--tool` pin that names a disabled tier candidate must fail
     // fast. Honoring the pin is impossible (the tool is gated off), so error
@@ -316,14 +413,15 @@ pub(crate) fn resolve_preferred_tool_from_tier_with_global_config(
         }
     }
 
-    if let Some(resolution) = resolve_tool_from_tier_with_global_config(
+    if let Some(resolution) = resolve_tool_from_tier_with_catalog(
         tier_name,
         config,
         global_config,
+        catalog,
         parent_tool,
         preference_order,
         skip_specs,
-    ) {
+    )? {
         return Ok(resolution);
     }
 
@@ -386,6 +484,7 @@ pub(crate) fn resolve_tool_from_tier(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_tool_from_tier_with_global_config(
     tier_name: &str,
     config: &ProjectConfig,
@@ -394,30 +493,53 @@ pub(crate) fn resolve_tool_from_tier_with_global_config(
     preference_order: &[String],
     skip_specs: &[String],
 ) -> Option<TierToolResolution> {
-    let parent_family = parent_tool
-        .and_then(|p| parse_tool_name(p).ok())
-        .map(|t| t.model_family());
-    let available = collect_preferred_tier_models_with_global_config(
+    let catalog = EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    resolve_tool_from_tier_with_catalog(
         tier_name,
         config,
         global_config,
+        &catalog,
+        parent_tool,
         preference_order,
         skip_specs,
-    );
+    )
+    .expect("shipped tier candidates must not contain tombstoned models")
+}
+
+pub(crate) fn resolve_tool_from_tier_with_catalog(
+    tier_name: &str,
+    config: &ProjectConfig,
+    global_config: Option<&GlobalConfig>,
+    catalog: &EffectiveModelCatalog,
+    parent_tool: Option<&str>,
+    preference_order: &[String],
+    skip_specs: &[String],
+) -> Result<Option<TierToolResolution>> {
+    let parent_family = parent_tool
+        .and_then(|p| parse_tool_name(p).ok())
+        .map(|t| t.model_family());
+    let available = collect_preferred_tier_models_with_catalog(
+        tier_name,
+        config,
+        global_config,
+        catalog,
+        preference_order,
+        skip_specs,
+    )?;
     if available.is_empty() {
-        return None;
+        return Ok(None);
     }
     if !preference_order.is_empty() {
-        return Some(available[0].clone());
+        return Ok(Some(available[0].clone()));
     }
     if let Some(parent_fam) = parent_family
         && let Some(resolution) = available
             .iter()
             .find(|resolution| resolution.tool.model_family() != parent_fam)
     {
-        return Some(resolution.clone());
+        return Ok(Some(resolution.clone()));
     }
-    Some(available[0].clone())
+    Ok(Some(available[0].clone()))
 }
 
 #[cfg(test)]

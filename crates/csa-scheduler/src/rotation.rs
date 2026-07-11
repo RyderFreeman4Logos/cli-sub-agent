@@ -3,9 +3,9 @@
 //! State is persisted in `{project_state}/rotation.toml` and protected by
 //! a blocking `flock` (rotation decisions are fast, so blocking is fine).
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use csa_config::{ProjectConfig, TierStrategy};
+use csa_config::{EffectiveModelCatalog, ProjectConfig, TierStrategy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -40,8 +40,20 @@ pub struct RotationState {
 /// (either `allow_edit_existing_files = false` or `allow_write_new_files = false`).
 /// Returns `Err` when `needs_edit` is true and all enabled tools in the tier have
 /// write restrictions — the caller should surface this as a hard error.
-pub fn resolve_tier_tool_rotated(
+#[cfg(test)]
+fn resolve_tier_tool_rotated(
     config: &ProjectConfig,
+    task_type: &str,
+    project_root: &Path,
+    needs_edit: bool,
+) -> Result<Option<(String, String)>> {
+    let catalog = EffectiveModelCatalog::shipped()?;
+    resolve_tier_tool_rotated_with_catalog(config, &catalog, task_type, project_root, needs_edit)
+}
+
+pub fn resolve_tier_tool_rotated_with_catalog(
+    config: &ProjectConfig,
+    catalog: &EffectiveModelCatalog,
     task_type: &str,
     project_root: &Path,
     needs_edit: bool,
@@ -63,25 +75,34 @@ pub fn resolve_tier_tool_rotated(
     }
 
     // 3. Build list of eligible (index, tool_name, model_spec) entries
-    let eligible: Vec<(usize, String, String)> = tier
-        .models
-        .iter()
-        .enumerate()
-        .filter_map(|(i, spec)| {
-            let tool_name = spec.split('/').next()?;
-            // Skip disabled tools
-            if !config.is_tool_enabled(tool_name) {
-                return None;
+    let mut eligible: Vec<(usize, String, String)> = Vec::new();
+    for (index, spec) in tier.models.iter().enumerate() {
+        let parts: Vec<&str> = spec.split('/').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+        match catalog.validate_parts(parts[0], parts[1], parts[2], parts[3]) {
+            Ok(_) => {}
+            Err(error)
+                if error.kind() == csa_core::model_catalog::CatalogErrorKind::DisabledModel =>
+            {
+                bail!("tier model '{spec}' is tombstoned and cannot be skipped: {error}");
             }
-            // Skip tools that are not fully write-capable when writing is needed.
-            // A tool must have both allow_edit_existing_files and allow_write_new_files
-            // set to true (or absent) to qualify for csa run races.
-            if needs_edit && !config.is_tool_write_capable(tool_name) {
-                return None;
-            }
-            Some((i, tool_name.to_string(), spec.clone()))
-        })
-        .collect();
+            Err(_) => continue,
+        }
+        let tool_name = parts[0];
+        // Skip disabled tools
+        if !config.is_tool_enabled(tool_name) {
+            continue;
+        }
+        // Skip tools that are not fully write-capable when writing is needed.
+        // A tool must have both allow_edit_existing_files and allow_write_new_files
+        // set to true (or absent) to qualify for csa run races.
+        if needs_edit && !config.is_tool_write_capable(tool_name) {
+            continue;
+        }
+        eligible.push((index, tool_name.to_string(), spec.clone()));
+    }
 
     if eligible.is_empty() {
         // When needs_edit is true and there are enabled tools that were filtered
@@ -493,6 +514,45 @@ mod tests {
 
         assert_eq!(eligible.len(), 1);
         assert_eq!(eligible[0].1, "codex");
+    }
+
+    #[test]
+    fn effective_catalog_filters_rejected_spec_before_rotation() {
+        let temp = tempdir().unwrap();
+        let config = make_config_with_strategy(
+            vec![
+                "codex/openai/not-declared/high",
+                "codex/openai/config-only-fake/high",
+            ],
+            vec![],
+            TierStrategy::Priority,
+        );
+        let catalog = EffectiveModelCatalog::from_toml_str(
+            r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "config-only-fake"
+reasoning_efforts = ["high"]
+"#,
+            "scheduler-test",
+        )
+        .unwrap();
+
+        let selected = resolve_tier_tool_rotated_with_catalog(
+            &config,
+            &catalog,
+            "default",
+            temp.path(),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.1, "codex/openai/config-only-fake/high");
     }
 }
 

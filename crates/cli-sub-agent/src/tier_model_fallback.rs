@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{FallbackAttempt, ToolName};
 use csa_scheduler::RateLimitDetected;
@@ -22,6 +23,11 @@ pub(crate) struct TierAttemptFailure {
     pub(crate) quota_exhausted: Option<bool>,
 }
 
+pub(crate) struct TierFallbackOptions<'a> {
+    pub(crate) enabled: bool,
+    pub(crate) preference_order: &'a [String],
+}
+
 impl TierAttemptFailure {
     /// Construct from a runtime [`RateLimitDetected`], capturing the scheduler's
     /// authoritative `quota_exhausted` flag alongside the normalized reason.
@@ -34,6 +40,7 @@ impl TierAttemptFailure {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn ordered_tier_candidates(
     initial_tool: ToolName,
     initial_model_spec: Option<&str>,
@@ -43,29 +50,68 @@ pub(crate) fn ordered_tier_candidates(
     tier_fallback_enabled: bool,
     tier_preference_order: &[String],
 ) -> Vec<(ToolName, Option<String>)> {
-    if !tier_fallback_enabled {
-        return vec![(initial_tool, initial_model_spec.map(str::to_string))];
+    let catalog =
+        csa_config::EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    ordered_tier_candidates_with_catalog(
+        initial_tool,
+        initial_model_spec,
+        tier_name,
+        config,
+        global_config,
+        &catalog,
+        TierFallbackOptions {
+            enabled: tier_fallback_enabled,
+            preference_order: tier_preference_order,
+        },
+    )
+    .expect("shipped catalog must admit built-in tier candidates")
+}
+
+pub(crate) fn ordered_tier_candidates_with_catalog(
+    initial_tool: ToolName,
+    initial_model_spec: Option<&str>,
+    tier_name: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: Option<&GlobalConfig>,
+    catalog: &csa_config::EffectiveModelCatalog,
+    options: TierFallbackOptions<'_>,
+) -> Result<Vec<(ToolName, Option<String>)>> {
+    if !options.enabled {
+        return Ok(vec![(initial_tool, initial_model_spec.map(str::to_string))]);
     }
 
     let Some(tier_name) = tier_name else {
-        return ordered_global_candidates(initial_tool, initial_model_spec, config, global_config);
+        let candidates =
+            ordered_global_candidates(initial_tool, initial_model_spec, config, global_config);
+        if candidates.is_empty() {
+            bail!("global routing has no admissible model candidates");
+        }
+        return Ok(candidates);
     };
     let Some(cfg) = config else {
-        return vec![(initial_tool, initial_model_spec.map(str::to_string))];
+        return Ok(vec![(initial_tool, initial_model_spec.map(str::to_string))]);
     };
 
     let mut ordered = Vec::new();
     if let Some(spec) = initial_model_spec {
-        ordered.push((initial_tool, Some(spec.to_string())));
+        let parts: Vec<&str> = spec.split('/').collect();
+        if parts.len() == 4
+            && catalog
+                .validate_parts(parts[0], parts[1], parts[2], parts[3])
+                .is_ok()
+        {
+            ordered.push((initial_tool, Some(spec.to_string())));
+        }
     }
 
-    for resolution in crate::run_helpers::collect_preferred_tier_models_with_global_config(
+    for resolution in crate::run_helpers::collect_preferred_tier_models_with_catalog(
         tier_name,
         cfg,
         global_config,
-        tier_preference_order,
+        catalog,
+        options.preference_order,
         &[],
-    ) {
+    )? {
         if ordered.iter().any(|(_, existing_spec)| {
             existing_spec.as_deref() == Some(resolution.model_spec.as_str())
         }) {
@@ -75,10 +121,12 @@ pub(crate) fn ordered_tier_candidates(
     }
 
     if ordered.is_empty() {
-        ordered.push((initial_tool, initial_model_spec.map(str::to_string)));
+        bail!(
+            "tier '{tier_name}' has no admissible model candidates in the effective model catalog"
+        );
     }
 
-    ordered
+    Ok(ordered)
 }
 
 /// Build the persisted per-tool failover chain for a tier result.
@@ -91,8 +139,29 @@ pub(crate) fn ordered_tier_candidates(
 /// actual preference-aware execution order, so a first-choice success does not
 /// falsely persist later, never-reached tier models as skips (#1714, #1749).
 /// Pass `None` on the all-models-failed path (no winner) to keep the full chain.
+#[cfg(test)]
 pub(crate) fn build_fallback_chain_for_result(
     project_config: Option<&ProjectConfig>,
+    tier_name: Option<&str>,
+    failures: &[TierAttemptFailure],
+    selected_model_spec: Option<&str>,
+    tier_preference_order: &[String],
+) -> Vec<FallbackAttempt> {
+    let catalog =
+        csa_config::EffectiveModelCatalog::shipped().expect("shipped model catalog must be valid");
+    build_fallback_chain_for_result_with_catalog(
+        project_config,
+        &catalog,
+        tier_name,
+        failures,
+        selected_model_spec,
+        tier_preference_order,
+    )
+}
+
+pub(crate) fn build_fallback_chain_for_result_with_catalog(
+    project_config: Option<&ProjectConfig>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     tier_name: Option<&str>,
     failures: &[TierAttemptFailure],
     selected_model_spec: Option<&str>,
@@ -107,7 +176,17 @@ pub(crate) fn build_fallback_chain_for_result(
         _ => Vec::new(),
     };
     let exclusions = match (tier_name, project_config) {
-        (Some(name), Some(cfg)) => crate::run_helpers::evaluate_tier_models(name, cfg, &[]).1,
+        (Some(name), Some(cfg)) => {
+            crate::run_helpers::evaluate_tier_models_with_catalog(
+                name,
+                cfg,
+                None,
+                model_catalog,
+                &[],
+            )
+            .expect("executed tier must already have rejected tombstoned candidates")
+            .1
+        }
         _ => Vec::new(),
     };
     let attempt_failures: Vec<crate::failover_trace::AttemptFailure> = failures

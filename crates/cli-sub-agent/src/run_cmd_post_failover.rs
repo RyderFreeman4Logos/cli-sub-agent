@@ -104,8 +104,17 @@ pub(crate) fn evaluate_rate_limit_failover(
     evaluate_rate_limit_failover_with_global_config(request)
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_rate_limit_failover_with_global_config(
     request: RateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let catalog = test_catalog_for_config(request.config)?;
+    evaluate_rate_limit_failover_with_catalog(request, &catalog)
+}
+
+pub(crate) fn evaluate_rate_limit_failover_with_catalog(
+    request: RateLimitFailoverRequest<'_>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> Result<RateLimitAction> {
     let RateLimitFailoverRequest {
         tool_name_str,
@@ -229,6 +238,7 @@ pub(crate) fn evaluate_rate_limit_failover_with_global_config(
             exhausted_providers: &exhausted_providers,
             config: cfg,
             global_config,
+            model_catalog,
             original_error: &rate_limit.matched_pattern,
         },
         FailoverAvailabilityState {
@@ -326,8 +336,49 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     evaluate_error_rate_limit_failover_with_global_config(request)
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_error_rate_limit_failover_with_global_config(
     request: ErrorRateLimitFailoverRequest<'_>,
+) -> Result<RateLimitAction> {
+    let catalog = test_catalog_for_config(request.config)?;
+    evaluate_error_rate_limit_failover_with_catalog(request, &catalog)
+}
+
+#[cfg(test)]
+fn test_catalog_for_config(
+    config: Option<&ProjectConfig>,
+) -> Result<csa_config::EffectiveModelCatalog> {
+    let mut catalog = csa_config::EffectiveModelCatalog::shipped()?;
+    let Some(config) = config else {
+        return Ok(catalog);
+    };
+
+    for (tier_name, tier) in &config.tiers {
+        for (index, raw_spec) in tier.models.iter().enumerate() {
+            let spec = csa_executor::ModelSpec::parse(raw_spec)?;
+            let reasoning = raw_spec
+                .rsplit_once('/')
+                .map(|(_, reasoning)| reasoning)
+                .expect("validated model spec has a reasoning segment");
+            catalog.register_configured_spec(
+                &spec.tool,
+                &spec.provider,
+                &spec.model,
+                reasoning,
+                csa_config::CatalogProvenance::Inline {
+                    source: "failover test config".to_string(),
+                    key: format!("tiers.{tier_name}.models[{index}]"),
+                },
+            )?;
+        }
+    }
+
+    Ok(catalog)
+}
+
+pub(crate) fn evaluate_error_rate_limit_failover_with_catalog(
+    request: ErrorRateLimitFailoverRequest<'_>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> Result<RateLimitAction> {
     let ErrorRateLimitFailoverRequest {
         tool_name_str,
@@ -485,6 +536,7 @@ pub(crate) fn evaluate_error_rate_limit_failover_with_global_config(
             exhausted_providers: &exhausted_providers,
             config: cfg,
             global_config,
+            model_catalog,
             original_error: &failover_signal.matched_pattern,
         },
         FailoverAvailabilityState {

@@ -227,11 +227,11 @@ impl Transport for LegacyTransport {
                     result,
                     codex_timeout,
                     |retry_budget| async move {
-                        let mut downgraded_executor = retry_executor;
-                        downgraded_executor.override_thinking_budget(retry_budget);
+                        let mut retry_executor = retry_executor;
+                        retry_executor.override_thinking_budget(retry_budget);
                         let retry_result = self
                             .execute_single_attempt(
-                                &downgraded_executor,
+                                &retry_executor,
                                 prompt,
                                 tool_state,
                                 session,
@@ -244,7 +244,7 @@ impl Transport for LegacyTransport {
                                 retry_options,
                             )
                             .await?;
-                        Ok((downgraded_executor, retry_result))
+                        Ok((retry_executor, retry_result))
                     },
                 )
                 .await?;
@@ -465,11 +465,11 @@ impl LegacyTransport {
                 result,
                 direct_timeout,
                 |retry_budget| async move {
-                    let mut downgraded_executor = retry_executor;
-                    downgraded_executor.override_thinking_budget(retry_budget);
+                    let mut retry_executor = retry_executor;
+                    retry_executor.override_thinking_budget(retry_budget);
                     let retry_result = self
                         .execute_in_single_attempt(ExecuteInAttempt {
-                            executor: &downgraded_executor,
+                            executor: &retry_executor,
                             prompt,
                             work_dir,
                             extra_env: Some(&prepared_attempt_env),
@@ -480,7 +480,7 @@ impl LegacyTransport {
                             resolved_initial_response_timeout: initial_response_timeout,
                         })
                         .await?;
-                    Ok((downgraded_executor, retry_result))
+                    Ok((retry_executor, retry_result))
                 },
             )
             .await?;

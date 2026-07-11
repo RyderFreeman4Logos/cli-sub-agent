@@ -23,8 +23,5 @@ pub(crate) fn reject_removed_refs(raw: &toml::Value, path: &Path, label: &str) -
 }
 
 pub(crate) fn prune_project_removed_refs(raw: &mut toml::Value, path: &Path) -> usize {
-    crate::project_prune::prune_removed_or_catalog_stale_project_refs_in_raw_config(
-        raw,
-        &path.display().to_string(),
-    )
+    crate::project_prune::prune_removed_project_refs_in_raw_config(raw, &path.display().to_string())
 }
