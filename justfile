@@ -271,19 +271,39 @@ review:
     @echo ""
     @echo "Review the above before committing."
 
-# Reviewed push: run csa review --range base...HEAD, then push, create/reuse PR,
-# and synchronously trigger the post-create review transaction.
-push-reviewed base="main":
+# Reviewed push: run csa review against one captured commit, then push that exact
+# commit, create/reuse PR, and synchronously trigger the post-create transaction.
+push-reviewed base="main" expected_head="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{base}}" != "main" ]; then
         echo "ERROR: push-reviewed currently supports base=main only."
         exit 1
     fi
-    echo "=== Pre-push review: csa review --sa-mode false --range {{base}}...HEAD ==="
-    csa review --sa-mode false --range "{{base}}...HEAD"
-    echo "=== Review passed. Pushing... ==="
-    git push -u origin HEAD
+    review_head="$(git rev-parse HEAD)"
+    current_branch="$(git symbolic-ref --quiet --short HEAD)" || {
+        echo "ERROR: push-reviewed requires an attached feature branch." >&2
+        exit 1
+    }
+    if [ -n "{{expected_head}}" ] && [ "${review_head}" != "{{expected_head}}" ]; then
+        echo "ERROR: HEAD changed before review: expected {{expected_head}}, found ${review_head}." >&2
+        exit 1
+    fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "ERROR: push-reviewed requires a clean tracked worktree." >&2
+        exit 1
+    fi
+    echo "=== Pre-push review: csa review --sa-mode false --range {{base}}...${review_head} ==="
+    csa review --sa-mode false --range "{{base}}...${review_head}"
+    if [ "$(git rev-parse HEAD)" != "${review_head}" ] \
+        || ! git diff --quiet \
+        || ! git diff --cached --quiet; then
+        echo "ERROR: HEAD or tracked files changed during review; refusing to push." >&2
+        exit 1
+    fi
+    echo "=== Review passed. Pushing captured commit ${review_head}... ==="
+    git push origin "${review_head}:refs/heads/${current_branch}"
+    git branch --set-upstream-to="origin/${current_branch}" "${current_branch}"
     echo "=== Creating or reusing PR targeting {{base}}... ==="
     set +e
     CREATE_OUTPUT="$(gh pr create --base "{{base}}" 2>&1)"
@@ -298,7 +318,7 @@ push-reviewed base="main":
     fi
     scripts/hooks/post-pr-create.sh --base "{{base}}"
 
-# Exact-head reviewed push: rebuild csa from the current checkout, force all
+# Exact-head reviewed push: rebuild csa from one captured checkout, force all
 # nested workflow calls to resolve that binary, then reuse push-reviewed.
 push-reviewed-exact base="main":
     #!/usr/bin/env bash
@@ -308,7 +328,14 @@ push-reviewed-exact base="main":
         echo "Commit or stash tracked changes, then retry." >&2
         exit 1
     fi
+    exact_head="$(git rev-parse HEAD)"
     {{_cargo}} build --release --locked -p cli-sub-agent -p weave
+    if [ "$(git rev-parse HEAD)" != "${exact_head}" ] \
+        || ! git diff --quiet \
+        || ! git diff --cached --quiet; then
+        echo "ERROR: HEAD or tracked files changed during exact-head build; refusing to continue." >&2
+        exit 1
+    fi
     exact_csa="{{_repo_root}}/target/release/csa"
     exact_weave="{{_repo_root}}/target/release/weave"
     for binary in "${exact_csa}" "${exact_weave}"; do
@@ -325,10 +352,10 @@ push-reviewed-exact base="main":
         echo "ERROR: expected csa=${exact_csa} and weave=${exact_weave}; resolved csa=${resolved_csa}, weave=${resolved_weave}." >&2
         exit 1
     fi
-    echo "=== Exact-head binaries: ${resolved_csa}, ${resolved_weave} ==="
+    echo "=== Exact-head binaries for ${exact_head}: ${resolved_csa}, ${resolved_weave} ==="
     csa --version
     weave --version
-    just push-reviewed "{{base}}"
+    just push-reviewed "{{base}}" "${exact_head}"
 
 # Push to all submodules and the main repo (useful for monorepos).
 git-push-all:
