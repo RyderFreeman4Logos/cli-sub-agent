@@ -385,7 +385,7 @@ pub(crate) fn process_state(pid: u32) -> Option<char> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn process_state(_pid: u32) -> Option<char> {
+pub(crate) fn process_state(_pid: u32) -> Option<char> {
     None
 }
 

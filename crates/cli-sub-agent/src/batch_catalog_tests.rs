@@ -307,6 +307,10 @@ model = "future"
 async fn batch_alias_with_nonempty_tier_uses_resolved_execution_identity() {
     let root = tempfile::tempdir().expect("temp project");
     let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
+    let _tools_available = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
     let config_dir = root.path().join(".csa");
     std::fs::create_dir_all(&config_dir).expect("config dir");
     std::fs::write(

@@ -134,6 +134,12 @@ async fn final_boundary_rejects_unsupported_explicit_thinking_override() {
 
 #[tokio::test]
 async fn final_boundary_admits_configured_thinking_lock_with_catalog_warning() {
+    let root = tempfile::tempdir().expect("temp project");
+    let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
+    let _tools_available = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
     let mut catalog = closed_catalog();
     let config = config_with_thinking_lock();
     catalog
