@@ -245,22 +245,37 @@ impl EffectiveModelCatalog {
         tool: &str,
         model: &str,
     ) -> Result<String, CatalogResolutionError> {
-        let mut providers = BTreeSet::new();
+        let mut exact_providers = BTreeSet::new();
         for identity in self.entries.keys() {
             if identity.tool == tool && identity.model == model {
-                providers.insert(identity.provider.clone());
+                exact_providers.insert(identity.provider.clone());
             }
         }
         for identity in self.configured_specs.keys() {
             if identity.tool == tool && identity.model == model {
-                providers.insert(identity.provider.clone());
+                exact_providers.insert(identity.provider.clone());
             }
         }
-        for scope in self.open_scopes.keys() {
-            if scope.tool == tool {
-                providers.insert(scope.provider.clone());
-            }
+        if exact_providers.len() == 1
+            && let Some(provider) = exact_providers.iter().next()
+        {
+            return Ok(provider.clone());
         }
+        if exact_providers.len() > 1 {
+            return Err(CatalogResolutionError::AmbiguousProvider {
+                tool: tool.to_string(),
+                model: model.to_string(),
+                providers: exact_providers.into_iter().collect(),
+                catalog_source: self.policy_provenance.source_label(),
+            });
+        }
+
+        let providers: BTreeSet<String> = self
+            .open_scopes
+            .keys()
+            .filter(|scope| scope.tool == tool)
+            .map(|scope| scope.provider.clone())
+            .collect();
 
         if providers.is_empty() {
             let known: BTreeSet<String> = self

@@ -415,3 +415,52 @@ reasoning_efforts = ["high"]
     assert!(primary < alias && alias < tier, "{first}");
     assert_eq!(first.matches("tiers.quality.models[0]").count(), 1);
 }
+
+#[test]
+fn exact_provider_resolution_precedes_wildcard_scopes() {
+    let mut catalog = EffectiveModelCatalog::from_toml_str(
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "declared"
+reasoning_efforts = ["high"]
+
+[[model_catalog.open_scopes]]
+tool = "codex"
+provider = "azure"
+reasoning_efforts = ["high"]
+"#,
+        "exact-first provider test",
+    )
+    .unwrap();
+    assert_eq!(
+        catalog
+            .resolve_provider_for_model("codex", "declared")
+            .unwrap(),
+        "openai"
+    );
+
+    catalog
+        .register_configured_spec(
+            "codex",
+            "google",
+            "configured",
+            "high",
+            CatalogProvenance::Inline {
+                source: "project config".to_string(),
+                key: "tiers.quality.models[0]".to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        catalog
+            .resolve_provider_for_model("codex", "configured")
+            .unwrap(),
+        "google"
+    );
+}
