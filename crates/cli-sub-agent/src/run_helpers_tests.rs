@@ -268,10 +268,7 @@ fn build_executor_model_with_thinking_suffix() {
             model_override,
             thinking_budget,
         } => {
-            assert_eq!(
-                model_override.as_deref(),
-                Some("google/gemini-3.1-pro-preview")
-            );
+            assert_eq!(model_override.as_deref(), Some("gemini-3.1-pro-preview"));
             assert!(matches!(thinking_budget, Some(ThinkingBudget::Xhigh)));
         }
         other => panic!("expected GeminiCli executor, got: {other:?}"),
@@ -309,10 +306,7 @@ fn build_executor_model_thinking_suffix_overridden_by_explicit_thinking() {
             model_override,
             thinking_budget,
         } => {
-            assert_eq!(
-                model_override.as_deref(),
-                Some("google/gemini-3.1-pro-preview")
-            );
+            assert_eq!(model_override.as_deref(), Some("gemini-3.1-pro-preview"));
             assert!(matches!(thinking_budget, Some(ThinkingBudget::Low)));
         }
         other => panic!("expected GeminiCli executor, got: {other:?}"),
@@ -336,10 +330,7 @@ fn build_executor_model_spec_override_with_thinking_suffix() {
             model_override,
             thinking_budget,
         } => {
-            assert_eq!(
-                model_override.as_deref(),
-                Some("google/gemini-3.1-pro-preview")
-            );
+            assert_eq!(model_override.as_deref(), Some("gemini-3.1-pro-preview"));
             assert!(matches!(thinking_budget, Some(ThinkingBudget::Xhigh)));
         }
         other => panic!("expected GeminiCli executor, got: {other:?}"),
