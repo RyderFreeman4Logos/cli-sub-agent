@@ -241,3 +241,99 @@ model = "future-provider/future-model/high"
     assert!(warning.contains("tasks[0].model"), "{warning}");
     assert!(warning.contains("tools.codex.thinking_lock"), "{warning}");
 }
+
+#[tokio::test]
+async fn batch_registration_resolves_alias_before_identity_admission() {
+    let root = tempfile::tempdir().expect("temp project");
+    let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
+    let config_dir = root.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "opencode"
+provider = "google"
+model = "declared"
+reasoning_efforts = ["high"]
+
+[[model_catalog.entries]]
+tool = "opencode"
+provider = "anthropic"
+model = "other"
+reasoning_efforts = ["high"]
+
+[aliases]
+future = "opencode/google/gemini-2.5-pro/high"
+"#,
+    )
+    .expect("project config");
+    let batch_path = root.path().join("batch.toml");
+    let batch: BatchConfig = toml::from_str(
+        r#"
+[[tasks]]
+name = "aliased"
+tool = "opencode"
+prompt = "must not dispatch"
+model = "future"
+"#,
+    )
+    .expect("batch config");
+    let csa_config::EffectiveConfig {
+        project,
+        global,
+        mut model_catalog,
+    } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
+
+    register_batch_model_specs(
+        &mut model_catalog,
+        &batch.tasks,
+        &batch_path,
+        project.as_ref(),
+        &global,
+        root.path(),
+    )
+    .expect("resolved alias registration");
+    model_catalog
+        .validate_parts("opencode", "google", "gemini-2.5-pro", "high")
+        .expect("alias target identity must be admitted");
+}
+
+#[tokio::test]
+async fn batch_registration_rejects_unsupported_multi_slash_identity() {
+    let root = tempfile::tempdir().expect("temp project");
+    let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
+    let batch_path = root.path().join("batch.toml");
+    let batch: BatchConfig = toml::from_str(
+        r#"
+[[tasks]]
+name = "too-many-components"
+tool = "codex"
+prompt = "must not dispatch"
+model = "a/b/c/d/e"
+"#,
+    )
+    .expect("batch config");
+    let csa_config::EffectiveConfig {
+        project,
+        global,
+        mut model_catalog,
+    } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
+
+    let error = register_batch_model_specs(
+        &mut model_catalog,
+        &batch.tasks,
+        &batch_path,
+        project.as_ref(),
+        &global,
+        root.path(),
+    )
+    .expect_err("unsupported slash count must be rejected");
+    let message = format!("{error:#}");
+    assert!(message.contains("a/b/c/d/e"), "{message}");
+    assert!(message.contains("expected model"), "{message}");
+}
