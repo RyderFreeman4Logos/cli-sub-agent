@@ -446,9 +446,7 @@ fn validate_final_executor_identity(
     original_model_spec: Option<&str>,
     model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> Result<Option<csa_config::CatalogAdmission>> {
-    let Some(raw_model) = executor.model_override() else {
-        return Ok(None);
-    };
+    let raw_model = executor.model_override().unwrap_or("default");
     let original = original_model_spec
         .map(csa_executor::ModelSpec::parse)
         .transpose()?;

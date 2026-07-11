@@ -17,7 +17,10 @@ use crate::run_helpers::{is_tool_binary_available_for_config, parse_tool_name};
 
 pub(super) enum AttemptSlotOutcome {
     Acquired(ToolSlot),
-    RetryWithTool(ToolName),
+    RetryWithIdentity {
+        tool: ToolName,
+        model_spec: Option<String>,
+    },
     Exit(i32),
 }
 
@@ -33,6 +36,9 @@ pub(super) struct AttemptSlotRequest<'a> {
     pub(super) max_failover_attempts: usize,
     pub(super) wait: bool,
     pub(super) strategy: &'a ToolSelectionStrategy,
+    pub(super) current_model_spec: Option<&'a str>,
+    pub(super) resolved_tier_name: Option<&'a str>,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
 }
 
 pub(super) fn acquire_attempt_slot(
@@ -64,31 +70,45 @@ pub(super) fn acquire_attempt_slot(
             if request.cross_tool_failover_enabled
                 && request.attempts < request.max_failover_attempts
             {
-                let free_alt = all_usage.iter().find(|slot_status| {
-                    slot_status.tool_name != request.tool_name
-                        && slot_status.free() > 0
-                        && !tried_tools.contains(&slot_status.tool_name)
+                let candidates = crate::tier_model_fallback::ordered_tier_candidates_with_catalog(
+                    parse_tool_name(request.tool_name)?,
+                    request.current_model_spec,
+                    request.resolved_tier_name,
+                    request.config,
+                    Some(request.global_config),
+                    request.model_catalog,
+                    crate::tier_model_fallback::TierFallbackOptions {
+                        enabled: true,
+                        preference_order: &[],
+                    },
+                )?;
+                let free_alt = candidates.into_iter().find(|(tool, _)| {
+                    let tool_name = tool.as_str();
+                    tool_name != request.tool_name
+                        && !tried_tools.iter().any(|tried| tried == tool_name)
+                        && all_usage.iter().any(|status| {
+                            status.tool_name == tool_name && status.free() > 0
+                        })
                         && request
                             .config
-                            .map(|config| config.is_tool_auto_selectable(&slot_status.tool_name))
+                            .map(|config| config.is_tool_auto_selectable(tool_name))
                             .unwrap_or(false)
-                        && is_tool_binary_available_for_config(
-                            &slot_status.tool_name,
-                            request.config,
-                        )
+                        && is_tool_binary_available_for_config(tool_name, request.config)
                 });
 
-                if let Some(alt) = free_alt {
+                if let Some((alt_tool, alt_model_spec)) = free_alt {
                     info!(
                         from = %request.tool_name,
-                        to = %alt.tool_name,
+                        to = %alt_tool,
+                        model_spec = ?alt_model_spec,
                         reason = "slot_exhausted",
-                        "Failing over to tool with free slots"
+                        "Failing over to catalog-admitted identity with free slots"
                     );
                     tried_tools.push(request.tool_name.to_string());
-                    return Ok(AttemptSlotOutcome::RetryWithTool(parse_tool_name(
-                        &alt.tool_name,
-                    )?));
+                    return Ok(AttemptSlotOutcome::RetryWithIdentity {
+                        tool: alt_tool,
+                        model_spec: alt_model_spec,
+                    });
                 }
             }
 

@@ -94,18 +94,36 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 max_failover_attempts,
                 wait: request.wait,
                 strategy: &request.strategy,
+                current_model_spec: current_model_spec.as_deref(),
+                resolved_tier_name: request.resolved_tier_name,
+                model_catalog: request.model_catalog,
             },
             &mut tried_tools,
         )? {
             AttemptSlotOutcome::Acquired(slot) => Some(slot),
-            AttemptSlotOutcome::RetryWithTool(next_tool) => {
-                current_tool = next_tool;
-                current_model_spec = None;
-                current_model = None;
-                fork_resolution = None;
-                if is_fork {
-                    effective_session_arg = None;
+            AttemptSlotOutcome::RetryWithIdentity { tool, model_spec } => {
+                let source_session_id = executed_session_id
+                    .clone()
+                    .or_else(|| effective_session_arg.clone())
+                    .or_else(|| session_arg.clone());
+                AttemptRetryState {
+                    failover_context: &mut failover_context_addendum,
+                    tool: &mut current_tool,
+                    model_spec: &mut current_model_spec,
+                    model: &mut current_model,
+                    fork_resolution: &mut fork_resolution,
+                    effective_session: &mut effective_session_arg,
+                    session_parent: &mut attempt_parent,
+                    session_creation_mode: &mut session_creation_mode,
+                    executed_session_id: &mut executed_session_id,
+                    is_fork,
                 }
+                .apply(outcome::AttemptRetryAction::Retry {
+                    new_tool: tool,
+                    new_model_spec: model_spec,
+                    failover_context: outcome::FailoverContextUpdate::Preserve,
+                    source_session_id,
+                });
                 continue;
             }
             AttemptSlotOutcome::Exit(exit_code) => {

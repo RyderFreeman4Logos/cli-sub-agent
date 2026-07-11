@@ -154,3 +154,36 @@ async fn final_boundary_rejects_unknown_model_spec_tool() {
     assert!(rendered.contains("tool/model-spec mismatch"), "{rendered}");
     assert!(rendered.contains("unknown-tool"), "{rendered}");
 }
+
+#[test]
+fn final_boundary_rejects_tombstoned_implicit_tool_default() {
+    let catalog = csa_config::EffectiveModelCatalog::from_toml_str(
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "claude-code"
+provider = "anthropic"
+model = "default"
+enabled = false
+reasoning_efforts = ["default"]
+"#,
+        "implicit default tombstone test",
+    )
+    .expect("test catalog");
+    let executor = csa_executor::Executor::from_tool_name(&ToolName::ClaudeCode, None, None);
+    let error = validate_final_executor_identity(&executor, None, &catalog)
+        .expect_err("implicit tool default tombstone must remain a hard error");
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("execution-boundary catalog rejection"));
+    assert!(
+        rendered.contains("disabled by catalog tombstone"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("claude-code, anthropic, default"),
+        "{rendered}"
+    );
+}
