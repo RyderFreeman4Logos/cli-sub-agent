@@ -56,13 +56,31 @@ fn main() {
 EOF
 cp "${repo_root}/scripts/cargo-env-normalize.sh" \
   "${fixture}/scripts/cargo-env-normalize.sh"
-chmod +x "${fixture}/scripts/cargo-env-normalize.sh"
+cp "${repo_root}/scripts/resolve-trusted-cargo.sh" \
+  "${fixture}/scripts/resolve-trusted-cargo.sh"
+chmod +x \
+  "${fixture}/scripts/cargo-env-normalize.sh" \
+  "${fixture}/scripts/resolve-trusted-cargo.sh"
+cargo_bin="$("${fixture}/scripts/resolve-trusted-cargo.sh" --repo "${fixture}")"
+rustup_home="${tmp}/rustup-only-home"
+mkdir -p "${rustup_home}/.cargo/bin"
+cat >"${rustup_home}/.cargo/bin/cargo" <<'EOF'
+#!/bin/sh
+[ "${1:-}" = "--version" ] || exit 2
+printf '%s\n' 'cargo 1.0.0 (rustup-only fixture)'
+EOF
+chmod +x "${rustup_home}/.cargo/bin/cargo"
+resolved_rustup_cargo="$(
+  HOME="${rustup_home}" "${fixture}/scripts/resolve-trusted-cargo.sh" \
+    --repo "${fixture}" --home-only
+)"
+[ "${resolved_rustup_cargo}" = "${rustup_home}/.cargo/bin/cargo" ]
 env -u RUSTC_WRAPPER \
   -u RUSTC_WORKSPACE_WRAPPER \
   -u RUSTFLAGS \
   -u CARGO_ENCODED_RUSTFLAGS \
   -u RUSTC_BOOTSTRAP \
-  /usr/local/bin/cargo generate-lockfile --manifest-path "${fixture}/Cargo.toml"
+  "${cargo_bin}" generate-lockfile --manifest-path "${fixture}/Cargo.toml"
 git -C "${fixture}" add .
 git -C "${fixture}" commit -qm "fixture"
 head="$(git -C "${fixture}" rev-parse HEAD)"
@@ -77,7 +95,14 @@ cat >"${fixture}/.env" <<'EOF'
 RUSTC_WRAPPER=/definitely/not/the-reviewed-wrapper
 RUSTFLAGS=--cfg contaminated_dotenv
 EOF
+hostile_tmp="${tmp}/hostile-tmp"
+mkdir -p "${hostile_tmp}/.cargo"
+cat >"${hostile_tmp}/.cargo/config.toml" <<'EOF'
+[build]
+rustc-wrapper = "/definitely/not/the-ancestor-wrapper"
+EOF
 
+TMPDIR="${hostile_tmp}" \
 RUSTC_WRAPPER=/live/wrapper \
 RUSTC_WORKSPACE_WRAPPER=/live/workspace-wrapper \
 RUSTFLAGS='--cfg contaminated_env' \

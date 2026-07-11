@@ -1,5 +1,6 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 usage() {
   cat <<'EOF'
@@ -47,6 +48,8 @@ if [ -z "${repo}" ] || [ -z "${head}" ] || [ -z "${output_dir}" ]; then
 fi
 repo="$(git -C "${repo}" rev-parse --show-toplevel)"
 head="$(git -C "${repo}" rev-parse --verify "${head}^{commit}")"
+cargo_bin="$("${repo}/scripts/resolve-trusted-cargo.sh" --repo "${repo}")"
+cargo_bin_dir="$(dirname "${cargo_bin}")"
 case "${output_dir}" in
   /*) ;;
   *) output_dir="${repo}/${output_dir}" ;;
@@ -70,21 +73,47 @@ target_dir="${scratch}/target"
 mkdir -p "${checkout}" "${cargo_home}" "${target_dir}"
 git -C "${repo}" archive --format=tar "${head}" | tar -xf - -C "${checkout}"
 
+cargo_args=("${cargo_bin}")
+# Cargo prefers the legacy extensionless file when both names exist.
+if [ -f "${checkout}/.cargo/config" ]; then
+  cargo_args+=(--config "${checkout}/.cargo/config")
+elif [ -f "${checkout}/.cargo/config.toml" ]; then
+  cargo_args+=(--config "${checkout}/.cargo/config.toml")
+fi
+cargo_args+=(
+  build
+  --manifest-path "${checkout}/Cargo.toml"
+  --release
+  --locked
+  -p cli-sub-agent
+  -p weave
+)
+
 # Do not inherit dotenv/Cargo/Rust build controls from the live checkout.
-# The fixed PATH preserves the repository's configured system/mise toolchain
-# without accepting a PATH injected by a local .env file.
+# The resolver selects Cargo only from fixed mise/rustup/system locations. Its
+# directory leads PATH so rustup shims can find the matching rustc without
+# accepting a PATH injected by a local .env file.
 clean_env=(
   env -i
   "HOME=${HOME}"
   "USER=${USER:-}"
   "LOGNAME=${LOGNAME:-${USER:-}}"
-  "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  "PATH=${cargo_bin_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   "CARGO_HOME=${cargo_home}"
   "CARGO_TARGET_DIR=${target_dir}"
   "CSA_PRESERVE_CARGO_TARGET_DIR=1"
   "MISE_TRUSTED_CONFIG_PATHS=${checkout}"
   "NEXTEST_DOUBLE_SPAWN=0"
 )
+if [ -f "${checkout}/rust-toolchain.toml" ]; then
+  rustup_toolchain="$(
+    sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+      "${checkout}/rust-toolchain.toml" | head -n 1
+  )"
+  if [ -n "${rustup_toolchain}" ]; then
+    clean_env+=("RUSTUP_TOOLCHAIN=${rustup_toolchain}")
+  fi
+fi
 if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
   clean_env+=("CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}")
 fi
@@ -97,8 +126,8 @@ done
 (
   cd "${checkout}"
   "${clean_env[@]}" \
-    "${checkout}/scripts/cargo-env-normalize.sh" cargo build \
-    --release --locked -p cli-sub-agent -p weave
+    "${checkout}/scripts/cargo-env-normalize.sh" \
+    /bin/sh -c 'cd / && exec "$@"' csa-exact-build "${cargo_args[@]}"
 )
 
 for binary in csa weave; do
