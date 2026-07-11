@@ -325,7 +325,22 @@ push-reviewed base="main" expected_head="" expected_branch="":
         fi
         echo "PR already exists. Continuing with post-create helper."
     fi
-    scripts/hooks/post-pr-create.sh --base "${base}"
+    PR_JSON="$(gh pr list --state open --base "${base}" --head "${current_branch}" --json number,headRefName,headRefOid,baseRefName)"
+    if [ "$(printf '%s' "${PR_JSON}" | jq 'length')" != "1" ]; then
+        echo "ERROR: expected exactly one open PR for ${current_branch} -> ${base}." >&2
+        exit 1
+    fi
+    PR_NUMBER="$(printf '%s' "${PR_JSON}" | jq -r '.[0].number')"
+    REMOTE_HEAD="$(printf '%s' "${PR_JSON}" | jq -r '.[0].headRefOid')"
+    if [ "${REMOTE_HEAD}" != "${review_head}" ]; then
+        echo "ERROR: PR #${PR_NUMBER} points to ${REMOTE_HEAD}, expected reviewed commit ${review_head}." >&2
+        exit 1
+    fi
+    scripts/hooks/post-pr-create.sh \
+        --base "${base}" \
+        --pr-number "${PR_NUMBER}" \
+        --expected-branch "${current_branch}" \
+        --expected-head "${review_head}"
 
 # Exact-head reviewed push: rebuild csa from one captured checkout, force all
 # nested workflow calls to resolve that binary, then reuse push-reviewed.

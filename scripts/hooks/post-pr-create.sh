@@ -4,14 +4,17 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: scripts/hooks/post-pr-create.sh [--base <branch>] [--pr-number <number>]
+       [--expected-branch <branch>] [--expected-head <sha>]
 
-Confirms that the current feature branch has an open PR, then runs the
-pr-bot workflow as a synchronous post-create transaction.
+Confirms that the expected feature branch and commit have an open PR, then runs
+pr-bot as a synchronous post-create transaction.
 EOF
 }
 
 BASE_BRANCH="main"
 REQUESTED_PR_NUMBER=""
+EXPECTED_BRANCH=""
+EXPECTED_HEAD=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -30,6 +33,22 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       REQUESTED_PR_NUMBER="$1"
+      ;;
+    --expected-branch)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "ERROR: Missing value for --expected-branch." >&2
+        exit 1
+      fi
+      EXPECTED_BRANCH="$1"
+      ;;
+    --expected-head)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "ERROR: Missing value for --expected-head." >&2
+        exit 1
+      fi
+      EXPECTED_HEAD="$1"
       ;;
     -h|--help)
       usage
@@ -70,13 +89,34 @@ if [ "${BASE_BRANCH}" != "main" ]; then
   exit 1
 fi
 
+assert_expected_checkout() {
+  local live_branch live_head
+  live_branch="$(git branch --show-current 2>/dev/null || true)"
+  live_head="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+  if [ -n "${EXPECTED_BRANCH}" ] && [ "${live_branch}" != "${EXPECTED_BRANCH}" ]; then
+    echo "ERROR: Checkout branch changed: expected ${EXPECTED_BRANCH}, found ${live_branch:-detached}." >&2
+    return 1
+  fi
+  if [ -n "${EXPECTED_HEAD}" ] && [ "${live_head}" != "${EXPECTED_HEAD}" ]; then
+    echo "ERROR: Checkout HEAD changed: expected ${EXPECTED_HEAD}, found ${live_head:-missing}." >&2
+    return 1
+  fi
+}
+
+if [ -n "${EXPECTED_HEAD}" ] && ! printf '%s' "${EXPECTED_HEAD}" | grep -Eq '^[0-9a-fA-F]{40,64}$'; then
+  echo "ERROR: --expected-head must be a full hexadecimal commit ID." >&2
+  exit 1
+fi
+assert_expected_checkout
+
 resolve_current_pr() {
   local pr_view pr_list pr_count
 
-  if pr_view="$(gh pr view --json number,url,headRefName,baseRefName,state 2>/dev/null)"; then
+  if pr_view="$(gh pr view --json number,url,headRefName,headRefOid,baseRefName,state 2>/dev/null)"; then
     if [ "$(printf '%s' "${pr_view}" | jq -r '.headRefName')" = "${CURRENT_BRANCH}" ] \
       && [ "$(printf '%s' "${pr_view}" | jq -r '.baseRefName')" = "${BASE_BRANCH}" ] \
-      && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ]; then
+      && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ] \
+      && { [ -z "${EXPECTED_HEAD}" ] || [ "$(printf '%s' "${pr_view}" | jq -r '.headRefOid')" = "${EXPECTED_HEAD}" ]; }; then
       printf '%s\n' "${pr_view}"
       return 0
     fi
@@ -84,8 +124,11 @@ resolve_current_pr() {
 
   pr_list="$(
     gh pr list --state open --base "${BASE_BRANCH}" --head "${CURRENT_BRANCH}" \
-      --json number,url,headRefName,baseRefName,state 2>/dev/null || true
+      --json number,url,headRefName,headRefOid,baseRefName,state 2>/dev/null || true
   )"
+  if [ -n "${EXPECTED_HEAD}" ]; then
+    pr_list="$(printf '%s' "${pr_list}" | jq --arg head "${EXPECTED_HEAD}" 'map(select(.headRefOid == $head))')"
+  fi
   pr_count="$(printf '%s' "${pr_list}" | jq 'length')"
 
   if [ "${pr_count}" = "1" ]; then
@@ -114,7 +157,7 @@ resolve_requested_pr() {
   fi
 
   pr_view="$(
-    gh pr view "${REQUESTED_PR_NUMBER}" --json number,url,headRefName,baseRefName,state \
+    gh pr view "${REQUESTED_PR_NUMBER}" --json number,url,headRefName,headRefOid,baseRefName,state \
       2>/dev/null || true
   )"
   if [ -z "${pr_view}" ]; then
@@ -123,7 +166,8 @@ resolve_requested_pr() {
 
   if [ "$(printf '%s' "${pr_view}" | jq -r '.headRefName')" = "${CURRENT_BRANCH}" ] \
     && [ "$(printf '%s' "${pr_view}" | jq -r '.baseRefName')" = "${BASE_BRANCH}" ] \
-    && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ]; then
+    && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ] \
+    && { [ -z "${EXPECTED_HEAD}" ] || [ "$(printf '%s' "${pr_view}" | jq -r '.headRefOid')" = "${EXPECTED_HEAD}" ]; }; then
     printf '%s\n' "${pr_view}"
     return 0
   fi
@@ -221,6 +265,7 @@ if [ -z "${HEAD_SHA}" ]; then
   echo "ERROR: Failed to resolve HEAD SHA for ${CURRENT_BRANCH}." >&2
   exit 1
 fi
+assert_expected_checkout
 
 resolve_marker_paths "${PR_NUMBER}" "${HEAD_SHA}"
 if ! begin_pr_bot_transaction; then
@@ -229,6 +274,7 @@ fi
 
 echo "Confirmed PR #${PR_NUMBER} (${PR_URL}) for branch ${CURRENT_BRANCH}."
 echo "Running pr-bot transaction..."
+assert_expected_checkout
 
 # Recursion guard: prevent PostRun hook from re-triggering pr-bot
 # while inner CSA sessions spawned by this workflow complete.
