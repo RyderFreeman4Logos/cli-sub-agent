@@ -5,6 +5,17 @@ use csa_config::ProjectConfig;
 
 use super::BatchTask;
 
+pub(super) fn resolve_batch_model(
+    task: &BatchTask,
+    project_config: Option<&ProjectConfig>,
+) -> Option<String> {
+    task.model.as_deref().map(|configured_model| {
+        project_config
+            .map(|config| config.resolve_alias(configured_model))
+            .unwrap_or_else(|| configured_model.to_string())
+    })
+}
+
 pub(super) fn register_batch_model_specs(
     catalog: &mut csa_config::EffectiveModelCatalog,
     tasks: &[BatchTask],
@@ -14,12 +25,9 @@ pub(super) fn register_batch_model_specs(
     project_root: &Path,
 ) -> Result<()> {
     for (index, task) in tasks.iter().enumerate() {
-        let Some(configured_model) = task.model.as_deref() else {
+        let Some(resolved_model) = resolve_batch_model(task, project_config) else {
             continue;
         };
-        let resolved_model = project_config
-            .map(|config| config.resolve_alias(configured_model))
-            .unwrap_or_else(|| configured_model.to_string());
         let raw_model = resolved_model.as_str();
         validate_batch_model_identity(task, batch_path, index, raw_model)?;
         let slash_count = raw_model.matches('/').count();
@@ -27,7 +35,7 @@ pub(super) fn register_batch_model_specs(
             anyhow::bail!(
                 "batch task '{}' has invalid model '{}': expected model, provider/model, provider/model/reasoning, or tool/provider/model/reasoning",
                 task.name,
-                configured_model
+                task.model.as_deref().expect("resolved batch model source")
             );
         }
         let (provider, model, suffix_reasoning) = if slash_count == 3 {

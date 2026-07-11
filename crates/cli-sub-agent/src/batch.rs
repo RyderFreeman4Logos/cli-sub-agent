@@ -446,6 +446,7 @@ async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) 
             };
         }
     };
+    let resolved_model = batch_catalog::resolve_batch_model(task, config);
 
     // Check tool is enabled
     if let Some(cfg) = config {
@@ -471,7 +472,7 @@ async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) 
         }
         if let Err(e) = cfg.enforce_tier_model_name(
             tool_name.as_str(),
-            crate::run_helpers::model_name_for_tier_validation(task.model.as_deref()),
+            crate::run_helpers::model_name_for_tier_validation(resolved_model.as_deref()),
         ) {
             error!("{} - {}", task_label, e);
             return TaskResult {
@@ -487,7 +488,7 @@ async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) 
     let executor = match crate::pipeline::build_and_validate_executor(
         &tool_name,
         None,
-        task.model.as_deref(),
+        resolved_model.as_deref(),
         None,
         ConfigRefs {
             project: config,

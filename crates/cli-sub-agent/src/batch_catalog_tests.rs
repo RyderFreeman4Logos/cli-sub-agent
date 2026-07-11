@@ -304,6 +304,92 @@ model = "future"
 }
 
 #[tokio::test]
+async fn batch_alias_with_nonempty_tier_uses_resolved_execution_identity() {
+    let root = tempfile::tempdir().expect("temp project");
+    let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
+    let config_dir = root.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "gpt-future"
+reasoning_efforts = ["high"]
+
+[aliases]
+future = "codex/openai/gpt-future/high"
+
+[tiers.default]
+description = "future tier"
+models = ["codex/openai/gpt-future/high"]
+"#,
+    )
+    .expect("project config");
+    let batch_path = root.path().join("batch.toml");
+    let batch: BatchConfig = toml::from_str(
+        r#"
+[[tasks]]
+name = "aliased-tier"
+tool = "codex"
+prompt = "must not dispatch"
+model = "future"
+"#,
+    )
+    .expect("batch config");
+    let csa_config::EffectiveConfig {
+        project,
+        global,
+        mut model_catalog,
+    } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
+
+    register_batch_model_specs(
+        &mut model_catalog,
+        &batch.tasks,
+        &batch_path,
+        project.as_ref(),
+        &global,
+        root.path(),
+    )
+    .expect("resolved alias registration");
+    let resolved =
+        super::super::batch_catalog::resolve_batch_model(&batch.tasks[0], project.as_ref())
+            .expect("batch alias must resolve");
+    assert_eq!(resolved, "codex/openai/gpt-future/high");
+    project
+        .as_ref()
+        .expect("project config")
+        .enforce_tier_model_name(
+            "codex",
+            crate::run_helpers::model_name_for_tier_validation(Some(&resolved)),
+        )
+        .expect("resolved alias must satisfy the non-empty tier");
+
+    let executor = crate::pipeline::build_and_validate_executor(
+        &csa_core::types::ToolName::Codex,
+        None,
+        Some(&resolved),
+        None,
+        crate::pipeline::ConfigRefs {
+            project: project.as_ref(),
+            global: Some(&global),
+            model_catalog: Some(&model_catalog),
+        },
+        false,
+        false,
+        false,
+    )
+    .await
+    .expect("resolved alias must build the admitted executor");
+    assert_eq!(executor.model_override(), Some("gpt-future"));
+}
+
+#[tokio::test]
 async fn batch_registration_rejects_unsupported_multi_slash_identity() {
     let root = tempfile::tempdir().expect("temp project");
     let _isolation = crate::test_env_lock::isolate_user_config_locked(root.path()).await;
