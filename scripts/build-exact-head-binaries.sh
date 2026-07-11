@@ -51,6 +51,11 @@ repo="$(git -C "${repo}" rev-parse --show-toplevel)"
 head="$(git -C "${repo}" rev-parse --verify "${head}^{commit}")"
 cargo_bin="$("${repo}/scripts/resolve-trusted-cargo.sh" --repo "${repo}")"
 cargo_bin_dir="$(dirname "${cargo_bin}")"
+rename_no_replace="${repo}/scripts/rename-no-replace.py"
+if [ ! -x "${rename_no_replace}" ]; then
+  echo "ERROR: atomic no-replace rename helper is missing or not executable: ${rename_no_replace}." >&2
+  exit 2
+fi
 case "${output_dir}" in
   /*) ;;
   *) output_dir="${repo}/${output_dir}" ;;
@@ -84,7 +89,7 @@ restore_previous_output() {
     return
   fi
   if [ ! -e "${output_dir}" ] && [ ! -L "${output_dir}" ] \
-    && mv -T -- "${previous_output}" "${output_dir}"; then
+    && "${rename_no_replace}" "${previous_output}" "${output_dir}"; then
     previous_output=""
   fi
 }
@@ -179,7 +184,7 @@ printf '%s\n' "${head}" >"${staged_output}/SOURCE_COMMIT"
 if [ -e "${output_dir}" ] || [ -L "${output_dir}" ]; then
   previous_output="$(mktemp -d "${output_parent}/.exact-previous.XXXXXX")"
   rmdir "${previous_output}"
-  if ! mv -T -- "${output_dir}" "${previous_output}"; then
+  if ! "${rename_no_replace}" "${output_dir}" "${previous_output}"; then
     previous_output=""
     echo "ERROR: failed to atomically quarantine existing exact-build output: ${output_dir}." >&2
     exit 1
@@ -190,7 +195,7 @@ if [ -e "${output_dir}" ] || [ -L "${output_dir}" ]; then
     exit 2
   fi
 fi
-if ! mv -T -- "${staged_output}" "${output_dir}"; then
+if ! "${rename_no_replace}" "${staged_output}" "${output_dir}"; then
   echo "ERROR: destination changed during exact-build publication: ${output_dir}." >&2
   exit 1
 fi

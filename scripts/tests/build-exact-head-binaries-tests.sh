@@ -69,9 +69,12 @@ cp "${repo_root}/scripts/cargo-env-normalize.sh" \
   "${fixture}/scripts/cargo-env-normalize.sh"
 cp "${repo_root}/scripts/resolve-trusted-cargo.sh" \
   "${fixture}/scripts/resolve-trusted-cargo.sh"
+cp "${repo_root}/scripts/rename-no-replace.py" \
+  "${fixture}/scripts/rename-no-replace.py"
 chmod +x \
   "${fixture}/scripts/cargo-env-normalize.sh" \
-  "${fixture}/scripts/resolve-trusted-cargo.sh"
+  "${fixture}/scripts/resolve-trusted-cargo.sh" \
+  "${fixture}/scripts/rename-no-replace.py"
 cargo_bin="$("${fixture}/scripts/resolve-trusted-cargo.sh" --repo "${fixture}")"
 rustup_home="${tmp}/rustup-only-home"
 mkdir -p "${rustup_home}/.cargo/bin"
@@ -96,6 +99,29 @@ git -C "${fixture}" add .
 git -C "${fixture}" commit -qm "fixture"
 head="$(git -C "${fixture}" rev-parse HEAD)"
 output="${fixture}/target/exact-head/${head}"
+
+rename_source="${tmp}/rename-source"
+rename_destination="${tmp}/rename-destination"
+mkdir "${rename_source}" "${rename_destination}"
+printf 'source\n' >"${rename_source}/sentinel"
+source_inode="$(stat -c '%i' "${rename_source}")"
+destination_inode="$(stat -c '%i' "${rename_destination}")"
+if "${fixture}/scripts/rename-no-replace.py" \
+  "${rename_source}" "${rename_destination}" \
+  >"${tmp}/rename-noreplace.stdout" 2>"${tmp}/rename-noreplace.stderr"; then
+  echo "ERROR: atomic no-replace helper replaced an existing empty directory" >&2
+  exit 1
+fi
+grep -q 'destination already exists' "${tmp}/rename-noreplace.stderr"
+[ "$(stat -c '%i' "${rename_source}")" = "${source_inode}" ]
+[ "$(stat -c '%i' "${rename_destination}")" = "${destination_inode}" ]
+[ "$(cat "${rename_source}/sentinel")" = "source" ]
+rmdir "${rename_destination}"
+"${fixture}/scripts/rename-no-replace.py" \
+  "${rename_source}" "${rename_destination}"
+[ ! -e "${rename_source}" ]
+[ "$(cat "${rename_destination}/sentinel")" = "source" ]
+rm -rf "${rename_destination}"
 
 victim="${tmp}/victim"
 mkdir -p "${victim}" "${fixture}/target/exact-head"
