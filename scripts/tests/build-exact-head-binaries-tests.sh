@@ -10,7 +10,7 @@ cleanup() {
 trap cleanup EXIT
 
 fixture="${tmp}/fixture"
-output="${tmp}/output"
+output=""
 mkdir -p \
   "${fixture}/scripts" \
   "${fixture}/crates/cli-sub-agent/src" \
@@ -84,6 +84,45 @@ env -u RUSTC_WRAPPER \
 git -C "${fixture}" add .
 git -C "${fixture}" commit -qm "fixture"
 head="$(git -C "${fixture}" rev-parse HEAD)"
+output="${fixture}/target/exact-head/${head}"
+
+victim="${tmp}/victim"
+mkdir -p "${victim}" "${fixture}/target/exact-head"
+printf 'keep\n' >"${victim}/sentinel"
+ln -s "${victim}" "${fixture}/target/exact-head/escape"
+for dangerous_output in \
+  "${HOME}" \
+  "${fixture}" \
+  "${fixture}/target/exact-head" \
+  "${fixture}/target/exact-head/not-the-reviewed-head" \
+  "${fixture}/target/exact-head/../../.." \
+  "${fixture}/target/exact-head/escape"; do
+  if "${builder}" \
+    --repo "${fixture}" \
+    --head "${head}" \
+    --output-dir "${dangerous_output}" \
+    >"${tmp}/dangerous-output.stdout" 2>"${tmp}/dangerous-output.stderr"; then
+    echo "ERROR: accepted dangerous exact-build output path: ${dangerous_output}" >&2
+    exit 1
+  fi
+  grep -q 'must resolve to the exact commit output path' "${tmp}/dangerous-output.stderr"
+  [ "$(cat "${victim}/sentinel")" = "keep" ]
+done
+
+mkdir -p "${output}"
+printf 'unrelated\n' >"${output}/sentinel"
+if "${builder}" \
+  --repo "${fixture}" \
+  --head "${head}" \
+  --output-dir "${output}" \
+  >"${tmp}/unmarked-output.stdout" 2>"${tmp}/unmarked-output.stderr"; then
+  echo "ERROR: replaced unmarked exact-build output directory" >&2
+  exit 1
+fi
+grep -q 'refusing to replace unmarked or invalid exact-build output' \
+  "${tmp}/unmarked-output.stderr"
+[ "$(cat "${output}/sentinel")" = "unrelated" ]
+rm -rf "${output}"
 
 mkdir -p "${fixture}/.cargo"
 cat >"${fixture}/.cargo/config.toml" <<'EOF'
@@ -115,4 +154,6 @@ CARGO_HOME="${fixture}/.cargo" \
 [ "$(cat "${output}/SOURCE_COMMIT")" = "${head}" ]
 [ "$("${output}/csa")" = "exact archive binary: csa" ]
 [ "$("${output}/weave")" = "exact archive binary: weave" ]
-printf 'PASS: exact-head archive build rejects live checkout and environment contamination\n'
+"${builder}" --repo "${fixture}" --head "${head}" --output-dir "${output}"
+[ "$(cat "${output}/SOURCE_COMMIT")" = "${head}" ]
+printf 'PASS: exact-head archive build rejects unsafe output paths, live checkout, and environment contamination\n'

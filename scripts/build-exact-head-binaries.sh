@@ -9,7 +9,8 @@ Usage: build-exact-head-binaries.sh --repo <path> --head <commit> --output-dir <
 Build csa and weave from a git-archive snapshot of one commit. The build runs
 with an isolated Cargo home/target directory and a whitelist environment so
 live-checkout ignored files, dotenv values, Cargo wrappers, and Rust flags
-cannot affect the produced binaries.
+cannot affect the produced binaries. The output directory must resolve to
+<repo>/target/exact-head/<head-commit>.
 EOF
 }
 
@@ -54,6 +55,24 @@ case "${output_dir}" in
   /*) ;;
   *) output_dir="${repo}/${output_dir}" ;;
 esac
+output_root="$(realpath -m -- "${repo}/target/exact-head")"
+output_dir="$(realpath -m -- "${output_dir}")"
+expected_output_dir="${output_root}/${head}"
+if [ "${output_dir}" != "${expected_output_dir}" ]; then
+  echo "ERROR: --output-dir must resolve to the exact commit output path ${expected_output_dir}." >&2
+  exit 2
+fi
+if [ -e "${output_dir}" ] || [ -L "${output_dir}" ]; then
+  if [ -L "${output_dir}" ] \
+    || [ ! -d "${output_dir}" ] \
+    || [ ! -f "${output_dir}/SOURCE_COMMIT" ] \
+    || [ "$(cat "${output_dir}/SOURCE_COMMIT")" != "${head}" ] \
+    || [ ! -x "${output_dir}/csa" ] \
+    || [ ! -x "${output_dir}/weave" ]; then
+    echo "ERROR: refusing to replace unmarked or invalid exact-build output: ${output_dir}." >&2
+    exit 2
+  fi
+fi
 
 scratch_parent="${TMPDIR:-/tmp}"
 mkdir -p "${scratch_parent}"
