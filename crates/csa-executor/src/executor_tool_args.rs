@@ -312,6 +312,64 @@ mod hermes_identity_tests {
     }
 
     #[test]
+    fn provider_qualified_codex_shorthand_dispatches_bare_model() {
+        let executor = Executor::from_tool_name(
+            &super::ToolName::Codex,
+            Some("openai/gpt-future".to_string()),
+            None,
+        );
+        let mut command = Command::new("codex");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(executor.model_override(), Some("gpt-future"));
+        assert_eq!(args, ["--model", "gpt-future"]);
+    }
+
+    #[test]
+    fn opencode_bare_override_inherits_model_spec_provider_in_spawned_argv() {
+        let spec = super::ModelSpec::parse("opencode/google/gemini-2.5-pro/high")
+            .expect("valid OpenCode model spec");
+        let mut executor = Executor::from_spec(&spec).expect("OpenCode executor");
+        executor.override_model("gemini-2.5-flash".to_string());
+        let mut command = Command::new("opencode");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(executor.model_override(), Some("google/gemini-2.5-flash"));
+        assert_eq!(
+            args,
+            [
+                "-m",
+                "google/gemini-2.5-flash",
+                "--variant",
+                "high"
+            ]
+        );
+    }
+
+    #[test]
+    fn hermes_provider_qualified_override_splits_dispatch_identity() {
+        let mut executor = Executor::from_tool_name(
+            &super::ToolName::Hermes,
+            Some("openai/gpt-future".to_string()),
+            None,
+        );
+        assert_eq!(executor.provider_override(), Some("openai"));
+        assert_eq!(executor.model_override(), Some("gpt-future"));
+
+        executor.override_model("gpt-next".to_string());
+        assert_eq!(executor.provider_override(), Some("openai"));
+        assert_eq!(executor.model_override(), Some("gpt-next"));
+    }
+
+    #[test]
     fn opencode_model_spec_preserves_provider_in_spawned_argv() {
         let spec = super::ModelSpec::parse("opencode/google/gemini-2.5-pro/high")
             .expect("valid OpenCode model spec");
