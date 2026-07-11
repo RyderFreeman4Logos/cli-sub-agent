@@ -159,6 +159,41 @@ fn verified_failure_removes_lifecycle_records_but_keeps_diagnostic_logs() {
 }
 
 #[test]
+fn unknown_direct_wait_state_preserves_lifecycle_records() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let session_dir = tmp.path().join("session-unknown-wait-state");
+    std::fs::create_dir_all(&session_dir).expect("session dir");
+    let result = DaemonSpawnResult {
+        pid: 42_424,
+        session_id: "TEST_UNKNOWN_WAIT_STATE".to_string(),
+        session_dir: session_dir.clone(),
+    };
+    std::fs::write(
+        session_dir.join("daemon.pid"),
+        daemon_pid_record(result.pid),
+    )
+    .expect("pid record");
+
+    let error = cleanup_after_spawn_error(
+        anyhow::anyhow!("wait probe failed"),
+        "spawned-daemon liveness check failed",
+        SpawnedProcessCleanup::WaitStateUnknown,
+        &DaemonSpawnMode::Direct,
+        Path::new("unused-systemctl"),
+        &result,
+    );
+
+    assert!(
+        format!("{error:#}").contains("cannot safely signal or reap"),
+        "{error:#}"
+    );
+    assert!(
+        session_dir.join("daemon.pid").is_file(),
+        "an unmanaged daemon must retain its lifecycle record for recovery"
+    );
+}
+
+#[test]
 fn publication_failure_cleans_the_still_owned_daemon() {
     let _guard = force_direct_daemon_spawn_for_test();
     let tmp = tempfile::tempdir().expect("tempdir");

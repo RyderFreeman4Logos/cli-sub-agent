@@ -381,7 +381,7 @@ where
         }
     };
 
-    // Detach only after all caller-supplied pre-marker checks pass. On Linux,
+    // Detach only after all caller-supplied pre-marker checks pass. On Unix,
     // inspect with waitid(WNOWAIT) so an exited leader remains the owned PGID
     // anchor until failure cleanup terminates every descendant.
     let child_liveness = match inspect_spawned_process_without_reaping(&mut child) {

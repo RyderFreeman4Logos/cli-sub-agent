@@ -37,34 +37,7 @@ pub(super) fn inspect_spawned_process_without_reaping(
 ) -> Result<SpawnedProcessLiveness> {
     #[cfg(unix)]
     {
-        let pid = child.id();
-        anyhow::ensure!(pid > 1, "invalid spawned daemon PID {pid}");
-        // SAFETY: waitid writes siginfo_t. WNOWAIT leaves an exited child
-        // waitable, preserving its PID as the process-group ownership anchor.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let rc = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if rc == -1 {
-            return Err(std::io::Error::last_os_error())
-                .context("failed to inspect spawned daemon with waitid(WNOWAIT)");
-        }
-        // SAFETY: waitid initialized info; si_pid == 0 means no state change.
-        let exited_pid = unsafe { info.si_pid() };
-        if exited_pid == 0 {
-            return Ok(SpawnedProcessLiveness::Running);
-        }
-        // SAFETY: this is a SIGCHLD wait result from waitid(P_PID, ...).
-        let status = unsafe { info.si_status() };
-        Ok(SpawnedProcessLiveness::Exited(format!(
-            "wait code {} status {status}",
-            info.si_code
-        )))
+        inspect_spawned_process_with_waitid(child, waitid_without_reaping)
     }
 
     #[cfg(not(unix))]
@@ -74,6 +47,58 @@ pub(super) fn inspect_spawned_process_without_reaping(
     {
         Some(status) => Ok(SpawnedProcessLiveness::AlreadyReaped(status)),
         None => Ok(SpawnedProcessLiveness::Running),
+    }
+}
+
+#[cfg(unix)]
+fn inspect_spawned_process_with_waitid(
+    child: &mut Child,
+    mut waitid: impl FnMut(libc::id_t, &mut libc::siginfo_t) -> std::io::Result<()>,
+) -> Result<SpawnedProcessLiveness> {
+    let pid = child.id();
+    anyhow::ensure!(pid > 1, "invalid spawned daemon PID {pid}");
+    loop {
+        // SAFETY: zero is the documented no-state-change sentinel for the
+        // siginfo_t returned by waitid with WNOHANG.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        match waitid(pid as libc::id_t, &mut info) {
+            Ok(()) => {
+                // SAFETY: waitid initialized info; si_pid == 0 means no state change.
+                let exited_pid = unsafe { info.si_pid() };
+                if exited_pid == 0 {
+                    return Ok(SpawnedProcessLiveness::Running);
+                }
+                // SAFETY: this is a SIGCHLD wait result from waitid(P_PID, ...).
+                let status = unsafe { info.si_status() };
+                return Ok(SpawnedProcessLiveness::Exited(format!(
+                    "wait code {} status {status}",
+                    info.si_code
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(error).context("failed to inspect spawned daemon with waitid(WNOWAIT)");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn waitid_without_reaping(id: libc::id_t, info: &mut libc::siginfo_t) -> std::io::Result<()> {
+    // SAFETY: info points to writable siginfo_t storage. WNOWAIT leaves an
+    // exited child waitable, preserving its PID as the process-group anchor.
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            id,
+            info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -90,7 +115,9 @@ pub(super) fn terminate_and_reap_spawned_daemon(
         SpawnedProcessCleanup::ProcessGroupAnchor(child) => terminate_and_reap_process_group(child),
         #[cfg(not(unix))]
         SpawnedProcessCleanup::AlreadyReaped => Ok(()),
-        SpawnedProcessCleanup::WaitStateUnknown => Ok(()),
+        SpawnedProcessCleanup::WaitStateUnknown => Err(anyhow::anyhow!(
+            "cannot safely signal or reap spawned daemon after its child wait state became unknown"
+        )),
     };
 
     match (scope_cleanup, process_cleanup) {
@@ -249,5 +276,32 @@ fn configure_new_session(command: &mut Command) {
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_waitid_probe_is_retried() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn waitid fixture");
+        let mut calls = 0;
+        let result = inspect_spawned_process_with_waitid(&mut child, |_, _| {
+            calls += 1;
+            if calls == 1 {
+                Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+            } else {
+                Ok(())
+            }
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(matches!(result, Ok(SpawnedProcessLiveness::Running)));
+        assert_eq!(calls, 2, "waitid must be retried exactly once after EINTR");
     }
 }
