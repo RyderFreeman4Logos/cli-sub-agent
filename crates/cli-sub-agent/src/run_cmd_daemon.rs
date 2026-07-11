@@ -1,7 +1,7 @@
 //! Daemon spawn logic for execution commands (daemon mode is the default).
 //! Shared by `csa run`, `csa review`, and `csa debate`.
 
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -360,49 +360,27 @@ pub(crate) fn spawn_and_exit(
         env: daemon_env,
     };
 
-    let result = csa_process::daemon::spawn_daemon(config)?;
-    if spawn_options.wait_for_pre_spawn_memory_admission {
-        crate::run_cmd_daemon_memory_wait::wait_for_daemon_pre_spawn_memory_admission(
+    let spawn_result = csa_process::daemon::spawn_daemon_verified_and_publish(
+        config,
+        |result| {
+            if spawn_options.wait_for_pre_spawn_memory_admission {
+                crate::run_cmd_daemon_memory_wait::wait_for_daemon_pre_spawn_memory_admission(
+                    &project_root,
+                    &result.session_id,
+                    &result.session_dir,
+                )?;
+            }
+            crate::daemon_started_output::prepare(result, &project_root)
+        },
+        |_, output| crate::daemon_started_output::publish(output),
+    );
+    if let Err(error) = spawn_result {
+        return Err(crate::daemon_launch_state::attach_retirement_context(
+            error,
             &project_root,
-            &result.session_id,
-            &result.session_dir,
-        )?;
+            &sid,
+        ));
     }
-    verify_daemon_session_waitable(&project_root, &result.session_id)?;
-    // stdout: machine-readable session ID (for script capture).
-    println!("{}", result.session_id);
-    // stderr: structured RPJ directive for orchestrators.
-    let wait_cmd =
-        crate::daemon_caller_hints::format_session_wait_command(&result.session_id, &project_root);
-    let attach_cmd = crate::daemon_caller_hints::format_session_attach_command(
-        &result.session_id,
-        &project_root,
-    );
-    let session_dir_attr = crate::daemon_caller_hints::escape_structured_comment_attr(
-        &result.session_dir.display().to_string(),
-    );
-    let wait_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
-    let attach_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&attach_cmd);
-    eprintln!(
-        "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
-         wait_cmd=\"{wait_cmd}\" \
-         attach_cmd=\"{attach_cmd}\" -->",
-        id = result.session_id,
-        pid = result.pid,
-        dir = session_dir_attr,
-        wait_cmd = wait_cmd_attr,
-        attach_cmd = attach_cmd_attr,
-    );
-    eprintln!(
-        "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->",
-        wait_cmd = wait_cmd_attr,
-    );
-    let codex_hint = crate::process_tree::codex_yield_hint();
-    if !codex_hint.is_empty() {
-        eprint!("{codex_hint}");
-    }
-    let _ = std::io::stdout().flush();
-    let _ = std::io::stderr().flush();
     std::process::exit(0);
 }
 

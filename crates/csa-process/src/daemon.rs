@@ -13,6 +13,12 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
+#[path = "daemon_cleanup.rs"]
+mod cleanup;
+#[cfg(test)]
+use cleanup::stop_systemd_scope_with_timeout;
+use cleanup::{SpawnedProcessCleanup, terminate_and_reap_spawned_daemon};
+
 const DAEMON_INDEPENDENT_SCOPE_ENV: &str = "CSA_DAEMON_INDEPENDENT_SCOPE";
 
 /// Configuration for spawning a daemonized child process.
@@ -169,10 +175,90 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
     spawn_daemon_with_systemd_run(config, Path::new("systemd-run"))
 }
 
+/// Spawn a daemon, run a caller-provided readiness check while the child is
+/// still owned by this process, and detach only after the check succeeds.
+///
+/// A failed check stops an independent scope when present, terminates the
+/// anchored spawned process group, reaps its leader, and removes matching
+/// PID/scope records after successful cleanup. If a liveness probe has already
+/// reaped the leader, cleanup never signals its stale PGID; it may still stop
+/// the exact recorded systemd unit. Spool logs remain for diagnostics.
+pub fn spawn_daemon_verified<F>(config: DaemonSpawnConfig, verify: F) -> Result<DaemonSpawnResult>
+where
+    F: FnOnce(&DaemonSpawnResult) -> Result<()>,
+{
+    spawn_daemon_verified_and_publish(config, verify, |_, ()| Ok(()))
+}
+
+/// Spawn and verify a daemon, then publish its caller-visible start marker
+/// while the child is still owned. A verification, liveness, or publication
+/// failure triggers bounded cleanup before the error is returned.
+pub fn spawn_daemon_verified_and_publish<T, F, P>(
+    config: DaemonSpawnConfig,
+    verify: F,
+    publish: P,
+) -> Result<DaemonSpawnResult>
+where
+    F: FnOnce(&DaemonSpawnResult) -> Result<T>,
+    P: FnOnce(&DaemonSpawnResult, T) -> Result<()>,
+{
+    spawn_daemon_verified_with_commands_and_publish(
+        config,
+        Path::new("systemd-run"),
+        Path::new("systemctl"),
+        verify,
+        publish,
+    )
+}
+
 fn spawn_daemon_with_systemd_run(
     config: DaemonSpawnConfig,
     systemd_run: &Path,
 ) -> Result<DaemonSpawnResult> {
+    spawn_daemon_verified_with_systemd_run(config, systemd_run, |_| Ok(()))
+}
+
+fn spawn_daemon_verified_with_systemd_run<F>(
+    config: DaemonSpawnConfig,
+    systemd_run: &Path,
+    verify: F,
+) -> Result<DaemonSpawnResult>
+where
+    F: FnOnce(&DaemonSpawnResult) -> Result<()>,
+{
+    spawn_daemon_verified_with_commands(config, systemd_run, Path::new("systemctl"), verify)
+}
+
+fn spawn_daemon_verified_with_commands<F>(
+    config: DaemonSpawnConfig,
+    systemd_run: &Path,
+    systemctl: &Path,
+    verify: F,
+) -> Result<DaemonSpawnResult>
+where
+    F: FnOnce(&DaemonSpawnResult) -> Result<()>,
+{
+    spawn_daemon_verified_with_commands_and_publish(
+        config,
+        systemd_run,
+        systemctl,
+        verify,
+        |_, ()| Ok(()),
+    )
+}
+
+fn spawn_daemon_verified_with_commands_and_publish<T, F, P>(
+    config: DaemonSpawnConfig,
+    systemd_run: &Path,
+    systemctl: &Path,
+    verify: F,
+
+    publish: P,
+) -> Result<DaemonSpawnResult>
+where
+    F: FnOnce(&DaemonSpawnResult) -> Result<T>,
+    P: FnOnce(&DaemonSpawnResult, T) -> Result<()>,
+{
     std::fs::create_dir_all(&config.session_dir).with_context(|| {
         format!(
             "failed to create session dir {}",
@@ -186,7 +272,7 @@ fn spawn_daemon_with_systemd_run(
     let spawn_mode = daemon_spawn_mode(&config.session_id);
     match &spawn_mode {
         DaemonSpawnMode::Direct => {
-            let _ = std::fs::remove_file(config.session_dir.join("daemon.scope"));
+            remove_file_if_exists(&config.session_dir.join("daemon.scope"))?;
             writeln!(
                 stderr_file,
                 "CSA daemon spawn: direct detached process; no inherited CSA systemd scope detected"
@@ -218,8 +304,8 @@ fn spawn_daemon_with_systemd_run(
         });
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
+    let (mut child, effective_spawn_mode) = match cmd.spawn() {
+        Ok(child) => (child, spawn_mode),
         Err(scope_err) if matches!(spawn_mode, DaemonSpawnMode::IndependentScope { .. }) => {
             // systemd-run binary not found or exec failed; fall back to direct detach.
             tracing::warn!(
@@ -232,7 +318,7 @@ fn spawn_daemon_with_systemd_run(
                 stderr2,
                 "CSA daemon spawn: scope spawn failed ({scope_err}), retrying as direct detached process"
             )?;
-            let _ = std::fs::remove_file(config.session_dir.join("daemon.scope"));
+            remove_file_if_exists(&config.session_dir.join("daemon.scope"))?;
             let mut cmd2 = build_daemon_command(&config, &DaemonSpawnMode::Direct);
             cmd2.stdin(Stdio::null());
             cmd2.stdout(stdout2);
@@ -246,369 +332,213 @@ fn spawn_daemon_with_systemd_run(
                     Ok(())
                 });
             }
-            cmd2.spawn()
-                .context("daemon spawn retry (direct mode) also failed")?
+            (
+                cmd2.spawn()
+                    .context("daemon spawn retry (direct mode) also failed")?,
+                DaemonSpawnMode::Direct,
+            )
         }
         Err(e) => return Err(e).context("failed to spawn daemon child process"),
     };
 
     let pid = child.id();
 
-    // Write daemon PID file for `csa session kill` and `wait` liveness checks.
-    let pid_path = config.session_dir.join("daemon.pid");
-    std::fs::write(&pid_path, daemon_pid_record(pid))
-        .with_context(|| format!("failed to write {}", pid_path.display()))?;
-
-    // Detach: the daemon child will outlive us. We must not leave a
-    // zombie, so `try_wait` reaps it if it already exited (unlikely)
-    // and `forget` prevents the Drop impl from killing the child.
-    let _ = child.try_wait();
-    // Intentionally leak the Child handle so Drop doesn't kill the daemon.
-    std::mem::forget(child);
-
-    Ok(DaemonSpawnResult {
+    let result = DaemonSpawnResult {
         pid,
         session_id: config.session_id,
         session_dir: config.session_dir,
-    })
-}
+    };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Read;
-    use std::sync::{Mutex, MutexGuard};
-
-    static DAEMON_SCOPE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct DaemonScopeEnvGuard {
-        _lock: MutexGuard<'static, ()>,
+    // Write daemon PID file for `csa session kill` and `wait` liveness checks.
+    let pid_path = result.session_dir.join("daemon.pid");
+    if let Err(error) = std::fs::write(&pid_path, daemon_pid_record(pid))
+        .with_context(|| format!("failed to write {}", pid_path.display()))
+    {
+        return Err(cleanup_after_spawn_error(
+            error,
+            "daemon PID record setup failed",
+            SpawnedProcessCleanup::ProcessGroupAnchor(&mut child),
+            &effective_spawn_mode,
+            systemctl,
+            &result,
+        ));
     }
 
-    impl Drop for DaemonScopeEnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: daemon spawn tests serialize environment mutation through
-            // DAEMON_SCOPE_ENV_LOCK and restore the variable before releasing it.
-            unsafe {
-                std::env::remove_var(DAEMON_INDEPENDENT_SCOPE_ENV);
+    let verified = match verify(&result) {
+        Ok(verified) => verified,
+        Err(error) => {
+            return Err(cleanup_after_spawn_error(
+                error,
+                "daemon readiness verification failed",
+                SpawnedProcessCleanup::ProcessGroupAnchor(&mut child),
+                &effective_spawn_mode,
+                systemctl,
+                &result,
+            ));
+        }
+    };
+
+    // Detach only after all caller-supplied pre-marker checks pass. A scoped
+    // spawn uses synchronous `systemd-run --scope`, so its launcher remains
+    // alive for exactly as long as the scoped command. In either mode, an
+    // already-exited owned child means there is no live daemon to announce.
+    let child_status = match child
+        .try_wait()
+        .context("failed to inspect spawned daemon after readiness verification")
+    {
+        Ok(status) => status,
+        Err(error) => {
+            return Err(cleanup_after_spawn_error(
+                error,
+                "spawned-daemon liveness check failed",
+                SpawnedProcessCleanup::WaitStateUnknown,
+                &effective_spawn_mode,
+                systemctl,
+                &result,
+            ));
+        }
+    };
+    if let Some(status) = child_status {
+        // try_wait consumed the child status, so the numeric PID/PGID is no
+        // longer an ownership token. Only exact-unit cleanup remains safe.
+        let exited_err = anyhow::anyhow!(
+            "daemon process {pid} exited before readiness verification completed: {status}"
+        );
+        return Err(cleanup_after_spawn_error(
+            exited_err,
+            "spawned daemon exited early",
+            SpawnedProcessCleanup::AlreadyReaped,
+            &effective_spawn_mode,
+            systemctl,
+            &result,
+        ));
+    }
+
+    if let Err(error) = publish(&result, verified) {
+        return Err(cleanup_after_spawn_error(
+            error,
+            "daemon start-marker publication failed",
+            SpawnedProcessCleanup::ProcessGroupAnchor(&mut child),
+            &effective_spawn_mode,
+            systemctl,
+            &result,
+        ));
+    }
+
+    // Release the handle without waiting. std::process::Child has no
+    // kill-on-drop behavior, so the successfully verified daemon stays detached.
+    drop(child);
+    Ok(result)
+}
+
+fn cleanup_after_spawn_error(
+    primary: anyhow::Error,
+    context: &str,
+    process: SpawnedProcessCleanup<'_>,
+    spawn_mode: &DaemonSpawnMode,
+    systemctl: &Path,
+    result: &DaemonSpawnResult,
+) -> anyhow::Error {
+    let primary = primary.context(context.to_string());
+    match terminate_and_reap_spawned_daemon(process, spawn_mode, systemctl)
+        .and_then(|()| remove_spawn_lifecycle_records(result, spawn_mode))
+    {
+        Ok(()) => primary,
+        Err(cleanup_error) => primary.context(format!(
+            "spawned-daemon cleanup also failed: {cleanup_error:#}"
+        )),
+    }
+}
+
+fn remove_spawn_lifecycle_records(
+    result: &DaemonSpawnResult,
+    spawn_mode: &DaemonSpawnMode,
+) -> Result<()> {
+    let pid_path = result.session_dir.join("daemon.pid");
+    match std::fs::read_to_string(&pid_path) {
+        Ok(contents) => {
+            let recorded_pid = contents
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse().ok());
+            if recorded_pid == Some(result.pid) {
+                remove_file_if_exists(&pid_path)?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context(format!("failed to read {}", pid_path.display())),
+    }
+
+    if let DaemonSpawnMode::IndependentScope { unit } = spawn_mode {
+        let scope_path = result.session_dir.join("daemon.scope");
+        match std::fs::read_to_string(&scope_path) {
+            Ok(contents) if contents.trim() == unit => remove_file_if_exists(&scope_path)?,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).context(format!("failed to read {}", scope_path.display()));
             }
         }
     }
+    Ok(())
+}
 
-    fn force_direct_daemon_spawn_for_test() -> DaemonScopeEnvGuard {
-        let lock = DAEMON_SCOPE_ENV_LOCK
-            .lock()
-            .expect("daemon env lock poisoned");
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context(format!("failed to remove {}", path.display())),
+    }
+}
+
+#[cfg(test)]
+static DAEMON_SCOPE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+struct DaemonScopeEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for DaemonScopeEnvGuard {
+    fn drop(&mut self) {
         // SAFETY: daemon spawn tests serialize environment mutation through
-        // DAEMON_SCOPE_ENV_LOCK and restore the variable in DaemonScopeEnvGuard.
+        // DAEMON_SCOPE_ENV_LOCK and restore the variable before releasing it.
         unsafe {
-            std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "0");
-        }
-        DaemonScopeEnvGuard { _lock: lock }
-    }
-
-    fn force_independent_scope_for_test() -> DaemonScopeEnvGuard {
-        let lock = DAEMON_SCOPE_ENV_LOCK
-            .lock()
-            .expect("daemon env lock poisoned");
-        // SAFETY: daemon spawn tests serialize environment mutation through
-        // DAEMON_SCOPE_ENV_LOCK and restore the variable in DaemonScopeEnvGuard.
-        unsafe {
-            std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "1");
-        }
-        DaemonScopeEnvGuard { _lock: lock }
-    }
-
-    /// Write a wrapper that LOGS every received arg on its own line, then
-    /// skips daemon-child prefix args until `--` and evals the rest.
-    ///
-    /// The per-arg `arg=<token>` log is what
-    /// `test_daemon_spawn_supports_multi_word_subcommand` inspects to prove
-    /// that the multi-word subcommand was actually split into distinct
-    /// argv tokens (`plan` and `run`), not passed as a single
-    /// `"plan run"` token. Without this, the wrapper's pre-`--` consume
-    /// loop would discard the evidence and the assertion would pass
-    /// vacuously.
-    fn write_wrapper_script(dir: &std::path::Path, name: &str) -> PathBuf {
-        use std::io::Write;
-        let script = dir.join(name);
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o755)
-            .open(&script)
-            .expect("create wrapper script");
-        f.write_all(
-            b"#!/bin/sh\n\
-              # Log every received arg first (one per line) so tests can\n\
-              # assert on how the spawner split the subcommand path.\n\
-              for tok in \"$@\"; do\n  echo \"arg=$tok\"\ndone\n\
-              # Then skip all args until '--' and eval the rest.\n\
-              while [ \"$#\" -gt 0 ]; do\n  case \"$1\" in --) shift; break;; *) shift;; esac\ndone\n\
-              eval \"$@\"\n",
-        )
-        .expect("write wrapper script");
-        f.sync_all().expect("sync wrapper script");
-        drop(f);
-        script
-    }
-
-    fn test_spawn_config(session_id: &str, csa_binary: PathBuf) -> DaemonSpawnConfig {
-        DaemonSpawnConfig {
-            session_id: session_id.to_string(),
-            session_dir: PathBuf::from("/tmp/session-unused"),
-            csa_binary,
-            subcommand: "plan run".to_string(),
-            args: vec!["--flag".to_string(), "value".to_string()],
-            env: HashMap::from([("CSA_TEST_ENV".to_string(), "1".to_string())]),
-        }
-    }
-
-    #[test]
-    fn test_build_daemon_command_direct_preserves_child_args() {
-        let config = test_spawn_config("TESTDIRECT", PathBuf::from("/bin/csa-test"));
-        let cmd = build_daemon_command(&config, &DaemonSpawnMode::Direct);
-
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        assert_eq!(cmd.get_program().to_string_lossy(), "/bin/csa-test");
-        assert_eq!(
-            args,
-            vec![
-                "plan",
-                "run",
-                "--daemon-child",
-                "--session-id",
-                "TESTDIRECT",
-                "--flag",
-                "value",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_daemon_command_independent_scope_wraps_systemd_run() {
-        let config = test_spawn_config("TESTSCOPE", PathBuf::from("/bin/csa-test"));
-        let cmd = build_daemon_command(
-            &config,
-            &DaemonSpawnMode::IndependentScope {
-                unit: "csa-daemon-TESTSCOPE.scope".to_string(),
-            },
-        );
-
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        assert_eq!(cmd.get_program().to_string_lossy(), "systemd-run");
-        assert_eq!(
-            args,
-            vec![
-                "--user",
-                "--scope",
-                "--quiet",
-                "--collect",
-                "--unit",
-                "csa-daemon-TESTSCOPE.scope",
-                "--",
-                "/bin/csa-test",
-                "plan",
-                "run",
-                "--daemon-child",
-                "--session-id",
-                "TESTSCOPE",
-                "--flag",
-                "value",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_daemon_spawn_creates_spool_files() {
-        let _guard = force_direct_daemon_spawn_for_test();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let session_dir = tmp.path().join("session-test");
-        let wrapper = write_wrapper_script(tmp.path(), "wrapper1.sh");
-
-        let config = DaemonSpawnConfig {
-            session_id: "TEST001".to_string(),
-            session_dir: session_dir.clone(),
-            csa_binary: wrapper,
-            subcommand: "run".to_string(),
-            // After the injected flags, pass '--' then the real command.
-            args: vec!["--".to_string(), "echo hello".to_string()],
-            env: HashMap::new(),
-        };
-
-        let result = spawn_daemon(config).expect("spawn_daemon");
-        assert_eq!(result.session_id, "TEST001");
-        assert!(result.pid > 0);
-
-        // Give the child time to write and exit.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let stdout_path = session_dir.join("stdout.log");
-        let stderr_path = session_dir.join("stderr.log");
-        assert!(stdout_path.exists(), "stdout.log must exist");
-        assert!(stderr_path.exists(), "stderr.log must exist");
-
-        let mut contents = String::new();
-        File::open(&stdout_path)
-            .expect("open stdout.log")
-            .read_to_string(&mut contents)
-            .expect("read stdout.log");
-        assert!(
-            contents.contains("hello"),
-            "stdout.log should contain 'hello', got: {contents:?}"
-        );
-    }
-
-    #[test]
-    fn test_daemon_spawn_supports_multi_word_subcommand() {
-        let _guard = force_direct_daemon_spawn_for_test();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let session_dir = tmp.path().join("session-multi");
-        let wrapper = write_wrapper_script(tmp.path(), "wrapper-multi.sh");
-
-        let config = DaemonSpawnConfig {
-            session_id: "TEST_MULTI".to_string(),
-            session_dir: session_dir.clone(),
-            csa_binary: wrapper,
-            subcommand: "plan run".to_string(),
-            args: vec!["--".to_string(), "echo got=$1,$2,$3,$4,$5".to_string()],
-            env: HashMap::new(),
-        };
-
-        let result = spawn_daemon(config).expect("spawn_daemon");
-        assert!(result.pid > 0);
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let mut contents = String::new();
-        File::open(session_dir.join("stdout.log"))
-            .expect("open stdout.log")
-            .read_to_string(&mut contents)
-            .expect("read stdout.log");
-
-        // The wrapper logs every received arg as `arg=<token>` on its own
-        // line BEFORE consuming up to `--`. The actual exec was:
-        //   <wrapper> plan run --daemon-child --session-id TEST_MULTI -- echo got=...
-        // Assert on the split: `plan` and `run` MUST appear on DISTINCT
-        // arg= lines. Without distinct lines, `subcommand: "plan run"`
-        // could have been passed as a single argv token and we wouldn't
-        // notice — that was the original test's vacuous-pass bug
-        // (#1130 PR-1 review F2).
-        let arg_lines: Vec<&str> = contents.lines().filter(|l| l.starts_with("arg=")).collect();
-        assert!(
-            arg_lines.contains(&"arg=plan"),
-            "expected a distinct `arg=plan` line proving the subcommand was \
-             split, got arg lines: {arg_lines:?}"
-        );
-        assert!(
-            arg_lines.contains(&"arg=run"),
-            "expected a distinct `arg=run` line proving the subcommand was \
-             split, got arg lines: {arg_lines:?}"
-        );
-        // Sanity: the daemon-child prefix the spawner injects must also be
-        // present so we know we're inspecting the real exec, not a noop.
-        assert!(
-            arg_lines.contains(&"arg=--daemon-child"),
-            "expected `arg=--daemon-child` from the spawner injection, got \
-             arg lines: {arg_lines:?}"
-        );
-        assert!(
-            contents.contains("got="),
-            "stdout should still contain 'got=' (exec ran), got: {contents:?}"
-        );
-    }
-
-    /// Verify that when IndependentScope is forced but systemd-run cannot be
-    /// spawned, spawn_daemon retries with Direct mode and still succeeds.
-    ///
-    /// Simulates the nested-CSA-subprocess scenario where the env override forces
-    /// IndependentScope but dbus / systemd-run is absent (ENOENT at exec time).
-    #[test]
-    fn test_daemon_spawn_falls_back_to_direct_when_scope_spawn_fails() {
-        let _env_guard = force_independent_scope_for_test();
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let session_dir = tmp.path().join("session-fallback");
-        let wrapper = write_wrapper_script(tmp.path(), "wrapper-fallback.sh");
-
-        let missing_systemd_run = tmp.path().join("missing-systemd-run");
-
-        let config = DaemonSpawnConfig {
-            session_id: "TEST_FALLBACK".to_string(),
-            session_dir: session_dir.clone(),
-            csa_binary: wrapper,
-            subcommand: "run".to_string(),
-            args: vec!["--".to_string(), "echo scope-fallback-ok".to_string()],
-            env: HashMap::new(),
-        };
-
-        let result = spawn_daemon_with_systemd_run(config, &missing_systemd_run);
-
-        let result = result.expect("spawn_daemon should succeed via direct fallback");
-        assert!(result.pid > 0);
-
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let contents = std::fs::read_to_string(session_dir.join("stdout.log"))
-            .expect("stdout.log must exist after daemon spawn");
-        assert!(
-            contents.contains("scope-fallback-ok"),
-            "expected 'scope-fallback-ok' in stdout (direct fallback output), got: {contents:?}"
-        );
-    }
-
-    #[test]
-    fn test_daemon_spawn_child_detached() {
-        let _guard = force_direct_daemon_spawn_for_test();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let session_dir = tmp.path().join("session-detach");
-        let wrapper = write_wrapper_script(tmp.path(), "wrapper2.sh");
-
-        let config = DaemonSpawnConfig {
-            session_id: "TEST002".to_string(),
-            session_dir: session_dir.clone(),
-            csa_binary: wrapper,
-            subcommand: "run".to_string(),
-            args: vec![
-                "--".to_string(),
-                "echo pid=$$ sid=$(ps -o sid= -p $$)".to_string(),
-            ],
-            env: HashMap::new(),
-        };
-
-        let result = spawn_daemon(config).expect("spawn_daemon");
-        let child_pid = result.pid;
-        let parent_pid = std::process::id();
-
-        assert_ne!(child_pid, parent_pid, "child PID must differ from parent");
-
-        // Give the child time to write and exit.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let mut contents = String::new();
-        File::open(session_dir.join("stdout.log"))
-            .expect("open stdout.log")
-            .read_to_string(&mut contents)
-            .expect("read stdout.log");
-
-        // Parse the sid= value from output and verify it differs from
-        // the parent's session ID.
-        if let Some(sid_str) = contents.split("sid=").nth(1) {
-            let child_sid: u32 = sid_str.trim().parse().unwrap_or(0);
-            // SAFETY: libc::getsid is safe for the current process.
-            let parent_sid = unsafe { libc::getsid(0) } as u32;
-            assert_ne!(
-                child_sid, parent_sid,
-                "child session ID ({child_sid}) must differ from parent ({parent_sid})"
-            );
+            std::env::remove_var(DAEMON_INDEPENDENT_SCOPE_ENV);
         }
     }
 }
+
+#[cfg(test)]
+fn force_direct_daemon_spawn_for_test() -> DaemonScopeEnvGuard {
+    let lock = DAEMON_SCOPE_ENV_LOCK
+        .lock()
+        .expect("daemon env lock poisoned");
+    // SAFETY: daemon spawn tests serialize environment mutation through the
+    // shared lock and restore the variable in DaemonScopeEnvGuard.
+    unsafe {
+        std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "0");
+    }
+    DaemonScopeEnvGuard { _lock: lock }
+}
+
+#[cfg(test)]
+fn force_independent_scope_for_test() -> DaemonScopeEnvGuard {
+    let lock = DAEMON_SCOPE_ENV_LOCK
+        .lock()
+        .expect("daemon env lock poisoned");
+    // SAFETY: same serialized test-only environment mutation as above.
+    unsafe {
+        std::env::set_var(DAEMON_INDEPENDENT_SCOPE_ENV, "1");
+    }
+    DaemonScopeEnvGuard { _lock: lock }
+}
+
+#[cfg(test)]
+#[path = "daemon_lifecycle_tests.rs"]
+mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "daemon_tests.rs"]
+mod tests;
