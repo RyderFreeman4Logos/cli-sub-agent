@@ -6,6 +6,16 @@
 // This file is `include!`d into `executor.rs`, so the impl block below
 // continues the same `impl Executor` namespace.
 
+fn hermes_dispatch_identity<'a>(
+    provider_override: Option<&'a str>,
+    model_override: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    match model_override.and_then(|model| model.split_once('/')) {
+        Some((provider, model)) => (Some(provider), Some(model)),
+        None => (provider_override, model_override),
+    }
+}
+
 impl Executor {
     /// Append tool-specific arguments for full execution.
     #[cfg(test)]
@@ -217,10 +227,14 @@ impl Executor {
                 model_override,
                 thinking_budget,
             } => {
-                if let Some(provider) = provider_override {
+                let (provider, model) = hermes_dispatch_identity(
+                    provider_override.as_deref(),
+                    model_override.as_deref(),
+                );
+                if let Some(provider) = provider {
                     cmd.arg("--provider").arg(provider);
                 }
-                if let Some(model) = model_override {
+                if let Some(model) = model {
                     cmd.arg("--model").arg(model);
                 }
                 if let Some(budget) = thinking_budget {
@@ -235,5 +249,39 @@ impl Executor {
         for arg in self.yolo_args() {
             cmd.arg(arg);
         }
+    }
+}
+
+#[cfg(test)]
+mod hermes_identity_tests {
+    use super::{Command, Executor, hermes_dispatch_identity};
+
+    #[test]
+    fn provider_qualified_model_overrides_separate_provider() {
+        assert_eq!(
+            hermes_dispatch_identity(Some("openai"), Some("anthropic/claude")),
+            (Some("anthropic"), Some("claude"))
+        );
+        let executor = Executor::Hermes {
+            provider_override: Some("openai".to_string()),
+            model_override: Some("anthropic/claude".to_string()),
+            thinking_budget: None,
+        };
+        let mut command = Command::new("hermes");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--provider", "anthropic", "--model", "claude"]);
+    }
+
+    #[test]
+    fn bare_model_preserves_separate_provider() {
+        assert_eq!(
+            hermes_dispatch_identity(Some("openai"), Some("gpt")),
+            (Some("openai"), Some("gpt"))
+        );
     }
 }
