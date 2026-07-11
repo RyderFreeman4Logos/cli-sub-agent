@@ -31,9 +31,11 @@ allow_custom_reasoning = {custom}
 fn shipped_catalog_preserves_existing_defaults() {
     let catalog = EffectiveModelCatalog::shipped().unwrap();
     for (tool, provider, model, effort) in [
+        ("codex", "openai", "default", "default"),
         ("codex", "openai", "gpt-5.5", "xhigh"),
         ("claude-code", "anthropic", "default", "default"),
         ("gemini-cli", "google", "gemini-2.5-pro", "high"),
+        ("opencode", "*", "default", "default"),
         ("opencode", "google", "gemini-2.5-pro", "high"),
     ] {
         catalog

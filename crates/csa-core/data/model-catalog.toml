@@ -28,6 +28,13 @@ allow_custom_reasoning = true
 [[model_catalog.entries]]
 tool = "codex"
 provider = "openai"
+model = "default"
+reasoning_efforts = ["default", "low", "medium", "high", "xhigh", "max"]
+allow_custom_reasoning = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
 model = "gpt-5.5"
 reasoning_efforts = ["default", "low", "medium", "high", "xhigh", "max"]
 allow_custom_reasoning = true
@@ -246,6 +253,13 @@ allow_custom_reasoning = true
 tool = "gemini-cli"
 provider = "google"
 model = "gemini-2.5-flash"
+reasoning_efforts = ["default", "low", "medium", "high", "xhigh", "max"]
+allow_custom_reasoning = true
+
+[[model_catalog.entries]]
+tool = "opencode"
+provider = "*"
+model = "default"
 reasoning_efforts = ["default", "low", "medium", "high", "xhigh", "max"]
 allow_custom_reasoning = true
 
