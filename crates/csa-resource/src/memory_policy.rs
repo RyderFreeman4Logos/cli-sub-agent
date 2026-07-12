@@ -5,7 +5,8 @@
 /// Lowered from 80% to 70% in #568 to provide headroom before SIGTERM on
 /// memory-constrained hosts. Raised from 65% to 70% after review found that
 /// 65% of Codex's 12288MB limit (7987MB) was below the old 8192MB hard cap,
-/// effectively negating the #555 increase.
+/// effectively negating the #555 increase. (Codex's default was later raised
+/// to 16384MB in #2650.)
 pub const DEFAULT_SOFT_LIMIT_PERCENT: u8 = 70;
 
 /// Return the soft-limit threshold in MB for a configured memory cap.

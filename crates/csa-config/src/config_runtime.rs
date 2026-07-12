@@ -63,10 +63,12 @@ fn default_memory_max_mb_for_tool(tool: &str) -> Option<u64> {
             // Codex uses codex-acp (Node.js) as backend which alone can consume
             // 5+ GB. When the tool also drives Rust compilation (cargo, rustc,
             // proc-macro expansion), 4096 MB is insufficient and 8192 MB still
-            // OOMs in large workspaces. 12288 MB (12 GB) provides headroom for
-            // Node.js runtime + full Rust compilation toolchain.
+            // OOMs in large workspaces. 16384 MB (16 GB) provides headroom for
+            // Node.js runtime + full Rust compilation toolchain + nextest
+            // running thousands of tests in parallel (#2650: 12288 MB was
+            // SIGKILLed when nextest spawned 6868 tests under a sandbox).
             // See: GitHub issue #555.
-            Some(12288)
+            Some(16384)
         }
         _ => profile_defaults(default_profile(tool)).memory_max_mb,
     }

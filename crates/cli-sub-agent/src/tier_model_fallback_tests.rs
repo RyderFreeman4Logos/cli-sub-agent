@@ -1,7 +1,8 @@
 use super::{
-    TierAttemptFailure, classify_next_model_failure_with_elapsed, earliest_backend_reset_window,
-    format_all_models_failed_reason_with_reset, format_all_models_failed_reason_with_ux_context,
-    opaque_total_exhaustion_message, ordered_tier_candidates, parse_backend_reset_duration,
+    TierAttemptFailure, TierFallbackOptions, classify_next_model_failure_with_elapsed,
+    earliest_backend_reset_window, format_all_models_failed_reason_with_reset,
+    format_all_models_failed_reason_with_ux_context, opaque_total_exhaustion_message,
+    ordered_tier_candidates, ordered_tier_candidates_with_catalog, parse_backend_reset_duration,
 };
 use csa_config::{GlobalConfig, ProjectConfig, ToolConfig, global::GlobalToolConfig};
 use csa_core::types::ToolName;
@@ -421,4 +422,104 @@ fn generic_400_within_init_window_still_advances() {
     .expect("a startup 400 within the init window must still advance");
     assert_eq!(detected.reason, "HTTP 400");
     assert!(detected.advance_to_next_model);
+}
+
+#[test]
+fn fully_tombstoned_tier_returns_deterministic_error() {
+    let config = project_config_with_tier(
+        "plan",
+        &["codex/openai/retired-plan-model/high"],
+        &["codex"],
+    );
+    let catalog = csa_config::EffectiveModelCatalog::from_toml_str(
+        r#"
+[model_catalog]
+mode = "extend"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "retired-plan-model"
+enabled = false
+reasoning_efforts = ["high"]
+"#,
+        "tombstoned-plan-test",
+    )
+    .unwrap();
+
+    let error = ordered_tier_candidates_with_catalog(
+        ToolName::Codex,
+        Some("codex/openai/retired-plan-model/high"),
+        Some("plan"),
+        Some(&config),
+        None,
+        &catalog,
+        TierFallbackOptions {
+            enabled: true,
+            preference_order: &[],
+        },
+    )
+    .unwrap_err();
+
+    let message = error.to_string();
+    assert!(message.contains("retired-plan-model"), "{message}");
+    assert!(
+        message.contains("tombstoned and cannot be skipped"),
+        "{message}"
+    );
+}
+
+#[test]
+fn tombstoned_first_candidate_rejects_instead_of_selecting_later_model() {
+    let _availability = crate::test_env_lock::ScopedEnvVarRestore::set(
+        crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+        "1",
+    );
+    let config = project_config_with_tier(
+        "plan",
+        &[
+            "codex/openai/retired-plan-model/high",
+            "codex/openai/live-plan-model/high",
+        ],
+        &["codex"],
+    );
+    let catalog = csa_config::EffectiveModelCatalog::from_toml_str(
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "retired-plan-model"
+enabled = false
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "openai"
+model = "live-plan-model"
+reasoning_efforts = ["high"]
+"#,
+        "mixed tombstone test",
+    )
+    .unwrap();
+
+    let error = ordered_tier_candidates_with_catalog(
+        ToolName::Codex,
+        Some("codex/openai/retired-plan-model/high"),
+        Some("plan"),
+        Some(&config),
+        None,
+        &catalog,
+        TierFallbackOptions {
+            enabled: true,
+            preference_order: &[],
+        },
+    )
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("retired-plan-model"), "{message}");
+    assert!(message.contains("tombstone"), "{message}");
 }

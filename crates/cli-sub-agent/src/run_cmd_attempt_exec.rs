@@ -10,9 +10,9 @@ use tracing::info;
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::{Executor, ResolvedTimeout};
+use csa_executor::ResolvedTimeout;
 
-use crate::pipeline;
+use crate::pipeline::{self, AdmittedExecutor, DispatchExecutor};
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session};
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
@@ -28,7 +28,7 @@ pub(super) enum AttemptExecution {
 }
 
 pub(super) struct EphemeralRunRequest<'a> {
-    pub(super) executor: &'a Executor,
+    pub(super) executor: &'a AdmittedExecutor,
     pub(super) effective_prompt: &'a str,
     pub(super) project_root: &'a Path,
     pub(super) extra_env: Option<&'a std::collections::HashMap<String, String>>,
@@ -54,6 +54,7 @@ pub(super) async fn run_ephemeral_with_timeout(
         _temp_dir.path(),
         request.project_root.display()
     );
+    request.executor.emit_catalog_warning();
     let execution = match tokio::time::timeout(
         timeout_duration,
         request.executor.execute_in(
@@ -88,6 +89,7 @@ pub(super) async fn run_ephemeral_without_timeout(
         _temp_dir.path(),
         request.project_root.display()
     );
+    request.executor.emit_catalog_warning();
     Ok(AttemptExecution::Finished {
         result: Box::new(
             request
@@ -111,7 +113,7 @@ pub(super) async fn run_ephemeral_without_timeout(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_persistent_with_timeout(
-    executor: &Executor,
+    executor: &AdmittedExecutor,
     current_tool: &ToolName,
     effective_prompt: &str,
     output_format: OutputFormat,
@@ -119,6 +121,7 @@ pub(super) async fn run_persistent_with_timeout(
     description: Option<String>,
     skill_session_tag: Option<String>,
     parent: Option<String>,
+    session_creation_mode: pipeline::SessionCreationMode,
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
@@ -175,6 +178,7 @@ pub(super) async fn run_persistent_with_timeout(
         description,
         skill_session_tag,
         parent,
+        session_creation_mode,
         project_root,
         config,
         extra_env,
@@ -207,7 +211,7 @@ pub(super) async fn run_persistent_with_timeout(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_persistent_without_timeout(
-    executor: &Executor,
+    executor: &AdmittedExecutor,
     current_tool: &ToolName,
     effective_prompt: &str,
     output_format: OutputFormat,
@@ -215,6 +219,7 @@ pub(super) async fn run_persistent_without_timeout(
     description: Option<String>,
     skill_session_tag: Option<String>,
     parent: Option<String>,
+    session_creation_mode: pipeline::SessionCreationMode,
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
@@ -250,6 +255,7 @@ pub(super) async fn run_persistent_without_timeout(
         description,
         skill_session_tag,
         parent,
+        session_creation_mode,
         project_root,
         config,
         extra_env,
@@ -282,7 +288,7 @@ pub(super) async fn run_persistent_without_timeout(
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_persistent(
-    executor: &Executor,
+    executor: &AdmittedExecutor,
     current_tool: &ToolName,
     effective_prompt: &str,
     output_format: OutputFormat,
@@ -290,6 +296,7 @@ async fn execute_persistent(
     description: Option<String>,
     skill_session_tag: Option<String>,
     parent: Option<String>,
+    session_creation_mode: pipeline::SessionCreationMode,
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
@@ -361,7 +368,7 @@ async fn execute_persistent(
         Some(global_config),
         pre_session_hook,
         pipeline::ParentSessionSource::ExplicitOrEnv,
-        pipeline::SessionCreationMode::DaemonManaged,
+        session_creation_mode,
         resource_overrides,
         no_fs_sandbox,
         allow_user_daemon_ipc,

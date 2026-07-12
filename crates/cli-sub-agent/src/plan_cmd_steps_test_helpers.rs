@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 
@@ -12,6 +13,20 @@ use super::plan_cmd_steps::{
     PlanRunContext, StepExecutionContext, StepResult, execute_plan_with_journal,
     execute_step_with_workflow,
 };
+
+static TEST_GLOBAL_CONFIG: LazyLock<csa_config::GlobalConfig> =
+    LazyLock::new(csa_config::GlobalConfig::default);
+static TEST_MODEL_CATALOG: LazyLock<csa_config::EffectiveModelCatalog> = LazyLock::new(|| {
+    csa_config::EffectiveModelCatalog::shipped().expect("shipped model catalog for plan tests")
+});
+
+pub(crate) fn test_global_config() -> &'static csa_config::GlobalConfig {
+    &TEST_GLOBAL_CONFIG
+}
+
+pub(crate) fn test_model_catalog() -> &'static csa_config::EffectiveModelCatalog {
+    &TEST_MODEL_CATALOG
+}
 
 /// Execute all steps in the plan sequentially.
 ///
@@ -32,6 +47,8 @@ pub(crate) async fn execute_plan(
         project_root,
         workflow_path: &workflow_path,
         config,
+        global_config: test_global_config(),
+        model_catalog: test_model_catalog(),
         tool_override,
         model_spec_override: None,
         journal: &mut journal,
@@ -63,6 +80,8 @@ pub(crate) async fn execute_step(
             project_root,
             workflow_path: &workflow_path_buf,
             config,
+            global_config: test_global_config(),
+            model_catalog: test_model_catalog(),
             tool_override,
             model_spec_override,
             no_fs_sandbox: false,

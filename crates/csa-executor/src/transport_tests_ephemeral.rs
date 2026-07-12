@@ -114,7 +114,8 @@ done
 
 echo "$effort" >> "$MODEL_LOG"
 
-if [ "$effort" = "xhigh" ]; then
+if [ ! -e "${MODEL_LOG}.retried" ]; then
+  touch "${MODEL_LOG}.retried"
   sleep 5
   exit 0
 fi
@@ -164,8 +165,8 @@ echo "ok effort=$effort"
 
     assert_eq!(result.exit_code, 0);
     assert!(
-        result.output.contains("ok effort=high"),
-        "expected downgraded retry output, got: {}",
+        result.output.contains("ok effort=xhigh"),
+        "expected same-effort retry output, got: {}",
         result.output
     );
     let attempts = std::fs::read_to_string(&model_log_path)
@@ -175,7 +176,7 @@ echo "ok effort=$effort"
         .collect::<Vec<_>>();
     assert_eq!(
         attempts,
-        vec!["xhigh".to_string(), "high".to_string()],
+        vec!["xhigh".to_string(), "xhigh".to_string()],
         "Executor::execute_in should trigger codex stall retry via the direct entry"
     );
 }

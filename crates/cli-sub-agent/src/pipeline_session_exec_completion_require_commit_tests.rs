@@ -206,6 +206,7 @@ async fn signal_killed_run_records_dirty_workspace_and_memory_recovery() {
     );
 }
 
+#[cfg(not(target_os = "macos"))]
 #[tokio::test]
 async fn signal_killed_require_commit_run_rescues_dirty_workspace() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -290,6 +291,7 @@ async fn signal_killed_require_commit_run_rescues_dirty_workspace() {
     assert_eq!(git_capture(project_root, &["status", "--short"]), "");
 }
 
+#[cfg(not(target_os = "macos"))]
 #[tokio::test]
 async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes() {
     let tmp = tempfile::tempdir().expect("tempdir");

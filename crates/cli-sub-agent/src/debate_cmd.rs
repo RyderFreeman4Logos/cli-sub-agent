@@ -22,9 +22,9 @@ mod question;
 
 #[path = "debate_cmd_finalize.rs"]
 mod finalize;
+pub(crate) use finalize::{DebateFinalizeContext, finalize_debate_outcome_with_catalog};
 #[cfg(test)]
-pub(crate) use finalize::resolve_persisted_debate_session_id;
-pub(crate) use finalize::{DebateFinalizeContext, finalize_debate_outcome};
+pub(crate) use finalize::{finalize_debate_outcome, resolve_persisted_debate_session_id};
 
 #[path = "debate_cmd_execute.rs"]
 mod execute;
@@ -81,7 +81,7 @@ pub(crate) async fn handle_debate(
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
     // 2. Load config and validate recursion depth
-    let Some((config, global_config)) =
+    let Some((config, global_config, model_catalog)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
@@ -202,6 +202,7 @@ pub(crate) async fn handle_debate(
         args.model_spec.as_deref(),
         config.as_ref(),
         &global_config,
+        &model_catalog,
         parent_tool.as_deref(),
         &project_root,
         args.force_override_user_config,
@@ -294,6 +295,7 @@ pub(crate) async fn handle_debate(
         project_root: &project_root,
         config: config.as_ref(),
         global_config: &global_config,
+        model_catalog: &model_catalog,
         pre_session_hook,
         prompt: &prompt,
         debate_description: &debate_description,

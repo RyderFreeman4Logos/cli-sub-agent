@@ -23,6 +23,7 @@ pub(crate) struct FinalizedDebateOutcome {
 pub(crate) struct DebateFinalizeContext<'a> {
     pub(crate) all_tier_models_failed: bool,
     pub(crate) project_config: Option<&'a ProjectConfig>,
+
     pub(crate) resolved_tier_name: Option<&'a str>,
     pub(crate) failures: &'a [TierAttemptFailure],
     pub(crate) debate_mode: DebateMode,
@@ -59,10 +60,22 @@ fn build_unavailable_debate_summary(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn finalize_debate_outcome(
     project_root: &Path,
     output_format: OutputFormat,
     execution: Option<crate::pipeline::SessionExecutionResult>,
+    context: DebateFinalizeContext<'_>,
+) -> Result<FinalizedDebateOutcome> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped()?;
+    finalize_debate_outcome_with_catalog(project_root, output_format, execution, &catalog, context)
+}
+
+pub(crate) fn finalize_debate_outcome_with_catalog(
+    project_root: &Path,
+    output_format: OutputFormat,
+    execution: Option<crate::pipeline::SessionExecutionResult>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     context: DebateFinalizeContext<'_>,
 ) -> Result<FinalizedDebateOutcome> {
     // A completed debate whose rendered output carries a recognized verdict
@@ -178,8 +191,9 @@ pub(crate) fn finalize_debate_outcome(
                 session_id,
                 original_tool,
                 fallback_tool,
-                crate::tier_model_fallback::build_fallback_chain_for_result(
+                crate::tier_model_fallback::build_fallback_chain_for_result_with_catalog(
                     context.project_config,
+                    model_catalog,
                     context.resolved_tier_name,
                     context.failures,
                     context.selected_model_spec,

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use csa_config::{GlobalConfig, ProjectConfig};
+use csa_core::model_catalog::EffectiveModelCatalog;
 use csa_core::types::ToolName;
 
 /// Request struct for tool and model routing.
@@ -16,6 +17,7 @@ pub(crate) struct RoutingRequest<'a> {
     pub thinking: Option<&'a str>,
     pub config: Option<&'a ProjectConfig>,
     pub global_config: Option<&'a GlobalConfig>,
+    pub model_catalog: Option<&'a EffectiveModelCatalog>,
     pub project_root: &'a Path,
     pub force: bool,
     pub force_override_user_config: bool,
@@ -38,6 +40,7 @@ impl<'a> RoutingRequest<'a> {
             thinking: None,
             config: None,
             global_config: None,
+            model_catalog: None,
             project_root,
             force: false,
             force_override_user_config: false,

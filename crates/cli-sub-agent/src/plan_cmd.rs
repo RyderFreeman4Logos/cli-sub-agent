@@ -72,7 +72,9 @@ pub(crate) use plan_cmd_steps::resolve_step_tool;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
 pub(crate) use plan_cmd_steps::{StepResult, StepTarget, resolve_step_tool_with_variables};
 #[cfg(test)]
-pub(crate) use plan_cmd_steps_test_helpers::{execute_plan, execute_step};
+pub(crate) use plan_cmd_steps_test_helpers::{
+    execute_plan, execute_step, test_global_config, test_model_catalog,
+};
 
 // Journal, resume-context, and repo-fingerprint primitives live in
 // `plan_cmd_journal` to keep this module within the per-file token budget.
@@ -200,8 +202,12 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         project_root.display()
     );
 
-    // 2. Load project config (optional)
-    let config = ProjectConfig::load(&project_root)?;
+    // 2. Load one immutable model-sensitive snapshot for the whole command.
+    let csa_config::EffectiveConfig {
+        project: config,
+        global: global_config,
+        model_catalog,
+    } = csa_config::EffectiveConfig::load(&project_root)?;
 
     // 3. Check recursion depth
     let max_depth = config
@@ -213,6 +219,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
     }
     enforce_plan_run_tier_bypass_gate(
         config.as_ref(),
+        &global_config,
         model_spec_override.as_deref(),
         &startup_env,
     )?;
@@ -352,6 +359,8 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         project_root: &project_root,
         workflow_path: &workflow_path,
         config: config.as_ref(),
+        global_config: &global_config,
+        model_catalog: &model_catalog,
         tool_override: tool_override.as_ref(),
         model_spec_override: model_spec_override.as_ref(),
         journal: &mut journal,
@@ -525,19 +534,19 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
 
 fn enforce_plan_run_tier_bypass_gate(
     config: Option<&ProjectConfig>,
+    global_config: &csa_config::GlobalConfig,
     model_spec_override: Option<&str>,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let Some(model_spec) = model_spec_override else {
         return Ok(());
     };
-    let global_config = csa_config::GlobalConfig::load()?;
     let inherited_trusted_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env)
             .is_some_and(|pin| pin.force_ignore_tier_setting && pin.model_spec == model_spec);
     crate::run_helpers::enforce_tier_bypass_gate(crate::run_helpers::TierBypassGateCtx {
         project_config: config,
-        global_config: &global_config,
+        global_config,
         flags: crate::run_helpers::TierBypassGateFlags {
             model_spec: true,
             force: false,

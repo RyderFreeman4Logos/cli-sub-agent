@@ -34,7 +34,7 @@ pub(crate) use lock::WaitCallerIdentity;
 pub(crate) use lock::parent_pid;
 #[cfg(test)]
 pub(crate) use lock::process_start_time_ticks;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) use lock::process_state;
 #[cfg(test)]
 pub(crate) use lock::try_acquire_session_wait_lock;

@@ -16,11 +16,16 @@ set dotenv-load := true
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
 _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
 # Default Cargo/rustc fan-out for Just recipes is auto-detected from available
-# memory; override with `CARGO_BUILD_JOBS=<n> just ...`. Do not default
-# NEXTEST_TEST_THREADS here: full-suite runs need nextest's normal parallelism
-# to avoid serializing thousands of tests.
+# memory; override with `CARGO_BUILD_JOBS=<n> just ...`.
+# NEXTEST_TEST_THREADS defaults to 16 in the `test` recipe below (#2650);
+# see comment there for rationale.
 _auto_build_jobs := `scripts/detect-build-jobs.sh`
 export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", _auto_build_jobs)
+# Disable nextest's double-spawn test execution mode. With symlinked target/
+# directories the double-spawn re-exec fails with "No such file or directory"
+# (#1742). The `double-spawn` key was removed from nextest's TOML config schema;
+# the NEXTEST_DOUBLE_SPAWN environment variable is the official replacement.
+export NEXTEST_DOUBLE_SPAWN := "0"
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
@@ -80,6 +85,10 @@ find-monolith-files:
 monolith-test:
     bash scripts/tests/monolith-check-tests.sh
 
+# Verify exact-head release builds ignore live checkout and dotenv contamination.
+exact-build-test:
+    bash scripts/tests/build-exact-head-binaries-tests.sh
+
 # Fail if generated or scratch artifacts are staged for commit.
 check-generated-artifacts:
     #!/usr/bin/env bash
@@ -111,6 +120,7 @@ check-version-bumped:
 pre-commit-fast:
     just find-monolith-files
     just monolith-test
+    just exact-build-test
     just check-path-includes
     just check-generated-artifacts
     just check-version-bumped
@@ -125,6 +135,10 @@ pre-commit:
     just pre-commit-fast
     just test
     just test-e2e
+
+# Authoritative local replacement for hosted GitHub CI.
+pre-push:
+    scripts/hooks/pre-push-quality-gates.sh
 
 # ==============================================================================
 
@@ -208,15 +222,23 @@ deny:
 # 🧪 Testing
 # ==============================================================================
 
+# Cap nextest parallelism to avoid exhausting memory and process/thread limits
+# when running the full test suite under a CSA sandbox. With ~7000 tests,
+# unlimited parallelism causes OOM SIGKILL and fork() EAGAIN (#2650).
+# Override with NEXTEST_TEST_THREADS=<n> just test.
+# Validate via shell to prevent shell injection from untrusted env values.
+# Use case (not grep) to reject multiline values that contain embedded newlines.
+_nextest_threads := `_v="${NEXTEST_TEST_THREADS:-16}"; case "$_v" in *[!0-9]*|'') echo 16 ;; *) echo "$_v" ;; esac`
+
 # Run all tests in the workspace across default and feature builds.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
-# NEXTEST_TEST_THREADS is caller-controlled.
+# NEXTEST_TEST_THREADS caps nextest parallelism (default 16, see #2650).
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace
+    {{_cargo}} nextest run --workspace --test-threads {{_nextest_threads}}
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace --all-features
+    {{_cargo}} nextest run --workspace --all-features --test-threads {{_nextest_threads}}
 
 # Run e2e tests only.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
@@ -258,22 +280,51 @@ review:
     @echo ""
     @echo "Review the above before committing."
 
-# Reviewed push: run csa review --range base...HEAD, then push, create/reuse PR,
-# and synchronously trigger the post-create review transaction.
-push-reviewed base="main":
+# Reviewed push: run csa review against one captured commit, then push that exact
+# commit, create/reuse PR, and synchronously trigger the post-create transaction.
+push-reviewed base="main" expected_head="" expected_branch="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ "{{base}}" != "main" ]; then
+    base={{quote(base)}}
+    expected_head={{quote(expected_head)}}
+    expected_branch={{quote(expected_branch)}}
+    if [ "${base}" != "main" ]; then
         echo "ERROR: push-reviewed currently supports base=main only."
         exit 1
     fi
-    echo "=== Pre-push review: csa review --sa-mode false --range {{base}}...HEAD ==="
-    csa review --sa-mode false --range "{{base}}...HEAD"
-    echo "=== Review passed. Pushing... ==="
-    git push -u origin HEAD
-    echo "=== Creating or reusing PR targeting {{base}}... ==="
+    review_head="$(git rev-parse HEAD)"
+    current_branch="$(git symbolic-ref --quiet --short HEAD)" || {
+        echo "ERROR: push-reviewed requires an attached feature branch." >&2
+        exit 1
+    }
+    if [ -n "${expected_head}" ] && [ "${review_head}" != "${expected_head}" ]; then
+        echo "ERROR: HEAD changed before review: expected ${expected_head}, found ${review_head}." >&2
+        exit 1
+    fi
+    if [ -n "${expected_branch}" ] && [ "${current_branch}" != "${expected_branch}" ]; then
+        echo "ERROR: branch changed before review: expected ${expected_branch}, found ${current_branch}." >&2
+        exit 1
+    fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "ERROR: push-reviewed requires a clean tracked worktree." >&2
+        exit 1
+    fi
+    echo "=== Pre-push review: csa review --sa-mode false --range ${base}...${review_head} ==="
+    csa review --sa-mode false --range "${base}...${review_head}"
+    reviewed_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    if [ "$(git rev-parse HEAD)" != "${review_head}" ] \
+        || [ "${reviewed_branch}" != "${current_branch}" ] \
+        || ! git diff --quiet \
+        || ! git diff --cached --quiet; then
+        echo "ERROR: HEAD, branch, or tracked files changed during review; refusing to push." >&2
+        exit 1
+    fi
+    echo "=== Review passed. Pushing captured commit ${review_head}... ==="
+    git push origin "${review_head}:refs/heads/${current_branch}"
+    git branch --set-upstream-to="origin/${current_branch}" "${current_branch}"
+    echo "=== Creating or reusing PR targeting ${base}... ==="
     set +e
-    CREATE_OUTPUT="$(gh pr create --base "{{base}}" 2>&1)"
+    CREATE_OUTPUT="$(gh pr create --base "${base}" --head "${current_branch}" 2>&1)"
     CREATE_RC=$?
     set -e
     if [ "${CREATE_RC}" -ne 0 ]; then
@@ -283,7 +334,81 @@ push-reviewed base="main":
         fi
         echo "PR already exists. Continuing with post-create helper."
     fi
-    scripts/hooks/post-pr-create.sh --base "{{base}}"
+    PR_JSON="$(gh pr list --state open --base "${base}" --head "${current_branch}" --json number,headRefName,headRefOid,baseRefName)"
+    if [ "$(printf '%s' "${PR_JSON}" | jq 'length')" != "1" ]; then
+        echo "ERROR: expected exactly one open PR for ${current_branch} -> ${base}." >&2
+        exit 1
+    fi
+    PR_NUMBER="$(printf '%s' "${PR_JSON}" | jq -r '.[0].number')"
+    REMOTE_HEAD="$(printf '%s' "${PR_JSON}" | jq -r '.[0].headRefOid')"
+    if [ "${REMOTE_HEAD}" != "${review_head}" ]; then
+        echo "ERROR: PR #${PR_NUMBER} points to ${REMOTE_HEAD}, expected reviewed commit ${review_head}." >&2
+        exit 1
+    fi
+    scripts/hooks/post-pr-create.sh \
+        --base "${base}" \
+        --pr-number "${PR_NUMBER}" \
+        --expected-branch "${current_branch}" \
+        --expected-head "${review_head}"
+
+# Exact-head reviewed push: build from an isolated archive of one captured SHA,
+# force all nested workflow calls to resolve those binaries, then reuse
+# push-reviewed.
+push-reviewed-exact base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base={{quote(base)}}
+    if [ "${base}" != "main" ]; then
+        echo "ERROR: push-reviewed-exact currently supports base=main only." >&2
+        exit 1
+    fi
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "ERROR: push-reviewed-exact requires a clean tracked worktree so release binaries match HEAD." >&2
+        echo "Commit or stash tracked changes, then retry." >&2
+        exit 1
+    fi
+    exact_head="$(git rev-parse HEAD)"
+    exact_branch="$(git symbolic-ref --quiet --short HEAD)" || {
+        echo "ERROR: push-reviewed-exact requires an attached feature branch." >&2
+        exit 1
+    }
+    exact_bin_dir="{{_repo_root}}/target/exact-head/${exact_head}"
+    "{{_repo_root}}/scripts/build-exact-head-binaries.sh" \
+        --repo "{{_repo_root}}" \
+        --head "${exact_head}" \
+        --output-dir "${exact_bin_dir}"
+    built_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    if [ "$(git rev-parse HEAD)" != "${exact_head}" ] \
+        || [ "${built_branch}" != "${exact_branch}" ] \
+        || ! git diff --quiet \
+        || ! git diff --cached --quiet; then
+        echo "ERROR: HEAD, branch, or tracked files changed during exact-head build; refusing to continue." >&2
+        exit 1
+    fi
+    if [ "$(cat "${exact_bin_dir}/SOURCE_COMMIT")" != "${exact_head}" ]; then
+        echo "ERROR: exact-head build provenance does not match ${exact_head}." >&2
+        exit 1
+    fi
+    exact_csa="${exact_bin_dir}/csa"
+    exact_weave="${exact_bin_dir}/weave"
+    for binary in "${exact_csa}" "${exact_weave}"; do
+        if [ ! -x "${binary}" ]; then
+            echo "ERROR: exact-head binary was not produced at ${binary}." >&2
+            exit 1
+        fi
+    done
+    export PATH="${exact_bin_dir}:${PATH}"
+    hash -r
+    resolved_csa="$(command -v csa)"
+    resolved_weave="$(command -v weave)"
+    if [ "${resolved_csa}" != "${exact_csa}" ] || [ "${resolved_weave}" != "${exact_weave}" ]; then
+        echo "ERROR: expected csa=${exact_csa} and weave=${exact_weave}; resolved csa=${resolved_csa}, weave=${resolved_weave}." >&2
+        exit 1
+    fi
+    echo "=== Exact-head binaries for ${exact_head}: ${resolved_csa}, ${resolved_weave} ==="
+    csa --version
+    weave --version
+    just push-reviewed "${base}" "${exact_head}" "${exact_branch}"
 
 # Push to all submodules and the main repo (useful for monorepos).
 git-push-all:

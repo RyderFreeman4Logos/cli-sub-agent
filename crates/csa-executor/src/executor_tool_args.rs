@@ -6,6 +6,16 @@
 // This file is `include!`d into `executor.rs`, so the impl block below
 // continues the same `impl Executor` namespace.
 
+fn hermes_dispatch_identity<'a>(
+    provider_override: Option<&'a str>,
+    model_override: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    match model_override.and_then(|model| model.split_once('/')) {
+        Some((provider, model)) => (Some(provider), Some(model)),
+        None => (provider_override, model_override),
+    }
+}
+
 impl Executor {
     /// Append tool-specific arguments for full execution.
     #[cfg(test)]
@@ -217,10 +227,14 @@ impl Executor {
                 model_override,
                 thinking_budget,
             } => {
-                if let Some(provider) = provider_override {
+                let (provider, model) = hermes_dispatch_identity(
+                    provider_override.as_deref(),
+                    model_override.as_deref(),
+                );
+                if let Some(provider) = provider {
                     cmd.arg("--provider").arg(provider);
                 }
-                if let Some(model) = model_override {
+                if let Some(model) = model {
                     cmd.arg("--model").arg(model);
                 }
                 if let Some(budget) = thinking_budget {
@@ -235,5 +249,147 @@ impl Executor {
         for arg in self.yolo_args() {
             cmd.arg(arg);
         }
+    }
+}
+
+#[cfg(test)]
+mod hermes_identity_tests {
+    use super::{Command, Executor, hermes_dispatch_identity};
+
+    #[test]
+    fn provider_qualified_model_overrides_separate_provider() {
+        assert_eq!(
+            hermes_dispatch_identity(Some("openai"), Some("anthropic/claude")),
+            (Some("anthropic"), Some("claude"))
+        );
+        let executor = Executor::Hermes {
+            provider_override: Some("openai".to_string()),
+            model_override: Some("anthropic/claude".to_string()),
+            thinking_budget: None,
+        };
+        let mut command = Command::new("hermes");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--provider", "anthropic", "--model", "claude"]);
+    }
+
+    #[test]
+    fn bare_model_preserves_separate_provider() {
+        assert_eq!(
+            hermes_dispatch_identity(Some("openai"), Some("gpt")),
+            (Some("openai"), Some("gpt"))
+        );
+    }
+
+    #[cfg(feature = "acp")]
+    #[test]
+    fn hermes_acp_metadata_normalizes_constructed_and_deserialized_executors() {
+        let constructed = Executor::Hermes {
+            provider_override: Some("openai".to_string()),
+            model_override: Some("anthropic/claude".to_string()),
+            thinking_budget: None,
+        };
+        let serialized = serde_json::to_string(&constructed).expect("serialize executor");
+        let deserialized: Executor =
+            serde_json::from_str(&serialized).expect("deserialize executor");
+
+        for executor in [constructed, deserialized] {
+            let config = executor.hermes_run_config().expect("Hermes run config");
+            assert_eq!(config.provider.as_deref(), Some("anthropic"));
+            assert_eq!(config.model.as_deref(), Some("claude"));
+            assert_eq!(
+                config.meta_options(),
+                Some(serde_json::json!({
+                    "provider": "anthropic",
+                    "model": "claude"
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn provider_qualified_codex_shorthand_dispatches_bare_model() {
+        let executor = Executor::from_tool_name(
+            &super::ToolName::Codex,
+            Some("openai/gpt-future".to_string()),
+            None,
+        );
+        let mut command = Command::new("codex");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(executor.model_override(), Some("gpt-future"));
+        assert_eq!(args, ["--model", "gpt-future"]);
+    }
+
+    #[test]
+    fn opencode_bare_override_inherits_model_spec_provider_in_spawned_argv() {
+        let spec = super::ModelSpec::parse("opencode/google/gemini-2.5-pro/high")
+            .expect("valid OpenCode model spec");
+        let mut executor = Executor::from_spec(&spec).expect("OpenCode executor");
+        executor.override_model("gemini-2.5-flash".to_string());
+        let mut command = Command::new("opencode");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(executor.model_override(), Some("google/gemini-2.5-flash"));
+        assert_eq!(
+            args,
+            [
+                "-m",
+                "google/gemini-2.5-flash",
+                "--variant",
+                "high"
+            ]
+        );
+    }
+
+    #[test]
+    fn hermes_provider_qualified_override_splits_dispatch_identity() {
+        let mut executor = Executor::from_tool_name(
+            &super::ToolName::Hermes,
+            Some("openai/gpt-future".to_string()),
+            None,
+        );
+        assert_eq!(executor.provider_override(), Some("openai"));
+        assert_eq!(executor.model_override(), Some("gpt-future"));
+
+        executor.override_model("gpt-next".to_string());
+        assert_eq!(executor.provider_override(), Some("openai"));
+        assert_eq!(executor.model_override(), Some("gpt-next"));
+    }
+
+    #[test]
+    fn opencode_model_spec_preserves_provider_in_spawned_argv() {
+        let spec = super::ModelSpec::parse("opencode/google/gemini-2.5-pro/high")
+            .expect("valid OpenCode model spec");
+        let executor = Executor::from_spec(&spec).expect("OpenCode executor");
+        assert_eq!(executor.model_override(), Some("google/gemini-2.5-pro"));
+        let mut command = Command::new("opencode");
+        executor.append_model_args(&mut command);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "-m",
+                "google/gemini-2.5-pro",
+                "--variant",
+                "high"
+            ]
+        );
     }
 }

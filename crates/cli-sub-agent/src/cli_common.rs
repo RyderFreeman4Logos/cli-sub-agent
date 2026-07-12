@@ -72,10 +72,6 @@ pub(crate) fn parse_model_spec_arg(spec: &str) -> std::result::Result<String, St
 pub(crate) fn parse_model_spec_arg_with_warning(
     spec: &str,
 ) -> std::result::Result<(String, Option<String>), String> {
-    let known_tools: Vec<&'static str> = csa_config::global::all_known_tools()
-        .iter()
-        .map(|tool| tool.as_str())
-        .collect();
     let parsed = csa_executor::ModelSpec::parse(spec).map_err(|e| e.to_string())?;
     if parsed.tool.trim().is_empty()
         || parsed.provider.trim().is_empty()
@@ -89,21 +85,9 @@ pub(crate) fn parse_model_spec_arg_with_warning(
         return Err(csa_core::types::removed_tool_error(&parsed.tool));
     }
 
-    match parsed.validate_with_catalog(&known_tools) {
-        Ok(()) => Ok((spec.to_string(), None)),
-        Err(csa_executor::model_spec::ModelSpecValidationError::UnknownModel {
-            tool,
-            provider,
-            got,
-            ..
-        }) => Ok((
-            spec.to_string(),
-            Some(format!(
-                "warning: model '{got}' for tool '{tool}' provider '{provider}' is not recognized in CSA's built-in model registry; passing it through unchanged, but the backend may reject it"
-            )),
-        )),
-        Err(err) => Err(err.to_string()),
-    }
+    // Catalog admission is command-scoped and occurs after all configuration
+    // layers are loaded. Clap parsing is intentionally syntax-only.
+    Ok((spec.to_string(), None))
 }
 
 pub(crate) fn parse_spec_path_arg(spec: &str) -> std::result::Result<String, String> {
@@ -117,25 +101,20 @@ mod tests {
     use super::{parse_cli_tool_name, parse_model_spec_arg_with_warning};
 
     #[test]
-    fn parse_model_spec_arg_warns_and_passes_unknown_model() {
+    fn parse_model_spec_arg_defers_unknown_model_to_effective_catalog() {
         let (value, warning) =
             parse_model_spec_arg_with_warning("codex/openai/claude-opus-4-8/xhigh").unwrap();
 
         assert_eq!(value, "codex/openai/claude-opus-4-8/xhigh");
-        let warning = warning.expect("unknown model should warn");
-        assert!(warning.starts_with("warning:"), "{warning}");
-        assert!(warning.contains("claude-opus-4-8"), "{warning}");
-        assert!(warning.contains("not recognized"), "{warning}");
-        assert!(warning.contains("backend may reject"), "{warning}");
+        assert!(warning.is_none());
     }
 
     #[test]
-    fn parse_model_spec_arg_still_rejects_unknown_provider() {
-        let err = parse_model_spec_arg_with_warning("codex/anthropic/gpt-5.5/xhigh")
-            .expect_err("unknown provider should remain a hard error");
-
-        assert!(err.contains("anthropic"), "{err}");
-        assert!(err.contains("openai"), "{err}");
+    fn parse_model_spec_arg_defers_provider_legality_to_effective_catalog() {
+        let (value, warning) =
+            parse_model_spec_arg_with_warning("codex/anthropic/gpt-5.5/xhigh").unwrap();
+        assert_eq!(value, "codex/anthropic/gpt-5.5/xhigh");
+        assert!(warning.is_none());
     }
 
     #[test]

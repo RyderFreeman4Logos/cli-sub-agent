@@ -34,6 +34,8 @@ async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
             project_root: project_root.path(),
             workflow_path: &workflow_path,
             config: None,
+            global_config: super::test_global_config(),
+            model_catalog: super::test_model_catalog(),
             tool_override: None,
             model_spec_override: None,
             no_fs_sandbox: false,

@@ -14,7 +14,7 @@ pub(crate) async fn handle_claude_sub_agent(
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
-    let Some((config, global_config)) =
+    let Some((config, global_config, model_catalog)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
@@ -37,16 +37,20 @@ pub(crate) async fn handle_claude_sub_agent(
 
     let parent_tool = crate::run_helpers::detect_parent_tool();
     let (tool_name, resolved_model_spec, resolved_model) =
-        resolve_claude_sub_agent_tool_and_model(ClaudeSubAgentRoutingRequest {
-            arg_tool: args.tool,
-            model_spec: args.model_spec.as_deref(),
-            model: args.model.as_deref(),
-            project_config: config.as_ref(),
-            global_config: &global_config,
-            parent_tool: parent_tool.as_deref(),
-            project_root: &project_root,
-            inherited_trusted_pin,
-        })?;
+        resolve_claude_sub_agent_tool_and_model_with_catalog(
+            ClaudeSubAgentRoutingRequest {
+                arg_tool: args.tool,
+                model_spec: args.model_spec.as_deref(),
+                model: args.model.as_deref(),
+                project_config: config.as_ref(),
+                global_config: &global_config,
+
+                parent_tool: parent_tool.as_deref(),
+                project_root: &project_root,
+                inherited_trusted_pin,
+            },
+            &model_catalog,
+        )?;
 
     // 8. Build executor and validate tool
     let executor = crate::pipeline::build_and_validate_executor(
@@ -57,6 +61,7 @@ pub(crate) async fn handle_claude_sub_agent(
         crate::pipeline::ConfigRefs {
             project: config.as_ref(),
             global: Some(&global_config),
+            model_catalog: Some(&model_catalog),
         },
         args.model_spec.is_none(),
         false, // claude-sub-agent does not support --force-override-user-config
@@ -148,13 +153,23 @@ struct ClaudeSubAgentRoutingRequest<'a> {
     model: Option<&'a str>,
     project_config: Option<&'a ProjectConfig>,
     global_config: &'a GlobalConfig,
+
     parent_tool: Option<&'a str>,
     project_root: &'a Path,
     inherited_trusted_pin: bool,
 }
 
+#[cfg(test)]
 fn resolve_claude_sub_agent_tool_and_model(
     request: ClaudeSubAgentRoutingRequest<'_>,
+) -> Result<(ToolName, Option<String>, Option<String>)> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped()?;
+    resolve_claude_sub_agent_tool_and_model_with_catalog(request, &catalog)
+}
+
+fn resolve_claude_sub_agent_tool_and_model_with_catalog(
+    request: ClaudeSubAgentRoutingRequest<'_>,
+    model_catalog: &csa_config::EffectiveModelCatalog,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let resolved_arg_tool = resolve_tool_arg_alias(
         request.arg_tool,
@@ -182,6 +197,7 @@ fn resolve_claude_sub_agent_tool_and_model(
         thinking: None, // claude-sub-agent does not support --thinking
         config: request.project_config,
         global_config: Some(request.global_config),
+        model_catalog: Some(model_catalog),
         project_root: request.project_root,
         force: false,                      // claude-sub-agent does not support --force
         force_override_user_config: false, // claude-sub-agent does not support --force-override-user-config

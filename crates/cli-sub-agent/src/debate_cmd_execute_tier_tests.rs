@@ -130,8 +130,34 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
         "opencode should not be invoked because the preferred codex fallback succeeds first"
     );
 
+    let sessions_dir = csa_session::get_session_root(project_dir.path())
+        .unwrap()
+        .join("sessions");
+    let child = std::fs::read_dir(&sessions_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            csa_session::load_session(project_dir.path(), &entry.file_name().to_string_lossy()).ok()
+        })
+        .find(|candidate| {
+            let linked = candidate.genealogy.parent_session_id.as_deref()
+                == Some(session.meta_session_id.as_str());
+            let has_success_verdict =
+                csa_session::get_session_dir(project_dir.path(), &candidate.meta_session_id)
+                    .ok()
+                    .and_then(|dir| {
+                        std::fs::read_to_string(dir.join("output/debate-verdict.json")).ok()
+                    })
+                    .and_then(|verdict| serde_json::from_str::<serde_json::Value>(&verdict).ok())
+                    .is_some_and(|verdict| {
+                        verdict["summary"] == "Debate succeeded via second codex tier candidate."
+                    });
+            linked && has_success_verdict
+        })
+        .expect("cross-model fallback must create a linked successful child session");
+    assert_ne!(child.meta_session_id, session.meta_session_id);
     let session_dir =
-        csa_session::get_session_dir(project_dir.path(), &session.meta_session_id).unwrap();
+        csa_session::get_session_dir(project_dir.path(), &child.meta_session_id).unwrap();
     let verdict_path = session_dir.join("output").join("debate-verdict.json");
     let parsed: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&verdict_path).unwrap()).unwrap();
@@ -144,7 +170,7 @@ async fn execute_debate_advances_tier_fallback_when_explicit_tool_and_tier() {
     );
     assert!(parsed["failure_reason"].is_null());
 
-    let result = csa_session::load_result(project_dir.path(), &session.meta_session_id)
+    let result = csa_session::load_result(project_dir.path(), &child.meta_session_id)
         .unwrap()
         .expect("result.toml should exist");
     assert_eq!(result.tool, "codex");

@@ -184,9 +184,26 @@ async fn execute_with_session_and_meta_does_not_persist_runtime_binary_when_lock
         Err(err) => err,
     };
 
+    let rendered = err.to_string();
     assert!(
-        err.to_string().contains("Failed to acquire lock"),
+        rendered.contains("Failed to acquire lock"),
         "unexpected error: {err:#}"
+    );
+    assert!(
+        rendered.contains(&session_dir.join("locks/codex.lock").display().to_string()),
+        "missing lock path diagnostic: {rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("Session locked by PID {}", std::process::id())),
+        "missing lock owner PID: {rendered}"
+    );
+    assert!(
+        rendered.contains("pid_status: alive"),
+        "missing lock-owner liveness: {rendered}"
+    );
+    assert!(
+        rendered.contains("reason: active resume winner"),
+        "missing lock reason: {rendered}"
     );
 
     let persisted = toml::from_str::<csa_session::metadata::SessionMetadata>(

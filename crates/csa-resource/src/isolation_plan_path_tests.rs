@@ -124,6 +124,7 @@ fn test_xdg_runtime_child_helper_keeps_run_user_scope_narrow() {
     assert!(!is_xdg_runtime_child_path(Path::new("/run/user/1002/just")));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
     let _guard = ENV_LOCK.lock().unwrap();

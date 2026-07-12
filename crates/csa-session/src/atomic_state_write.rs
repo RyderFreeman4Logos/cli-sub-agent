@@ -38,6 +38,44 @@ pub(super) fn write_state_atomically(
         )
     })?;
 
+    // fsync the session directory so the rename is durable on disk.
+    // Without this, a crash immediately after the rename may leave the
+    // state.toml invisible to readers, causing session-registry loss
+    // between SESSION_STARTED and the first `csa session wait` (#2648).
+    //
+    // We propagate the session-directory fsync error because it directly
+    // proves the rename durability. Ancestor directory fsync is best-effort
+    // because some legitimate filesystem layouts (e.g. execute-only ancestors,
+    // network filesystems) may not support directory fsync.
+    //
+    // Directory fsync is only meaningful on POSIX (Linux/macOS). On Windows
+    // the rename is already atomic within the same volume.
+    #[cfg(unix)]
+    {
+        let dir = std::fs::File::open(session_dir).with_context(|| {
+            format!(
+                "Failed to open session dir for fsync: {}",
+                session_dir.display()
+            )
+        })?;
+        dir.sync_all().with_context(|| {
+            format!(
+                "Failed to fsync session dir after state rename: {}",
+                session_dir.display()
+            )
+        })?;
+
+        // Sync the immediate parent directory to persist the directory entry
+        // linking this session. We propagate this error because the parent
+        // (sessions/) was just created/readable via create_dir_all, so fsync
+        // failure indicates a real I/O problem (#2648).
+        if let Some(parent_dir) = session_dir.parent() {
+            std::fs::File::open(parent_dir)
+                .and_then(|f| f.sync_all())
+                .with_context(|| format!("Failed to fsync parent dir: {}", parent_dir.display()))?;
+        }
+    }
+
     Ok(())
 }
 

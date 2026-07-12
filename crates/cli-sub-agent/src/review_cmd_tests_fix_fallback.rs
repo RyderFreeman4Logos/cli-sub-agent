@@ -121,10 +121,12 @@ async fn handle_review_fix_loop_uses_effective_fallback_tool() {
     .expect("initial review should fall back to opencode");
     assert_eq!(initial.executed_tool, ToolName::Opencode);
 
+    let model_catalog = csa_config::EffectiveModelCatalog::shipped().expect("shipped catalog");
     let exit_code = super::fix::run_fix_loop(super::fix::FixLoopContext {
         effective_tool: initial.executed_tool,
         config: Some(&config),
         global_config: &global,
+        model_catalog: &model_catalog,
         review_model: None,
         effective_tier_model_spec: initial.routed_to.clone(),
         review_thinking: None,

@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_executor::ResolvedTimeout;
 use serde_json::Value;
 use tempfile::TempDir;
+
+use crate::pipeline::{AdmittedExecutor, ConfigRefs, DispatchExecutor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct McpModelPinResolution {
@@ -50,9 +51,11 @@ pub(super) async fn handle_run_tool(
     // Determine project root
     let project_root = crate::pipeline::determine_project_root(None)?;
 
-    // Load config
-    let config = ProjectConfig::load(&project_root)?;
-    let global_config = csa_config::GlobalConfig::load()?;
+    // Load one immutable effective configuration for all model-sensitive work.
+    let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
+    let config = effective_config.project;
+    let model_catalog = effective_config.model_catalog;
+    let global_config = effective_config.global;
 
     let current_depth = startup_env.current_depth();
     let max_depth = config
@@ -100,6 +103,8 @@ pub(super) async fn handle_run_tool(
     if model_pin_resolution.model_spec.is_some() && tier_bypass_allowed {
         model_pin_resolution.force_ignore_tier_setting = true;
     }
+    let enforce_tier = !model_pin_resolution.force_ignore_tier_setting
+        && model_pin_resolution.model_spec.is_none();
 
     // Resolve tool and model
     let (resolved_tool, resolved_model_spec, resolved_model) =
@@ -110,6 +115,7 @@ pub(super) async fn handle_run_tool(
             thinking: None, // MCP server does not support --thinking
             config: config.as_ref(),
             global_config: Some(&global_config),
+            model_catalog: Some(&model_catalog),
             project_root: &project_root,
             force: false,                      // MCP server does not support --force
             force_override_user_config: false, // MCP server does not support --force-override-user-config
@@ -120,51 +126,34 @@ pub(super) async fn handle_run_tool(
             tool_is_auto_resolved: false, // user-explicit tool from MCP args
         })?;
 
-    // Build executor
-    let executor = crate::run_helpers::build_executor(
+    // Build and admit the exact post-routing identity through the same final
+    // boundary used by CLI run/plan/review/debate/batch.
+    let executor = match build_mcp_admitted_executor(
         &resolved_tool,
         resolved_model_spec.as_deref(),
         resolved_model.as_deref(),
-        None,
         config.as_ref(),
-        false,
-    )?;
-
-    // Check tool is installed
-    if csa_process::check_tool_installed(executor.runtime_binary_name())
-        .await
-        .is_err()
+        &global_config,
+        &model_catalog,
+        enforce_tier,
+    )
+    .await
     {
-        return Ok(serde_json::json!({
-            "content": [
-                {
+        Ok(executor) => executor,
+        Err(error) if is_tool_availability_error(&error) => {
+            return Ok(serde_json::json!({
+                "content": [{
                     "type": "text",
                     "text": format!(
                         "Error: Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml",
-                        executor.tool_name(),
-                        executor.install_hint()
+                        resolved_tool,
+                        error,
                     )
-                }
-            ]
-        }));
-    }
-
-    // Check tool is enabled in config
-    if let Some(ref cfg) = config
-        && !cfg.is_tool_enabled(executor.tool_name())
-    {
-        return Ok(serde_json::json!({
-            "content": [
-                {
-                    "type": "text",
-                    "text": format!(
-                        "Error: Tool '{}' is disabled in project config",
-                        executor.tool_name()
-                    )
-                }
-            ]
-        }));
-    }
+                }]
+            }));
+        }
+        Err(error) => return Err(error),
+    };
 
     // Use global config for env injection and slot control
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
@@ -221,6 +210,7 @@ pub(super) async fn handle_run_tool(
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
+        executor.emit_catalog_warning();
         executor
             .execute_in(
                 prompt,
@@ -301,6 +291,41 @@ pub(super) async fn handle_run_tool(
             }
         ]
     }))
+}
+
+fn is_tool_availability_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string();
+        message == "Failed to execute 'which' command"
+            || (message.starts_with("Tool '")
+                && message.ends_with(" is not installed or not in PATH"))
+    })
+}
+
+pub(super) async fn build_mcp_admitted_executor(
+    tool: &ToolName,
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    project_config: Option<&csa_config::ProjectConfig>,
+    global_config: &csa_config::GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
+    enforce_tier: bool,
+) -> Result<AdmittedExecutor> {
+    crate::pipeline::build_and_validate_executor(
+        tool,
+        model_spec,
+        model,
+        None,
+        ConfigRefs {
+            project: project_config,
+            global: Some(global_config),
+            model_catalog: Some(model_catalog),
+        },
+        enforce_tier,
+        false,
+        false,
+    )
+    .await
 }
 
 pub(super) fn resolve_mcp_model_pin(

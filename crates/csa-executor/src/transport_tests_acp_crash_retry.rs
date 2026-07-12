@@ -514,84 +514,11 @@ fn idle_disconnect_not_detected_on_initial_response_timeout() {
 }
 
 #[test]
-fn build_downshifted_args_injects_effort_when_absent() {
-    let args: Vec<String> = vec!["--acp".into()];
-    let result = build_downshifted_acp_args(&args, &ThinkingBudget::Medium);
-    assert_eq!(
-        result,
-        vec!["--acp", "-c", "model_reasoning_effort=medium"]
-    );
-}
-
-#[test]
-fn build_downshifted_args_replaces_existing_effort() {
-    let args: Vec<String> = vec![
-        "-c".into(),
-        "model_reasoning_effort=high".into(),
-        "--other".into(),
+fn idle_disconnect_retry_preserves_original_acp_args() {
+    let args = vec![
+        "-c".to_string(),
+        "model_reasoning_effort=xhigh".to_string(),
+        "--other".to_string(),
     ];
-    let result = build_downshifted_acp_args(&args, &ThinkingBudget::Medium);
-    assert_eq!(
-        result,
-        vec!["-c", "model_reasoning_effort=medium", "--other"]
-    );
-}
-
-#[test]
-fn idle_disconnect_downshift_covers_all_levels() {
-    use crate::model_spec::ThinkingBudget;
-
-    // Max → High (skips Xhigh — both map to "xhigh" in codex_effort, #1101)
-    assert!(matches!(
-        ThinkingBudget::Max.idle_disconnect_downshift(),
-        Some(ThinkingBudget::High)
-    ));
-    // Xhigh → High
-    assert!(matches!(
-        ThinkingBudget::Xhigh.idle_disconnect_downshift(),
-        Some(ThinkingBudget::High)
-    ));
-    // High → Medium
-    assert!(matches!(
-        ThinkingBudget::High.idle_disconnect_downshift(),
-        Some(ThinkingBudget::Medium)
-    ));
-    // Medium → Low
-    assert!(matches!(
-        ThinkingBudget::Medium.idle_disconnect_downshift(),
-        Some(ThinkingBudget::Low)
-    ));
-    // Low → None (already minimal)
-    assert!(ThinkingBudget::Low.idle_disconnect_downshift().is_none());
-    // Default → None
-    assert!(
-        ThinkingBudget::DefaultBudget
-            .idle_disconnect_downshift()
-            .is_none()
-    );
-    // Custom → None
-    assert!(
-        ThinkingBudget::Custom(5000)
-            .idle_disconnect_downshift()
-            .is_none()
-    );
-}
-
-/// Verify that Max.downshift() actually changes codex_effort() (#1101).
-#[test]
-fn max_downshift_changes_codex_effort() {
-    use crate::model_spec::ThinkingBudget;
-
-    let max_effort = ThinkingBudget::Max.codex_effort();
-    let downshifted = ThinkingBudget::Max
-        .idle_disconnect_downshift()
-        .expect("Max should have a downshift target");
-    let downshifted_effort = downshifted.codex_effort();
-
-    assert_ne!(
-        max_effort, downshifted_effort,
-        "Max.downshift() must produce a different codex_effort; \
-         both were '{max_effort}' — the downshift is a no-op on codex"
-    );
-    assert_eq!(downshifted_effort, "high");
+    assert_eq!(idle_disconnect_retry_args(&args), args);
 }

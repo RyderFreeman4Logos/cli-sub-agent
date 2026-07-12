@@ -178,14 +178,12 @@ fn run_cli_parses_require_commit_flag() {
 }
 
 #[test]
-fn run_rejects_unknown_tool_at_clap_parse() {
+fn run_defers_unknown_model_spec_tool_to_command_catalog() {
     let result = try_parse_cli(&["csa", "run", "--model-spec", "unknown-tool/x/y/medium", "x"]);
-    let err = match result {
-        Ok(_) => panic!("unknown tool should fail clap parsing"),
-        Err(err) => err,
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("unknown-tool"), "{msg}");
+    assert!(
+        result.is_ok(),
+        "clap parsing is syntax-only; the immutable command catalog rejects unknown tools"
+    );
 }
 
 #[test]

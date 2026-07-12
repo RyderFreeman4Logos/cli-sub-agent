@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "batch_catalog_tests.rs"]
+mod catalog_tests;
+
 // --- parse_tool_name tests ---
 
 #[test]

@@ -26,7 +26,7 @@ impl ToolBinaryAvailability {
 }
 
 #[cfg(test)]
-fn assume_tool_binaries_available_for_tests() -> bool {
+pub(crate) fn assume_tool_binaries_available_for_tests() -> bool {
     [
         super::TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV,
         super::TEST_ASSUME_TOOLS_AVAILABLE_ENV,

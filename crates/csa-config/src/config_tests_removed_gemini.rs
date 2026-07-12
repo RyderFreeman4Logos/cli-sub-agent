@@ -30,14 +30,6 @@ fn validate_project_error(contents: &str) -> String {
     format!("{err:?}")
 }
 
-fn validate_user_error(contents: &str) -> String {
-    let (_dir, user_path) = user_path_with_contents(contents);
-    let missing_project_path = user_path.parent().unwrap().join("missing-project.toml");
-    let err = crate::validate::validate_config_with_paths(Some(&user_path), &missing_project_path)
-        .unwrap_err();
-    format!("{err:?}")
-}
-
 fn load_ok(contents: &str) {
     let (_dir, project_path) = project_path_with_contents(contents);
     ProjectConfig::load_with_paths(None, &project_path).unwrap();
@@ -115,7 +107,7 @@ fn load_rejects_removed_gemini_cli_model_alias_value() {
 }
 
 #[test]
-fn load_project_prunes_removed_and_catalog_stale_tier_models_when_fallback_exists() {
+fn load_project_prunes_removed_but_preserves_catalog_unknown_tier_models() {
     let config = load_project(
         r#"
 [review]
@@ -134,10 +126,13 @@ models = [
     let tier = config
         .tiers
         .get("tier-review")
-        .expect("tier-review should remain after pruning stale model");
+        .expect("tier-review should remain after pruning the removed tool");
     assert_eq!(
         tier.models,
-        vec!["claude-code/anthropic/claude-sonnet-4-20250514/none"]
+        vec![
+            "codex/openai/o3/medium",
+            "claude-code/anthropic/claude-sonnet-4-20250514/none",
+        ]
     );
 }
 
@@ -180,16 +175,17 @@ models = ["gemini-cli/google/gemini-3-pro-preview/xhigh"]
 }
 
 #[test]
-fn validate_user_config_still_rejects_catalog_stale_tier_model() {
-    let message = validate_user_error(
+fn validate_user_config_admits_catalog_stale_tier_model_with_warning() {
+    let (_dir, user_path) = user_path_with_contents(
         r#"
 [tiers.tier-review]
-description = "User typo should fail closed"
+description = "User model selection remains authoritative"
 models = ["codex/openai/o3/medium"]
 "#,
     );
-
-    assert!(message.contains("unknown model 'o3'"), "{message}");
+    let missing_project_path = user_path.parent().unwrap().join("missing-project.toml");
+    crate::validate::validate_config_with_paths(Some(&user_path), &missing_project_path)
+        .expect("configured stale model should warn and remain selectable");
 }
 
 #[test]

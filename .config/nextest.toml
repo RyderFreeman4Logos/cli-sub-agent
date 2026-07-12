@@ -1,4 +1,2 @@
 [profile.default]
 retries = 2
-# Symlinked target/ causes "No such file or directory" with double-spawn (#1742).
-double-spawn = false

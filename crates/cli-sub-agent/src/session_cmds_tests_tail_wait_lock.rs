@@ -112,6 +112,7 @@ fn session_wait_rejects_closed_caller_output_before_lock_acquisition() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn session_wait_releases_lock_when_caller_output_closes() {
     let td = tempdir().expect("tempdir");

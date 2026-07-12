@@ -119,39 +119,6 @@ impl Drop for AntigravitySettingsGuard {
     }
 }
 
-/// Known antigravity-cli model display names mapped to their slug aliases.
-/// Users can pass either the exact display name or a slug-style alias (#2347).
-const KNOWN_MODEL_ALIASES: &[(&str, &[&str])] = &[
-    (
-        "Gemini 3.1 Pro (High)",
-        &["gemini-3.1-pro-high", "gemini-3.1-pro", "gemini-pro-high"],
-    ),
-    (
-        "Gemini 3.1 Pro (Preview)",
-        &["gemini-3.1-pro-preview", "gemini-pro-preview"],
-    ),
-    (
-        "Gemini 3.5 Flash (High)",
-        &[
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash",
-            "gemini-flash-high",
-        ],
-    ),
-    (
-        "Claude Opus 4.6 (Thinking)",
-        &[
-            "claude-opus-4.6-thinking",
-            "opus-thinking",
-            "claude-opus-thinking",
-        ],
-    ),
-    (
-        "Claude Sonnet 4.5",
-        &["claude-sonnet-4.5", "sonnet-4.5", "claude-sonnet"],
-    ),
-];
-
 /// Normalize a user-provided model name: if it matches a known slug alias,
 /// resolve to the canonical display name. Otherwise pass through unchanged
 /// (the model name may be a valid display name we don't know about).
@@ -161,15 +128,16 @@ fn normalize_model_alias(input: &str) -> String {
         .to_ascii_lowercase()
         .replace(' ', "-")
         .replace(['(', ')'], "");
-    for (display, aliases) in KNOWN_MODEL_ALIASES {
-        if aliases.contains(&slug.as_str()) {
-            return display.to_string();
+    let aliases = csa_core::model_catalog::shipped_model_aliases().unwrap_or_default();
+    for alias in &aliases {
+        if alias.aliases.iter().any(|candidate| candidate == &slug) {
+            return alias.canonical.clone();
         }
     }
     // Also check if the input matches a known display name case-insensitively
-    for (display, _) in KNOWN_MODEL_ALIASES {
-        if display.eq_ignore_ascii_case(trimmed) {
-            return display.to_string();
+    for alias in &aliases {
+        if alias.canonical.eq_ignore_ascii_case(trimmed) {
+            return alias.canonical.clone();
         }
     }
     trimmed.to_string()

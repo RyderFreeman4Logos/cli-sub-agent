@@ -467,11 +467,11 @@ fn test_gemini_retry_model_sequence_matches_policy() {
         None,
         "phase 2 keeps original model (auth changes instead)"
     );
-    // Phase 3: flash model + API key
+    // Phase 3: original configured model + API key
     assert_eq!(
         gemini_retry_model(3),
-        Some("gemini-3-flash-preview"),
-        "phase 3 downgrades to flash model"
+        None,
+        "phase 3 must preserve the configured model"
     );
     assert_eq!(gemini_retry_model(4), None);
 }
@@ -501,10 +501,10 @@ fn test_executor_for_attempt_overrides_gemini_retry_models() {
         }
         _ => panic!("expected GeminiCli executor"),
     }
-    // Phase 3: flash model
+    // Phase 3: still the configured model
     match third {
         Executor::GeminiCli { model_override, .. } => {
-            assert_eq!(model_override.as_deref(), Some("gemini-3-flash-preview"));
+            assert_eq!(model_override.as_deref(), Some("default"));
         }
         _ => panic!("expected GeminiCli executor"),
     }
@@ -694,13 +694,13 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
         result.execution.output
     );
     let models = read_model_log(&model_log_path);
-    // OAuth original, API-key original, API-key flash.
+    // OAuth original, then API-key retries with the same configured model.
     assert_eq!(
         models,
         vec![
             "inherit".to_string(),
             "inherit".to_string(),
-            "gemini-3-flash-preview".to_string()
+            "inherit".to_string()
         ]
     );
 }
@@ -745,13 +745,13 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         result.execution.stderr_output
     );
     let models = read_model_log(&model_log_path);
-    // Phase 1: original model (OAuth), Phase 2: original model (API key), Phase 3: flash (API key)
+    // All transport retry phases preserve the configured model.
     assert_eq!(
         models,
         vec![
             "inherit".to_string(),
             "inherit".to_string(),
-            "gemini-3-flash-preview".to_string()
+            "inherit".to_string()
         ],
         "retry loop should stop after 3 attempts"
     );

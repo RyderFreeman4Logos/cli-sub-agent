@@ -383,6 +383,13 @@ impl IsolationPlanBuilder {
                 add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
             }
 
+            // RUSTUP_TOOLCHAIN: ambient value is inherited by the child
+            // process normally. Explicit tool configuration via extra_env
+            // overrides ambient values through build_merged_env(). We do not
+            // add RUSTUP_TOOLCHAIN to env_overrides here because bwrap
+            // --setenv is applied after the merged execution_env and would
+            // override configured values (#2661).
+
             // Do not make mise-managed toolchain install dirs writable; only the
             // registry/git cache subdirs above need write access.
 

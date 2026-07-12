@@ -15,6 +15,7 @@ fn force_resolve_review_tool_from_tier(
     tier: &str,
     config: &ProjectConfig,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     tool: ToolName,
 ) -> Option<crate::run_helpers::TierToolResolution> {
     let tier_config = config.tiers.get(tier)?;
@@ -23,7 +24,12 @@ fn force_resolve_review_tool_from_tier(
         if parts.len() != 4 || parts[0] != tool.as_str() {
             return None;
         }
-        if crate::run_helpers::validate_tier_model_spec_compatibility(model_spec).is_err() {
+        if crate::run_helpers::validate_tier_model_spec_compatibility_with_catalog(
+            model_spec,
+            model_catalog,
+        )
+        .is_err()
+        {
             return None;
         }
         let extra_env = global_config
@@ -63,11 +69,12 @@ pub(crate) fn validate_review_direct_tool_tier_restriction(
 
 /// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_review_selection(
+pub(crate) fn resolve_review_selection_with_catalog(
     arg_tool: Option<ToolName>,
     arg_model_spec: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
@@ -91,6 +98,7 @@ pub(crate) fn resolve_review_selection(
                 thinking: None, // thinking not relevant for review command
                 config: project_config,
                 global_config: Some(global_config),
+                model_catalog: Some(model_catalog),
                 project_root,
                 force: false,
                 force_override_user_config,
@@ -136,12 +144,14 @@ pub(crate) fn resolve_review_selection(
         {
             let tier_preference_order = vec![tool.as_str().to_string()];
             let resolution = if force_override_user_config {
-                force_resolve_review_tool_from_tier(tier, cfg, global_config, tool).map_or_else(
+                force_resolve_review_tool_from_tier(tier, cfg, global_config, model_catalog, tool)
+                    .map_or_else(
                     || {
-                        crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
+                        crate::run_helpers::resolve_preferred_tool_from_tier_with_catalog(
                             tier,
                             cfg,
                             Some(global_config),
+                            model_catalog,
                             parent_tool,
                             &tier_preference_order,
                             &[],
@@ -150,10 +160,11 @@ pub(crate) fn resolve_review_selection(
                     Ok,
                 )?
             } else {
-                crate::run_helpers::resolve_preferred_tool_from_tier_with_global_config(
+                crate::run_helpers::resolve_preferred_tool_from_tier_with_catalog(
                     tier,
                     cfg,
                     Some(global_config),
+                    model_catalog,
                     parent_tool,
                     &tier_preference_order,
                     &[],
@@ -193,14 +204,15 @@ pub(crate) fn resolve_review_selection(
 
         let tier_tools = cfg.list_tools_in_tier(tier);
 
-        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_global_config(
+        if let Some(resolution) = crate::run_helpers::resolve_tool_from_tier_with_catalog(
             tier,
             cfg,
             Some(global_config),
+            model_catalog,
             parent_tool,
             &tier_preference_order,
             &[],
-        ) {
+        )? {
             return Ok(ResolvedReviewSelection {
                 tool: resolution.tool,
                 model_spec: Some(resolution.model_spec),
@@ -209,19 +221,21 @@ pub(crate) fn resolve_review_selection(
         }
 
         let available_tools_after_checks =
-            crate::run_helpers::collect_available_tier_models_with_global_config(
+            crate::run_helpers::collect_available_tier_models_with_catalog(
                 tier,
                 cfg,
                 Some(global_config),
+                model_catalog,
                 &[],
-            );
+            )?;
         let (_, excluded_models_after_checks) =
-            crate::run_helpers::evaluate_tier_models_with_global_config(
+            crate::run_helpers::evaluate_tier_models_with_catalog(
                 tier,
                 cfg,
                 Some(global_config),
+                model_catalog,
                 &[],
-            );
+            )?;
         let configured_tools: Vec<&str> = tier_tools
             .iter()
             .map(|(tool_name, _)| tool_name.as_str())
@@ -280,6 +294,36 @@ pub(crate) fn resolve_review_selection(
         model_spec: None,
         tier_preference_order: Vec::new(),
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_review_selection(
+    arg_tool: Option<ToolName>,
+    arg_model_spec: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    parent_tool: Option<&str>,
+    project_root: &Path,
+    force_override_user_config: bool,
+    cli_tier: Option<&str>,
+    force_ignore_tier_setting: bool,
+    direct_tool_requested: bool,
+) -> Result<ResolvedReviewSelection> {
+    let catalog = csa_config::EffectiveModelCatalog::shipped()?;
+    resolve_review_selection_with_catalog(
+        arg_tool,
+        arg_model_spec,
+        project_config,
+        global_config,
+        &catalog,
+        parent_tool,
+        project_root,
+        force_override_user_config,
+        cli_tier,
+        force_ignore_tier_setting,
+        direct_tool_requested,
+    )
 }
 
 #[cfg(test)]

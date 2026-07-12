@@ -7,8 +7,6 @@ fn determine_project_root_none_returns_cwd() {
     assert_eq!(result, cwd);
 }
 
-/// When config has no tiers, both enforce_tier values must behave identically:
-/// no tier-related errors regardless of the flag.
 #[tokio::test]
 async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
     let cfg = ProjectConfig {
@@ -45,6 +43,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -60,6 +59,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -67,8 +67,6 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
     )
     .await;
 
-    // Neither should fail with tier errors (tiers are empty).
-    // Both should produce the same outcome (success or same non-tier error).
     for (label, result) in [("true", &result_true), ("false", &result_false)] {
         if let Err(e) = result {
             let msg = e.to_string();
@@ -78,7 +76,6 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
             );
         }
     }
-    // Both must have the same Ok/Err status (empty tiers = no behavioral difference)
     assert_eq!(
         result_true.is_ok(),
         result_false.is_ok(),

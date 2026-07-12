@@ -257,7 +257,7 @@ printf '%s\\n' \
         "scope=uncommitted mode=review-only security=auto".to_string(),
         None,
         None,
-        Some("opencode/provider/model/medium".to_string()),
+        Some("opencode/openai/gpt-5/medium".to_string()),
         None,  // tier_name
         false, // tier_fallback_enabled
         None,  // thinking

@@ -7,15 +7,14 @@ use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
 use csa_core::types::{OutputFormat, ToolName};
-use csa_process::check_tool_installed;
 
 use crate::codex_transcript_filter::{
     extract_codex_json_event_text, first_non_empty_line_is_thread_started,
 };
 use crate::pipeline::{
-    ParentSessionSource, SessionCreationMode, execute_with_session_and_meta_with_parent_source,
+    ConfigRefs, ParentSessionSource, SessionCreationMode,
+    execute_with_session_and_meta_with_parent_source,
 };
-use crate::run_helpers::build_executor;
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
@@ -273,20 +272,47 @@ fn is_argument_list_too_long(error: &std::io::Error) -> bool {
 /// Rationale: token reuse is an optimization, while workflow completion is
 /// mandatory for long-running automation. Fallback is never silent: we emit a
 /// warning whenever a stale session fallback occurs.
+pub(super) struct CsaStepExecutionRequest<'a> {
+    pub(super) label: &'a str,
+    pub(super) prompt: &'a str,
+    pub(super) tool_name: &'a ToolName,
+    pub(super) project_root: &'a Path,
+    pub(super) config: Option<&'a ProjectConfig>,
+    pub(super) global_config: &'a csa_config::GlobalConfig,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
+}
+
 pub(super) async fn execute_csa_step(
-    label: &str,
-    prompt: &str,
-    tool_name: &ToolName,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
+    request: CsaStepExecutionRequest<'_>,
     options: CsaStepExecutionOptions<'_>,
 ) -> Result<StepExecutionOutcome> {
+    let CsaStepExecutionRequest {
+        label,
+        prompt,
+        tool_name,
+        project_root,
+        config,
+        global_config,
+        model_catalog,
+    } = request;
     info!("{} - Dispatching to {} ...", label, tool_name.as_str());
 
-    let executor = build_executor(tool_name, options.model_spec, None, None, config, false)?;
-    check_tool_installed(executor.runtime_binary_name()).await?;
+    let executor = crate::pipeline::build_and_validate_executor(
+        tool_name,
+        options.model_spec,
+        None,
+        None,
+        ConfigRefs {
+            project: config,
+            global: Some(global_config),
+            model_catalog: Some(model_catalog),
+        },
+        false,
+        false,
+        false,
+    )
+    .await?;
 
-    let global_config = csa_config::GlobalConfig::load()?;
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),

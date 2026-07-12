@@ -6,7 +6,6 @@
 //! recovers progress via `csa session wait`/`session result`.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
@@ -243,9 +242,10 @@ pub(crate) async fn dispatch_plan_run(
 
 /// Spawn a daemon child for `csa plan run` and **never return on success**.
 ///
-/// Writes a placeholder session record (task_type="plan") with the daemon-
-/// preassigned session ID, forks via `csa_process::daemon::spawn_daemon`,
-/// prints the ULID to stdout and an RPJ directive to stderr, then exits 0.
+/// Writes a placeholder session record (task_type="plan"), spawns through the
+/// verified daemon lifecycle, publishes the ULID/marker only after readiness
+/// and liveness succeed, then exits 0. A failed pre-publication launch is
+/// cleaned up and its placeholder is retired while spool logs are retained.
 ///
 /// On the daemon-child path, [`handle_plan_run_daemon_child`] takes over.
 pub(crate) fn spawn_and_exit(
@@ -292,39 +292,18 @@ pub(crate) fn spawn_and_exit(
         env: daemon_env,
     };
 
-    let result = csa_process::daemon::spawn_daemon(config)?;
-    println!("{}", result.session_id);
-    let wait_cmd =
-        crate::daemon_caller_hints::format_session_wait_command(&result.session_id, &project_root);
-    let attach_cmd = crate::daemon_caller_hints::format_session_attach_command(
-        &result.session_id,
-        &project_root,
+    let spawn_result = csa_process::daemon::spawn_daemon_verified_and_publish(
+        config,
+        |result| crate::daemon_started_output::prepare(result, &project_root),
+        |_, output| crate::daemon_started_output::publish(output),
     );
-    let session_dir_attr = crate::daemon_caller_hints::escape_structured_comment_attr(
-        &result.session_dir.display().to_string(),
-    );
-    let wait_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
-    let attach_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&attach_cmd);
-    eprintln!(
-        "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
-         wait_cmd=\"{wait_cmd}\" \
-         attach_cmd=\"{attach_cmd}\" -->",
-        id = result.session_id,
-        pid = result.pid,
-        dir = session_dir_attr,
-        wait_cmd = wait_cmd_attr,
-        attach_cmd = attach_cmd_attr,
-    );
-    eprintln!(
-        "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->",
-        wait_cmd = wait_cmd_attr,
-    );
-    let codex_hint = crate::process_tree::codex_yield_hint();
-    if !codex_hint.is_empty() {
-        eprint!("{codex_hint}");
+    if let Err(error) = spawn_result {
+        return Err(crate::daemon_launch_state::attach_retirement_context(
+            error,
+            &project_root,
+            &session_id,
+        ));
     }
-    let _ = std::io::stdout().flush();
-    let _ = std::io::stderr().flush();
     std::process::exit(0);
 }
 

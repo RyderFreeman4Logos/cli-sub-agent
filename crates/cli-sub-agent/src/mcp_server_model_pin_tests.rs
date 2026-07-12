@@ -207,3 +207,66 @@ models = ["codex/openai/gpt-5.5/xhigh"]
         .expect("response text");
     assert!(text.contains("Tool 'codex' is not installed"));
 }
+
+#[tokio::test]
+async fn mcp_builder_carries_future_model_warning_after_thinking_lock() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+    let project = tempdir().expect("project tempdir");
+    let config_dir = project.path().join(".csa");
+    std::fs::create_dir_all(&config_dir).expect("create project config dir");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+[model_catalog]
+mode = "replace"
+closed = true
+
+[[model_catalog.entries]]
+tool = "codex"
+provider = "known"
+model = "known"
+reasoning_efforts = ["default"]
+
+[tools.codex]
+thinking_lock = "xhigh"
+
+[tiers.quality]
+description = "quality"
+models = ["codex/future-provider/future-model/high"]
+"#,
+    )
+    .expect("write project config");
+    let xdg = tempdir().expect("xdg tempdir");
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", xdg.path());
+    let bin = tempdir().expect("fake bin");
+    let codex = bin.path().join("codex");
+    std::fs::write(&codex, "#!/bin/sh\nexit 0\n").expect("fake codex");
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))
+        .expect("fake codex permissions");
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut test_paths = vec![bin.path().to_path_buf()];
+    test_paths.extend(std::env::split_paths(&original_path));
+    let test_path = std::env::join_paths(test_paths).expect("test PATH");
+    let _path_guard = EnvVarGuard::set("PATH", test_path);
+    let effective = csa_config::EffectiveConfig::load(project.path()).expect("effective config");
+
+    let executor = build_mcp_admitted_executor(
+        &ToolName::Codex,
+        Some("codex/future-provider/future-model/high"),
+        None,
+        effective.project.as_ref(),
+        &effective.global,
+        &effective.model_catalog,
+        false,
+    )
+    .await
+    .expect("configured future MCP model must reach the shared final boundary");
+
+    assert_eq!(
+        executor.thinking_budget(),
+        Some(&csa_executor::ThinkingBudget::Xhigh)
+    );
+    assert!(executor.catalog_warning_pending());
+}

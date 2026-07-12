@@ -79,22 +79,23 @@ fn build_smart_tiers(
         |name: &str| installed.contains(&name) && !globally_disabled.contains(&name.to_string());
 
     // tier-1-quick: Fast, cheap
-    let tier1_model = if has_tool("codex") {
-        "codex/openai/gpt-5.4-mini/xhigh"
+    let tier1_key = if has_tool("codex") {
+        "init_tier1_codex"
     } else if has_tool("opencode") {
-        "opencode/anthropic/claude-sonnet-4-5-20250929/default"
+        "init_tier1_opencode"
     } else if has_tool("claude-code") {
-        "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
+        "init_tier1_claude"
     } else {
         // Fallback: codex (will be disabled)
-        "codex/openai/gpt-5.4-mini/xhigh"
+        "init_tier1_codex"
     };
+    let tier1_model = required_shipped_model_default(tier1_key);
 
     tiers.insert(
         "tier-1-quick".to_string(),
         TierConfig {
             description: "Quick tasks, low cost".to_string(),
-            models: vec![tier1_model.to_string()],
+            models: vec![tier1_model],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -103,22 +104,23 @@ fn build_smart_tiers(
     );
 
     // tier-2-standard: Balanced
-    let tier2_model = if has_tool("codex") {
-        "codex/openai/gpt-5.5/high"
+    let tier2_key = if has_tool("codex") {
+        "init_tier2_codex"
     } else if has_tool("claude-code") {
-        "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
+        "init_tier2_claude"
     } else if has_tool("opencode") {
-        "opencode/anthropic/claude-sonnet-4-5-20250929/default"
+        "init_tier2_opencode"
     } else {
         // Fallback: codex (will be disabled)
-        "codex/openai/gpt-5.5/high"
+        "init_tier2_codex"
     };
+    let tier2_model = required_shipped_model_default(tier2_key);
 
     tiers.insert(
         "tier-2-standard".to_string(),
         TierConfig {
             description: "Standard development tasks".to_string(),
-            models: vec![tier2_model.to_string()],
+            models: vec![tier2_model],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -127,22 +129,23 @@ fn build_smart_tiers(
     );
 
     // tier-3-complex: Deep reasoning
-    let tier3_model = if has_tool("claude-code") {
-        "claude-code/anthropic/claude-opus-4-6/default"
+    let tier3_key = if has_tool("claude-code") {
+        "init_tier3_claude"
     } else if has_tool("codex") {
-        "codex/openai/gpt-5.5/xhigh"
+        "init_tier3_codex"
     } else if has_tool("opencode") {
-        "opencode/anthropic/claude-opus-4-6/default"
+        "init_tier3_opencode"
     } else {
         // Fallback: codex (will be disabled)
-        "codex/openai/gpt-5.5/xhigh"
+        "init_tier3_codex"
     };
+    let tier3_model = required_shipped_model_default(tier3_key);
 
     tiers.insert(
         "tier-3-complex".to_string(),
         TierConfig {
             description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
-            models: vec![tier3_model.to_string()],
+            models: vec![tier3_model],
             strategy: TierStrategy::default(),
 
             token_budget: None,
@@ -151,6 +154,12 @@ fn build_smart_tiers(
     );
 
     tiers
+}
+
+fn required_shipped_model_default(key: &str) -> String {
+    csa_core::model_catalog::shipped_model_default(key)
+        .expect("shipped model policy must parse")
+        .unwrap_or_else(|| panic!("shipped model policy is missing defaults.{key}"))
 }
 
 /// Initialize project configuration.
@@ -190,7 +199,12 @@ pub fn init_project(
                 enabled: is_usable,
                 restrictions: None,
                 suppress_notify: true,
-                default_model: (*tool_name == "codex").then(|| "gpt-5.4".to_string()),
+                default_model: (*tool_name == "codex")
+                    .then(|| {
+                        csa_core::model_catalog::shipped_model_default("init_codex_model")
+                            .expect("shipped default model policy must be valid")
+                    })
+                    .flatten(),
                 default_thinking: (*tool_name == "codex").then(|| "xhigh".to_string()),
                 ..Default::default()
             },

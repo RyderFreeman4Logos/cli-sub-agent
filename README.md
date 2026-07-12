@@ -154,8 +154,15 @@ stay attached to the audited commit.
 just clippy       # Build + lint
 just test         # Run tests
 just fmt          # Format
-just pre-commit   # Full pre-commit check
+just pre-commit   # Full local check for dirty/staged work
+just pre-push     # Authoritative committed-HEAD gate (runs automatically on push)
 ```
+
+Pull-request and branch CI do not run on GitHub Actions. The Lefthook
+`pre-push` hook and `just pre-push` are the source of truth for formatting,
+linting, dependency policy, monolith limits, unit tests, feature tests, and
+end-to-end tests. Tag-triggered GitHub Actions remain enabled only for release
+artifact publication.
 
 ## License
 

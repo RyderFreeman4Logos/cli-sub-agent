@@ -176,7 +176,7 @@ fn test_resolve_tier_tool_rotated_round_robin() {
     let config = make_config_with_strategy(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
             "claude-code/anthropic/sonnet/0",
         ],
         vec![],
@@ -224,7 +224,7 @@ fn test_resolve_tier_tool_priority_always_first() {
     let config = make_config_with_strategy(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
             "claude-code/anthropic/sonnet/0",
         ],
         vec![],
@@ -250,7 +250,7 @@ fn test_resolve_tier_tool_priority_skips_disabled_first() {
     let config = make_config_with_strategy(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
             "claude-code/anthropic/sonnet/0",
         ],
         vec!["gemini-cli"],
@@ -276,7 +276,7 @@ fn test_resolve_tier_tool_rotated_skips_disabled_round_robin() {
     let config = make_config_with_strategy(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
             "claude-code/anthropic/sonnet/0",
         ],
         vec!["codex"], // codex disabled
@@ -305,7 +305,7 @@ fn test_resolve_tier_tool_rotated_all_disabled() {
     let config = make_config(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
         ],
         vec!["gemini-cli", "codex"],
     );
@@ -351,13 +351,13 @@ fn test_resolve_tier_tool_rotated_single_tool() {
 fn test_resolve_tier_tool_rotated_returns_full_spec() {
     let temp = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&temp);
-    let config = make_config(vec!["codex/openai/o4-mini/0"], vec![]);
+    let config = make_config(vec!["codex/openai/gpt-5.4/0"], vec![]);
 
     let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
         .unwrap()
         .unwrap();
     assert_eq!(result.0, "codex");
-    assert_eq!(result.1, "codex/openai/o4-mini/0");
+    assert_eq!(result.1, "codex/openai/gpt-5.4/0");
 }
 
 #[test]
@@ -408,7 +408,7 @@ fn test_rotated_skips_restricted_tool_when_needs_edit() {
     let config = make_config_with_restrictions(
         vec![
             "gemini-cli/google/gemini-2.5-pro/0",
-            "codex/openai/o4-mini/0",
+            "codex/openai/gpt-5.4/0",
         ],
         vec!["gemini-cli"],
     );

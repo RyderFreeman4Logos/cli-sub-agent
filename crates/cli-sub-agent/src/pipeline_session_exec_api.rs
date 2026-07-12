@@ -6,10 +6,9 @@ use std::{
 use anyhow::Result;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::Executor;
 use csa_process::ExecutionResult;
 
-use super::execute_with_session_and_meta_with_parent_source;
+use super::{DispatchExecutor, execute_with_session_and_meta_with_parent_source};
 use crate::pipeline::{
     MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
 };
@@ -18,8 +17,8 @@ use crate::startup_env::StartupSubtreeEnv;
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
-pub(crate) async fn execute_with_session(
-    executor: &Executor,
+pub(crate) async fn execute_with_session<D: DispatchExecutor + ?Sized>(
+    executor: &D,
     tool: &ToolName,
     prompt: &str,
     session_arg: Option<String>,
@@ -85,8 +84,8 @@ pub(crate) async fn execute_with_session(
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool))]
-pub(crate) async fn execute_with_session_and_meta(
-    executor: &Executor,
+pub(crate) async fn execute_with_session_and_meta<D: DispatchExecutor + ?Sized>(
+    executor: &D,
     tool: &ToolName,
     prompt: &str,
     output_format: OutputFormat,

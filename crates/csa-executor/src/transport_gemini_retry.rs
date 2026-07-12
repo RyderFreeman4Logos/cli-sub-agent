@@ -11,21 +11,19 @@ use csa_core::{
 };
 use csa_process::ExecutionResult;
 
-/// Total retry attempts for the 3-phase fallback chain:
+/// Total retry attempts for the 3-phase authentication retry chain:
 ///   Phase 1 (attempt 1): Original model + OAuth auth
 ///   Phase 2 (attempt 2): Original model + API key auth
-///   Phase 3 (attempt 3): Flash model  + API key auth
+///   Phase 3 (attempt 3): Original model + API key auth
 pub(crate) const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
 /// When `_CSA_NO_FAILOVER` is set, disable all Gemini retry/failover phases.
 pub(crate) const GEMINI_RATE_LIMIT_NO_FAILOVER_ATTEMPTS: u8 = 1;
-/// When `_CSA_NO_FLASH_FALLBACK` is set, skip phase 3 (flash model).
+/// When `_CSA_NO_FLASH_FALLBACK` is set, skip the legacy third retry.
 pub(crate) const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
 #[cfg(test)]
 pub(crate) const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
 #[cfg(not(test))]
 pub(crate) const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
-/// Flash model used in phase 3 of the fallback chain.
-pub(crate) const GEMINI_RATE_LIMIT_FLASH_MODEL: &str = "gemini-3-flash-preview";
 
 pub(crate) fn gemini_is_no_flash(extra_env: Option<&HashMap<String, String>>) -> bool {
     extra_env.is_some_and(|env| env.contains_key(NO_FLASH_FALLBACK_ENV_KEY))
@@ -45,12 +43,10 @@ pub(crate) fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
 ///
 /// Phase 1 (attempt 1): None — keep original model.
 /// Phase 2 (attempt 2): None — keep original model (auth changes instead).
-/// Phase 3 (attempt 3): Flash model.
-pub(crate) fn gemini_retry_model(attempt: u8) -> Option<&'static str> {
-    match attempt {
-        3 => Some(GEMINI_RATE_LIMIT_FLASH_MODEL),
-        _ => None,
-    }
+/// Transport retries never change the configured model. Cross-model fallback
+/// is owned by the catalog-aware scheduler and requires a new session.
+pub(crate) fn gemini_retry_model(_attempt: u8) -> Option<String> {
+    None
 }
 
 /// Whether this attempt should use API key auth instead of OAuth.

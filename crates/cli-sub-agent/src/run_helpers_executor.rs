@@ -27,40 +27,85 @@ pub(crate) fn build_executor(
         Executor::from_spec(&parsed)?
     } else {
         let tool_name = tool.as_str();
-        let (parsed_model, model_thinking) = match model {
-            Some(m) => {
-                let (clean, budget) = ThinkingBudget::try_split_from_model(m);
-                (Some(clean.to_string()), budget)
+        let selected_model = model
+            .map(|value| {
+                config
+                    .map(|cfg| cfg.resolve_alias(value))
+                    .unwrap_or_else(|| value.to_string())
+            })
+            .or_else(|| {
+                apply_tool_defaults.then(|| {
+                    config.and_then(|cfg| {
+                        cfg.tool_default_model(tool_name)
+                            .map(|default_model| cfg.resolve_alias(default_model))
+                    })
+                })?
+            });
+        if let Some(full_spec) = selected_model
+            .as_deref()
+            .filter(|value| value.matches('/').count() == 3)
+        {
+            let parsed = ModelSpec::parse(full_spec)?;
+            if parsed.tool != tool_name {
+                anyhow::bail!(
+                    "tool/model-spec mismatch: selected tool {} cannot execute model spec {full_spec} \
+                     because it selects tool {}; refusing to dispatch through the wrong provider",
+                    tool_name,
+                    parsed.tool
+                );
             }
-            None => (None, None),
-        };
-        let final_model = parsed_model.or_else(|| {
-            apply_tool_defaults.then(|| {
-                config.and_then(|cfg| {
-                    cfg.tool_default_model(tool_name)
-                        .map(|default_model| cfg.resolve_alias(default_model))
-                })
-            })?
-        });
-        let effective_thinking = thinking.or_else(|| {
-            apply_tool_defaults
-                .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
-        });
-        let budget = effective_thinking
-            .map(ThinkingBudget::parse)
-            .transpose()?
-            .or(model_thinking);
-        Executor::from_tool_name(tool, final_model, budget)
+            let mut executor = Executor::from_spec(&parsed)?;
+            let effective_thinking = thinking.or_else(|| {
+                apply_tool_defaults
+                    .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
+            });
+            if let Some(value) = effective_thinking {
+                executor.override_thinking_budget(ThinkingBudget::parse(value)?);
+            }
+            executor
+        } else {
+            let (parsed_model, model_thinking) = match selected_model.as_deref() {
+                Some(model) => {
+                    let (clean, budget) = ThinkingBudget::try_split_from_model(model);
+                    (Some(clean.to_string()), budget)
+                }
+                None => (None, None),
+            };
+            let effective_thinking = thinking.or_else(|| {
+                apply_tool_defaults
+                    .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
+            });
+            let budget = effective_thinking
+                .map(ThinkingBudget::parse)
+                .transpose()?
+                .or(model_thinking);
+            Executor::from_tool_name(tool, parsed_model, budget)
+        }
     };
 
     if model_spec.is_some() {
         if let Some(explicit_model) = model {
-            let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(explicit_model);
-            executor.override_model(clean.to_string());
-            if thinking.is_none()
-                && let Some(budget) = suffix_budget
-            {
-                executor.override_thinking_budget(budget);
+            let resolved_model = config
+                .map(|cfg| cfg.resolve_alias(explicit_model))
+                .unwrap_or_else(|| explicit_model.to_string());
+            if resolved_model.matches('/').count() == 3 {
+                let parsed = ModelSpec::parse(&resolved_model)?;
+                if parsed.tool != tool.as_str() {
+                    anyhow::bail!(
+                        "tool/model-spec mismatch: selected tool {} cannot execute model override {resolved_model} because it selects tool {}; refusing to dispatch through the wrong provider",
+                        tool.as_str(),
+                        parsed.tool
+                    );
+                }
+                executor = Executor::from_spec(&parsed)?;
+            } else {
+                let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(&resolved_model);
+                executor.override_model(clean.to_string());
+                if thinking.is_none()
+                    && let Some(budget) = suffix_budget
+                {
+                    executor.override_thinking_budget(budget);
+                }
             }
         }
         if let Some(explicit_thinking) = thinking {
@@ -81,5 +126,11 @@ pub(crate) fn build_executor(
 }
 
 pub(crate) fn model_name_for_tier_validation(model: Option<&str>) -> Option<&str> {
-    model.map(|name| ThinkingBudget::try_split_from_model(name).0)
+    model.map(|name| {
+        if name.split('/').count() == 4 {
+            name
+        } else {
+            ThinkingBudget::try_split_from_model(name).0
+        }
+    })
 }

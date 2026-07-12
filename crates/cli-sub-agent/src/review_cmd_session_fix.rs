@@ -21,6 +21,7 @@ pub(super) struct SelectionResolutionCtx<'a> {
     pub(super) args: &'a ReviewArgs,
     pub(super) project_config: Option<&'a ProjectConfig>,
     pub(super) global_config: &'a GlobalConfig,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub(super) parent_tool: Option<&'a str>,
     pub(super) project_root: &'a Path,
     pub(super) effective_tier: Option<&'a str>,
@@ -54,11 +55,12 @@ pub(super) fn resolve_selection_tool(
 pub(super) fn resolve_selection_or_persist_error(
     ctx: SelectionResolutionCtx<'_>,
 ) -> Result<ResolvedReviewSelection> {
-    let resolved = match super::resolve::resolve_review_selection(
+    let resolved = match super::resolve::resolve_review_selection_with_catalog(
         ctx.selection_tool,
         ctx.args.model_spec.as_deref(),
         ctx.project_config,
         ctx.global_config,
+        ctx.model_catalog,
         ctx.parent_tool,
         ctx.project_root,
         ctx.args.force_override_user_config,
@@ -188,8 +190,9 @@ pub(super) fn validate_session_fix_explicit_tool(
 
 pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
-    let project_config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load()?;
+    let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
+    let project_config = effective_config.project;
+    let global_config = effective_config.global;
     let parent_tool =
         crate::run_helpers::resolve_tool(crate::run_helpers::detect_parent_tool(), &global_config);
 
@@ -198,6 +201,7 @@ pub(crate) fn validate_session_fix_before_daemon(args: &ReviewArgs) -> Result<()
         &project_root,
         project_config.as_ref(),
         &global_config,
+        &effective_config.model_catalog,
         parent_tool.as_deref(),
     )?;
 
@@ -209,6 +213,7 @@ pub(super) fn resolve_session_fix_selection(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     parent_tool: Option<&str>,
 ) -> Result<Option<ToolName>> {
     let Some(session_fix) = resolve_session_fix_tool(args, project_root)? else {
@@ -219,11 +224,12 @@ pub(super) fn resolve_session_fix_selection(
     let (effective_tier, args_tool) =
         super::resolve::resolve_review_effective_tier(args, project_config)?;
     let selection_tool = args_tool.or(session_fix.tool);
-    let resolved = super::resolve::resolve_review_selection(
+    let resolved = super::resolve::resolve_review_selection_with_catalog(
         selection_tool,
         args.model_spec.as_deref(),
         project_config,
         global_config,
+        model_catalog,
         parent_tool,
         project_root,
         args.force_override_user_config,

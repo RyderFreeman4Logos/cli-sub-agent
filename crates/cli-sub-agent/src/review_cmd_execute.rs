@@ -36,8 +36,7 @@ use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{
     TierAttemptFailure, chain_failure_reasons, earliest_backend_reset_window,
     fallback_reason_for_result, format_all_models_failed_reason_with_ux_context,
-    ordered_tier_candidates, parse_backend_reset_duration, persist_fallback_chain,
-    persist_fallback_result_fields,
+    parse_backend_reset_duration, persist_fallback_chain, persist_fallback_result_fields,
 };
 
 use super::output::{
@@ -45,6 +44,7 @@ use super::output::{
     ensure_review_summary_artifact, has_structured_review_content, is_edit_restriction_summary,
     is_review_output_empty,
 };
+use super::tier_candidates::{ReviewTierCandidateRequest, review_ordered_tier_candidates};
 use artifact_guard::detect_repo_root_review_artifact_violations;
 use execute_once::execute_review_once_with_artifact_guard;
 #[cfg(test)]
@@ -108,31 +108,6 @@ fn warn_if_fast_mode_has_no_codex_review_candidate(
     }
 }
 
-struct ReviewTierCandidateRequest<'a> {
-    initial_tool: ToolName,
-    initial_model_spec: Option<&'a str>,
-    tier_name: Option<&'a str>,
-    project_config: Option<&'a ProjectConfig>,
-    global_config: Option<&'a GlobalConfig>,
-    tier_fallback_enabled: bool,
-    no_failover: bool,
-    tier_preference_order: &'a [String],
-}
-
-fn review_ordered_tier_candidates(
-    request: ReviewTierCandidateRequest<'_>,
-) -> Vec<(ToolName, Option<String>)> {
-    ordered_tier_candidates(
-        request.initial_tool,
-        request.initial_model_spec,
-        request.tier_name,
-        request.project_config,
-        request.global_config,
-        request.tier_fallback_enabled && !request.no_failover,
-        request.tier_preference_order,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 pub(crate) async fn execute_review(
@@ -163,6 +138,7 @@ pub(crate) async fn execute_review(
     error_marker_scan_override: Option<bool>,
 ) -> Result<ReviewExecutionOutcome> {
     let startup_env = StartupSubtreeEnv::default();
+    let model_catalog = csa_config::EffectiveModelCatalog::shipped()?;
     execute_review_with_tier_filter(
         tool,
         prompt,
@@ -177,6 +153,7 @@ pub(crate) async fn execute_review(
         project_root,
         project_config,
         global_config,
+        &model_catalog,
         pre_session_hook,
         review_routing,
         stream_mode,
@@ -197,6 +174,7 @@ pub(crate) async fn execute_review(
         error_marker_scan_override,
         RunResourceOverrides::default(),
         0,
+        crate::pipeline::SessionCreationMode::DaemonManaged,
         &startup_env,
     )
     .await
@@ -217,6 +195,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    model_catalog: &csa_config::EffectiveModelCatalog,
     pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     review_routing: ReviewRoutingMetadata,
     stream_mode: csa_process::StreamMode,
@@ -237,6 +216,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     error_marker_scan_override: Option<bool>,
     resource_overrides: RunResourceOverrides,
     current_depth: u32,
+    initial_creation_mode: crate::pipeline::SessionCreationMode,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<ReviewExecutionOutcome> {
     let execution_started_at = Utc::now();
@@ -264,10 +244,11 @@ pub(crate) async fn execute_review_with_tier_filter(
         tier_name: tier_name.as_deref(),
         project_config,
         global_config: Some(global_config),
+        model_catalog,
         tier_fallback_enabled,
         no_failover,
         tier_preference_order: &tier_preference_order,
-    });
+    })?;
     if tier_fallback_enabled && candidates.len() <= 1 {
         warn!(
             tier = ?tier_name,
@@ -283,6 +264,7 @@ pub(crate) async fn execute_review_with_tier_filter(
     );
     let mut failures = Vec::new();
     let mut reset_windows = Vec::new();
+    let mut failed_attempt_session = session.clone();
 
     for (attempt_index, (attempt_tool, attempt_model_spec)) in candidates.iter().enumerate() {
         let attempt_started_at = std::time::Instant::now();
@@ -296,6 +278,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             crate::pipeline::ConfigRefs {
                 project: project_config,
                 global: Some(global_config),
+                model_catalog: Some(model_catalog),
             },
             enforce_tier,
             force_override_user_config,
@@ -348,12 +331,21 @@ pub(crate) async fn execute_review_with_tier_filter(
         let extra_env_owned =
             with_readonly_session_env(base_env_owned.as_ref(), review_prompt_is_readonly(&prompt));
         let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
+        let session_plan = crate::pipeline::model_failover_session::resolve_model_attempt_session(
+            attempt_index,
+            session.as_deref(),
+            failed_attempt_session.as_deref(),
+            initial_creation_mode,
+            startup_env.session_id(),
+        );
 
         let mut execution = match execute_review_once_with_artifact_guard(
             &executor,
             attempt_tool,
             &effective_prompt,
-            session.clone(),
+            session_plan.session_arg,
+            session_plan.parent,
+            session_plan.creation_mode,
             description.clone(),
             project_root,
             project_config,
@@ -419,6 +411,7 @@ pub(crate) async fn execute_review_with_tier_filter(
                             &err,
                         );
                         if let Some(session_id) = extract_meta_session_id_from_error(&err) {
+                            failed_attempt_session = Some(session_id.clone());
                             retire_tier_failover_session(project_root, &session_id);
                         }
                         continue;
@@ -431,8 +424,9 @@ pub(crate) async fn execute_review_with_tier_filter(
                     );
                     if let Some(session_id) = extract_meta_session_id_from_error(&err) {
                         let fallback_chain =
-                            crate::tier_model_fallback::build_fallback_chain_for_result(
+                            crate::tier_model_fallback::build_fallback_chain_for_result_with_catalog(
                                 project_config,
+                                model_catalog,
                                 tier_name.as_deref(),
                                 &failures,
                                 // All tier models failed: no winner, so persist
@@ -564,7 +558,9 @@ pub(crate) async fn execute_review_with_tier_filter(
                     &executor,
                     attempt_tool,
                     &effective_prompt,
-                    session.clone(),
+                    Some(execution.meta_session_id.clone()),
+                    None,
+                    crate::pipeline::SessionCreationMode::DaemonManaged,
                     description.clone(),
                     project_root,
                     project_config,
@@ -681,14 +677,16 @@ pub(crate) async fn execute_review_with_tier_filter(
                     *attempt_tool,
                     fallback_reason_for_result(&failures),
                 );
-                let fallback_chain = crate::tier_model_fallback::build_fallback_chain_for_result(
-                    project_config,
-                    tier_name.as_deref(),
-                    &failures,
-                    // Every tier model failed: no winner, persist full chain.
-                    None,
-                    &tier_preference_order,
-                );
+                let fallback_chain =
+                    crate::tier_model_fallback::build_fallback_chain_for_result_with_catalog(
+                        project_config,
+                        model_catalog,
+                        tier_name.as_deref(),
+                        &failures,
+                        // Every tier model failed: no winner, persist full chain.
+                        None,
+                        &tier_preference_order,
+                    );
                 persist_review_routing_artifact_with_fallback_chain(
                     project_root,
                     &execution.meta_session_id,
@@ -721,6 +719,7 @@ pub(crate) async fn execute_review_with_tier_filter(
             }
             // Retire the failed intermediate session so `csa session list` shows
             // "Retired" rather than "Failed" during the failover window (#1475).
+            failed_attempt_session = Some(execution.meta_session_id.clone());
             retire_tier_failover_session(project_root, &execution.meta_session_id);
             continue;
         }
@@ -734,16 +733,18 @@ pub(crate) async fn execute_review_with_tier_filter(
             *attempt_tool,
             fallback_reason_for_result(&failures),
         );
-        let fallback_chain = crate::tier_model_fallback::build_fallback_chain_for_result(
-            project_config,
-            tier_name.as_deref(),
-            &failures,
-            // The winning model: bounds the persisted chain to before-winner
-            // skips so a first-choice success omits never-reached tier
-            // models (#1714).
-            attempt_model_spec.as_deref(),
-            &tier_preference_order,
-        );
+        let fallback_chain =
+            crate::tier_model_fallback::build_fallback_chain_for_result_with_catalog(
+                project_config,
+                model_catalog,
+                tier_name.as_deref(),
+                &failures,
+                // The winning model: bounds the persisted chain to before-winner
+                // skips so a first-choice success omits never-reached tier
+                // models (#1714).
+                attempt_model_spec.as_deref(),
+                &tier_preference_order,
+            );
         persist_review_routing_artifact_with_fallback_chain(
             project_root,
             &execution.meta_session_id,
@@ -847,6 +848,10 @@ mod readonly_tests;
 #[cfg(test)]
 #[path = "review_cmd_execute_tier_tests.rs"]
 mod tier_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_execute_tier_session_tests.rs"]
+mod tier_session_tests;
 
 #[cfg(test)]
 #[path = "review_cmd_execute_issue2409_tests.rs"]

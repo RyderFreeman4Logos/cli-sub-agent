@@ -8,17 +8,23 @@
 use anyhow::Result;
 use csa_core::types::ToolName;
 use csa_executor::ThinkingBudget;
+use std::sync::LazyLock;
 
 /// Codex ChatGPT-account-incompatible models.
 ///
 /// These are rejected by codex when using a ChatGPT subscription rather than
 /// an OpenAI API key. The codex CLI surfaces this at runtime:
 /// "The '<model>' model is not supported when using Codex with a ChatGPT account."
-pub(crate) const CODEX_CHATGPT_INCOMPATIBLE_MODELS: &[&str] = &["o4-mini"];
+pub(crate) static CODEX_CHATGPT_INCOMPATIBLE_MODELS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    csa_core::model_catalog::shipped_compatibility_models("codex_chatgpt_incompatible")
+        .expect("shipped compatibility policy must be valid")
+});
 
 /// Well-known codex ChatGPT-account-compatible models, listed in error hints.
-pub(crate) const CODEX_CHATGPT_COMPATIBLE_MODELS: &[&str] =
-    &["gpt-5.5", "o3", "o4-mini-high", "gpt-4.1", "gpt-4o"];
+pub(crate) static CODEX_CHATGPT_COMPATIBLE_MODELS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    csa_core::model_catalog::shipped_compatibility_models("codex_chatgpt_compatible")
+        .expect("shipped compatibility policy must be valid")
+});
 
 /// Validate that `model` is compatible with `tool` before spawning a session.
 ///
@@ -51,7 +57,10 @@ pub(crate) fn validate_tool_model_compat(
 }
 
 fn validate_codex_model_compat(model: &str) -> Result<()> {
-    if CODEX_CHATGPT_INCOMPATIBLE_MODELS.contains(&model) {
+    if CODEX_CHATGPT_INCOMPATIBLE_MODELS
+        .iter()
+        .any(|candidate| candidate == model)
+    {
         let compatible = CODEX_CHATGPT_COMPATIBLE_MODELS.join(", ");
         anyhow::bail!(
             "'{model}' is not supported when using codex with a ChatGPT account.\n\

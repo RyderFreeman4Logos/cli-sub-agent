@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::pipeline::AdmittedExecutor;
 use anyhow::Result;
 use chrono::Utc;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::Executor;
 
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
@@ -16,10 +16,12 @@ const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
 
 #[allow(clippy::too_many_arguments)]
 async fn execute_review_once(
-    executor: &Executor,
+    executor: &AdmittedExecutor,
     tool: &ToolName,
     effective_prompt: &str,
     session: Option<String>,
+    parent_session: Option<String>,
+    session_creation_mode: crate::pipeline::SessionCreationMode,
     description: String,
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
@@ -48,7 +50,7 @@ async fn execute_review_once(
         session,
         false,
         Some(description),
-        None,
+        parent_session,
         project_root,
         project_config,
         extra_env,
@@ -65,7 +67,7 @@ async fn execute_review_once(
         Some(global_config),
         pre_session_hook,
         crate::pipeline::ParentSessionSource::ExplicitOnly,
-        crate::pipeline::SessionCreationMode::DaemonManaged,
+        session_creation_mode,
         resource_overrides,
         no_fs_sandbox,
         allow_user_daemon_ipc,
@@ -81,10 +83,12 @@ async fn execute_review_once(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_review_once_with_artifact_guard(
-    executor: &Executor,
+    executor: &AdmittedExecutor,
     tool: &ToolName,
     effective_prompt: &str,
     session: Option<String>,
+    parent_session: Option<String>,
+    session_creation_mode: crate::pipeline::SessionCreationMode,
     description: String,
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
@@ -111,6 +115,8 @@ pub(super) async fn execute_review_once_with_artifact_guard(
         tool,
         effective_prompt,
         session,
+        parent_session,
+        session_creation_mode,
         description,
         project_root,
         project_config,

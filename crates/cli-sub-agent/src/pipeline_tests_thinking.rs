@@ -100,6 +100,7 @@ async fn build_and_validate_executor_accepts_global_openai_compat_env() {
         ConfigRefs {
             project: Some(&cfg),
             global: Some(&global_config),
+            model_catalog: None,
         },
         true,
         false,
@@ -144,6 +145,7 @@ async fn openai_compat_model_spec_overrides_project_default_model() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -152,7 +154,7 @@ async fn openai_compat_model_spec_overrides_project_default_model() {
     .await
     .expect("project HTTP config plus explicit model spec should be valid");
 
-    match exec {
+    match &*exec {
         csa_executor::Executor::OpenaiCompat { model_override, .. } => {
             assert_eq!(model_override.as_deref(), Some("gpt-5"));
         }
@@ -206,6 +208,7 @@ async fn thinking_lock_project_config_overrides_cli_thinking() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -249,6 +252,7 @@ async fn thinking_lock_global_config_applies_when_project_absent() {
         ConfigRefs {
             project: None,
             global: Some(&global_cfg),
+            model_catalog: None,
         },
         false,
         false,
@@ -323,6 +327,7 @@ async fn thinking_lock_project_overrides_global() {
         ConfigRefs {
             project: Some(&cfg),
             global: Some(&global_cfg),
+            model_catalog: None,
         },
         false,
         false,
@@ -350,6 +355,7 @@ async fn no_thinking_lock_passes_cli_thinking_through() {
         ConfigRefs {
             project: None,
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -382,6 +388,7 @@ async fn model_thinking_suffix_is_stripped_before_tier_validation() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -414,6 +421,7 @@ async fn force_ignore_tier_setting_skips_execution_boundary_model_check() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false, // `--force-ignore-tier-setting` disables defense-in-depth tier enforcement
         false,
@@ -474,6 +482,7 @@ async fn project_default_thinking_applies_when_cli_absent() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         false,
         false,
@@ -548,6 +557,7 @@ async fn project_default_model_is_checked_against_tiers_when_enabled() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,
@@ -620,6 +630,7 @@ async fn project_default_model_is_ignored_when_tool_defaults_disabled() {
         ConfigRefs {
             project: Some(&cfg),
             global: None,
+            model_catalog: None,
         },
         true,
         false,

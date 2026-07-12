@@ -371,100 +371,7 @@ prompt = '''
 mktd TODO; --pattern mktd default, MKTD_WORKFLOW_PATH override, auto light/full.
 
 ```bash
-set -euo pipefail
-CURRENT_BRANCH="$(git branch --show-current)"
-FEATURE_INPUT="${FEATURE_INPUT:-${SCOPE:-current branch changes pending merge}}"
-USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
-MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-}}"
-MKTD_TIMEOUT_SECONDS="${MKTD_TIMEOUT_SECONDS:-1800}"
-MKTD_PLAN_TIER="${PLAN_TIER:-${TIER:-tier-3-complex}}"
-CSA_BIN="${CSA_BIN:-csa}"
-MKTD=(--pattern mktd); [ -n "${MKTD_WORKFLOW_PATH:-}" ] && MKTD=("$MKTD_WORKFLOW_PATH")
-MKTD_TOOL_ARGS=(); [ -z "${MKTD_TOOL_EFFECTIVE}" ] || MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
-LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
-LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
-PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
-PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
-FEATURE_INPUT_LEN=${#FEATURE_INPUT}
-FEATURE_FILE_LINE_HITS="$(printf '%s' "${FEATURE_INPUT}" | grep -oE '[A-Za-z0-9_./-]+\.(rs|toml|md):[0-9]+' | wc -l | xargs || true)"
-if [ "${FEATURE_INPUT_LEN}" -lt 4096 ] && [ "${FEATURE_FILE_LINE_HITS}" -ge 2 ]; then
-  MKTD_INTENSITY="light"
-  echo "Planning intensity: light (brief specificity: ${FEATURE_FILE_LINE_HITS} file:line refs in ${FEATURE_INPUT_LEN}-char brief)"
-elif [ "${PLAN_CODE_FILES}" -le "${LIGHT_THRESHOLD_FILES}" ] && [ "${PLAN_INSERTIONS:-0}" -lt "${LIGHT_THRESHOLD_LINES}" ]; then
-  MKTD_INTENSITY="light"
-  echo "Planning intensity: light (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
-else
-  MKTD_INTENSITY="full"
-  echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
-fi
-echo "mktd timeout: ${MKTD_TIMEOUT_SECONDS}s"
-set +e
-MKTD_OUTPUT="$(timeout -k 30 "${MKTD_TIMEOUT_SECONDS}" "${CSA_BIN}" plan run --sa-mode true "${MKTD[@]}" \
-  "${MKTD_TOOL_ARGS[@]}" \
-  --var CWD="$(pwd)" \
-  --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
-  --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
-  --var TIER="${TIER:-}" \
-  --var PLAN_TIER="${MKTD_PLAN_TIER}" \
-  --var IMPL_TIER="${IMPL_TIER:-}" \
-  --var IMPL_TOOL="${IMPL_TOOL:-}" \
-  --var INTENSITY="${MKTD_INTENSITY}" 2>&1)"
-MKTD_EXIT=$?
-set -e
-printf '%s\n' "${MKTD_OUTPUT}"
-print_mktd_failure_context() {
-  echo "mktd exit code: ${MKTD_EXIT}" >&2
-  echo "mktd failure context (step/exit lines):" >&2
-  MKTD_FAILURE_CONTEXT="$(printf '%s\n' "${MKTD_OUTPUT}" | grep -Ei '(error|Step [0-9]+|timeout|fail)' | tail -40 || true)"
-  if [ -n "${MKTD_FAILURE_CONTEXT}" ]; then
-    printf '%s\n' "${MKTD_FAILURE_CONTEXT}" >&2
-  else
-    printf '%s\n' "${MKTD_OUTPUT}" | tail -80 >&2
-  fi
-}
-fail_step7_gate() {
-  echo "ERROR: ${1}" >&2
-  if [ "${MKTD_EXIT}" -ne 0 ]; then
-    print_mktd_failure_context
-  else
-    echo "mktd exit code: 0" >&2
-  fi
-  exit 1
-}
-if [ "${MKTD_EXIT}" -eq 124 ] || [ "${MKTD_EXIT}" -eq 137 ]; then
-  echo "ERROR: mktd hard-timeout after ${MKTD_TIMEOUT_SECONDS}s (#1118 part A)." >&2
-  print_mktd_failure_context
-  exit 1
-fi
-LATEST_TS="$("${CSA_BIN}" todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
-if [ -z "${LATEST_TS}" ]; then
-  fail_step7_gate "mktd did not produce a TODO for branch ${CURRENT_BRANCH}."
-fi
-TODO_PATH="$("${CSA_BIN}" todo show -t "${LATEST_TS}" --path)"
-if ! grep -qF -- '- [ ] ' "${TODO_PATH}"; then
-  fail_step7_gate "TODO missing checkbox tasks."
-fi
-if ! awk '
-function flush() { if (in_open == 1 && has_clause == 0) bad = 1; in_open = 0; has_clause = 0 }
-function scan(text,   pos, rest) {
-  pos = index(text, "DONE WHEN:")
-  if (pos > 0) { rest = substr(text, pos + 10); sub(/^[ \t]+/, "", rest); if (length(rest) > 0) has_clause = 1 }
-}
-{
-  is_open = ($0 ~ /^- \[ \]/)
-  if ($0 ~ /^- \[[ xX]\]/ || $0 ~ /^#/) { flush(); if (is_open == 1) { in_open = 1; scan($0) }; next }
-  if (in_open == 1) scan($0)
-}
-END { flush(); exit (bad + 0) }
-' "${TODO_PATH}"; then
-  fail_step7_gate "TODO has an open task without a mechanically-verifiable DONE WHEN: clause."
-fi
-if [ "${MKTD_EXIT}" -ne 0 ]; then
-  echo "WARNING: mktd exited ${MKTD_EXIT}, but TODO gates passed; treating Step 7 as successful." >&2
-  print_mktd_failure_context
-fi
-echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
-echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/plan-with-mktd.sh"
 ```'''
 on_fail = "abort"
 condition = "(!(${DEV2MERGE_SKIP})) && (!(${FAST_PATH})) && (!(${RESUME_MODE}))"
@@ -710,55 +617,7 @@ as CSA_VARs for the next step. This step does NOT trigger pr-bot —
 that is a separate hard gate in Step 16.
 
 ```bash
-set -euo pipefail
-BRANCH="$(git branch --show-current)"
-COMMIT_SUBJECT="$(git log -1 --format=%s)"
-
-# --- Create or reuse PR ---
-set +e
-CREATE_OUTPUT="$(gh pr create --base "${DEFAULT_BRANCH}" --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
-CREATE_RC=$?
-set -e
-if [ "${CREATE_RC}" -ne 0 ]; then
-  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
-    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
-    exit 1
-  fi
-  echo "INFO: PR already exists for ${BRANCH}; continuing."
-fi
-
-# --- Resolve PR number (retry + fallback) ---
-PR_NUMBER=""
-PR_URL=""
-for attempt in 1 2 3; do
-  PR_JSON="$(gh pr view --json number,url,state -q 'select(.state == "OPEN")' 2>/dev/null || true)"
-  PR_NUMBER="$(printf '%s' "${PR_JSON}" | jq -r '.number // empty' 2>/dev/null || true)"
-  if [ -n "${PR_NUMBER}" ] && printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
-    PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.url // empty')"
-    break
-  fi
-  PR_NUMBER=""
-  if [ "${attempt}" -lt 3 ]; then
-    echo "INFO: PR resolution attempt ${attempt} failed, retrying in 5s..."
-    sleep 5
-  fi
-done
-# Fallback: gh pr list --head
-if [ -z "${PR_NUMBER}" ]; then
-  echo "INFO: gh pr view failed; falling back to gh pr list..."
-  PR_NUMBER="$(gh pr list --head "${BRANCH}" --base "${DEFAULT_BRANCH}" --json number -q '.[0].number' 2>/dev/null || true)"
-  if [ -n "${PR_NUMBER}" ] && printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
-    PR_URL="$(gh pr view "${PR_NUMBER}" --json url -q '.url' 2>/dev/null || true)"
-  fi
-fi
-if [ -z "${PR_NUMBER}" ] || ! printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
-  echo "ERROR: Cannot resolve open PR number for ${BRANCH} after retries." >&2
-  exit 1
-fi
-echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
-echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
-echo "CSA_VAR:PR_URL=${PR_URL}"
-echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 16)" required=true -->'
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/create-or-reuse-pr.sh"
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
@@ -776,56 +635,7 @@ Uses marker files for idempotency: skips if pr-bot already completed for
 the same PR/HEAD combination.
 
 ```bash
-set -euo pipefail
-if [ -z "${PR_NUMBER:-}" ]; then
-  echo "ERROR: PR_NUMBER not set — Step 15 must run first." >&2
-  exit 1
-fi
-HEAD_SHA="$(git rev-parse --verify HEAD)"
-
-# --- Lock + Idempotency: skip if pr-bot already ran or is running ---
-# Bind markers to repo identity to prevent cross-repo PR# collisions.
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
-if [ -z "${REPO_SLUG}" ]; then
-  REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
-fi
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
-mkdir -p "${MARKER_DIR}"
-MARKER_BASE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}"
-DONE_MARKER="${MARKER_BASE}.done"
-LOCK_DIR="${MARKER_BASE}.lock"
-LOCK_HELD=0
-
-cleanup_lock() {
-  if [ "${LOCK_HELD}" -eq 1 ]; then
-    rmdir "${LOCK_DIR}" 2>/dev/null || true
-  fi
-}
-trap cleanup_lock EXIT
-
-if [ -f "${DONE_MARKER}" ]; then
-  echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
-  echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 17)" required=true -->'
-elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-  echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
-  echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
-  exit 1
-else
-  LOCK_HELD=1
-  echo "Running pr-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
-  export CSA_PR_BOT_GUARD=1
-  if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
-    touch "${DONE_MARKER}"
-    echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 17)" required=true -->'
-    LOCK_HELD=0
-    rmdir "${LOCK_DIR}" 2>/dev/null || true
-  else
-    echo "ERROR: pr-bot workflow failed for PR #${PR_NUMBER}." >&2
-    exit 1
-  fi
-fi
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/pr-bot-review-merge.sh"
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"
@@ -839,74 +649,7 @@ Verify pr-bot completion marker exists (deterministic gate — cannot be bypasse
 by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
 ```bash
-set -euo pipefail
-# NOTE: PR_NUMBER comes from Step 15 (gh pr view/list). In fork workflows,
-# pr-bot may resolve a different PR via owner-aware lookup. For single-repo
-# workflows (the common case), both resolve to the same PR.
-if [ -n "${PR_NUMBER:-}" ]; then
-  # --- Deterministic gate: verify pr-bot completion marker ---
-  # Prefer exact marker path from Step 16 (CSA_VAR:PR_BOT_DONE_MARKER).
-  # Fall back to repo-scoped glob if variable is unset (backwards compat).
-  if [ -n "${PR_BOT_DONE_MARKER:-}" ]; then
-    if [ ! -f "${PR_BOT_DONE_MARKER}" ]; then
-      echo "ERROR: pr-bot marker not found: ${PR_BOT_DONE_MARKER}" >&2
-      echo "Step 16 (pr-bot) must complete successfully before post-merge sync." >&2
-      exit 1
-    fi
-    echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
-  else
-    # Fallback: glob match by repo slug + PR number.
-    # NOTE: glob may match stale markers from previous pr-bot runs on the same
-    # PR. The exact CSA_VAR path (above) is the primary defense; this fallback
-    # exists only for edge cases where the variable is lost.
-    REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
-    if [ -z "${REPO_SLUG}" ]; then
-      REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
-    fi
-    MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
-    if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
-      echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
-      echo "Step 16 (pr-bot) must complete successfully before post-merge sync." >&2
-      echo "Marker directory: ${MARKER_DIR}" >&2
-      exit 1
-    fi
-    echo "pr-bot completion marker verified (glob) for PR #${PR_NUMBER}."
-  fi
-
-  # --- Verify PR is actually merged (defense in depth) ---
-  PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"
-  if [ "${PR_STATE}" != "MERGED" ]; then
-    echo "ERROR: PR #${PR_NUMBER} state is '${PR_STATE}', expected 'MERGED'." >&2
-    echo "pr-bot marker exists but PR not merged — possible partial failure." >&2
-    exit 1
-  fi
-  echo "PR #${PR_NUMBER} confirmed MERGED."
-fi
-FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
-SYNC_REMOTE="origin"
-SYNC_DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
-if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
-  SYNC_DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)"
-fi
-if [ -z "${SYNC_DEFAULT_BRANCH}" ]; then
-  echo "WARNING: post-merge checkout skipped: could not determine default branch." >&2
-  exit 0
-fi
-if ! git checkout "${SYNC_DEFAULT_BRANCH}"; then
-  echo "WARNING: post-merge checkout of ${SYNC_DEFAULT_BRANCH} failed; leaving ${FEATURE_BRANCH:-current branch} checked out." >&2
-  exit 0
-fi
-if ! git pull --ff-only "${SYNC_REMOTE}" "${SYNC_DEFAULT_BRANCH}"; then
-  echo "WARNING: post-merge pull of ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} failed; merge already completed." >&2
-  exit 0
-fi
-LOCAL_SHA="$(git rev-parse HEAD)"
-REMOTE_SHA="$(git rev-parse "${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH}" 2>/dev/null || true)"
-if [ -n "${REMOTE_SHA}" ] && [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
-  echo "WARNING: Local ${SYNC_DEFAULT_BRANCH} (${LOCAL_SHA}) does not match ${SYNC_REMOTE}/${SYNC_DEFAULT_BRANCH} (${REMOTE_SHA}) after sync." >&2
-  exit 0
-fi
-echo "Local ${SYNC_DEFAULT_BRANCH} synced to ${LOCAL_SHA}."
+bash "${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/post-merge-local-sync.sh"
 ```'''
 on_fail = "abort"
 condition = "!(${DEV2MERGE_SKIP})"

@@ -102,6 +102,14 @@ const fn default_claude_runtime_metadata() -> ClaudeCodeRuntimeMetadata {
     ClaudeCodeRuntimeMetadata::current()
 }
 
+fn split_provider_qualified_model(model: &str) -> Option<(&str, &str)> {
+    if model.matches('/').count() != 1 {
+        return None;
+    }
+    let (provider, bare_model) = model.split_once('/')?;
+    (!provider.is_empty() && !bare_model.is_empty()).then_some((provider, bare_model))
+}
+
 impl Executor {
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -171,7 +179,6 @@ impl Executor {
 
     /// Construct executor from model spec.
     pub fn from_spec(spec: &ModelSpec) -> Result<Self> {
-        let model = Some(spec.model.clone());
         let budget = Some(spec.thinking_budget.clone());
         let tool = match spec.tool.as_str() {
             "gemini-cli" => ToolName::GeminiCli,
@@ -183,6 +190,11 @@ impl Executor {
             "antigravity-cli" => ToolName::AntigravityCli,
             other => anyhow::bail!("Unknown tool '{other}' in model spec"),
         };
+        let model = Some(if matches!(tool, ToolName::Opencode) {
+            format!("{}/{}", spec.provider, spec.model)
+        } else {
+            spec.model.clone()
+        });
         if matches!(tool, ToolName::Hermes) {
             return Ok(Self::Hermes {
                 provider_override: Some(spec.provider.clone()),
@@ -199,40 +211,44 @@ impl Executor {
         model: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
     ) -> Self {
-        match tool {
+        let mut executor = match tool {
             ToolName::GeminiCli => Self::GeminiCli {
-                model_override: model,
+                model_override: None,
                 thinking_budget,
             },
             ToolName::Opencode => Self::Opencode {
-                model_override: model,
+                model_override: None,
                 agent: None,
                 thinking_budget,
             },
             ToolName::Codex => Self::Codex {
-                model_override: model,
+                model_override: None,
                 thinking_budget,
                 runtime_metadata: codex_runtime_metadata(),
             },
             ToolName::ClaudeCode => Self::ClaudeCode {
-                model_override: model,
+                model_override: None,
                 thinking_budget,
                 runtime_metadata: claude_runtime_metadata(),
             },
             ToolName::OpenaiCompat => Self::OpenaiCompat {
-                model_override: model,
+                model_override: None,
                 thinking_budget,
             },
             ToolName::Hermes => Self::Hermes {
                 provider_override: None,
-                model_override: model,
+                model_override: None,
                 thinking_budget,
             },
             ToolName::AntigravityCli => Self::AntigravityCli {
-                model_override: model,
+                model_override: None,
                 thinking_budget,
             },
+        };
+        if let Some(model) = model {
+            executor.override_model(model);
         }
+        executor
     }
 
     /// Returns the current thinking budget, if any.
@@ -259,6 +275,30 @@ impl Executor {
             | Self::AntigravityCli {
                 thinking_budget, ..
             } => thinking_budget.as_ref(),
+        }
+    }
+
+    /// Returns the model identity that will be handed to the selected tool.
+    pub fn model_override(&self) -> Option<&str> {
+        match self {
+            Self::GeminiCli { model_override, .. }
+            | Self::Opencode { model_override, .. }
+            | Self::Codex { model_override, .. }
+            | Self::ClaudeCode { model_override, .. }
+            | Self::OpenaiCompat { model_override, .. }
+            | Self::Hermes { model_override, .. }
+            | Self::AntigravityCli { model_override, .. } => model_override.as_deref(),
+        }
+    }
+
+    /// Returns an executor-level provider override when the transport carries
+    /// one independently from the model string.
+    pub fn provider_override(&self) -> Option<&str> {
+        match self {
+            Self::Hermes {
+                provider_override, ..
+            } => provider_override.as_deref(),
+            _ => None,
         }
     }
 
@@ -311,16 +351,50 @@ impl Executor {
     }
 
     /// Override the model (CLI `--model` / config `[review].model` > tier model_spec).
+    /// Normalize provider-qualified identities to the selected tool's dispatch contract.
     pub fn override_model(&mut self, model: String) {
+        let qualified = split_provider_qualified_model(&model)
+            .map(|(provider, bare_model)| (provider.to_string(), bare_model.to_string()));
         match self {
+            Self::Opencode { model_override, .. } => {
+                if qualified.is_some() {
+                    *model_override = Some(model);
+                } else if let Some(provider) = model_override
+                    .as_deref()
+                    .and_then(split_provider_qualified_model)
+                    .map(|(provider, _)| provider)
+                {
+                    *model_override = Some(format!("{provider}/{model}"));
+                } else {
+                    *model_override = Some(model);
+                }
+            }
+            Self::Hermes {
+                provider_override,
+                model_override,
+                ..
+            } => {
+                if let Some((provider, bare_model)) = qualified {
+                    *provider_override = Some(provider);
+                    *model_override = Some(bare_model);
+                } else {
+                    if provider_override.is_none()
+                        && let Some(provider) = model_override
+                            .as_deref()
+                            .and_then(split_provider_qualified_model)
+                            .map(|(provider, _)| provider)
+                    {
+                        *provider_override = Some(provider.to_string());
+                    }
+                    *model_override = Some(model);
+                }
+            }
             Self::GeminiCli { model_override, .. }
-            | Self::Opencode { model_override, .. }
             | Self::Codex { model_override, .. }
             | Self::ClaudeCode { model_override, .. }
             | Self::OpenaiCompat { model_override, .. }
-            | Self::Hermes { model_override, .. }
             | Self::AntigravityCli { model_override, .. } => {
-                *model_override = Some(model);
+                *model_override = Some(qualified.map_or(model, |(_, bare_model)| bare_model));
             }
         }
     }
@@ -543,11 +617,17 @@ impl Executor {
                 provider_override,
                 model_override,
                 thinking_budget,
-            } => Some(HermesRunConfig::new(
-                provider_override.clone(),
-                model_override.clone(),
-                thinking_budget.clone(),
-            )),
+            } => {
+                let (provider, model) = hermes_dispatch_identity(
+                    provider_override.as_deref(),
+                    model_override.as_deref(),
+                );
+                Some(HermesRunConfig::new(
+                    provider.map(str::to_string),
+                    model.map(str::to_string),
+                    thinking_budget.clone(),
+                ))
+            }
             _ => None,
         }
     }

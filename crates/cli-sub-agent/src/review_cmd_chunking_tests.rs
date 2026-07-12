@@ -202,6 +202,45 @@ fn duplicate_findings_across_chunks_collapse_deterministically() {
 }
 
 #[test]
+fn issue_bearing_chunk_without_artifact_fails_consolidation_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outcome = ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: "01MISSINGCHUNKARTIFACT".to_string(),
+        output: "FAIL\n".to_string(),
+        exit_code: 1,
+        verdict: HAS_ISSUES,
+        diagnostic: None,
+    };
+
+    let error = load_consolidated_chunk_artifact(temp.path(), Some(temp.path()), &[outcome])
+        .expect_err("issue-bearing chunk without artifact must fail closed");
+    assert!(error.to_string().contains("01MISSINGCHUNKARTIFACT"));
+}
+
+#[test]
+fn issue_bearing_chunk_with_malformed_artifact_fails_consolidation_closed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let reviewer_dir = temp.path().join("reviewer-1");
+    std::fs::create_dir_all(&reviewer_dir).expect("create reviewer dir");
+    std::fs::write(reviewer_dir.join("review-findings.json"), "{")
+        .expect("write malformed artifact");
+    let outcome = ReviewerOutcome {
+        reviewer_index: 0,
+        tool: ToolName::Codex,
+        session_id: "01MALFORMEDCHUNKARTIFACT".to_string(),
+        output: "FAIL\n".to_string(),
+        exit_code: 1,
+        verdict: HAS_ISSUES,
+        diagnostic: None,
+    };
+
+    load_consolidated_chunk_artifact(temp.path(), Some(temp.path()), &[outcome])
+        .expect_err("issue-bearing chunk with malformed artifact must fail closed");
+}
+
+#[test]
 fn unavailable_chunk_fails_closed_when_other_chunks_are_clean() {
     let outcomes = vec![
         ReviewerOutcome {

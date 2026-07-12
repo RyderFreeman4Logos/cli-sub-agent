@@ -13,7 +13,6 @@ use csa_core::transport_events::SessionEvent;
 use csa_session::state::{MetaSessionState, ToolState};
 use regex::Regex;
 
-use crate::model_spec::ThinkingBudget;
 use csa_core::env::NO_FAILOVER_ENV_KEY;
 
 use super::{
@@ -43,29 +42,9 @@ pub(crate) fn is_idle_disconnect(result: &TransportResult) -> bool {
             .contains("idle timeout: no ACP events/stderr for")
 }
 
-/// Build ACP args with reasoning effort injected or replaced for the downshifted budget.
-///
-/// If the args already contain `model_reasoning_effort=...`, replace it.
-/// Otherwise, inject `-c model_reasoning_effort=<effort>` (codex-style).
-fn build_downshifted_acp_args(args: &[String], new_budget: &ThinkingBudget) -> Vec<String> {
-    let new_effort = new_budget.codex_effort();
-    let effort_prefix = "model_reasoning_effort=";
-    let mut result = Vec::with_capacity(args.len() + 2);
-    let mut replaced = false;
-    for arg in args {
-        if arg.starts_with(effort_prefix) {
-            result.push(format!("{effort_prefix}{new_effort}"));
-            replaced = true;
-        } else {
-            result.push(arg.clone());
-        }
-    }
-    if !replaced {
-        // Inject codex-style `-c model_reasoning_effort=<effort>` for adapters that forward it.
-        result.push("-c".to_string());
-        result.push(format!("{effort_prefix}{new_effort}"));
-    }
-    result
+/// Build ACP retry arguments without changing the configured model effort.
+fn idle_disconnect_retry_args(args: &[String]) -> Vec<String> {
+    args.to_vec()
 }
 
 /// OOM-related signals that indicate the process was killed by the kernel
@@ -482,10 +461,8 @@ pub(crate) fn apply_codex_acp_initial_stall_summary(
 /// unexpectedly" during large diff reads. One retry with a fresh process
 /// often succeeds because the crash is transient.
 ///
-/// When `options.thinking_budget` is set, idle disconnects trigger an automatic
-/// one-level downshift and a single retry with reduced reasoning effort
-/// (Issue #766). `--no-failover` (via `_CSA_NO_FAILOVER` in `extra_env`)
-/// disables this behavior.
+/// Idle disconnects receive one fresh-process transport retry with the original
+/// model and reasoning effort. `--no-failover` disables that retry.
 pub(super) async fn execute_with_crash_retry(
     transport: &AcpTransport,
     prompt: &str,
@@ -502,7 +479,7 @@ pub(super) async fn execute_with_crash_retry(
         })
         .flatten();
     let no_failover = extra_env.is_some_and(|env| env.contains_key(NO_FAILOVER_ENV_KEY));
-    let mut idle_downshift_attempted = false;
+
     let mut codex_rate_limit_retries = 0u8;
     loop {
         // Only resume provider session on the first attempt; retries start fresh.
@@ -551,82 +528,54 @@ pub(super) async fn execute_with_crash_retry(
                     }
                 }
 
-                // --- Issue #766: idle disconnect auto-downshift ---
-                // On first idle disconnect, if a downshift target exists and
-                // --no-failover is not set, retry once with reduced reasoning effort.
-                if is_idle_disconnect(&tr) && !idle_downshift_attempted && !no_failover {
-                    idle_downshift_attempted = true;
-                    if let Some(downshift_target) = options
-                        .thinking_budget
-                        .as_ref()
-                        .and_then(ThinkingBudget::idle_disconnect_downshift)
-                    {
-                        let downshifted_args =
-                            build_downshifted_acp_args(&transport.acp_args, &downshift_target);
-                        tracing::warn!(
-                            tool = %transport.tool_name,
-                            from = ?options.thinking_budget,
-                            to = ?downshift_target,
-                            new_effort = downshift_target.codex_effort(),
-                            "ACP idle disconnect detected; retrying with \
-                             downshifted thinking budget (#766)"
-                        );
-                        tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
-                        // Single retry with downshifted args — route through
-                        // classification instead of returning early (#1101).
-                        match transport
-                            .execute_acp_attempt(
-                                prompt,
-                                session,
-                                extra_env,
-                                options,
-                                &downshifted_args,
-                                None, // fresh process, no resume
-                            )
-                            .await
-                        {
-                            Ok(tr) => return Ok(tr),
-                            Err(error) => {
-                                let error_display = format!("{error:#}");
-                                let memory_max_mb = options
-                                    .sandbox
-                                    .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
-                                if is_auth_error(&error_display) {
-                                    return Err(format_auth_failure(error, &transport.tool_name));
-                                }
-                                if transport.tool_name == "codex"
-                                    && is_crash_lowered(&error_display.to_lowercase())
-                                {
-                                    let classification = classify_codex_acp_crash(
-                                        &error_display,
-                                        extract_crash_exit_code(&error_display),
-                                        None,
-                                        memory_max_mb,
-                                    );
-                                    return Err(format_codex_acp_crash(
-                                        &classification,
-                                        error,
-                                        attempt + 1,
-                                    ));
-                                }
-                                if is_oom_error(&error_display) {
-                                    return Err(format_oom_crash(
-                                        error,
-                                        &transport.tool_name,
-                                        memory_max_mb,
-                                    ));
-                                }
-                                return Err(error);
-                            }
-                        }
-                    }
-                    // No downshift target (already at lowest) — fall through to return as-is.
+                // Retry one idle disconnect with a fresh process while preserving
+                // the exact model reasoning effort selected by configuration.
+                if is_idle_disconnect(&tr) && !no_failover {
+                    let retry_args = idle_disconnect_retry_args(&transport.acp_args);
                     tracing::warn!(
                         tool = %transport.tool_name,
-                        budget = ?options.thinking_budget,
-                        "ACP idle disconnect detected but thinking budget is \
-                         already at minimum; propagating result (#766)"
+                        thinking_budget = ?options.thinking_budget,
+                        "ACP idle disconnect detected; retrying with original thinking budget"
                     );
+                    tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                    match transport
+                        .execute_acp_attempt(prompt, session, extra_env, options, &retry_args, None)
+                        .await
+                    {
+                        Ok(tr) => return Ok(tr),
+                        Err(error) => {
+                            let error_display = format!("{error:#}");
+                            let memory_max_mb = options
+                                .sandbox
+                                .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
+                            if is_auth_error(&error_display) {
+                                return Err(format_auth_failure(error, &transport.tool_name));
+                            }
+                            if transport.tool_name == "codex"
+                                && is_crash_lowered(&error_display.to_lowercase())
+                            {
+                                let classification = classify_codex_acp_crash(
+                                    &error_display,
+                                    extract_crash_exit_code(&error_display),
+                                    None,
+                                    memory_max_mb,
+                                );
+                                return Err(format_codex_acp_crash(
+                                    &classification,
+                                    error,
+                                    attempt + 1,
+                                ));
+                            }
+                            if is_oom_error(&error_display) {
+                                return Err(format_oom_crash(
+                                    error,
+                                    &transport.tool_name,
+                                    memory_max_mb,
+                                ));
+                            }
+                            return Err(error);
+                        }
+                    }
                 }
 
                 if transport.tool_name == "codex"

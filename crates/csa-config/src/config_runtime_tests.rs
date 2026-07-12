@@ -235,8 +235,8 @@ fn memory_max_codex_gets_elevated_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_max_mb("codex"),
-        Some(12288),
-        "codex should get 12288 MB default (Node.js + Rust compilation headroom)"
+        Some(16384),
+        "codex should get 16384 MB default (Node.js + Rust compilation + nextest headroom)"
     );
 }
 
@@ -678,8 +678,8 @@ fn default_sandbox_for_tool_codex() {
     );
     assert_eq!(
         opts.memory_max_mb,
-        Some(12288),
-        "codex must get elevated memory limit (Node.js + Rust compilation)"
+        Some(16384),
+        "codex must get elevated memory limit (Node.js + Rust compilation + nextest)"
     );
     assert_eq!(
         opts.memory_swap_max_mb,

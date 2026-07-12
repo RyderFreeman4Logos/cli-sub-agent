@@ -24,7 +24,8 @@ use super::runtime::{
     wait_for_still_working_backoff,
 };
 use super::{
-    DebateFinalizeContext, DebateMode, finalize_debate_outcome, with_readonly_session_env,
+    DebateFinalizeContext, DebateMode, finalize_debate_outcome_with_catalog,
+    with_readonly_session_env,
 };
 
 impl DebateArgs {
@@ -53,6 +54,7 @@ pub(crate) struct DebateExecutionRequest<'a> {
     pub(crate) project_root: &'a Path,
     pub(crate) config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
+    pub(crate) model_catalog: &'a csa_config::EffectiveModelCatalog,
     pub(crate) pre_session_hook: Option<csa_hooks::PreSessionHookInvocation>,
     pub(crate) prompt: &'a str,
     pub(crate) debate_description: &'a str,
@@ -74,15 +76,18 @@ pub(crate) struct DebateExecutionRequest<'a> {
 
 pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Result<i32> {
     let wall_clock_start = Instant::now();
-    let candidates = tier_model_fallback::ordered_tier_candidates(
+    let candidates = tier_model_fallback::ordered_tier_candidates_with_catalog(
         request.tool,
         request.resolved_model_spec,
         request.resolved_tier_name,
         request.config,
         Some(request.global_config),
-        request.tier_active,
-        request.tier_preference_order,
-    );
+        request.model_catalog,
+        tier_model_fallback::TierFallbackOptions {
+            enabled: request.tier_active,
+            preference_order: request.tier_preference_order,
+        },
+    )?;
     let effective_fast_mode = request.args.fast_but_more_cost
         || request
             .config
@@ -105,6 +110,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
     let mut failures = Vec::new();
     let mut final_tool = None;
     let mut final_model_spec: Option<String> = None;
+    let mut failed_attempt_session = request.args.session.clone();
 
     'tier_attempts: for (attempt_index, (attempt_tool, attempt_model_spec)) in
         candidates.iter().enumerate()
@@ -117,6 +123,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             crate::pipeline::ConfigRefs {
                 project: request.config,
                 global: Some(request.global_config),
+                model_catalog: Some(request.model_catalog),
             },
             request.tier_active && attempt_model_spec.is_some(),
             request.args.force_override_user_config,
@@ -146,7 +153,16 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
         let _slot_guard = crate::pipeline::acquire_slot(&executor, request.global_config)?;
         let mut retry_count = 0u8;
         let mut first_error_context: Option<String> = None;
-        let mut resume_session = request.args.session.clone();
+        let session_plan = crate::pipeline::model_failover_session::resolve_model_attempt_session(
+            attempt_index,
+            request.args.session.as_deref(),
+            failed_attempt_session.as_deref(),
+            crate::pipeline::SessionCreationMode::DaemonManaged,
+            request.startup_env.session_id(),
+        );
+        let mut resume_session = session_plan.session_arg;
+        let attempt_parent = session_plan.parent;
+        let session_creation_mode = session_plan.creation_mode;
 
         loop {
             ensure_debate_wall_clock_within_timeout(wall_clock_start, request.timeout_seconds)?;
@@ -160,7 +176,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 resume_session.clone(),
                 false,
                 Some(request.debate_description.to_string()),
-                None,
+                attempt_parent.clone(),
                 request.project_root,
                 request.config,
                 extra_env,
@@ -177,7 +193,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 Some(request.global_config),
                 request.pre_session_hook.clone(),
                 crate::pipeline::ParentSessionSource::ExplicitOrEnv,
-                crate::pipeline::SessionCreationMode::DaemonManaged,
+                session_creation_mode,
                 request.args.resource_overrides(),
                 request.args.no_fs_sandbox,
                 false,
@@ -209,6 +225,13 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
             let executed = match execute_result {
                 Ok(execution) => execution,
                 Err(err) => {
+                    if let Some(session_id) =
+                        crate::pipeline::model_failover_session::extract_meta_session_id_from_error(
+                            &err,
+                        )
+                    {
+                        resume_session = Some(session_id);
+                    }
                     if let Some(detected) =
                         tier_model_fallback::classify_next_model_failure_with_elapsed(
                             attempt_tool.as_str(),
@@ -234,6 +257,7 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                             total = candidates.len(),
                             "Debate tier model failed before completion; advancing to next configured model"
                         );
+                        failed_attempt_session = resume_session.clone();
                         continue 'tier_attempts;
                     }
 
@@ -300,6 +324,9 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 );
                 final_tool = Some(*attempt_tool);
                 execution = Some(executed);
+                failed_attempt_session = execution
+                    .as_ref()
+                    .map(|attempt| attempt.meta_session_id.clone());
                 continue 'tier_attempts;
             }
 
@@ -363,13 +390,15 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
 
     let all_tier_models_failed = !failures.is_empty() && failures.len() == candidates.len();
     let fallback_reason = tier_model_fallback::fallback_reason_for_result(&failures);
-    let finalized = finalize_debate_outcome(
+    let finalized = finalize_debate_outcome_with_catalog(
         request.project_root,
         request.output_format,
         execution,
+        request.model_catalog,
         DebateFinalizeContext {
             all_tier_models_failed,
             project_config: request.config,
+
             resolved_tier_name: request.resolved_tier_name,
             failures: &failures,
             debate_mode: request.debate_mode,
@@ -405,6 +434,7 @@ async fn execute_debate_dry_run(
         crate::pipeline::ConfigRefs {
             project: request.config,
             global: Some(request.global_config),
+            model_catalog: Some(request.model_catalog),
         },
         request.tier_active && attempt_model_spec.is_some(),
         request.args.force_override_user_config,

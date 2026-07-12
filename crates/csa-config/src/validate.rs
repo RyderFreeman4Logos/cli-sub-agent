@@ -1,9 +1,9 @@
 use anyhow::{Result, bail};
 use std::path::Path;
 
-use crate::TransportKind;
 use crate::config::{FORK_PREFIX_BUDGET_MAX_TOKENS, FORK_PREFIX_BUDGET_MIN_TOKENS, ProjectConfig};
 use crate::global::ToolSelection;
+use crate::{EffectiveConfig, EffectiveModelCatalog, TransportKind};
 
 const KNOWN_TOOLS: &[&str] = &[
     "opencode",
@@ -18,8 +18,8 @@ const LEGAL_TRANSPORT_VALUES: &str = "auto, acp, cli, tmux";
 /// Validate a project configuration file.
 /// Returns Ok(()) if valid, or Err with descriptive messages.
 pub fn validate_config(project_root: &Path) -> Result<()> {
-    let config = ProjectConfig::load(project_root)?;
-    validate_loaded_config(config)
+    let effective = EffectiveConfig::load(project_root)?;
+    validate_loaded_config(effective.project, &effective.model_catalog)
 }
 
 /// Validate config loaded with explicit paths (bypasses user-level fallback).
@@ -29,11 +29,14 @@ pub(crate) fn validate_config_with_paths(
     user_path: Option<&Path>,
     project_path: &Path,
 ) -> Result<()> {
-    let config = ProjectConfig::load_with_paths(user_path, project_path)?;
-    validate_loaded_config(config)
+    let effective = EffectiveConfig::load_with_paths(user_path, project_path)?;
+    validate_loaded_config(effective.project, &effective.model_catalog)
 }
 
-fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
+fn validate_loaded_config(
+    config: Option<ProjectConfig>,
+    catalog: &EffectiveModelCatalog,
+) -> Result<()> {
     let config = match config {
         Some(c) => c,
         None => bail!("No configuration found. Run `csa init` first."),
@@ -45,7 +48,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     validate_tools(&config)?;
     validate_review(&config)?;
     validate_debate(&config)?;
-    validate_tiers(&config)?;
+    validate_tiers(&config, catalog)?;
     warn_unknown_tool_priority(&config);
     warn_fork_prefix_budget_out_of_range(&config);
 
@@ -494,7 +497,7 @@ fn validate_debate(config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_tiers(config: &ProjectConfig) -> Result<()> {
+fn validate_tiers(config: &ProjectConfig, catalog: &EffectiveModelCatalog) -> Result<()> {
     // Validate tier names are non-empty
     for tier_name in config.tiers.keys() {
         if tier_name.is_empty() {
@@ -508,7 +511,7 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
             bail!("Tier '{tier_name}' must have at least one model");
         }
         for model_spec in &tier_config.models {
-            validate_model_spec(tier_name, model_spec)?;
+            validate_model_spec(tier_name, model_spec, catalog)?;
         }
         // Validate budget constraints
         if let Some(budget) = tier_config.token_budget
@@ -578,7 +581,11 @@ fn warn_unknown_tool_priority(config: &ProjectConfig) {
     }
 }
 
-fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
+fn validate_model_spec(
+    tier_name: &str,
+    model_spec: &str,
+    catalog: &EffectiveModelCatalog,
+) -> Result<()> {
     let parts: Vec<&str> = model_spec.split('/').collect();
     if parts.len() != 4 {
         bail!(
@@ -612,50 +619,15 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
         );
     }
 
-    let provider_part = parts[1];
-    if csa_core::model_catalog::provider_validation_enabled(tool_part) {
-        let valid_providers = csa_core::model_catalog::valid_providers(tool_part);
-        if !valid_providers.contains(&provider_part) {
-            bail!(
-                "Tier '{}' has model spec '{}' with unknown provider '{}' for tool '{}'. \
-                 Known providers: [{}].",
-                tier_name,
-                model_spec,
-                provider_part,
-                tool_part,
-                valid_providers.join(", ")
-            );
-        }
-    }
-
-    let model_part = parts[2];
-    if csa_core::model_catalog::model_validation_enabled(tool_part) {
-        let valid_models = csa_core::model_catalog::valid_models(tool_part, provider_part);
-        if !valid_models.contains(&model_part) {
-            bail!(
-                "Tier '{}' has model spec '{}' with unknown model '{}' for tool '{}' provider '{}'. \
-                 Known models: [{}].",
-                tier_name,
-                model_spec,
-                model_part,
-                tool_part,
-                provider_part,
-                valid_models.join(", ")
-            );
-        }
-    }
-
-    let budget_part = parts[3];
-    if !csa_core::thinking_budget::is_valid_budget(budget_part) {
-        bail!(
-            "Tier '{}' has model spec '{}' with invalid thinking_budget '{}'. \
-             Valid budgets: [{}].",
-            tier_name,
-            model_spec,
-            budget_part,
-            csa_core::thinking_budget::VALID_BUDGET_DESCRIPTION
-        );
-    }
+    catalog
+        .validate_parts(tool_part, parts[1], parts[2], parts[3])
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "Tier '{tier_name}' has catalog-invalid model spec '{model_spec}': {error}"
+            )
+        })?;
+    // Validation only establishes admissibility. Unverified-model diagnostics
+    // remain pending on the admission and are emitted exactly once at dispatch.
 
     Ok(())
 }

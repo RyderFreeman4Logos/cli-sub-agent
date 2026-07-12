@@ -69,7 +69,7 @@ impl Transport for AcpTransport {
             let mut args = self.acp_args.clone();
             if let Some(model) = gemini_retry_model(attempt) {
                 tracing::info!(attempt, model, "gemini-cli ACP: overriding model for retry");
-                args.extend(["-m".into(), model.into()]);
+                args.extend(["-m".into(), model]);
             }
 
             // Phase 2+: inject API key auth if available, otherwise keep original env.

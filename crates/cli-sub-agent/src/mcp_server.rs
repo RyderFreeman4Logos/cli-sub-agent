@@ -16,7 +16,7 @@ use csa_session::{delete_session, list_sessions};
 mod run_tool;
 use run_tool::handle_run_tool;
 #[cfg(test)]
-use run_tool::resolve_mcp_model_pin;
+use run_tool::{build_mcp_admitted_executor, resolve_mcp_model_pin};
 #[cfg(test)]
 use run_tool::{direct_entry_resolved_timeout, parse_tool_name};
 

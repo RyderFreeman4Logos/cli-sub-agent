@@ -13,6 +13,13 @@ fn test_gemini_should_use_api_key_by_phase() {
 }
 
 #[test]
+fn gemini_transport_retries_never_switch_the_configured_model() {
+    for attempt in 1..=GEMINI_RATE_LIMIT_MAX_ATTEMPTS {
+        assert_eq!(gemini_retry_model(attempt), None, "attempt {attempt}");
+    }
+}
+
+#[test]
 fn test_gemini_rate_limit_backoff_is_exponential() {
     assert_eq!(
         gemini_rate_limit_backoff(1),
@@ -394,7 +401,7 @@ fn test_format_gemini_retry_report_lists_attempt_phases() {
     assert!(report.contains("auth=oauth"));
     assert!(report.contains("attempt=2"));
     assert!(report.contains("auth=api_key"));
-    assert!(report.contains("model=gemini-3-flash-preview"));
+    assert!(report.contains("model=inherit"));
 }
 
 #[test]

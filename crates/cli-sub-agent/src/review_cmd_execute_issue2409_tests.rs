@@ -61,16 +61,19 @@ fn issue_2409_review_tier_filters_codex_o3_before_candidate_selection() {
         Some("claude-code/anthropic/claude-sonnet-4-20250514/none")
     );
 
+    let model_catalog = csa_config::EffectiveModelCatalog::shipped().expect("shipped catalog");
     let candidates = review_ordered_tier_candidates(ReviewTierCandidateRequest {
         initial_tool: tool,
         initial_model_spec: model_spec.as_deref(),
         tier_name: Some("quality"),
         project_config: Some(&config),
         global_config: Some(&global),
+        model_catalog: &model_catalog,
         tier_fallback_enabled: true,
         no_failover: false,
         tier_preference_order: &[],
-    });
+    })
+    .unwrap();
     assert!(
         candidates
             .iter()

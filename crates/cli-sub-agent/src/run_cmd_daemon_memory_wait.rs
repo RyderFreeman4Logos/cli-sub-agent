@@ -68,13 +68,29 @@ fn daemon_pre_spawn_failure_message(
         && packet.exit_code != 0
         && !csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
     {
+        let detail = packet
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty());
+        let prefix = if detail.is_some_and(|reason| reason.contains("host memory admission denied"))
+        {
+            "CSA: host memory admission was denied before daemon session handoff"
+        } else {
+            "CSA: daemon exited before pre-spawn host-memory admission completed"
+        };
+        let detail = detail
+            .map(|reason| format!("\nSummary: {reason}"))
+            .unwrap_or_else(|| {
+                format!(
+                    " Inspect daemon stderr at {}",
+                    session_dir.join("stderr.log").display()
+                )
+            });
         return Ok(Some(format!(
-            "CSA: daemon exited before pre-spawn host-memory admission completed \
-             (exit_code={}, status={}); no session-start marker was emitted, and no \
-             `csa session wait` is needed. Inspect daemon stderr at {}",
-            packet.exit_code,
-            packet.status,
-            session_dir.join("stderr.log").display()
+            "{prefix} (exit_code={}, status={}); no session-start marker was emitted, and no \
+             `csa session wait` is needed.{detail}",
+            packet.exit_code, packet.status,
         )));
     }
 

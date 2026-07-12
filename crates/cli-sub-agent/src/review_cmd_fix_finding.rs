@@ -52,8 +52,9 @@ pub(crate) fn validate_fix_finding_before_daemon(args: &ReviewArgs) -> Result<()
     }
 
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
-    let project_config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load()?;
+    let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
+    let project_config = effective_config.project;
+    let global_config = effective_config.global;
     let session_ref = args
         .session
         .as_deref()
@@ -74,7 +75,7 @@ pub(crate) async fn handle_fix_finding(
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
-    let Some((config, global_config)) =
+    let Some((config, global_config, model_catalog)) =
         crate::pipeline::load_and_validate(project_root, current_depth)?
     else {
         return Ok(1);
@@ -121,6 +122,7 @@ pub(crate) async fn handle_fix_finding(
         project_root,
         config.as_ref(),
         &global_config,
+        &model_catalog,
         None,
         review_routing,
         stream_mode,
@@ -141,6 +143,7 @@ pub(crate) async fn handle_fix_finding(
         args.error_marker_scan_override(),
         args.resource_overrides(),
         current_depth,
+        crate::pipeline::SessionCreationMode::DaemonManaged,
         startup_env,
     );
 

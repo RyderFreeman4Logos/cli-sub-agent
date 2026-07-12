@@ -117,7 +117,7 @@ fn review_verdict_carries_no_provider_launch_diagnostic() {
             ..Default::default()
         },
         guidance: vec![
-            "remove a lower memory override so Codex can use its 12288MB default".to_string(),
+            "remove a lower memory override so Codex can use its 16384MB default".to_string(),
         ],
     };
     csa_session::save_result(

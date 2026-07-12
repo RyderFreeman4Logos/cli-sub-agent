@@ -5,6 +5,15 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
+fn dev2merge_bundled_helper(name: &str) -> String {
+    std::fs::read_to_string(
+        workspace_root()
+            .join("patterns/dev2merge/scripts/csa")
+            .join(name),
+    )
+    .unwrap_or_else(|error| panic!("read bundled dev2merge helper {name}: {error}"))
+}
+
 #[test]
 fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
     let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
@@ -78,12 +87,19 @@ fn dev2merge_forwards_impl_executor_overrides_to_mktd() {
         .iter()
         .find(|step| step.title == "Plan with mktd")
         .expect("missing dev2merge plan step");
+    assert!(
+        plan_step
+            .prompt
+            .contains("${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/plan-with-mktd.sh"),
+        "Step 7 must invoke the bundled helper through CSA_WORKFLOW_DIR"
+    );
+    let plan_script = dev2merge_bundled_helper("plan-with-mktd.sh");
     for required in [
         r#"--var IMPL_TIER="${IMPL_TIER:-}""#,
         r#"--var IMPL_TOOL="${IMPL_TOOL:-}""#,
     ] {
         assert!(
-            plan_step.prompt.contains(required),
+            plan_script.contains(required),
             "Step 7 must forward implementation override to mktd: {required}"
         );
     }
@@ -346,12 +362,7 @@ fn dev2merge_plan_step_has_mktd_timeout_seconds_variable() {
         "MKTD_TIMEOUT_SECONDS variable must be declared on the dev2merge workflow"
     );
 
-    let plan_step = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Plan with mktd")
-        .expect("missing dev2merge plan step");
-    let prompt = &plan_step.prompt;
+    let prompt = dev2merge_bundled_helper("plan-with-mktd.sh");
     assert!(
         prompt.contains("MKTD_TIMEOUT_SECONDS"),
         "Step 7 prompt must reference MKTD_TIMEOUT_SECONDS for hard-cap on mktd wall-clock"
@@ -377,16 +388,7 @@ fn dev2merge_plan_step_has_mktd_timeout_seconds_variable() {
 // avoid spawning a debate-loop the user did not need.
 #[test]
 fn dev2merge_plan_step_has_brief_specificity_heuristic() {
-    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-
-    let plan_step = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Plan with mktd")
-        .expect("missing dev2merge plan step");
-    let prompt = &plan_step.prompt;
+    let prompt = dev2merge_bundled_helper("plan-with-mktd.sh");
 
     assert!(
         prompt.contains("FEATURE_INPUT_LEN") && prompt.contains("FEATURE_FILE_LINE_HITS"),
@@ -415,15 +417,7 @@ fn dev2merge_plan_step_has_brief_specificity_heuristic() {
 // where only one open task carries a clause; the per-task awk rejects it.
 #[test]
 fn dev2merge_plan_step_done_when_gate_is_per_task() {
-    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-    let prompt = &plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Plan with mktd")
-        .expect("missing dev2merge plan step")
-        .prompt;
+    let prompt = dev2merge_bundled_helper("plan-with-mktd.sh");
 
     assert!(
         !prompt.contains("grep -q 'DONE WHEN'"),
@@ -442,16 +436,7 @@ fn dev2merge_plan_step_done_when_gate_is_per_task() {
 #[cfg(unix)]
 #[test]
 fn dev2merge_done_when_awk_gate_enforces_per_task() {
-    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-    let prompt = plan
-        .steps
-        .iter()
-        .find(|step| step.title == "Plan with mktd")
-        .expect("missing dev2merge plan step")
-        .prompt
-        .clone();
+    let prompt = dev2merge_bundled_helper("plan-with-mktd.sh");
     // Extract the exact awk program bash hands to `awk` (the bytes between
     // `awk '` and `' "${TODO_PATH}"`), so this exercises the real gate.
     let awk_program = prompt

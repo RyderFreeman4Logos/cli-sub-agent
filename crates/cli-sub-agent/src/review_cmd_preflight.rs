@@ -29,8 +29,9 @@ pub(crate) fn validate_before_session(
 
 fn validate_fix_finding_resources_before_session(args: &ReviewArgs) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
-    let project_config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load()?;
+    let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
+    let project_config = effective_config.project;
+    let global_config = effective_config.global;
     let session_ref = args
         .session
         .as_deref()
@@ -51,8 +52,10 @@ fn validate_review_routing_before_session(
     startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
-    let project_config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load()?;
+    let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
+    let project_config = effective_config.project;
+    let model_catalog = effective_config.model_catalog;
+    let global_config = effective_config.global;
     let mut effective_args = args.clone();
     let inherited_model_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
@@ -103,11 +106,12 @@ fn validate_review_routing_before_session(
         super::session_fix::resolve_selection_tool(&effective_args, &project_root, args_tool)?;
     let parent_tool =
         crate::run_helpers::resolve_tool(crate::run_helpers::detect_parent_tool(), &global_config);
-    let resolved_selection = super::resolve::resolve_review_selection(
+    let resolved_selection = super::resolve::resolve_review_selection_with_catalog(
         selection.selection_tool,
         effective_args.model_spec.as_deref(),
         project_config.as_ref(),
         &global_config,
+        &model_catalog,
         parent_tool.as_deref(),
         &project_root,
         effective_args.force_override_user_config,
@@ -122,15 +126,18 @@ fn validate_review_routing_before_session(
         effective_args.no_failover,
         selection.session_fix.as_ref(),
     );
-    let candidates = crate::tier_model_fallback::ordered_tier_candidates(
+    let candidates = crate::tier_model_fallback::ordered_tier_candidates_with_catalog(
         resolved_selection.tool,
         resolved_selection.model_spec.as_deref(),
         resolved_tier_name.as_deref(),
         project_config.as_ref(),
         Some(&global_config),
-        tier_active && !execution_no_failover,
-        &resolved_selection.tier_preference_order,
-    );
+        &model_catalog,
+        crate::tier_model_fallback::TierFallbackOptions {
+            enabled: tier_active && !execution_no_failover,
+            preference_order: &resolved_selection.tier_preference_order,
+        },
+    )?;
     for candidate_tool in
         pre_session_candidate_tools_to_validate(&candidates, selection.direct_tool_requested)
     {

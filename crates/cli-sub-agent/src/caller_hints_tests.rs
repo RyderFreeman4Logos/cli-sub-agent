@@ -15,6 +15,7 @@ const NO_LOOPS_WARNING: &str = "no loops";
 
 const RUN_CMD_DAEMON_SRC: &str = include_str!("run_cmd_daemon.rs");
 const PLAN_CMD_DAEMON_SRC: &str = include_str!("plan_cmd_daemon.rs");
+const DAEMON_STARTED_OUTPUT_SRC: &str = include_str!("daemon_started_output.rs");
 const SESSION_CMDS_DAEMON_WAIT_SRC: &str = concat!(
     include_str!("session_cmds_daemon_wait.rs"),
     include_str!("session_cmds_daemon_wait_core.rs"),
@@ -171,8 +172,7 @@ const CALLER_HINT_MAX_BYTES: usize = 300;
 #[test]
 fn caller_hint_blocks_stay_under_size_budget() {
     let all_sources = [
-        ("run_cmd_daemon", RUN_CMD_DAEMON_SRC),
-        ("plan_cmd_daemon", PLAN_CMD_DAEMON_SRC),
+        ("daemon_started_output", DAEMON_STARTED_OUTPUT_SRC),
         ("session_cmds_daemon_wait", SESSION_CMDS_DAEMON_WAIT_SRC),
     ];
     for (site, src) in &all_sources {
@@ -190,15 +190,51 @@ fn caller_hint_blocks_stay_under_size_budget() {
 
 #[test]
 fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
-    let blocks = caller_hint_blocks(RUN_CMD_DAEMON_SRC);
-    assert_eq!(blocks.len(), 1, "run_cmd_daemon emits one CALLER_HINT");
+    assert_eq!(
+        RUN_CMD_DAEMON_SRC
+            .matches("daemon_started_output::prepare")
+            .count(),
+        1,
+        "run_cmd_daemon prepares one shared daemon-start output"
+    );
+    assert_eq!(
+        RUN_CMD_DAEMON_SRC
+            .matches("daemon_started_output::publish")
+            .count(),
+        1,
+        "run_cmd_daemon publishes one shared daemon-start output"
+    );
+    let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "shared daemon output emits one CALLER_HINT"
+    );
     assert_wait_hint_contract(blocks[0], "run_cmd_daemon");
 }
 
 #[test]
 fn plan_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
-    let blocks = caller_hint_blocks(PLAN_CMD_DAEMON_SRC);
-    assert_eq!(blocks.len(), 1, "plan_cmd_daemon emits one CALLER_HINT");
+    assert_eq!(
+        PLAN_CMD_DAEMON_SRC
+            .matches("daemon_started_output::prepare")
+            .count(),
+        1,
+        "plan_cmd_daemon prepares one shared daemon-start output"
+    );
+    assert_eq!(
+        PLAN_CMD_DAEMON_SRC
+            .matches("daemon_started_output::publish")
+            .count(),
+        1,
+        "plan_cmd_daemon publishes one shared daemon-start output"
+    );
+    let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "shared daemon output emits one CALLER_HINT"
+    );
     assert_wait_hint_contract(blocks[0], "plan_cmd_daemon");
 }
 

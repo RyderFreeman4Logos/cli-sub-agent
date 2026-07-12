@@ -48,6 +48,17 @@ mod session_exec_failover;
 #[path = "pipeline_session_hooks.rs"]
 mod session_hooks;
 
+#[path = "pipeline_admitted_executor.rs"]
+mod admitted_executor;
+pub(crate) use admitted_executor::{AdmittedExecutor, DispatchExecutor};
+
+#[path = "pipeline_catalog_admission.rs"]
+mod catalog_admission;
+use catalog_admission::validate_final_executor_identity;
+
+#[path = "pipeline_model_failover_session.rs"]
+pub(crate) mod model_failover_session;
+
 #[path = "lefthook_auto_install.rs"]
 pub(crate) mod lefthook_auto_install;
 
@@ -223,8 +234,16 @@ pub(crate) fn context_load_options_with_skips(
 pub(crate) fn load_and_validate(
     project_root: &Path,
     current_depth: u32,
-) -> Result<Option<(Option<ProjectConfig>, GlobalConfig)>> {
-    let config = ProjectConfig::load(project_root)?;
+) -> Result<
+    Option<(
+        Option<ProjectConfig>,
+        GlobalConfig,
+        csa_config::EffectiveModelCatalog,
+    )>,
+> {
+    let effective = csa_config::EffectiveConfig::load(project_root)?;
+    let config = effective.project;
+    let global_config = effective.global;
 
     let max_depth = config
         .as_ref()
@@ -239,8 +258,7 @@ pub(crate) fn load_and_validate(
         return Ok(None);
     }
 
-    let global_config = GlobalConfig::load()?;
-    Ok(Some((config, global_config)))
+    Ok(Some((config, global_config, effective.model_catalog)))
 }
 
 /// Load and merge MCP server registries from global + project config.
@@ -298,9 +316,11 @@ fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> Option<AcpMcpServerCo
 }
 
 /// References to project and global config for executor building.
+#[derive(Clone, Copy)]
 pub(crate) struct ConfigRefs<'a> {
     pub project: Option<&'a ProjectConfig>,
     pub global: Option<&'a GlobalConfig>,
+    pub model_catalog: Option<&'a csa_config::EffectiveModelCatalog>,
 }
 
 /// Build executor and validate tool is installed and enabled.
@@ -328,7 +348,14 @@ pub(crate) async fn build_and_validate_executor(
     enforce_tier: bool,
     force_override_user_config: bool,
     apply_tool_defaults: bool,
-) -> Result<Executor> {
+) -> Result<AdmittedExecutor> {
+    let shipped_catalog;
+    let model_catalog = if let Some(catalog) = configs.model_catalog {
+        catalog
+    } else {
+        shipped_catalog = csa_config::EffectiveModelCatalog::shipped()?;
+        &shipped_catalog
+    };
     let mut executor = crate::run_helpers::build_executor(
         tool,
         model_spec,
@@ -387,6 +414,28 @@ pub(crate) async fn build_and_validate_executor(
         }
     }
 
+    let final_model_request = model.map(|requested| {
+        configs
+            .project
+            .map(|cfg| cfg.resolve_alias(requested))
+            .unwrap_or_else(|| requested.to_string())
+    });
+    let final_model_request = final_model_request
+        .as_deref()
+        .or(default_model_resolved.as_deref());
+    let admission = validate_final_executor_identity(
+        &executor,
+        model_spec,
+        final_model_request,
+        model_catalog,
+    )?;
+
+    #[cfg(test)]
+    let assume_tool_binaries_available =
+        crate::run_helpers::assume_tool_binaries_available_for_tests();
+    #[cfg(not(test))]
+    let assume_tool_binaries_available = false;
+
     if executor.tool_name() == "openai-compat" {
         let model_hint = model_spec.or(model).or(default_model_resolved.as_deref());
         let extra_env = configs.global.and_then(|cfg| {
@@ -404,7 +453,9 @@ pub(crate) async fn build_and_validate_executor(
         if let crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } = availability {
             anyhow::bail!("OpenAI-compat is not configured.\n\n{hint}");
         }
-    } else if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
+    } else if !assume_tool_binaries_available
+        && let Err(e) = check_tool_installed(executor.runtime_binary_name()).await
+    {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
             executor.tool_name(),
@@ -413,7 +464,7 @@ pub(crate) async fn build_and_validate_executor(
         );
         anyhow::bail!("{e}");
     }
-    Ok(executor)
+    Ok(AdmittedExecutor::new(executor, admission))
 }
 
 async fn ensure_tool_runtime_prerequisites(
