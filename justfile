@@ -115,12 +115,12 @@ check-generated-artifacts:
 check-version-bumped:
     @bash "{{_repo_root}}/scripts/check-version-bumped.sh" "{{_repo_root}}"
 
-# Fast pre-commit: formatting, linting, static analysis only (no tests).
-# Tests run in pre-push hook instead, avoiding ~58min commit wait (#1383).
+# Fast pre-commit (fmt/lint/static); tests run in pre-push (#1383).
 pre-commit-fast:
     just find-monolith-files
     just monolith-test
     just exact-build-test
+    bash scripts/tests/post-merge-rebuild-tests.sh
     just check-path-includes
     just check-generated-artifacts
     just check-version-bumped
@@ -484,7 +484,7 @@ install-hooks:
 install install_dir="/usr/local/bin":
     #!/usr/bin/env bash
     set -euo pipefail
-    d="{{install_dir}}"; t="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
+    d={{quote(install_dir)}}; t="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
     {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
     install -m 755 "$t/release/csa" "$d/csa"

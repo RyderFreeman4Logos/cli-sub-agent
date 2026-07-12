@@ -1,7 +1,11 @@
-use super::{InstallProvenanceStatus, NOT_EXECUTED_MISMATCH, default_intended_target, inspect};
+use super::{
+    InstallProvenanceStatus, NOT_EXECUTED_MISMATCH, default_intended_target, inspect, is_writable,
+    version_output_with_limits,
+};
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn write_csa(dir: &Path, version: &str) -> std::path::PathBuf {
@@ -26,6 +30,13 @@ fn write_marker_shadow(dir: &Path, marker: &Path) -> std::path::PathBuf {
         ),
     )
     .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+fn write_script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, body).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
@@ -135,6 +146,77 @@ fn install_verification_reports_unsafe_non_writable_shadow_without_overwriting_i
     assert!(!marker.exists(), "unsafe shadow must not be executed");
     assert!(report.diagnostic().contains("not writable"));
     assert!(report.diagnostic().contains("will not overwrite"));
+}
+
+#[test]
+fn is_writable_uses_effective_access_not_mere_mode_bits() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("shadow");
+    fs::write(&path, "x").unwrap();
+
+    // Owner-write mode: current process owns the file → effectively writable.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        is_writable(&path).unwrap(),
+        "owner-writable file should be effectively writable"
+    );
+
+    // No write bits at all → not effectively writable (and mode & 0o222 == 0).
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+    assert!(
+        !is_writable(&path).unwrap(),
+        "read-only file must not be classified as writable"
+    );
+
+    // 0555: no write bit for anyone — effective access fails.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(
+        !is_writable(&path).unwrap(),
+        "0555 must not be effectively writable"
+    );
+
+    // Restore for TempDir cleanup.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[test]
+fn version_probe_times_out_and_reaps_hanging_binary() {
+    let temp = TempDir::new().unwrap();
+    let hanging = write_script(
+        temp.path(),
+        "hang",
+        "#!/bin/sh\n# Ignore --version and hang forever.\nwhile true; do sleep 60; done\n",
+    );
+
+    let err = version_output_with_limits(&hanging, Duration::from_millis(250), 4096).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("timed out"),
+        "expected timeout diagnostic, got: {msg}"
+    );
+}
+
+#[test]
+fn version_probe_rejects_unbounded_output() {
+    let temp = TempDir::new().unwrap();
+    // Emit a fixed oversize payload then exit so the size bound is hit
+    // deterministically (no race with timeout or fork pressure from hang loops).
+    let spam = write_script(
+        temp.path(),
+        "spam",
+        "#!/bin/sh\n# ~4KiB of printable output, then exit 0.\ni=0\nwhile [ \"$i\" -lt 64 ]; do\n  printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'\n  i=$((i + 1))\ndone\n",
+    );
+
+    let err = version_output_with_limits(&spam, Duration::from_secs(5), 256).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("more than"),
+        "expected size-bound diagnostic, got: {msg}"
+    );
+    assert!(
+        msg.contains("256"),
+        "size bound should appear in error: {msg}"
+    );
 }
 
 #[test]

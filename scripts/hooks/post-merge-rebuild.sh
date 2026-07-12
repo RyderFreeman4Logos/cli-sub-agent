@@ -29,7 +29,10 @@ if [ ! -w "$INSTALL_DIR" ]; then
 fi
 
 echo "[post-merge] Rebuilding csa (install_dir=$INSTALL_DIR)..."
-if "$JUST_CMD" install install_dir="$INSTALL_DIR"; then
+# Just positional params: `install <dir>` sets install_dir. Do NOT pass
+# `install_dir=<dir>` as a bare positional — Just treats that as the value and
+# installs into a relative path literally named `install_dir=<dir>`.
+if "$JUST_CMD" install "$INSTALL_DIR"; then
     echo "[post-merge] csa active-binary provenance verified."
     echo "[post-merge] Cleaning cargo target..."
     if "$CARGO_CMD" clean; then

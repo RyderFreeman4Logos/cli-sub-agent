@@ -8,10 +8,17 @@
 use anyhow::{Context, Result, bail};
 use std::env;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::audit::hash::hash_file;
+
+/// Bound for artifact/`csa --version` probes (doctor + install verification).
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Cap stdout/stderr growth so a hostile/hung artifact cannot exhaust memory.
+const VERSION_PROBE_MAX_BYTES: usize = 64 * 1024;
 
 /// Stable marker when a mismatched PATH binary was intentionally not executed.
 pub(crate) const NOT_EXECUTED_MISMATCH: &str =
@@ -221,11 +228,20 @@ fn is_executable_file(path: &Path) -> Result<bool> {
     }
 }
 
+/// Whether the *current process* has effective write access to `path`.
+///
+/// Uses `access(W_OK)` on Unix so owner/group/other mode bits, identity, and
+/// ACLs are honored. Checking mode write bits alone mis-classifies root-owned
+/// 0755 shadows as writable for unprivileged callers.
 fn is_writable(path: &Path) -> Result<bool> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        Ok(fs::metadata(path)?.permissions().mode() & 0o222 != 0)
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .with_context(|| format!("path contains interior NUL: {}", path.display()))?;
+        // SAFETY: `access` only inspects the path string; no pointer aliasing.
+        let rc = unsafe { libc::access(c_path.as_ptr(), libc::W_OK) };
+        Ok(rc == 0)
     }
     #[cfg(not(unix))]
     {
@@ -234,17 +250,116 @@ fn is_writable(path: &Path) -> Result<bool> {
 }
 
 fn version_output(path: &Path) -> Result<String> {
-    // Trusted paths only (callers enforce). Never mutates PATH entries.
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .with_context(|| format!("failed to run {} --version", path.display()))?;
-    if !output.status.success() {
-        bail!("{} --version exited with {}", path.display(), output.status);
+    version_output_with_limits(path, VERSION_PROBE_TIMEOUT, VERSION_PROBE_MAX_BYTES)
+}
+
+/// Bounded `--version` probe: timeout, output size cap, and child reaping.
+///
+/// Trusted paths only (callers enforce). Never mutates PATH entries.
+fn version_output_with_limits(path: &Path, timeout: Duration, max_bytes: usize) -> Result<String> {
+    let mut stdout_file =
+        tempfile::tempfile().context("failed to allocate version probe stdout buffer")?;
+    let stderr_file =
+        tempfile::tempfile().context("failed to allocate version probe stderr buffer")?;
+
+    let mut cmd = Command::new(path);
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(
+            stdout_file
+                .try_clone()
+                .context("failed to clone version probe stdout")?,
+        ))
+        .stderr(Stdio::from(
+            stderr_file
+                .try_clone()
+                .context("failed to clone version probe stderr")?,
+        ));
+
+    // Isolate process group so timeout kills the probe and any grandchildren.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
-    String::from_utf8(output.stdout)
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to run {} --version", path.display()))?;
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                if file_len_exceeds(&stdout_file, max_bytes)?
+                    || file_len_exceeds(&stderr_file, max_bytes)?
+                {
+                    kill_version_probe(&mut child);
+                    bail!(
+                        "{} --version produced more than {} bytes of output",
+                        path.display(),
+                        max_bytes
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => {
+                kill_version_probe(&mut child);
+                bail!(
+                    "{} --version timed out after {}ms",
+                    path.display(),
+                    timeout.as_millis()
+                );
+            }
+        }
+    };
+
+    if !status.success() {
+        bail!("{} --version exited with {}", path.display(), status);
+    }
+
+    let mut stdout_bytes = Vec::new();
+    stdout_file
+        .seek(SeekFrom::Start(0))
+        .context("failed to rewind version probe stdout")?;
+    stdout_file
+        .read_to_end(&mut stdout_bytes)
+        .context("failed to read version probe stdout")?;
+    if stdout_bytes.len() > max_bytes {
+        bail!(
+            "{} --version produced more than {} bytes of output",
+            path.display(),
+            max_bytes
+        );
+    }
+
+    String::from_utf8(stdout_bytes)
         .map(|value| value.trim().to_string())
         .context("csa --version returned non-UTF-8 output")
+}
+
+fn file_len_exceeds(file: &std::fs::File, max_bytes: usize) -> Result<bool> {
+    let len = file
+        .metadata()
+        .context("failed to stat version probe output")?
+        .len();
+    Ok(len as usize > max_bytes)
+}
+
+fn kill_version_probe(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: negative pid targets the process group created via process_group(0).
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
 }
 
 #[cfg(all(test, unix))]
