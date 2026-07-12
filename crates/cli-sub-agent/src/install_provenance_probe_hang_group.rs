@@ -3,6 +3,12 @@
 //! Keeps ownership-unknown fixtures RAII-safe: armed cleanup kills the process
 //! group on unwind, and happy-path asserts use heartbeat + starttime identity
 //! instead of treating zombies or PID reuse as live writers.
+//!
+//! Signal rule (AGENTS Rust 018 Rule 5): never issue `kill(-pgid)` / exact-PID
+//! kill from a bare numeric PID. Linux requires a matching `/proc` starttime;
+//! non-Linux uses unreaped parenthood (`waitid` + `WNOWAIT`) as the ownership
+//! token. When identity cannot be verified, refuse signals and only best-effort
+//! reap if we are still the parent.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +64,7 @@ pub(super) const FORCE_REAP_BOUND: Duration = Duration::from_secs(2);
 /// reparented and later appear as a zombie (or a reused PID). Comparing starttime
 /// distinguishes the original fixture from a reuse and treats zombies as cleaned.
 #[cfg(target_os = "linux")]
-fn process_starttime(pid: u32) -> Option<u64> {
+pub(super) fn process_starttime(pid: u32) -> Option<u64> {
     if pid <= 1 {
         return None;
     }
@@ -72,7 +78,7 @@ fn process_starttime(pid: u32) -> Option<u64> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn process_starttime(_pid: u32) -> Option<u64> {
+pub(super) fn process_starttime(_pid: u32) -> Option<u64> {
     None
 }
 
@@ -82,8 +88,8 @@ fn process_starttime(_pid: u32) -> Option<u64> {
 /// - Zombie (`Z`) → cleaned (not a live writer; init may reap slowly).
 /// - Different starttime → PID reuse; original fixture is gone.
 #[cfg(target_os = "linux")]
-fn same_live_identity(pid: u32, starttime: Option<u64>) -> bool {
-    let Some(expected) = starttime else {
+pub(super) fn same_live_identity(pid: u32, starttime: Option<u64>) -> bool {
+    let Some(expected) = starttime.filter(|t| *t != 0) else {
         return false;
     };
     if !live_non_zombie_process(pid as i32) {
@@ -93,31 +99,77 @@ fn same_live_identity(pid: u32, starttime: Option<u64>) -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn same_live_identity(_pid: u32, _starttime: Option<u64>) -> bool {
+pub(super) fn same_live_identity(_pid: u32, _starttime: Option<u64>) -> bool {
     // Non-Linux identity is proven via heartbeat growth for descendants.
     false
 }
 
-/// Test-only cleanup for hang-group fixtures.
+/// True when the numeric PID still belongs to the original fixture identity
+/// and is therefore safe to target with `kill(-pgid)` / exact-PID kill.
 ///
-/// 1. SIGKILL the whole process group (`-leader`) while the numeric PGID still
-///    matches the fixture leader (descendants such as `sleep` must not orphan).
-/// 2. Exact-PID SIGKILL as a fallback if group delivery is denied.
-/// 3. Bounded, EINTR-safe `waitpid(..., WNOHANG)` when we are still the parent —
-///    after `abandon_without_signaling` this may return `ECHILD` (reparented);
-///    that is fine — SIGKILL already targeted the group.
-pub(super) fn force_kill_and_reap(pid: u32) {
+/// - Linux: saved starttime must be non-zero and match current `/proc` starttime
+///   (zombie with the same starttime still anchors the PGID until reaped).
+/// - Non-Linux: unreaped parenthood via `waitid(..., WNOWAIT)` is the ownership
+///   token when starttime is unavailable.
+fn may_signal_original_identity(pid: u32, expected_starttime: Option<u64>) -> bool {
+    if pid <= 1 {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let Some(expected) = expected_starttime.filter(|t| *t != 0) else {
+            // Rule 5: refuse signals when starttime was never captured.
+            return false;
+        };
+        process_starttime(pid) == Some(expected)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = expected_starttime;
+        still_our_unreaped_child(pid)
+    }
+}
+
+/// Parenthood without reaping: `waitid` + `WNOWAIT` keeps the leader as the
+/// PGID anchor so a subsequent group SIGKILL can still reach descendants.
+///
+/// Used only when Linux starttime is unavailable (non-Linux ownership token).
+#[cfg(not(target_os = "linux"))]
+fn still_our_unreaped_child(pid: u32) -> bool {
+    if pid <= 1 {
+        return false;
+    }
+    loop {
+        // SAFETY: zeroed siginfo is the documented no-state-change baseline.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: WNOWAIT leaves the child unreaped; WNOHANG never blocks.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            // ECHILD / other: not our waitable child — refuse PID/PGID signals.
+            return false;
+        }
+        // Success: still our child (running si_pid==0, or exited-but-unreaped).
+        return true;
+    }
+}
+
+/// Bounded, EINTR-safe `waitpid(..., WNOHANG)` when we may still be the parent.
+fn best_effort_waitpid(pid: u32) {
     if pid <= 1 {
         return;
     }
     let leader = pid as libc::pid_t;
-    // SAFETY: test fixtures we just asserted were still our hang group. Prefer
-    // group kill first so descendants die before the leader PID can be reused.
-    unsafe {
-        let _ = libc::kill(-leader, libc::SIGKILL);
-        let _ = libc::kill(leader, libc::SIGKILL);
-    }
-
     let deadline = Instant::now() + FORCE_REAP_BOUND;
     loop {
         let mut status: libc::c_int = 0;
@@ -140,6 +192,36 @@ pub(super) fn force_kill_and_reap(pid: u32) {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// Test-only cleanup for hang-group fixtures.
+///
+/// 1. Verify original identity (starttime / unreaped parenthood) **before** any
+///    signal — refuse `kill(-pgid)` and exact-PID kill when verification fails.
+/// 2. SIGKILL the whole process group (`-leader`) while the numeric PGID still
+///    matches the fixture leader (descendants such as `sleep` must not orphan).
+/// 3. Exact-PID SIGKILL as a fallback if group delivery is denied.
+/// 4. Bounded, EINTR-safe `waitpid(..., WNOHANG)` when we are still the parent —
+///    after `abandon_without_signaling` this may return `ECHILD` (reparented);
+///    that is fine when signals were identity-verified first.
+pub(super) fn force_kill_and_reap(pid: u32, expected_starttime: Option<u64>) {
+    if pid <= 1 {
+        return;
+    }
+    if !may_signal_original_identity(pid, expected_starttime) {
+        // Identity unverified or already gone — never spray -pgid at a reused PID.
+        // Best-effort reap only if we are still the parent of an unreaped child.
+        best_effort_waitpid(pid);
+        return;
+    }
+    let leader = pid as libc::pid_t;
+    // SAFETY: identity just verified (Linux starttime match, or unreaped parenthood).
+    // Prefer group kill first so descendants die before the leader PID can be reused.
+    unsafe {
+        let _ = libc::kill(-leader, libc::SIGKILL);
+        let _ = libc::kill(leader, libc::SIGKILL);
+    }
+    best_effort_waitpid(pid);
 }
 
 /// After `force_kill_and_reap`, prove the original fixture is no longer a live writer.
@@ -232,6 +314,10 @@ impl HangGroupCleanup {
         self.descendant
     }
 
+    pub(super) fn leader_starttime(&self) -> Option<u64> {
+        self.leader_starttime
+    }
+
     /// Record descendant after it appears; refresh starttime identities.
     pub(super) fn bind_descendant(&mut self, descendant: u32) {
         self.descendant = descendant;
@@ -241,7 +327,7 @@ impl HangGroupCleanup {
 
     /// Happy-path cleanup: group-kill, identity-safe assert, then disarm Drop.
     pub(super) fn force_kill_reap_and_assert(mut self) {
-        force_kill_and_reap(self.leader);
+        force_kill_and_reap(self.leader, self.leader_starttime);
         assert_group_cleaned(
             self.leader,
             self.leader_starttime,
@@ -257,7 +343,48 @@ impl Drop for HangGroupCleanup {
     fn drop(&mut self) {
         if self.armed {
             // Panic/assert failure path: never leave infinite-loop fixtures behind.
-            force_kill_and_reap(self.leader);
+            // Identity check inside force_kill_and_reap refuses reused PID/PGID.
+            force_kill_and_reap(self.leader, self.leader_starttime);
+        }
+    }
+}
+
+/// RAII for a direct `Child` that is not handed to `VersionProbeSession`.
+///
+/// Arms immediately after spawn so assertion failures cannot leave long-lived
+/// sleep/hang children behind. Uses exact-child `kill` + bounded `try_wait`
+/// (no negative-PGID — the child is not necessarily a process-group leader).
+pub(super) struct ArmedChildCleanup {
+    child: Option<std::process::Child>,
+}
+
+impl ArmedChildCleanup {
+    pub(super) fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    pub(super) fn child_mut(&mut self) -> &mut std::process::Child {
+        self.child
+            .as_mut()
+            .expect("ArmedChildCleanup child still present")
+    }
+}
+
+impl Drop for ArmedChildCleanup {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let _ = child.kill();
+        let deadline = Instant::now() + FORCE_REAP_BOUND;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => break,
+            }
         }
     }
 }
@@ -303,13 +430,12 @@ pub(super) fn spawn_hang_group_with_descendant(
     let deadline = Instant::now() + FORCE_REAP_BOUND;
     let mut descendant = 0u32;
     while Instant::now() < deadline {
-        if let Ok(s) = fs::read_to_string(&pid_file) {
-            if let Ok(p) = s.trim().parse::<u32>() {
-                if p > 1 {
-                    descendant = p;
-                    break;
-                }
-            }
+        if let Ok(s) = fs::read_to_string(&pid_file)
+            && let Ok(p) = s.trim().parse::<u32>()
+            && p > 1
+        {
+            descendant = p;
+            break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -322,10 +448,10 @@ pub(super) fn spawn_hang_group_with_descendant(
 
     let hb_deadline = Instant::now() + FORCE_REAP_BOUND;
     while Instant::now() < hb_deadline {
-        if let Ok(meta) = fs::metadata(&hb) {
-            if meta.len() > 0 {
-                break;
-            }
+        if let Ok(meta) = fs::metadata(&hb)
+            && meta.len() > 0
+        {
+            break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }

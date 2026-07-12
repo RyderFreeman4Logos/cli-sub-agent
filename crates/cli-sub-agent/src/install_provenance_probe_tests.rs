@@ -45,16 +45,20 @@ fn version_probe_times_out_and_reaps_hanging_binary() {
 fn version_probe_reap_wait_is_deadline_bounded() {
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new("sh")
-        .args(["-c", "trap '' TERM; exec sleep 30"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn unreaped sleep fixture");
+    // Arm RAII immediately: assertion failures must not leave `sleep 30` behind.
+    // `std::process::Child` Drop neither kills nor reaps.
+    let mut guard = ArmedChildCleanup::new(
+        Command::new("sh")
+            .args(["-c", "trap '' TERM; exec sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn unreaped sleep fixture"),
+    );
 
     let start = Instant::now();
-    let result = super::wait_and_reap_for_exit(&mut child, Duration::from_millis(200))
+    let result = super::wait_and_reap_for_exit(guard.child_mut(), Duration::from_millis(200))
         .expect("try_wait poll must not error on a live child");
     let elapsed = start.elapsed();
 
@@ -66,19 +70,7 @@ fn version_probe_reap_wait_is_deadline_bounded() {
         elapsed < Duration::from_millis(800),
         "bounded try_wait loop must not hang: {elapsed:?}"
     );
-
-    // Early-exit cleanup: SIGKILL + bounded try_wait — never unbounded wait().
-    let _ = child.kill();
-    let deadline = Instant::now() + FORCE_REAP_BOUND;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => break,
-        }
-    }
+    // Drop: SIGKILL + bounded try_wait — never unbounded wait().
 }
 
 #[test]
@@ -284,6 +276,10 @@ fn version_probe_output_stat_error_still_cleans_owned_group() {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
+    let temp = TempDir::new().unwrap();
+    // Leader-only hang group: dummy heartbeat path for HangGroupCleanup RAII.
+    // Arm immediately after spawn so setup asserts cannot leak an infinite loop.
+    let hb = temp.path().join("leader-only.hb");
     let child = Command::new("sh")
         .args(["-c", "trap '' TERM; while true; do sleep 60; done"])
         .stdin(Stdio::null())
@@ -293,22 +289,42 @@ fn version_probe_output_stat_error_still_cleans_owned_group() {
         .spawn()
         .expect("spawn hang fixture");
     let pid = child.id();
-    assert!(process_exists(pid));
+    let cleanup = HangGroupCleanup::new(pid, 0, hb);
+    let leader_starttime = cleanup.leader_starttime();
+    assert!(
+        process_exists(pid),
+        "hang fixture leader must be alive before OutputStatError finish"
+    );
 
     let session = super::VersionProbeSession::new(child);
     let stop = super::ProbeStopReason::OutputStatError(std::io::Error::other("stat failed"));
-    // finish should terminate the owned group then reap (or timeout-reap).
-    let _ = session.finish(&stop);
+    // finish should terminate the owned group then reap (or hit the reap bound).
+    match session.finish(&stop) {
+        Ok(_) => {}
+        Err(err) => {
+            let msg = format!("{err:#}");
+            // Production may abandon the Child after VERSION_PROBE_KILL_WAIT when
+            // the leader stays unreapable — that is not ownership-unknown.
+            assert!(
+                msg.contains("timed out") && msg.contains("reaping"),
+                "OutputStatError finish must clean the group or hit the reap bound, got: {msg}"
+            );
+        }
+    }
 
-    // Allow SIGKILL to apply.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && process_exists(pid) {
+    // Prove the original identity is gone: do not use kill(0)/process_exists —
+    // zombies still "exist" and pure numeric PIDs can be reused.
+    let deadline = Instant::now() + FORCE_REAP_BOUND;
+    while Instant::now() < deadline && same_live_identity(pid, leader_starttime) {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(
-        !process_exists(pid),
-        "OutputStatError must still clean the owned process group (pid {pid} still exists)"
+        !same_live_identity(pid, leader_starttime),
+        "OutputStatError must still clean the owned process group \
+         (pid {pid} still the original live identity)"
     );
+    // Keep HangGroupCleanup armed: Drop re-checks starttime and refuses
+    // signals if the identity is already gone (or reaps only if still ours).
 }
 
 /// End-to-end poll path: inject ECHILD into waitid and assert cleanup never
@@ -360,13 +376,12 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
     let deadline = Instant::now() + FORCE_REAP_BOUND;
     let mut descendant = 0u32;
     while Instant::now() < deadline {
-        if let Ok(s) = fs::read_to_string(&pid_file) {
-            if let Ok(p) = s.trim().parse::<u32>() {
-                if p > 1 {
-                    descendant = p;
-                    break;
-                }
-            }
+        if let Ok(s) = fs::read_to_string(&pid_file)
+            && let Ok(p) = s.trim().parse::<u32>()
+            && p > 1
+        {
+            descendant = p;
+            break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }
