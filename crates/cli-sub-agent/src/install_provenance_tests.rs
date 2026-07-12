@@ -1,4 +1,4 @@
-use super::{InstallProvenanceStatus, inspect};
+use super::{InstallProvenanceStatus, NOT_EXECUTED_MISMATCH, default_intended_target, inspect};
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
@@ -9,6 +9,21 @@ fn write_csa(dir: &Path, version: &str) -> std::path::PathBuf {
     fs::write(
         &path,
         format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{version}'; fi\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// Shadow that would leave a side-effect marker if ever executed.
+fn write_marker_shadow(dir: &Path, marker: &Path) -> std::path::PathBuf {
+    let path = dir.join("csa");
+    let marker_display = marker.display();
+    fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nprintf 'ran\\n' >'{marker_display}'\nif [ \"$1\" = \"--version\" ]; then echo 'csa 0.0.0 (evil)'; fi\n"
+        ),
     )
     .unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -36,12 +51,36 @@ fn install_verification_rejects_stale_higher_priority_path_shadow() {
 
     assert_eq!(report.status, InstallProvenanceStatus::StaleShadow);
     assert_eq!(report.path_resolved, stale);
+    assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
     assert!(
         report
             .diagnostic()
             .contains("refusing to report installation success")
     );
     assert!(report.diagnostic().contains("will not overwrite"));
+}
+
+#[test]
+fn install_verification_never_executes_mismatched_path_shadow() {
+    let temp = TempDir::new().unwrap();
+    let shadow = temp.path().join("shadow");
+    let target_dir = temp.path().join("target");
+    fs::create_dir_all(&shadow).unwrap();
+    fs::create_dir_all(&target_dir).unwrap();
+    let marker = temp.path().join("shadow-was-executed");
+    let stale = write_marker_shadow(&shadow, &marker);
+    let target = write_csa(&target_dir, "csa 0.1.1095 (3a67b06b)");
+
+    let report = inspect(&path(&[&shadow, &target_dir]), &target, &target).unwrap();
+
+    assert_eq!(report.status, InstallProvenanceStatus::StaleShadow);
+    assert_eq!(report.path_resolved, stale);
+    assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
+    assert!(
+        !marker.exists(),
+        "mismatched PATH shadow must not be executed for diagnostics"
+    );
+    assert!(!report.is_current());
 }
 
 #[test]
@@ -55,6 +94,8 @@ fn install_verification_accepts_unshadowed_exact_artifact() {
 
     assert_eq!(report.status, InstallProvenanceStatus::Current);
     assert_eq!(report.path_resolved, target);
+    assert_eq!(report.version_output, "csa 0.1.1095 (3a67b06b)");
+    assert_eq!(report.artifact_version, report.version_output);
 }
 
 #[test]
@@ -71,6 +112,8 @@ fn install_verification_accepts_matching_duplicate_path_entry() {
 
     assert_eq!(report.status, InstallProvenanceStatus::Current);
     assert_ne!(report.path_resolved, target);
+    // Bytes match → artifact version reused; shadow not re-executed.
+    assert_eq!(report.version_output, "csa 0.1.1095 (3a67b06b)");
 }
 
 #[test]
@@ -80,13 +123,16 @@ fn install_verification_reports_unsafe_non_writable_shadow_without_overwriting_i
     let target_dir = temp.path().join("target");
     fs::create_dir_all(&shadow).unwrap();
     fs::create_dir_all(&target_dir).unwrap();
-    let stale = write_csa(&shadow, "csa 0.1.1094 (1d04aac0)");
+    let marker = temp.path().join("unsafe-shadow-ran");
+    let stale = write_marker_shadow(&shadow, &marker);
     fs::set_permissions(&stale, fs::Permissions::from_mode(0o555)).unwrap();
     let target = write_csa(&target_dir, "csa 0.1.1095 (3a67b06b)");
 
     let report = inspect(&path(&[&shadow, &target_dir]), &target, &target).unwrap();
 
     assert_eq!(report.status, InstallProvenanceStatus::UnsafeShadow);
+    assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
+    assert!(!marker.exists(), "unsafe shadow must not be executed");
     assert!(report.diagnostic().contains("not writable"));
     assert!(report.diagnostic().contains("will not overwrite"));
 }
@@ -105,7 +151,23 @@ fn doctor_and_install_share_the_same_report() {
     let doctor = inspect(&path(&[&shadow, &target_dir]), &target, &target).unwrap();
 
     assert_eq!(install, doctor);
-    assert!(doctor.version_output.contains("1d04aac0"));
+    assert_eq!(doctor.version_output, NOT_EXECUTED_MISMATCH);
+    assert_eq!(doctor.resolved_hash != doctor.artifact_hash, true);
+}
+
+#[test]
+fn install_report_json_is_stable_and_additive() {
+    let temp = TempDir::new().unwrap();
+    let target_dir = temp.path().join("target");
+    fs::create_dir_all(&target_dir).unwrap();
+    let target = write_csa(&target_dir, "csa 0.1.1095 (3a67b06b)");
+    let report = inspect(&path(&[&target_dir]), &target, &target).unwrap();
+    let json = report.to_json();
+    assert_eq!(json["status"], "current");
+    assert_eq!(json["current"], true);
+    assert!(json["artifact_sha256"].as_str().is_some());
+    assert!(json["path_resolved"].as_str().is_some());
+    assert!(json["intended_target"].as_str().is_some());
 }
 
 #[test]
@@ -138,6 +200,7 @@ fn install_verification_handles_spaces_in_path_entries() {
 
     assert_eq!(report.status, InstallProvenanceStatus::StaleShadow);
     assert_eq!(report.path_resolved, stale);
+    assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
 }
 
 #[test]
@@ -156,4 +219,9 @@ fn install_verification_ignores_non_executable_name_collision() {
 
     assert_eq!(report.status, InstallProvenanceStatus::Current);
     assert_eq!(report.path_resolved, target);
+}
+
+#[test]
+fn default_intended_target_is_unix_usr_local_bin() {
+    assert_eq!(default_intended_target(), Path::new("/usr/local/bin/csa"));
 }

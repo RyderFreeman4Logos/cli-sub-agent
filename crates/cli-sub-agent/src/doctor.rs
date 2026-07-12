@@ -171,7 +171,7 @@ pub async fn dispatch_doctor(
     match subcommand {
         None => run_doctor(format).await,
         Some(crate::cli::DoctorSubcommand::Install { target, artifact }) => {
-            run_doctor_install(&target, artifact.as_deref())
+            run_doctor_install(format, &target, artifact.as_deref())
         }
         Some(crate::cli::DoctorSubcommand::Routing { operation, tier }) => {
             run_doctor_routing(format, operation, tier).await
@@ -180,10 +180,24 @@ pub async fn dispatch_doctor(
 }
 
 /// Report the same install provenance used by `just install`.
-pub(crate) fn run_doctor_install(target: &Path, artifact: Option<&Path>) -> Result<()> {
+///
+/// Honors global `--format` (text or additive JSON). Never executes a
+/// PATH-resolved binary whose content bytes differ from the artifact.
+pub(crate) fn run_doctor_install(
+    format: OutputFormat,
+    target: &Path,
+    artifact: Option<&Path>,
+) -> Result<()> {
     let artifact = artifact.unwrap_or(target);
     let report = install_provenance::inspect_current_path(artifact, target)?;
-    println!("{}", report.diagnostic());
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+        }
+        OutputFormat::Text => {
+            println!("{}", report.diagnostic());
+        }
+    }
     if report.is_current() {
         Ok(())
     } else {
@@ -414,9 +428,10 @@ fn install_provenance_json() -> serde_json::Value {
 /// When the intended install target exists it is compared against the
 /// PATH-resolved executable (same logic as `just install` without `--artifact`).
 /// When it is missing, the PATH-resolved binary is still reported and marked
-/// non-current so shadowing stays visible.
+/// non-current so shadowing stays visible — but the PATH binary is **not**
+/// executed (hash-first / no untrusted diagnostics).
 fn install_provenance_snapshot() -> InstallDoctorSnapshot {
-    let intended = PathBuf::from("/usr/local/bin/csa");
+    let intended = install_provenance::default_intended_target();
     if intended.is_file() {
         match install_provenance::inspect_current_path(&intended, &intended) {
             Ok(report) => InstallDoctorSnapshot::Report(report),
@@ -427,15 +442,12 @@ fn install_provenance_snapshot() -> InstallDoctorSnapshot {
         }
     } else {
         match install_provenance::resolve_current_path() {
-            Ok(path_resolved) => {
-                let version = install_provenance::version_output_for(&path_resolved)
-                    .unwrap_or_else(|error| format!("(unavailable: {error})"));
-                InstallDoctorSnapshot::MissingIntended {
-                    path_resolved,
-                    intended_target: intended,
-                    version_output: version,
-                }
-            }
+            Ok(path_resolved) => InstallDoctorSnapshot::MissingIntended {
+                path_resolved,
+                intended_target: intended,
+                // Do not run unverified PATH binaries for diagnostics.
+                version_output: install_provenance::NOT_EXECUTED_UNVERIFIED.to_string(),
+            },
             Err(error) => InstallDoctorSnapshot::Unavailable {
                 intended_target: intended,
                 error: error.to_string(),
@@ -483,21 +495,7 @@ impl InstallDoctorSnapshot {
 
     fn to_json(&self) -> serde_json::Value {
         match self {
-            Self::Report(report) => serde_json::json!({
-                "status": match report.status {
-                    install_provenance::InstallProvenanceStatus::Current => "current",
-                    install_provenance::InstallProvenanceStatus::StaleShadow => "stale_shadow",
-                    install_provenance::InstallProvenanceStatus::UnsafeShadow => "unsafe_shadow",
-                },
-                "path_resolved": report.path_resolved.display().to_string(),
-                "intended_target": report.intended_target.display().to_string(),
-                "artifact": report.artifact.display().to_string(),
-                "artifact_sha256": report.artifact_hash,
-                "path_resolved_sha256": report.resolved_hash,
-                "artifact_version": report.artifact_version,
-                "path_resolved_version": report.version_output,
-                "current": report.is_current(),
-            }),
+            Self::Report(report) => report.to_json(),
             Self::MissingIntended {
                 path_resolved,
                 intended_target,

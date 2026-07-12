@@ -1,4 +1,9 @@
 //! Shared PATH/install provenance checks for installation and `csa doctor install`.
+//!
+//! Safety contract: never execute a PATH-resolved binary whose content bytes
+//! differ from the trusted build artifact. Hash first; only run `--version`
+//! against the artifact (or, when bytes match, treat the artifact version as
+//! authoritative and skip redundant shadow execution).
 
 use anyhow::{Context, Result, bail};
 use std::env;
@@ -7,6 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::audit::hash::hash_file;
+
+/// Stable marker when a mismatched PATH binary was intentionally not executed.
+pub(crate) const NOT_EXECUTED_MISMATCH: &str =
+    "(not executed: PATH-resolved bytes differ from build artifact)";
+
+/// Stable marker when full doctor would otherwise run an unverified PATH binary.
+pub(crate) const NOT_EXECUTED_UNVERIFIED: &str =
+    "(not executed: refuse to run unverified PATH-resolved binary)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InstallProvenanceStatus {
@@ -24,12 +37,35 @@ pub(crate) struct InstallProvenanceReport {
     pub(crate) artifact_hash: String,
     pub(crate) resolved_hash: String,
     pub(crate) artifact_version: String,
+    /// Version banner from PATH-resolved binary, or a not-executed marker.
     pub(crate) version_output: String,
 }
 
 impl InstallProvenanceReport {
     pub(crate) fn is_current(&self) -> bool {
         self.status == InstallProvenanceStatus::Current
+    }
+
+    pub(crate) fn status_str(&self) -> &'static str {
+        match self.status {
+            InstallProvenanceStatus::Current => "current",
+            InstallProvenanceStatus::StaleShadow => "stale_shadow",
+            InstallProvenanceStatus::UnsafeShadow => "unsafe_shadow",
+        }
+    }
+
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": self.status_str(),
+            "path_resolved": self.path_resolved.display().to_string(),
+            "intended_target": self.intended_target.display().to_string(),
+            "artifact": self.artifact.display().to_string(),
+            "artifact_sha256": self.artifact_hash,
+            "path_resolved_sha256": self.resolved_hash,
+            "artifact_version": self.artifact_version,
+            "path_resolved_version": self.version_output,
+            "current": self.is_current(),
+        })
     }
 
     pub(crate) fn diagnostic(&self) -> String {
@@ -60,6 +96,26 @@ impl InstallProvenanceReport {
     }
 }
 
+/// Default intended install target for `just install` / doctor surfaces.
+///
+/// Unix: `/usr/local/bin/csa`. Windows: `LOCALAPPDATA\\csa\\csa.exe` when set,
+/// otherwise a non-Unix placeholder (the release `just install` recipe is
+/// Unix-oriented).
+pub(crate) fn default_intended_target() -> PathBuf {
+    #[cfg(windows)]
+    {
+        env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("csa")
+            .join("csa.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/usr/local/bin/csa")
+    }
+}
+
 pub(crate) fn inspect_current_path(
     artifact: &Path,
     intended_target: &Path,
@@ -72,11 +128,6 @@ pub(crate) fn inspect_current_path(
 pub(crate) fn resolve_current_path() -> Result<PathBuf> {
     let path = env::var_os("PATH").context("PATH is not set")?;
     resolve_from_path(&path.to_string_lossy())
-}
-
-/// Run `csa --version` against an explicit path without mutating PATH.
-pub(crate) fn version_output_for(path: &Path) -> Result<String> {
-    version_output(path)
 }
 
 pub(crate) fn inspect(
@@ -93,17 +144,25 @@ pub(crate) fn inspect(
             path_resolved.display()
         )
     })?;
+
+    // Always version the trusted artifact only.
     let artifact_version = version_output(artifact)?;
-    let version_output = version_output(&path_resolved)?;
-    // Content + version must both match so a coincidental hash collision with a
-    // different --version banner cannot report success.
-    let matches_artifact = artifact_hash == resolved_hash && artifact_version == version_output;
-    let status = if matches_artifact {
-        InstallProvenanceStatus::Current
+
+    // Hash-first gate: never execute a PATH shadow whose bytes differ.
+    // When bytes match, the artifact version is authoritative — skip redundant
+    // shadow execution (same content cannot yield a different --version banner).
+    let (status, version_output) = if artifact_hash == resolved_hash {
+        (InstallProvenanceStatus::Current, artifact_version.clone())
     } else if is_writable(&path_resolved)? {
-        InstallProvenanceStatus::StaleShadow
+        (
+            InstallProvenanceStatus::StaleShadow,
+            NOT_EXECUTED_MISMATCH.to_string(),
+        )
     } else {
-        InstallProvenanceStatus::UnsafeShadow
+        (
+            InstallProvenanceStatus::UnsafeShadow,
+            NOT_EXECUTED_MISMATCH.to_string(),
+        )
     };
 
     Ok(InstallProvenanceReport {
@@ -120,12 +179,27 @@ pub(crate) fn inspect(
 
 fn resolve_from_path(path: &str) -> Result<PathBuf> {
     for directory in env::split_paths(path) {
-        let candidate = directory.join("csa");
-        if is_executable_file(&candidate)? {
-            return Ok(candidate);
+        for name in binary_candidates() {
+            let candidate = directory.join(name);
+            if is_executable_file(&candidate)? {
+                return Ok(candidate);
+            }
         }
     }
     bail!("could not resolve `csa` from PATH")
+}
+
+/// Platform-aware executable names searched on PATH.
+fn binary_candidates() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        // Prefer PATHEXT-typical names; bare `csa` last for rare no-extension cases.
+        &["csa.exe", "csa.cmd", "csa.bat", "csa"]
+    }
+    #[cfg(not(windows))]
+    {
+        &["csa"]
+    }
 }
 
 fn is_executable_file(path: &Path) -> Result<bool> {
@@ -160,7 +234,7 @@ fn is_writable(path: &Path) -> Result<bool> {
 }
 
 fn version_output(path: &Path) -> Result<String> {
-    // Side-effect free: only reads --version stdout. Never mutates PATH entries.
+    // Trusted paths only (callers enforce). Never mutates PATH entries.
     let output = Command::new(path)
         .arg("--version")
         .output()
