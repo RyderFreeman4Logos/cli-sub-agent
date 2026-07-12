@@ -23,12 +23,3 @@ tier = "tier-4-critical"
 
 [debate]
 tier = "tier-4-critical"
-
-[tiers.tier-review]
-description = "Review and debate tier with priority-based fallback"
-strategy = "priority"
-models = [
-  "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
-  "codex/openai/o3/medium",
-  "claude-code/anthropic/claude-sonnet-4-20250514/none",
-]
