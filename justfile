@@ -480,16 +480,16 @@ install-hooks:
     lefthook install
     @echo "Lefthook hooks installed."
 
-# Install release csa/weave to /usr/local/bin (target cache).
-install:
+# Install release csa/weave (install_dir=/usr/local/bin).
+install install_dir="/usr/local/bin":
     #!/usr/bin/env bash
     set -euo pipefail
-    target_dir="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
+    d="{{install_dir}}"; t="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
     {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
-    install -m 755 "${target_dir}/release/csa" /usr/local/bin/csa
-    install -m 755 "${target_dir}/release/weave" /usr/local/bin/weave
-    "{{_repo_root}}/scripts/verify-csa-install-provenance.sh" "${target_dir}/release/csa"
+    install -m 755 "$t/release/csa" "$d/csa"
+    install -m 755 "$t/release/weave" "$d/weave"
+    "{{_repo_root}}/scripts/verify-csa-install-provenance.sh" "$t/release/csa" "$d/csa"
     weave --version
 
 # Bump patch version of all workspace crates atomically.
