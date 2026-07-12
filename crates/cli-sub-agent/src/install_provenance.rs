@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::env;
+use std::ffi::OsStr;
 #[cfg(not(unix))]
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
@@ -131,22 +132,36 @@ pub(crate) fn inspect_current_path(
     artifact: &Path,
     intended_target: &Path,
 ) -> Result<InstallProvenanceReport> {
+    // Preserve raw OS PATH bytes. Lossy UTF-8 conversion can invent U+FFFD
+    // directory components and skip a real higher-priority non-UTF-8 shadow
+    // that `execvp` / the shell would still resolve first.
     let path = env::var_os("PATH").context("PATH is not set")?;
-    inspect(&path.to_string_lossy(), artifact, intended_target)
+    inspect_os(path.as_os_str(), artifact, intended_target)
 }
 
 /// Resolve the PATH-first executable named `csa` (for doctor diagnostics).
 pub(crate) fn resolve_current_path() -> Result<PathBuf> {
     let path = env::var_os("PATH").context("PATH is not set")?;
-    resolve_from_path(&path.to_string_lossy())
+    resolve_from_path_os(path.as_os_str())
 }
 
+/// UTF-8 PATH helper for tests that already hold a `str`.
+#[cfg(test)]
 pub(crate) fn inspect(
     path: &str,
     artifact: &Path,
     intended_target: &Path,
 ) -> Result<InstallProvenanceReport> {
-    let path_resolved = resolve_from_path(path)?;
+    inspect_os(OsStr::new(path), artifact, intended_target)
+}
+
+/// Inspect with an OS-native PATH value (may contain non-UTF-8 directory bytes).
+pub(crate) fn inspect_os(
+    path: &OsStr,
+    artifact: &Path,
+    intended_target: &Path,
+) -> Result<InstallProvenanceReport> {
+    let path_resolved = resolve_from_path_os(path)?;
     let artifact_hash = hash_file(artifact)
         .with_context(|| format!("failed to hash artifact {}", artifact.display()))?;
     let resolved_hash = hash_file(&path_resolved).with_context(|| {
@@ -188,9 +203,11 @@ pub(crate) fn inspect(
     })
 }
 
-fn resolve_from_path(path: &str) -> Result<PathBuf> {
+fn resolve_from_path_os(path: &OsStr) -> Result<PathBuf> {
     // Use OS-equivalent lookup: Unix effective execute checks (access/X_OK) and
     // Windows PATHEXT ordering via the `which` crate — not mode-bit heuristics.
+    // Pass the raw OsStr so non-UTF-8 PATH components remain searchable, matching
+    // shell / execvp resolution order for the `csa` basename.
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     which::which_in("csa", Some(path), cwd).with_context(|| "could not resolve `csa` from PATH")
 }

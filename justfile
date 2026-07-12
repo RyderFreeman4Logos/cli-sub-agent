@@ -490,7 +490,7 @@ install install_dir="/usr/local/bin":
     install -m 755 "$t/release/csa" "$d/csa"
     install -m 755 "$t/release/weave" "$d/weave"
     "{{_repo_root}}/scripts/verify-csa-install-provenance.sh" "$t/release/csa" "$d/csa"
-    weave --version
+    "$t/release/weave" --version
 
 # Bump patch version of all workspace crates atomically.
 # All crates inherit version.workspace, so a single workspace bump suffices.

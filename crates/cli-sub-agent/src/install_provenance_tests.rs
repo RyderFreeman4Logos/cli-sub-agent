@@ -1,10 +1,12 @@
 use super::{
-    InstallProvenanceStatus, NOT_EXECUTED_MISMATCH, default_intended_target, inspect, is_writable,
-    version_output_with_limits,
+    InstallProvenanceStatus, NOT_EXECUTED_MISMATCH, default_intended_target, inspect, inspect_os,
+    is_writable, version_output_with_limits,
 };
+use std::ffi::OsString;
 use std::fs;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -269,31 +271,36 @@ fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
     let pid_path = pid_file.display().to_string();
     // Leader exits 0 with a valid version while a descendant keeps writing stderr.
     // Prior bug: Ok(Some(status)) reaped the leader and never cleaned the group.
+    //
+    // Important: record `$!` (the background descendant), NOT `$$`.
+    // POSIX `$$` is the main shell PID even inside `( ... )`, so asserting on
+    // `$$` can pass after the leader is reaped while the true descendant lives.
     let path = write_script(
         temp.path(),
         "descendant-stderr",
         &format!(
-            "#!/bin/sh\n(\n  echo $$ > '{pid_path}'\n  while true; do\n    printf 'z' >&2\n    sleep 0.05\n  done\n) &\necho 'csa 0.1.0 (leader-ok)'\nexit 0\n"
+            "#!/bin/sh\n(\n  while true; do\n    printf 'z' >&2\n    sleep 0.05\n  done\n) &\necho $! > '{pid_path}'\necho 'csa 0.1.0 (leader-ok)'\nexit 0\n"
         ),
     );
 
     let out = version_output_with_limits(&path, Duration::from_secs(2), 64 * 1024).unwrap();
     assert_eq!(out, "csa 0.1.0 (leader-ok)");
 
-    // Allow the OS a moment to apply SIGKILL.
+    // Marker is written by the leader before exit; content survives on disk even
+    // after group cleanup. Liveness uses /proc state (not kill(0)) so zombies are
+    // not treated as surviving writers.
+    let body = fs::read_to_string(&pid_file).unwrap_or_default();
+    let pid = body.trim().parse::<i32>().unwrap_or(0);
+    if pid <= 1 {
+        // Descendant may have been killed before the leader flushed the marker.
+        return;
+    }
+
+    // Allow the OS a moment to apply SIGKILL / reap.
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut still_alive = true;
     while Instant::now() < deadline {
-        let body = fs::read_to_string(&pid_file).unwrap_or_default();
-        let pid = body.trim().parse::<i32>().unwrap_or(0);
-        if pid <= 1 {
-            // Descendant may have been killed before writing the pid file.
-            still_alive = false;
-            break;
-        }
-        // kill(pid, 0) probes existence.
-        let exists = unsafe { libc::kill(pid, 0) } == 0;
-        if !exists {
+        if !live_non_zombie_process(pid) {
             still_alive = false;
             break;
         }
@@ -301,8 +308,64 @@ fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
     }
     assert!(
         !still_alive,
-        "descendant that retained stderr must be reaped after version probe"
+        "descendant pid {pid} that retained stderr must be gone or reaped after version probe"
     );
+}
+
+/// True if `/proc/<pid>` exists in a non-zombie state (running/sleeping/etc.).
+///
+/// Prefer this over `kill(pid, 0)`: zombies still "exist" for kill(0) but are not
+/// live writers, and pure existence checks cannot distinguish PID reuse without
+/// `/proc` starttime — here "still alive" means a non-zombie task table entry.
+fn live_non_zombie_process(pid: i32) -> bool {
+    if pid <= 1 {
+        return false;
+    }
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // Format: pid (comm) state ppid ...
+    let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {
+        return false;
+    };
+    let Some(state) = rest
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.chars().next())
+    else {
+        return false;
+    };
+    state != 'Z'
+}
+
+#[test]
+fn install_verification_detects_stale_shadow_in_non_utf8_path_component() {
+    // A higher-priority PATH directory whose name is not valid UTF-8 must still
+    // participate in resolution. Lossy conversion to String would replace the
+    // invalid bytes with U+FFFD and skip the real shadow directory.
+    let temp = TempDir::new().unwrap();
+    let mut shadow_bytes = temp.path().as_os_str().as_bytes().to_vec();
+    shadow_bytes.push(b'/');
+    shadow_bytes.extend_from_slice(b"sha\xffdow");
+    let shadow = PathBuf::from(OsString::from_vec(shadow_bytes));
+    let target_dir = temp.path().join("target");
+    fs::create_dir_all(&shadow).unwrap();
+    fs::create_dir_all(&target_dir).unwrap();
+
+    let stale = write_csa(&shadow, "csa 0.1.1094 (non-utf8-shadow)");
+    let target = write_csa(&target_dir, "csa 0.1.1095 (fresh)");
+
+    let path_os = std::env::join_paths([&shadow, &target_dir]).unwrap();
+    let report = inspect_os(path_os.as_os_str(), &target, &target).unwrap();
+
+    assert_eq!(
+        report.status,
+        InstallProvenanceStatus::StaleShadow,
+        "non-UTF-8 higher-priority PATH dir must still resolve the stale shadow"
+    );
+    assert_eq!(report.path_resolved, stale);
+    assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
+    assert!(!report.is_current());
 }
 
 #[test]

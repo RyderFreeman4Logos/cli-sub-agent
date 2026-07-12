@@ -128,6 +128,11 @@ assert_not_contains "$inject_dry" 'd="$(printf injected)"' "install_dir is not d
 # quote() yields a single-quoted shell literal (or escaped equivalent).
 assert_contains "$inject_dry" "d='" "install_dir assignment uses shell quoting"
 
+# Post-install weave version probe must use the just-built artifact path, never
+# a bare PATH-resolved `weave` (PATH-shadowed weave must not execute).
+assert_contains "$pos_dry" '"$t/release/weave" --version' "install versions built weave by explicit path"
+assert_not_contains "$pos_dry" $'\nweave --version' "install must not PATH-resolve bare weave --version"
+
 # ---------------------------------------------------------------------------
 # Hook ordering with fake tools
 # ---------------------------------------------------------------------------
