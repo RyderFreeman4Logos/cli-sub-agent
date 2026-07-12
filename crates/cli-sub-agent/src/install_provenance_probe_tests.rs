@@ -213,175 +213,9 @@ fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
     }
 }
 
-/// True if `/proc/<pid>` exists in a non-zombie state (running/sleeping/etc.).
-///
-/// Linux-only helper used as a secondary check alongside the portable heartbeat
-/// assertion. Prefer heartbeat growth for cross-Unix coverage: zombies still
-/// "exist" for kill(0) but are not live writers.
-#[cfg(target_os = "linux")]
-fn live_non_zombie_process(pid: i32) -> bool {
-    if pid <= 1 {
-        return false;
-    }
-    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        // Missing /proc entry means not live — on Linux this is authoritative.
-        return false;
-    };
-    // Format: pid (comm) state ppid ...
-    let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {
-        return false;
-    };
-    let Some(state) = rest
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.chars().next())
-    else {
-        return false;
-    };
-    state != 'Z'
-}
-
-/// Portable: process exists (including zombies). Used to assert we did **not**
-/// SIGKILL a still-owned or already-reaped identity when ownership is unknown.
-fn process_exists(pid: u32) -> bool {
-    if pid <= 1 {
-        return false;
-    }
-    // SAFETY: kill(pid, 0) is a pure existence/permission probe.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    rc == 0
-}
-
-/// Bound for test-only leader reap after group SIGKILL. Never use unbounded
-/// `waitpid(..., 0)` alone — that can hang the suite if the leader becomes
-/// unreapable under abnormal kernel conditions.
-const FORCE_REAP_BOUND: Duration = Duration::from_secs(2);
-
-/// Test-only cleanup for fixtures still owned by this process.
-///
-/// 1. SIGKILL the whole process group (`-leader`) while the unreaped leader
-///    still anchors the PGID (descendants such as `sleep` must not orphan).
-/// 2. Exact-child SIGKILL as a fallback if group delivery is denied.
-/// 3. Bounded, EINTR-safe `waitpid(..., WNOHANG)` loop — never block forever.
-fn force_kill_and_reap(pid: u32) {
-    if pid <= 1 {
-        return;
-    }
-    let leader = pid as libc::pid_t;
-    // SAFETY: fixtures we still own as parent. Leader is unreaped, so its PID
-    // remains the process-group anchor created via `process_group(0)`.
-    unsafe {
-        let _ = libc::kill(-leader, libc::SIGKILL);
-        let _ = libc::kill(leader, libc::SIGKILL);
-    }
-
-    let deadline = Instant::now() + FORCE_REAP_BOUND;
-    loop {
-        let mut status: libc::c_int = 0;
-        // SAFETY: waitpid on our unreaped child; status is stack storage; WNOHANG.
-        let rc = unsafe { libc::waitpid(leader, &mut status, libc::WNOHANG) };
-        if rc == leader {
-            return;
-        }
-        if rc == -1 {
-            let errno = std::io::Error::last_os_error().raw_os_error();
-            if errno == Some(libc::EINTR) {
-                continue;
-            }
-            // ECHILD / other: already reaped or not our child.
-            return;
-        }
-        // rc == 0: still running
-        if Instant::now() >= deadline {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-/// After `force_kill_and_reap`, assert leader and a recorded descendant are gone.
-fn assert_group_cleaned(leader: u32, descendant: u32) {
-    let deadline = Instant::now() + FORCE_REAP_BOUND;
-    while Instant::now() < deadline && (process_exists(leader) || process_exists(descendant)) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(
-        !process_exists(leader),
-        "leader pid {leader} must be gone after group cleanup"
-    );
-    assert!(
-        !process_exists(descendant),
-        "descendant pid {descendant} must not orphan after group SIGKILL"
-    );
-}
-
-/// Spawn a hang fixture in its own process group that records a long-lived
-/// descendant PID + heartbeat (not an ephemeral `sleep 60` alone).
-fn spawn_hang_group_with_descendant(
-    temp: &Path,
-) -> (
-    std::process::Child,
-    u32, /* leader */
-    u32, /* descendant */
-) {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-
-    let pid_file = temp.join("descendant.pid");
-    let hb = temp.join("descendant.hb");
-    let shell = format!(
-        "trap '' TERM\n\
-         (while true; do date +%s >'{hb}'; sleep 1; done) &\n\
-         echo $! >'{pid}'\n\
-         while true; do sleep 60; done\n",
-        hb = hb.display(),
-        pid = pid_file.display(),
-    );
-
-    let child = Command::new("sh")
-        .args(["-c", &shell])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .expect("spawn hang fixture with descendant");
-    let leader = child.id();
-
-    let deadline = Instant::now() + FORCE_REAP_BOUND;
-    let mut descendant = 0u32;
-    while Instant::now() < deadline {
-        if let Ok(s) = fs::read_to_string(&pid_file) {
-            if let Ok(p) = s.trim().parse::<u32>() {
-                if p > 1 {
-                    descendant = p;
-                    break;
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(
-        descendant > 1,
-        "descendant pid must be recorded under {}",
-        pid_file.display()
-    );
-
-    let hb_deadline = Instant::now() + FORCE_REAP_BOUND;
-    while Instant::now() < hb_deadline && !hb.exists() {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(
-        hb.exists(),
-        "descendant must write heartbeat before ownership-unknown assertions"
-    );
-    assert!(
-        process_exists(leader) && process_exists(descendant),
-        "leader and descendant must both be alive before probe cleanup"
-    );
-
-    (child, leader, descendant)
-}
+#[path = "install_provenance_probe_hang_group.rs"]
+mod hang_group;
+use hang_group::*;
 
 /// Round-5 HIGH: wait-state unknown must not emit PID or negative-PGID signals.
 ///
@@ -394,7 +228,9 @@ fn spawn_hang_group_with_descendant(
 #[test]
 fn version_probe_ownership_unknown_emits_no_pid_or_pgid_signal() {
     let temp = TempDir::new().unwrap();
-    let (child, pid, descendant) = spawn_hang_group_with_descendant(temp.path());
+    let (child, cleanup) = spawn_hang_group_with_descendant(temp.path());
+    let pid = cleanup.leader();
+    let descendant = cleanup.descendant();
 
     let mut session = super::VersionProbeSession::new(child);
     // Simulate poll_version_probe's waitid failure path.
@@ -416,15 +252,18 @@ fn version_probe_ownership_unknown_emits_no_pid_or_pgid_signal() {
         "ownership-unknown cleanup must not SIGTERM/SIGKILL pid {pid} or descendant {descendant}"
     );
 
-    force_kill_and_reap(pid);
-    assert_group_cleaned(pid, descendant);
+    // Happy path: explicit cleanup + identity-safe assert; Drop disarmed.
+    // On any panic above, HangGroupCleanup::Drop still group-kills the fixture.
+    cleanup.force_kill_reap_and_assert();
 }
 
 /// Drop path after wait-state loss must also refuse group signals.
 #[test]
 fn version_probe_drop_after_ownership_unknown_does_not_signal() {
     let temp = TempDir::new().unwrap();
-    let (child, pid, descendant) = spawn_hang_group_with_descendant(temp.path());
+    let (child, cleanup) = spawn_hang_group_with_descendant(temp.path());
+    let pid = cleanup.leader();
+    let descendant = cleanup.descendant();
 
     {
         let mut session = super::VersionProbeSession::new(child);
@@ -436,8 +275,7 @@ fn version_probe_drop_after_ownership_unknown_does_not_signal() {
         process_exists(pid) && process_exists(descendant),
         "Drop after ownership-unknown must not kill pid {pid} or descendant {descendant}"
     );
-    force_kill_and_reap(pid);
-    assert_group_cleaned(pid, descendant);
+    cleanup.force_kill_reap_and_assert();
 }
 
 /// Output-stat errors still own the leader: cleanup must kill the process group.
@@ -487,7 +325,7 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
     test_hooks::clear();
 
     let temp = TempDir::new().unwrap();
-    // Long-lived descendant (heartbeat) so test cleanup can assert group kill.
+    // Long-lived append-heartbeat descendant so RAII cleanup can assert growth stop.
     let pid_file = temp.path().join("descendant.pid");
     let hb = temp.path().join("descendant.hb");
     let hanging = write_script(
@@ -496,7 +334,7 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
         &format!(
             "#!/bin/sh\n\
              trap '' TERM\n\
-             (while true; do date +%s >'{hb}'; sleep 1; done) &\n\
+             (while true; do printf 'x' >>'{hb}'; sleep 0.05; done) &\n\
              echo $! >'{pid}'\n\
              while true; do sleep 60; done\n",
             hb = hb.display(),
@@ -516,6 +354,8 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
 
     let child = cmd.spawn().expect("spawn hang fixture");
     let pid = child.id();
+    // Arm RAII immediately so assert/poll panics cannot leak the hang group.
+    let mut cleanup = HangGroupCleanup::new(pid, 0, hb);
 
     let deadline = Instant::now() + FORCE_REAP_BOUND;
     let mut descendant = 0u32;
@@ -534,6 +374,7 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
         descendant > 1 && process_exists(pid) && process_exists(descendant),
         "fixture leader and descendant must start before waitid inject"
     );
+    cleanup.bind_descendant(descendant);
 
     // Inject ECHILD on the next waitid call inside the poll loop.
     test_hooks::force_waitid_once(Err(std::io::Error::from_raw_os_error(libc::ECHILD)));
@@ -558,7 +399,6 @@ fn version_probe_waitid_echild_does_not_signal_process_group() {
         "waitid ECHILD path must not signal pid/pgid {pid} or descendant {descendant}"
     );
 
-    force_kill_and_reap(pid);
-    assert_group_cleaned(pid, descendant);
+    cleanup.force_kill_reap_and_assert();
     test_hooks::clear();
 }
