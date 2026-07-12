@@ -29,6 +29,15 @@ fn dev2merge_workflow_step_bash(title: &str) -> String {
         .to_string()
 }
 
+fn dev2merge_bundled_helper(name: &str) -> String {
+    std::fs::read_to_string(
+        workspace_root()
+            .join("patterns/dev2merge/scripts/csa")
+            .join(name),
+    )
+    .unwrap_or_else(|error| panic!("read bundled dev2merge helper {name}: {error}"))
+}
+
 fn markdown_step_section<'a>(content: &'a str, heading: &str) -> &'a str {
     let start = content
         .find(heading)
@@ -253,7 +262,12 @@ fn dev2merge_cumulative_review_gates_use_bundled_helpers() {
 
 #[test]
 fn dev2merge_plan_step_resolves_mktd_by_pattern_unless_explicit_path_set() {
-    let script = dev2merge_workflow_step_bash("Plan with mktd");
+    let wrapper = dev2merge_workflow_step_bash("Plan with mktd");
+    assert!(
+        wrapper.contains("${CSA_WORKFLOW_DIR:-patterns/dev2merge}/scripts/csa/plan-with-mktd.sh"),
+        "Step 7 must invoke the bundled helper through CSA_WORKFLOW_DIR"
+    );
+    let script = dev2merge_bundled_helper("plan-with-mktd.sh");
 
     assert!(
         script.contains("CSA_BIN=\"${CSA_BIN:-csa}\""),
