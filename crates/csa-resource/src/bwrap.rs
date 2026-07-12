@@ -271,6 +271,6 @@ fn resolve_for_bind(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 #[path = "bwrap_tests.rs"]
 mod tests;
