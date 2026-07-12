@@ -190,8 +190,14 @@ CSA_TEST_ORDER_FILE="$order3" \
     bash "$HOOK"
 rc=$?
 set -e
-assert_eq "$rc" "0" "non-writable skip exit 0"
-assert_eq "$(cat "$order3")" "" "non-writable skip no tools"
+if [ "$(id -u)" -eq 0 ]; then
+    # Root retains write via DAC override; `test -w` succeeds and the hook runs.
+    assert_eq "$rc" "0" "root non-mode-writable still proceeds exit 0"
+    assert_contains "$(cat "$order3")" "just install $install_dir3" "root proceeds to install"
+else
+    assert_eq "$rc" "0" "non-writable skip exit 0"
+    assert_eq "$(cat "$order3")" "" "non-writable skip no tools"
+fi
 chmod u+w "$install_dir3" 2>/dev/null || true
 
 echo "== install failure: no cargo clean =="

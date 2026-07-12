@@ -42,6 +42,14 @@ fn path(entries: &[&Path]) -> String {
         .unwrap()
 }
 
+/// Whether the current process is effectively root (UID 0). Root / CAP_DAC_OVERRIDE
+/// retains write and can execute any file with any execute bit — DAC-dependent
+/// tests must be privilege-aware so privileged containers stay green.
+fn is_effective_root() -> bool {
+    // SAFETY: geteuid has no preconditions and returns the caller's euid.
+    unsafe { libc::geteuid() == 0 }
+}
+
 #[test]
 fn install_verification_rejects_stale_higher_priority_path_shadow() {
     let temp = TempDir::new().unwrap();
@@ -135,11 +143,20 @@ fn install_verification_reports_unsafe_non_writable_shadow_without_overwriting_i
 
     let report = inspect(&path(&[&shadow, &target_dir]), &target, &target).unwrap();
 
-    assert_eq!(report.status, InstallProvenanceStatus::UnsafeShadow);
+    // Hash mismatch + no execute of untrusted shadow either way.
     assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
     assert!(!marker.exists(), "unsafe shadow must not be executed");
-    assert!(report.diagnostic().contains("not writable"));
-    assert!(report.diagnostic().contains("will not overwrite"));
+
+    if is_effective_root() {
+        // Root retains write via DAC override; production correctly classifies
+        // the shadow as writable StaleShadow (would overwrite) not UnsafeShadow.
+        assert_eq!(report.status, InstallProvenanceStatus::StaleShadow);
+        assert!(is_writable(&stale).unwrap());
+    } else {
+        assert_eq!(report.status, InstallProvenanceStatus::UnsafeShadow);
+        assert!(report.diagnostic().contains("not writable"));
+        assert!(report.diagnostic().contains("will not overwrite"));
+    }
 }
 
 #[test]
@@ -155,19 +172,33 @@ fn is_writable_uses_effective_access_not_mere_mode_bits() {
         "owner-writable file should be effectively writable"
     );
 
-    // No write bits at all → not effectively writable (and mode & 0o222 == 0).
+    // No write bits at all — unprivileged callers fail; root retains write.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
-    assert!(
-        !is_writable(&path).unwrap(),
-        "read-only file must not be classified as writable"
-    );
+    if is_effective_root() {
+        assert!(
+            is_writable(&path).unwrap(),
+            "root retains write on 0444 via DAC override (access W_OK)"
+        );
+    } else {
+        assert!(
+            !is_writable(&path).unwrap(),
+            "read-only file must not be classified as writable"
+        );
+    }
 
-    // 0555: no write bit for anyone — effective access fails.
+    // 0555: no write bit for anyone — same privilege split.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o555)).unwrap();
-    assert!(
-        !is_writable(&path).unwrap(),
-        "0555 must not be effectively writable"
-    );
+    if is_effective_root() {
+        assert!(
+            is_writable(&path).unwrap(),
+            "root retains write on 0555 via DAC override (access W_OK)"
+        );
+    } else {
+        assert!(
+            !is_writable(&path).unwrap(),
+            "0555 must not be effectively writable"
+        );
+    }
 
     // Restore for TempDir cleanup.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -206,7 +237,8 @@ fn install_verification_detects_stale_shadow_in_non_utf8_path_component() {
 #[test]
 fn path_lookup_skips_owner_unexecutable_mode_bits() {
     // 0401: owner-read + other-execute. Mode-bit heuristics wrongly accept this;
-    // execvp / access(X_OK) as the owner do not.
+    // execvp / access(X_OK) as the unprivileged owner do not. Root can execute
+    // any file that has any execute bit, so resolution is privilege-aware.
     let temp = TempDir::new().unwrap();
     let bad = temp.path().join("early");
     let good = temp.path().join("late");
@@ -218,8 +250,15 @@ fn path_lookup_skips_owner_unexecutable_mode_bits() {
     let good_bin = write_csa(&good, "csa 0.1.0 (good)");
 
     let report = inspect(&path(&[&bad, &good]), &good_bin, &good_bin).unwrap();
-    assert_eq!(report.path_resolved, good_bin);
-    assert_eq!(report.status, InstallProvenanceStatus::Current);
+    if is_effective_root() {
+        // Root X_OK succeeds on 0401; hash mismatch → StaleShadow (root can write).
+        assert_eq!(report.path_resolved, bad_bin);
+        assert_eq!(report.status, InstallProvenanceStatus::StaleShadow);
+        assert_eq!(report.version_output, NOT_EXECUTED_MISMATCH);
+    } else {
+        assert_eq!(report.path_resolved, good_bin);
+        assert_eq!(report.status, InstallProvenanceStatus::Current);
+    }
 }
 
 #[test]
