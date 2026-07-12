@@ -108,8 +108,11 @@ run_hook() {
 # Real Just recipe semantics (not the fake just used for hook ordering).
 # ---------------------------------------------------------------------------
 echo "== real Just install argument semantics =="
-tmp_semantics="$(mktemp -d)"
-trap 'rm -rf "$tmp_semantics"' EXIT
+# All fixtures live under one parent so EXIT cannot leak tmp dirs (tmp..tmp6).
+tmp_root="$(mktemp -d)"
+trap 'rm -rf "$tmp_root"' EXIT
+tmp_semantics="$tmp_root/semantics"
+mkdir -p "$tmp_semantics"
 
 pos_dry="$(cd "$ROOT" && just --dry-run install /tmp/csa-install-pos 2>&1)"
 assert_contains "$pos_dry" "d='/tmp/csa-install-pos'" "positional install_dir sets d= path"
@@ -129,7 +132,8 @@ assert_contains "$inject_dry" "d='" "install_dir assignment uses shell quoting"
 # Hook ordering with fake tools
 # ---------------------------------------------------------------------------
 echo "== post-merge success: install then clean =="
-tmp="$(mktemp -d)"
+tmp="$tmp_root/t1"
+mkdir -p "$tmp"
 install_dir="$tmp/bin"
 mkdir -p "$install_dir"
 order="$tmp/order"
@@ -145,7 +149,8 @@ assert_contains "$order_body" $'just install '"$install_dir"$'\ncargo clean' "or
 assert_not_contains "$order_body" "install_dir=" "hook uses positional install_dir, not install_dir= keyword-as-positional"
 
 echo "== skip when CSA_SESSION_ID set =="
-tmp2="$(mktemp -d)"
+tmp2="$tmp_root/t2"
+mkdir -p "$tmp2"
 install_dir2="$tmp2/bin"
 mkdir -p "$install_dir2"
 order2="$tmp2/order"
@@ -164,7 +169,8 @@ assert_eq "$rc" "0" "session skip exit 0"
 assert_eq "$(cat "$order2")" "" "session skip no tools"
 
 echo "== skip when install dir not writable =="
-tmp3="$(mktemp -d)"
+tmp3="$tmp_root/t3"
+mkdir -p "$tmp3"
 install_dir3="$tmp3/ro"
 mkdir -p "$install_dir3"
 chmod a-w "$install_dir3"
@@ -184,7 +190,8 @@ assert_eq "$(cat "$order3")" "" "non-writable skip no tools"
 chmod u+w "$install_dir3" 2>/dev/null || true
 
 echo "== install failure: no cargo clean =="
-tmp4="$(mktemp -d)"
+tmp4="$tmp_root/t4"
+mkdir -p "$tmp4"
 install_dir4="$tmp4/bin"
 mkdir -p "$install_dir4"
 order4="$tmp4/order"
@@ -200,7 +207,8 @@ assert_contains "$order_body4" "just install $install_dir4" "install attempted"
 assert_not_contains "$order_body4" "cargo clean" "clean skipped on install failure"
 
 echo "== partial: install ok, clean fails =="
-tmp5="$(mktemp -d)"
+tmp5="$tmp_root/t5"
+mkdir -p "$tmp5"
 install_dir5="$tmp5/bin"
 mkdir -p "$install_dir5"
 order5="$tmp5/order"
@@ -215,7 +223,8 @@ order_body5="$(cat "$order5")"
 assert_contains "$order_body5" $'just install '"$install_dir5"$'\ncargo clean' "order partial install then clean"
 
 echo "== concurrent-safe order files (no clobber) =="
-tmp6="$(mktemp -d)"
+tmp6="$tmp_root/t6"
+mkdir -p "$tmp6"
 install_dir6="$tmp6/bin"
 mkdir -p "$install_dir6"
 order6a="$tmp6/order-a"

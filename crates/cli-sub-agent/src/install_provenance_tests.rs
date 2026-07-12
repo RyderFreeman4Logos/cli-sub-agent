@@ -5,7 +5,7 @@ use super::{
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn write_csa(dir: &Path, version: &str) -> std::path::PathBuf {
@@ -185,14 +185,21 @@ fn version_probe_times_out_and_reaps_hanging_binary() {
     let hanging = write_script(
         temp.path(),
         "hang",
-        "#!/bin/sh\n# Ignore --version and hang forever.\nwhile true; do sleep 60; done\n",
+        // Ignore SIGTERM so only the SIGKILL escalation reaps the hang.
+        "#!/bin/sh\ntrap '' TERM\n# Ignore --version and hang forever.\nwhile true; do sleep 60; done\n",
     );
 
+    let start = Instant::now();
     let err = version_output_with_limits(&hanging, Duration::from_millis(250), 4096).unwrap_err();
+    let elapsed = start.elapsed();
     let msg = err.to_string();
     assert!(
         msg.contains("timed out"),
         "expected timeout diagnostic, got: {msg}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "timeout cleanup took too long: {elapsed:?}"
     );
 }
 
@@ -217,6 +224,104 @@ fn version_probe_rejects_unbounded_output() {
         msg.contains("256"),
         "size bound should appear in error: {msg}"
     );
+}
+
+#[test]
+fn version_probe_rejects_oversized_stderr_after_success_exit() {
+    let temp = TempDir::new().unwrap();
+    // Leader prints valid version on stdout but floods stderr beyond the cap.
+    let spam = write_script(
+        temp.path(),
+        "stderr-spam",
+        "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 64 ]; do\n  printf 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' >&2\n  i=$((i + 1))\ndone\necho 'csa 0.1.0 (ok)'\n",
+    );
+
+    let err = version_output_with_limits(&spam, Duration::from_secs(5), 256).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("more than") && msg.contains("256"),
+        "expected stderr size-bound diagnostic, got: {msg}"
+    );
+}
+
+#[test]
+fn version_probe_fast_exit_returns_version() {
+    let temp = TempDir::new().unwrap();
+    let path = write_script(
+        temp.path(),
+        "fast",
+        "#!/bin/sh\necho 'csa 0.1.1095 (fast)'\n",
+    );
+    let start = Instant::now();
+    let out = version_output_with_limits(&path, Duration::from_secs(2), 1024).unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(out, "csa 0.1.1095 (fast)");
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "fast-exit probe should not wait full TERM grace: {elapsed:?}"
+    );
+}
+
+#[test]
+fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
+    let temp = TempDir::new().unwrap();
+    let pid_file = temp.path().join("descendant.pid");
+    let pid_path = pid_file.display().to_string();
+    // Leader exits 0 with a valid version while a descendant keeps writing stderr.
+    // Prior bug: Ok(Some(status)) reaped the leader and never cleaned the group.
+    let path = write_script(
+        temp.path(),
+        "descendant-stderr",
+        &format!(
+            "#!/bin/sh\n(\n  echo $$ > '{pid_path}'\n  while true; do\n    printf 'z' >&2\n    sleep 0.05\n  done\n) &\necho 'csa 0.1.0 (leader-ok)'\nexit 0\n"
+        ),
+    );
+
+    let out = version_output_with_limits(&path, Duration::from_secs(2), 64 * 1024).unwrap();
+    assert_eq!(out, "csa 0.1.0 (leader-ok)");
+
+    // Allow the OS a moment to apply SIGKILL.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut still_alive = true;
+    while Instant::now() < deadline {
+        let body = fs::read_to_string(&pid_file).unwrap_or_default();
+        let pid = body.trim().parse::<i32>().unwrap_or(0);
+        if pid <= 1 {
+            // Descendant may have been killed before writing the pid file.
+            still_alive = false;
+            break;
+        }
+        // kill(pid, 0) probes existence.
+        let exists = unsafe { libc::kill(pid, 0) } == 0;
+        if !exists {
+            still_alive = false;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !still_alive,
+        "descendant that retained stderr must be reaped after version probe"
+    );
+}
+
+#[test]
+fn path_lookup_skips_owner_unexecutable_mode_bits() {
+    // 0401: owner-read + other-execute. Mode-bit heuristics wrongly accept this;
+    // execvp / access(X_OK) as the owner do not.
+    let temp = TempDir::new().unwrap();
+    let bad = temp.path().join("early");
+    let good = temp.path().join("late");
+    fs::create_dir_all(&bad).unwrap();
+    fs::create_dir_all(&good).unwrap();
+    let bad_bin = bad.join("csa");
+    fs::write(&bad_bin, b"#!/bin/sh\necho should-not-run\n").unwrap();
+    fs::set_permissions(&bad_bin, fs::Permissions::from_mode(0o401)).unwrap();
+    let good_bin = write_csa(&good, "csa 0.1.0 (good)");
+
+    let report = inspect(&path(&[&bad, &good]), &good_bin, &good_bin).unwrap();
+    assert_eq!(report.path_resolved, good_bin);
+    assert_eq!(report.status, InstallProvenanceStatus::Current);
 }
 
 #[test]

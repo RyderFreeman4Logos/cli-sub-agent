@@ -7,10 +7,11 @@
 
 use anyhow::{Context, Result, bail};
 use std::env;
+#[cfg(not(unix))]
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::audit::hash::hash_file;
@@ -19,6 +20,9 @@ use crate::audit::hash::hash_file;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cap stdout/stderr growth so a hostile/hung artifact cannot exhaust memory.
 const VERSION_PROBE_MAX_BYTES: usize = 64 * 1024;
+/// Grace between SIGTERM and SIGKILL while the unreaped leader still anchors the PGID.
+const VERSION_PROBE_TERM_GRACE: Duration = Duration::from_millis(100);
+const VERSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Stable marker when a mismatched PATH binary was intentionally not executed.
 pub(crate) const NOT_EXECUTED_MISMATCH: &str =
@@ -185,47 +189,10 @@ pub(crate) fn inspect(
 }
 
 fn resolve_from_path(path: &str) -> Result<PathBuf> {
-    for directory in env::split_paths(path) {
-        for name in binary_candidates() {
-            let candidate = directory.join(name);
-            if is_executable_file(&candidate)? {
-                return Ok(candidate);
-            }
-        }
-    }
-    bail!("could not resolve `csa` from PATH")
-}
-
-/// Platform-aware executable names searched on PATH.
-fn binary_candidates() -> &'static [&'static str] {
-    #[cfg(windows)]
-    {
-        // Prefer PATHEXT-typical names; bare `csa` last for rare no-extension cases.
-        &["csa.exe", "csa.cmd", "csa.bat", "csa"]
-    }
-    #[cfg(not(windows))]
-    {
-        &["csa"]
-    }
-}
-
-fn is_executable_file(path: &Path) -> Result<bool> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
-        }
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Ok(metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(metadata.is_file())
-    }
+    // Use OS-equivalent lookup: Unix effective execute checks (access/X_OK) and
+    // Windows PATHEXT ordering via the `which` crate — not mode-bit heuristics.
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    which::which_in("csa", Some(path), cwd).with_context(|| "could not resolve `csa` from PATH")
 }
 
 /// Whether the *current process* has effective write access to `path`.
@@ -253,9 +220,130 @@ fn version_output(path: &Path) -> Result<String> {
     version_output_with_limits(path, VERSION_PROBE_TIMEOUT, VERSION_PROBE_MAX_BYTES)
 }
 
-/// Bounded `--version` probe: timeout, output size cap, and child reaping.
+/// Why the wait loop stopped. Group cleanup always runs afterward while the
+/// unreaped leader still anchors the process group (Unix).
+#[derive(Debug)]
+enum ProbeStopReason {
+    LeaderExited,
+    TimedOut,
+    OutputTooLarge,
+    WaitError(std::io::Error),
+}
+
+/// Owns a version-probe child and enforces process-group cleanup ownership rules.
+///
+/// On Unix, negative-PGID signals are legal only while the group leader remains
+/// unreaped. Reaping first can free the numeric PID/PGID for reuse by an
+/// unrelated process group — never signal `-pgid` after the leader is reaped.
+struct VersionProbeSession {
+    /// Present until the leader has been reaped (or Drop fails closed).
+    child: Option<Child>,
+    /// Cached leader status when reaped early (non-Unix `try_wait` path).
+    reaped_status: Option<ExitStatus>,
+}
+
+impl VersionProbeSession {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            reaped_status: None,
+        }
+    }
+
+    fn child_mut(&mut self) -> Option<&mut Child> {
+        self.child.as_mut()
+    }
+
+    /// Signal remaining probe processes while the leader is still unreaped.
+    ///
+    /// - When the leader already exited (Unix WNOWAIT path): SIGKILL the group
+    ///   immediately to reap descendants that may still hold stdout/stderr FDs.
+    /// - When the leader is still running (timeout / oversized output): SIGTERM,
+    ///   grace window (leader still unreaped), then SIGKILL.
+    /// - No-op if the leader was already reaped (non-Unix `try_wait` path).
+    fn terminate_group_while_owned(&mut self, leader_already_exited: bool) {
+        let Some(child) = self.child.as_mut() else {
+            // Already reaped — never signal a negative PGID after ownership loss.
+            return;
+        };
+        let pid = child.id();
+        if pid <= 1 {
+            return;
+        }
+
+        #[cfg(unix)]
+        {
+            let pgid = -(pid as libc::pid_t);
+            if !leader_already_exited {
+                // SAFETY: leader is still unreaped, so its PID remains the process-group
+                // anchor created via `process_group(0)`. Negative PGID targets that group.
+                let _ = unsafe { libc::kill(pgid, libc::SIGTERM) };
+                std::thread::sleep(VERSION_PROBE_TERM_GRACE);
+            }
+            // Leader still unreaped — safe for final group KILL (no post-reap -pgid).
+            let kill_rc = unsafe { libc::kill(pgid, libc::SIGKILL) };
+            if kill_rc != 0 {
+                // ESRCH: group already empty. Other errors: fall back to exact child kill.
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::ESRCH) {
+                    let _ = child.kill();
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = leader_already_exited;
+            let _ = child.kill();
+        }
+    }
+
+    fn reap_leader(&mut self) -> Result<ExitStatus> {
+        if let Some(status) = self.reaped_status {
+            return Ok(status);
+        }
+        let mut child = self
+            .child
+            .take()
+            .context("version probe leader already reaped")?;
+        let status = child
+            .wait()
+            .context("failed to reap version probe leader")?;
+        self.reaped_status = Some(status);
+        Ok(status)
+    }
+
+    /// Terminate remaining group members (while owned), then reap the leader.
+    fn finish(mut self, stop: &ProbeStopReason) -> Result<ExitStatus> {
+        let leader_already_exited = matches!(stop, ProbeStopReason::LeaderExited);
+        self.terminate_group_while_owned(leader_already_exited);
+        self.reap_leader()
+    }
+}
+
+impl Drop for VersionProbeSession {
+    fn drop(&mut self) {
+        if self.child.is_none() {
+            return;
+        }
+        // Fail-closed cleanup: escalate as if the probe is still live.
+        self.terminate_group_while_owned(false);
+        if let Some(mut child) = self.child.take() {
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Bounded `--version` probe: timeout, dual-stream size cap, process-group lifecycle.
 ///
 /// Trusted paths only (callers enforce). Never mutates PATH entries.
+///
+/// Lifecycle:
+/// 1. Spawn in a new process group (Unix) so descendants share the leader PGID.
+/// 2. Poll until leader exit / timeout / stdout|stderr size breach — on Unix,
+///    detect exit with `waitid(WNOWAIT)` so the leader stays unreaped.
+/// 3. SIGTERM → grace → SIGKILL the process group while the leader is still owned.
+/// 4. Reap the leader exactly once; never signal a negative PGID after reaping.
+/// 5. Enforce both stream caps on the captured output (tempfile-backed; no reader threads).
 fn version_output_with_limits(path: &Path, timeout: Duration, max_bytes: usize) -> Result<String> {
     let mut stdout_file =
         tempfile::tempfile().context("failed to allocate version probe stdout buffer")?;
@@ -276,47 +364,63 @@ fn version_output_with_limits(path: &Path, timeout: Duration, max_bytes: usize) 
                 .context("failed to clone version probe stderr")?,
         ));
 
-    // Isolate process group so timeout kills the probe and any grandchildren.
+    // Isolate process group so cleanup can terminate the probe and grandchildren.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
 
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .with_context(|| format!("failed to run {} --version", path.display()))?;
+    let mut session = VersionProbeSession::new(child);
 
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
-                if file_len_exceeds(&stdout_file, max_bytes)?
-                    || file_len_exceeds(&stderr_file, max_bytes)?
-                {
-                    kill_version_probe(&mut child);
-                    bail!(
-                        "{} --version produced more than {} bytes of output",
-                        path.display(),
-                        max_bytes
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) | Err(_) => {
-                kill_version_probe(&mut child);
-                bail!(
-                    "{} --version timed out after {}ms",
-                    path.display(),
-                    timeout.as_millis()
-                );
-            }
+    let stop = poll_version_probe(&mut session, &stdout_file, &stderr_file, timeout, max_bytes);
+
+    // Always clean the group while ownership holds, including the success path
+    // where the leader already exited but descendants may retain stdout/stderr FDs.
+    let status = session.finish(&stop).with_context(|| {
+        format!(
+            "failed to terminate/reap version probe for {}",
+            path.display()
+        )
+    })?;
+
+    match stop {
+        ProbeStopReason::TimedOut => {
+            bail!(
+                "{} --version timed out after {}ms",
+                path.display(),
+                timeout.as_millis()
+            );
         }
-    };
+        ProbeStopReason::OutputTooLarge => {
+            bail!(
+                "{} --version produced more than {} bytes of output",
+                path.display(),
+                max_bytes
+            );
+        }
+        ProbeStopReason::WaitError(error) => {
+            return Err(error)
+                .with_context(|| format!("failed waiting for {} --version", path.display()));
+        }
+        ProbeStopReason::LeaderExited => {}
+    }
 
     if !status.success() {
         bail!("{} --version exited with {}", path.display(), status);
+    }
+
+    // Post-completion dual-stream cap: descendants may have written after the
+    // leader closed its own FDs but before group cleanup completed.
+    if file_len_exceeds(&stdout_file, max_bytes)? || file_len_exceeds(&stderr_file, max_bytes)? {
+        bail!(
+            "{} --version produced more than {} bytes of output",
+            path.display(),
+            max_bytes
+        );
     }
 
     let mut stdout_bytes = Vec::new();
@@ -339,27 +443,122 @@ fn version_output_with_limits(path: &Path, timeout: Duration, max_bytes: usize) 
         .context("csa --version returned non-UTF-8 output")
 }
 
+fn poll_version_probe(
+    session: &mut VersionProbeSession,
+    stdout_file: &std::fs::File,
+    stderr_file: &std::fs::File,
+    timeout: Duration,
+    max_bytes: usize,
+) -> ProbeStopReason {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match probe_leader_state(session) {
+            Ok(LeaderPoll::Exited) => return ProbeStopReason::LeaderExited,
+            Ok(LeaderPoll::Running) => {}
+            Err(error) => return ProbeStopReason::WaitError(error),
+        }
+
+        match (
+            file_len_exceeds(stdout_file, max_bytes),
+            file_len_exceeds(stderr_file, max_bytes),
+        ) {
+            (Ok(true), _) | (_, Ok(true)) => return ProbeStopReason::OutputTooLarge,
+            (Err(error), _) | (_, Err(error)) => {
+                // Treat stat failures as wait-path errors so callers fail closed.
+                return ProbeStopReason::WaitError(std::io::Error::other(error.to_string()));
+            }
+            (Ok(false), Ok(false)) => {}
+        }
+
+        if Instant::now() >= deadline {
+            return ProbeStopReason::TimedOut;
+        }
+        std::thread::sleep(
+            VERSION_PROBE_POLL.min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
+enum LeaderPoll {
+    Running,
+    Exited,
+}
+
+/// Inspect leader liveness without releasing process-group ownership on Unix.
+fn probe_leader_state(session: &mut VersionProbeSession) -> std::io::Result<LeaderPoll> {
+    #[cfg(unix)]
+    {
+        let Some(child) = session.child_mut() else {
+            // Already reaped — treat as exited (should not happen on Unix poll path).
+            return Ok(LeaderPoll::Exited);
+        };
+        // WNOWAIT leaves the exited leader waitable so its PID remains the PGID anchor.
+        leader_exited_without_reaping(child.id()).map(|exited| {
+            if exited {
+                LeaderPoll::Exited
+            } else {
+                LeaderPoll::Running
+            }
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        // No process-group ownership model: try_wait reaps the direct child.
+        let wait_result = match session.child.as_mut() {
+            None => return Ok(LeaderPoll::Exited),
+            Some(child) => child.try_wait()?,
+        };
+        match wait_result {
+            Some(status) => {
+                // Consume the handle after try_wait reaped the child.
+                session.child = None;
+                session.reaped_status = Some(status);
+                Ok(LeaderPoll::Exited)
+            }
+            None => Ok(LeaderPoll::Running),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn leader_exited_without_reaping(pid: u32) -> std::io::Result<bool> {
+    if pid <= 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid version probe PID {pid}"),
+        ));
+    }
+    loop {
+        // SAFETY: zeroed siginfo is the documented no-state-change baseline for waitid.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: info points to writable storage; WNOWAIT keeps the child unreaped.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+        // SAFETY: waitid initialized info on success; si_pid == 0 means no change.
+        let exited_pid = unsafe { info.si_pid() };
+        return Ok(exited_pid != 0);
+    }
+}
+
 fn file_len_exceeds(file: &std::fs::File, max_bytes: usize) -> Result<bool> {
     let len = file
         .metadata()
         .context("failed to stat version probe output")?
         .len();
     Ok(len as usize > max_bytes)
-}
-
-fn kill_version_probe(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        // SAFETY: negative pid targets the process group created via process_group(0).
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
 }
 
 #[cfg(all(test, unix))]
