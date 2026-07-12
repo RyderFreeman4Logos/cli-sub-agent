@@ -430,6 +430,12 @@ pub(crate) async fn build_and_validate_executor(
         model_catalog,
     )?;
 
+    #[cfg(test)]
+    let assume_tool_binaries_available =
+        crate::run_helpers::assume_tool_binaries_available_for_tests();
+    #[cfg(not(test))]
+    let assume_tool_binaries_available = false;
+
     if executor.tool_name() == "openai-compat" {
         let model_hint = model_spec.or(model).or(default_model_resolved.as_deref());
         let extra_env = configs.global.and_then(|cfg| {
@@ -447,7 +453,9 @@ pub(crate) async fn build_and_validate_executor(
         if let crate::run_helpers::ToolBinaryAvailability::Missing { hint, .. } = availability {
             anyhow::bail!("OpenAI-compat is not configured.\n\n{hint}");
         }
-    } else if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
+    } else if !assume_tool_binaries_available
+        && let Err(e) = check_tool_installed(executor.runtime_binary_name()).await
+    {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
             executor.tool_name(),

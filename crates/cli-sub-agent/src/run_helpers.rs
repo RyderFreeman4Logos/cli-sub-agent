@@ -76,6 +76,8 @@ pub(crate) use tier_resolution::{
 pub(crate) use token_parse::parse_token_usage;
 #[cfg(test)]
 pub(crate) use token_parse::{extract_cost, extract_number};
+#[cfg(test)]
+pub(crate) use tool_availability::assume_tool_binaries_available_for_tests;
 pub(crate) use tool_availability::{
     ToolBinaryAvailability, is_tool_binary_available_for_config,
     is_tool_runtime_available_for_config_with_env, resolved_claude_code_transport,
