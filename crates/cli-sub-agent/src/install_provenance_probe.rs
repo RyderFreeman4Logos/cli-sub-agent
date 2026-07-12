@@ -113,7 +113,9 @@ impl VersionProbeSession {
                 let _ = unsafe { libc::kill(pgid, libc::SIGTERM) };
                 std::thread::sleep(VERSION_PROBE_TERM_GRACE);
             }
-            // Leader still unreaped — safe for final group KILL (no post-reap -pgid).
+            // SAFETY: leader remains unreaped, so its PID still anchors the process group
+            // created via `process_group(0)`. Final SIGKILL targets that group only
+            // (never after reaping — no post-reap -pgid).
             let kill_rc = unsafe { libc::kill(pgid, libc::SIGKILL) };
             if kill_rc != 0 {
                 // ESRCH: group already empty. Other errors: fall back to exact child kill.
