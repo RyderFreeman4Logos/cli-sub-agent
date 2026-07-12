@@ -194,15 +194,51 @@ fn version_probe_times_out_and_reaps_hanging_binary() {
     let start = Instant::now();
     let err = version_output_with_limits(&hanging, Duration::from_millis(250), 4096).unwrap_err();
     let elapsed = start.elapsed();
-    let msg = err.to_string();
+    let msg = format!("{err:#}");
     assert!(
         msg.contains("timed out"),
         "expected timeout diagnostic, got: {msg}"
     );
+    // Poll (250ms) + TERM grace (100ms) + kill-wait bound (2s) must stay finite.
+    // Never allow unbounded Child::wait() to push this into multi-second hangs
+    // beyond the documented kill-wait ceiling with generous scheduler slack.
     assert!(
-        elapsed < Duration::from_secs(3),
-        "timeout cleanup took too long: {elapsed:?}"
+        elapsed < Duration::from_secs(4),
+        "timeout cleanup took too long (must stay within poll+kill-wait): {elapsed:?}"
     );
+}
+
+/// Direct unit: `wait_and_reap_for_exit` must return within its deadline when the
+/// child remains waitable (simulates post-kill uninterruptible/unreapable leader).
+#[test]
+fn version_probe_reap_wait_is_deadline_bounded() {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("sh")
+        .args(["-c", "trap '' TERM; exec sleep 30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn unreaped sleep fixture");
+
+    let start = Instant::now();
+    let result = super::wait_and_reap_for_exit(&mut child, Duration::from_millis(200))
+        .expect("try_wait poll must not error on a live child");
+    let elapsed = start.elapsed();
+
+    assert!(
+        result.is_none(),
+        "short-bound wait must not reap a still-running child"
+    );
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "bounded try_wait loop must not hang: {elapsed:?}"
+    );
+
+    // Cleanup fixture without relying on the production path under test.
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -268,18 +304,25 @@ fn version_probe_fast_exit_returns_version() {
 fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
     let temp = TempDir::new().unwrap();
     let pid_file = temp.path().join("descendant.pid");
+    let heartbeat = temp.path().join("descendant.heartbeat");
     let pid_path = pid_file.display().to_string();
-    // Leader exits 0 with a valid version while a descendant keeps writing stderr.
-    // Prior bug: Ok(Some(status)) reaped the leader and never cleaned the group.
+    let heartbeat_path = heartbeat.display().to_string();
+    // Leader exits 0 with a valid version while a descendant keeps writing stderr
+    // and a portable heartbeat file. Prior bug: Ok(Some(status)) reaped the
+    // leader and never cleaned the group.
     //
     // Important: record `$!` (the background descendant), NOT `$$`.
     // POSIX `$$` is the main shell PID even inside `( ... )`, so asserting on
     // `$$` can pass after the leader is reaped while the true descendant lives.
+    //
+    // Liveness is proven via heartbeat growth (works on Linux and macOS). The
+    // old `/proc/<pid>/stat` check returned false when `/proc` was missing, so
+    // the regression passed vacuously on macOS.
     let path = write_script(
         temp.path(),
         "descendant-stderr",
         &format!(
-            "#!/bin/sh\n(\n  while true; do\n    printf 'z' >&2\n    sleep 0.05\n  done\n) &\necho $! > '{pid_path}'\necho 'csa 0.1.0 (leader-ok)'\nexit 0\n"
+            "#!/bin/sh\n(\n  while true; do\n    printf 'z' >&2\n    printf 'x' >> '{heartbeat_path}'\n    sleep 0.05\n  done\n) &\necho $! > '{pid_path}'\necho 'csa 0.1.0 (leader-ok)'\nexit 0\n"
         ),
     );
 
@@ -287,41 +330,61 @@ fn version_probe_kills_descendant_that_retains_stderr_after_leader_exit() {
     assert_eq!(out, "csa 0.1.0 (leader-ok)");
 
     // Marker is written by the leader before exit; content survives on disk even
-    // after group cleanup. Liveness uses /proc state (not kill(0)) so zombies are
-    // not treated as surviving writers.
+    // after group cleanup. Missing/invalid PID is a hard failure — never treat
+    // "no evidence" as success (that made the macOS path vacuous).
     let body = fs::read_to_string(&pid_file).unwrap_or_default();
-    let pid = body.trim().parse::<i32>().unwrap_or(0);
-    if pid <= 1 {
-        // Descendant may have been killed before the leader flushed the marker.
-        return;
-    }
-
-    // Allow the OS a moment to apply SIGKILL / reap.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut still_alive = true;
-    while Instant::now() < deadline {
-        if !live_non_zombie_process(pid) {
-            still_alive = false;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let pid = body
+        .trim()
+        .parse::<i32>()
+        .unwrap_or_else(|_| panic!("descendant pid marker must be a valid pid, got {body:?}"));
     assert!(
-        !still_alive,
-        "descendant pid {pid} that retained stderr must be gone or reaped after version probe"
+        pid > 1,
+        "descendant pid marker must be written so the regression is not vacuous (got {body:?})"
     );
+
+    // Portable observable: after cleanup, heartbeat growth must stop across
+    // several former write intervals. Allow the OS a moment to apply SIGKILL.
+    std::thread::sleep(Duration::from_millis(150));
+    let size1 = fs::metadata(&heartbeat).map(|m| m.len()).unwrap_or(0);
+    std::thread::sleep(Duration::from_millis(250));
+    let size2 = fs::metadata(&heartbeat).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        size1, size2,
+        "descendant pid {pid} heartbeat must stop growing after version probe \
+         (size1={size1}, size2={size2})"
+    );
+
+    // On Linux, additionally assert the task table entry is gone or a zombie.
+    #[cfg(target_os = "linux")]
+    {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut still_alive = true;
+        while Instant::now() < deadline {
+            if !live_non_zombie_process(pid) {
+                still_alive = false;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !still_alive,
+            "descendant pid {pid} that retained stderr must be gone or reaped after version probe"
+        );
+    }
 }
 
 /// True if `/proc/<pid>` exists in a non-zombie state (running/sleeping/etc.).
 ///
-/// Prefer this over `kill(pid, 0)`: zombies still "exist" for kill(0) but are not
-/// live writers, and pure existence checks cannot distinguish PID reuse without
-/// `/proc` starttime — here "still alive" means a non-zombie task table entry.
+/// Linux-only helper used as a secondary check alongside the portable heartbeat
+/// assertion. Prefer heartbeat growth for cross-Unix coverage: zombies still
+/// "exist" for kill(0) but are not live writers.
+#[cfg(target_os = "linux")]
 fn live_non_zombie_process(pid: i32) -> bool {
     if pid <= 1 {
         return false;
     }
     let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        // Missing /proc entry means not live — on Linux this is authoritative.
         return false;
     };
     // Format: pid (comm) state ppid ...

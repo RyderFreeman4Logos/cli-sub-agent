@@ -23,6 +23,8 @@ const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION_PROBE_MAX_BYTES: usize = 64 * 1024;
 /// Grace between SIGTERM and SIGKILL while the unreaped leader still anchors the PGID.
 const VERSION_PROBE_TERM_GRACE: Duration = Duration::from_millis(100);
+/// Bound for post-signal `try_wait` reaping — never use unbounded `Child::wait()`.
+const VERSION_PROBE_KILL_WAIT: Duration = Duration::from_secs(2);
 const VERSION_PROBE_POLL: Duration = Duration::from_millis(10);
 
 /// Stable marker when a mismatched PATH binary was intentionally not executed.
@@ -322,9 +324,20 @@ impl VersionProbeSession {
             .child
             .take()
             .context("version probe leader already reaped")?;
-        let status = child
-            .wait()
-            .context("failed to reap version probe leader")?;
+        // Deadline-limited try_wait only: unbounded Child::wait() would hang the
+        // install/doctor path when SIGKILL fails (uninterruptible I/O, etc.).
+        let status = match wait_and_reap_for_exit(&mut child, VERSION_PROBE_KILL_WAIT)? {
+            Some(status) => status,
+            None => {
+                // Abandon the Child handle (std::process::Child Drop does not wait)
+                // rather than block forever; the process may remain a zombie until
+                // this parent exits, which is preferable to hanging just install.
+                bail!(
+                    "timed out after {} ms reaping version probe leader after terminate",
+                    VERSION_PROBE_KILL_WAIT.as_millis()
+                );
+            }
+        };
         self.reaped_status = Some(status);
         Ok(status)
     }
@@ -343,10 +356,31 @@ impl Drop for VersionProbeSession {
             return;
         }
         // Fail-closed cleanup: escalate as if the probe is still live.
+        // Reap is also deadline-bounded so Drop cannot hang the process forever.
         self.terminate_group_while_owned(false);
         if let Some(mut child) = self.child.take() {
-            let _ = child.wait();
+            let _ = wait_and_reap_for_exit(&mut child, VERSION_PROBE_KILL_WAIT);
+            // If still unreaped after the bound, drop the handle without waiting.
         }
+    }
+}
+
+/// Poll `try_wait` until the child exits or `timeout` elapses.
+///
+/// Returns `Ok(None)` on timeout so callers can fail closed without blocking.
+fn wait_and_reap_for_exit(child: &mut Child, timeout: Duration) -> Result<Option<ExitStatus>> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to inspect version probe leader")?
+        {
+            return Ok(Some(status));
+        }
+        if started.elapsed() >= timeout {
+            return Ok(None);
+        }
+        std::thread::sleep(VERSION_PROBE_POLL.min(timeout.saturating_sub(started.elapsed())));
     }
 }
 
@@ -359,7 +393,9 @@ impl Drop for VersionProbeSession {
 /// 2. Poll until leader exit / timeout / stdout|stderr size breach — on Unix,
 ///    detect exit with `waitid(WNOWAIT)` so the leader stays unreaped.
 /// 3. SIGTERM → grace → SIGKILL the process group while the leader is still owned.
-/// 4. Reap the leader exactly once; never signal a negative PGID after reaping.
+/// 4. Reap the leader exactly once with a deadline-limited `try_wait` loop
+///    (`VERSION_PROBE_KILL_WAIT`); never unbounded `Child::wait()`, and never
+///    signal a negative PGID after reaping.
 /// 5. Enforce both stream caps on the captured output (tempfile-backed; no reader threads).
 fn version_output_with_limits(path: &Path, timeout: Duration, max_bytes: usize) -> Result<String> {
     let mut stdout_file =
