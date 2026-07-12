@@ -7,7 +7,7 @@ use csa_resource::filesystem_sandbox::detect_filesystem_capability;
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use sysinfo::System;
 
 #[path = "doctor_config.rs"]
@@ -22,6 +22,7 @@ mod doctor_routing;
 mod doctor_sandbox;
 #[path = "doctor_tools.rs"]
 mod doctor_tools;
+use crate::install_provenance;
 use doctor_config::{
     inspect_doctor_effective_config_from, inspect_doctor_project_config_from,
     project_config_tool_lists, render_effective_config_lines, render_project_config_lines,
@@ -162,6 +163,48 @@ pub async fn run_doctor(format: OutputFormat) -> Result<()> {
     }
 }
 
+/// Dispatch `csa doctor` / `csa doctor <subcommand>`.
+pub async fn dispatch_doctor(
+    format: OutputFormat,
+    subcommand: Option<crate::cli::DoctorSubcommand>,
+) -> Result<()> {
+    match subcommand {
+        None => run_doctor(format).await,
+        Some(crate::cli::DoctorSubcommand::Install { target, artifact }) => {
+            run_doctor_install(format, &target, artifact.as_deref())
+        }
+        Some(crate::cli::DoctorSubcommand::Routing { operation, tier }) => {
+            run_doctor_routing(format, operation, tier).await
+        }
+    }
+}
+
+/// Report the same install provenance used by `just install`.
+///
+/// Honors global `--format` (text or additive JSON). Never executes a
+/// PATH-resolved binary whose content bytes differ from the artifact.
+pub(crate) fn run_doctor_install(
+    format: OutputFormat,
+    target: &Path,
+    artifact: Option<&Path>,
+) -> Result<()> {
+    let artifact = artifact.unwrap_or(target);
+    let report = install_provenance::inspect_current_path(artifact, target)?;
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+        }
+        OutputFormat::Text => {
+            println!("{}", report.diagnostic());
+        }
+    }
+    if report.is_current() {
+        Ok(())
+    } else {
+        anyhow::bail!("CSA installation provenance is not current")
+    }
+}
+
 /// Run diagnostics with human-readable text output.
 async fn run_doctor_text() -> Result<()> {
     let cwd = env::current_dir()?;
@@ -218,6 +261,10 @@ async fn run_doctor_text_from(project_root: &Path) -> Result<()> {
 
     println!("=== Merge Guard ===");
     print_merge_guard_status();
+    println!();
+
+    println!("=== Install Provenance ===");
+    print_install_provenance_status();
 
     Ok(())
 }
@@ -307,6 +354,8 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
         }),
     };
 
+    let install_status = install_provenance_json();
+
     let result = serde_json::json!({
         "platform": {
             "os": os,
@@ -326,6 +375,7 @@ fn build_doctor_json(project_root: &Path) -> serde_json::Value {
         "sandbox": sandbox_status,
         "filesystem_sandbox": fs_sandbox_status,
         "merge_guard": merge_guard_status,
+        "install": install_status,
     });
 
     result
@@ -358,6 +408,115 @@ fn print_state_dir() {
 fn print_project_config(status: &DoctorProjectConfigStatus) {
     for line in render_project_config_lines(status) {
         println!("{line}");
+    }
+}
+
+/// Side-effect-free PATH/install provenance summary for `csa doctor`.
+///
+/// Does not mutate PATH entries. Failures (missing `csa`, hash errors) are
+/// reported as text rather than failing the whole doctor command.
+fn print_install_provenance_status() {
+    println!("{}", install_provenance_snapshot().render_text());
+}
+
+fn install_provenance_json() -> serde_json::Value {
+    install_provenance_snapshot().to_json()
+}
+
+/// Snapshot used by both text and JSON doctor surfaces.
+///
+/// When the intended install target exists it is compared against the
+/// PATH-resolved executable (same logic as `just install` without `--artifact`).
+/// When it is missing, the PATH-resolved binary is still reported and marked
+/// non-current so shadowing stays visible — but the PATH binary is **not**
+/// executed (hash-first / no untrusted diagnostics).
+fn install_provenance_snapshot() -> InstallDoctorSnapshot {
+    let intended = install_provenance::default_intended_target();
+    if intended.is_file() {
+        match install_provenance::inspect_current_path(&intended, &intended) {
+            Ok(report) => InstallDoctorSnapshot::Report(report),
+            Err(error) => InstallDoctorSnapshot::Unavailable {
+                intended_target: intended,
+                error: error.to_string(),
+            },
+        }
+    } else {
+        match install_provenance::resolve_current_path() {
+            Ok(path_resolved) => InstallDoctorSnapshot::MissingIntended {
+                path_resolved,
+                intended_target: intended,
+                // Do not run unverified PATH binaries for diagnostics.
+                version_output: install_provenance::NOT_EXECUTED_UNVERIFIED.to_string(),
+            },
+            Err(error) => InstallDoctorSnapshot::Unavailable {
+                intended_target: intended,
+                error: error.to_string(),
+            },
+        }
+    }
+}
+
+enum InstallDoctorSnapshot {
+    Report(install_provenance::InstallProvenanceReport),
+    MissingIntended {
+        path_resolved: PathBuf,
+        intended_target: PathBuf,
+        version_output: String,
+    },
+    Unavailable {
+        intended_target: PathBuf,
+        error: String,
+    },
+}
+
+impl InstallDoctorSnapshot {
+    fn render_text(&self) -> String {
+        match self {
+            Self::Report(report) => report.diagnostic(),
+            Self::MissingIntended {
+                path_resolved,
+                intended_target,
+                version_output,
+            } => format!(
+                "CSA install provenance: intended install target is missing\n  PATH-resolved executable: {}\n  intended install target: {}\n  PATH-resolved version/source commit: {}\n  status: not current\n  remediation: run `just install` (or install to the intended target); CSA will not overwrite arbitrary PATH entries.",
+                path_resolved.display(),
+                intended_target.display(),
+                version_output
+            ),
+            Self::Unavailable {
+                intended_target,
+                error,
+            } => format!(
+                "Install provenance unavailable: {error}\n  intended install target: {}\n  remediation: ensure `csa` is on PATH or run `just install`.",
+                intended_target.display()
+            ),
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Report(report) => report.to_json(),
+            Self::MissingIntended {
+                path_resolved,
+                intended_target,
+                version_output,
+            } => serde_json::json!({
+                "status": "missing_intended_target",
+                "path_resolved": path_resolved.display().to_string(),
+                "intended_target": intended_target.display().to_string(),
+                "path_resolved_version": version_output,
+                "current": false,
+            }),
+            Self::Unavailable {
+                intended_target,
+                error,
+            } => serde_json::json!({
+                "status": "unavailable",
+                "intended_target": intended_target.display().to_string(),
+                "error": error,
+                "current": false,
+            }),
+        }
     }
 }
 

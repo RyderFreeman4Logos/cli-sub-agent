@@ -115,12 +115,12 @@ check-generated-artifacts:
 check-version-bumped:
     @bash "{{_repo_root}}/scripts/check-version-bumped.sh" "{{_repo_root}}"
 
-# Fast pre-commit: formatting, linting, static analysis only (no tests).
-# Tests run in pre-push hook instead, avoiding ~58min commit wait (#1383).
+# Fast pre-commit (fmt/lint/static); tests run in pre-push (#1383).
 pre-commit-fast:
     just find-monolith-files
     just monolith-test
     just exact-build-test
+    bash scripts/tests/post-merge-rebuild-tests.sh
     just check-path-includes
     just check-generated-artifacts
     just check-version-bumped
@@ -480,18 +480,17 @@ install-hooks:
     lefthook install
     @echo "Lefthook hooks installed."
 
-# Install latest local build to /usr/local/bin (reuses workspace target/ cache).
-install:
+# Install release csa/weave (install_dir=/usr/local/bin).
+install install_dir="/usr/local/bin":
     #!/usr/bin/env bash
     set -euo pipefail
-    target_dir="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
+    d={{quote(install_dir)}}; t="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
     {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
-    install -m 755 "${target_dir}/release/csa" /usr/local/bin/csa
-    install -m 755 "${target_dir}/release/weave" /usr/local/bin/weave
-    echo "Verifying installation..."
-    csa --version
-    weave --version
+    install -m 755 "$t/release/csa" "$d/csa"
+    install -m 755 "$t/release/weave" "$d/weave"
+    "{{_repo_root}}/scripts/verify-csa-install-provenance.sh" "$t/release/csa" "$d/csa"
+    "$t/release/weave" --version
 
 # Bump patch version of all workspace crates atomically.
 # All crates inherit version.workspace, so a single workspace bump suffices.

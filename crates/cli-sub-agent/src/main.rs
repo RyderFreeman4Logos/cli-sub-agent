@@ -35,6 +35,7 @@ mod gh_env;
 mod goal_loop;
 mod hooks_cmd;
 mod hunt_cmd;
+mod install_provenance;
 #[cfg(test)]
 mod main_auto_weave_tests;
 mod main_bootstrap;
@@ -157,7 +158,7 @@ include!("review_round10_exact_tests.rs");
 #[cfg(test)]
 include!("debate_cmd_exact_tests.rs");
 use cli::{
-    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, SetupCommands, TiersCommands,
+    Cli, Commands, ConfigCommands, McpHubCommands, SetupCommands, TiersCommands,
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
@@ -621,12 +622,9 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
         } => {
             eval_cmd::handle_eval(project, days, json)?;
         }
-        Commands::Doctor { subcommand } => match subcommand {
-            None => doctor::run_doctor(output_format).await?,
-            Some(DoctorSubcommand::Routing { operation, tier }) => {
-                doctor::run_doctor_routing(output_format, operation, tier).await?
-            }
-        },
+        Commands::Doctor { subcommand } => {
+            doctor::dispatch_doctor(output_format, subcommand).await?
+        }
         Commands::Batch {
             file,
             sa_mode: _,

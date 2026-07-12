@@ -399,4 +399,32 @@ fn explicit_claude_code_cli_transport_reports_json_transport_details() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn doctor_json_includes_install_provenance_surface() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let td = tempfile::tempdir().expect("tempdir");
+    let report = build_doctor_json(td.path());
+    let install = &report["install"];
+    assert!(
+        install.is_object(),
+        "doctor JSON must expose additive install surface: {report}"
+    );
+    assert!(
+        install.get("status").and_then(|v| v.as_str()).is_some(),
+        "install.status must be present: {install}"
+    );
+    assert!(
+        install
+            .get("intended_target")
+            .and_then(|v| v.as_str())
+            .is_some(),
+        "install.intended_target must be present: {install}"
+    );
+    assert!(
+        install.get("current").and_then(|v| v.as_bool()).is_some(),
+        "install.current must be present: {install}"
+    );
+}
+
 include!("doctor_tests_split.rs");
