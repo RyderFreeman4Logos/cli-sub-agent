@@ -1,11 +1,19 @@
-use std::{collections::HashMap, fmt, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    str::FromStr,
+};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use ulid::Ulid;
 
-use super::{CampaignId, CampaignRecord, CoverageCellId, CoverageCellRecord, EpochId, EpochRecord};
+use super::{
+    CampaignId, CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId,
+    CandidateRecord, CoverageCellId, CoverageCellRecord, CoverageDispositionRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochId, EpochRecord, StableFindingId,
+};
 
 /// Current on-disk schema version for convergence ledgers.
 pub const CONVERGENCE_LEDGER_SCHEMA_VERSION: u32 = 1;
@@ -87,6 +95,14 @@ pub enum ConvergenceEvent {
     EpochOpened(EpochRecord),
     /// A deterministic semantic coverage cell was defined in an opened epoch.
     CoverageCellDefined(CoverageCellRecord),
+    /// One discovery attempt produced completion and artifact evidence.
+    DiscoveryAttemptRecorded(DiscoveryAttemptRecord),
+    /// One candidate observation was reported by a prior discovery attempt.
+    CandidateRecorded(CandidateRecord),
+    /// One candidate received its immutable terminal disposition.
+    CandidateDispositionRecorded(CandidateDispositionRecord),
+    /// One defined coverage cell received its planning disposition.
+    CoverageDispositionRecorded(CoverageDispositionRecord),
 }
 
 /// One ordered, immutable convergence history event.
@@ -275,10 +291,215 @@ impl ConvergenceLedger {
                             entry.campaign_id
                         );
                     }
-                    if !state.cells.insert(record.id().clone()) {
+                    if state
+                        .cells
+                        .insert(record.id().clone(), record.epoch_id().clone())
+                        .is_some()
+                    {
                         bail!(
                             "duplicate coverage cell {} in campaign {}",
                             record.id(),
+                            entry.campaign_id
+                        );
+                    }
+                }
+                ConvergenceEvent::DiscoveryAttemptRecorded(record) => {
+                    let state = campaigns.get_mut(&entry.campaign_id).with_context(|| {
+                        format!(
+                            "discovery attempt {} recorded before campaign {} started",
+                            record.id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    record.validate().with_context(|| {
+                        format!(
+                            "invalid discovery attempt {} in campaign {}",
+                            record.id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    if !state.epochs.contains(record.epoch_id()) {
+                        bail!(
+                            "discovery attempt {} references unopened epoch {} in campaign {}",
+                            record.id(),
+                            record.epoch_id(),
+                            entry.campaign_id
+                        );
+                    }
+                    let cell_epoch = state.cells.get(record.coverage_cell_id()).with_context(|| {
+                        format!(
+                            "discovery attempt {} references undefined coverage cell {} in campaign {}",
+                            record.id(),
+                            record.coverage_cell_id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    if cell_epoch != record.epoch_id() {
+                        bail!(
+                            "discovery attempt {} epoch {} does not match coverage cell {} epoch {} in campaign {}",
+                            record.id(),
+                            record.epoch_id(),
+                            record.coverage_cell_id(),
+                            cell_epoch,
+                            entry.campaign_id
+                        );
+                    }
+                    if !state.attempts.insert(record.id().clone()) {
+                        bail!(
+                            "duplicate discovery attempt {} in campaign {}",
+                            record.id(),
+                            entry.campaign_id
+                        );
+                    }
+                }
+                ConvergenceEvent::CandidateRecorded(record) => {
+                    let state = campaigns.get_mut(&entry.campaign_id).with_context(|| {
+                        format!(
+                            "candidate {} recorded before campaign {} started",
+                            record.id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    record.validate().with_context(|| {
+                        format!(
+                            "invalid candidate {} in campaign {}",
+                            record.id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    if !state.attempts.contains(record.discovery_attempt_id()) {
+                        bail!(
+                            "candidate {} references unknown discovery attempt {} in campaign {}",
+                            record.id(),
+                            record.discovery_attempt_id(),
+                            entry.campaign_id
+                        );
+                    }
+                    if state
+                        .candidates
+                        .insert(record.id().clone(), record.stable_finding_id().clone())
+                        .is_some()
+                    {
+                        bail!(
+                            "duplicate candidate {} in campaign {}",
+                            record.id(),
+                            entry.campaign_id
+                        );
+                    }
+                }
+                ConvergenceEvent::CandidateDispositionRecorded(record) => {
+                    let state = campaigns.get_mut(&entry.campaign_id).with_context(|| {
+                        format!(
+                            "candidate disposition for {} recorded before campaign {} started",
+                            record.candidate_id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    let source_stable = state
+                        .candidates
+                        .get(record.candidate_id())
+                        .cloned()
+                        .with_context(|| {
+                            format!(
+                                "candidate disposition references unknown candidate {} in campaign {}",
+                                record.candidate_id(),
+                                entry.campaign_id
+                            )
+                        })?;
+                    if state.disposed_candidates.contains(record.candidate_id()) {
+                        bail!(
+                            "duplicate terminal disposition for candidate {} in campaign {}",
+                            record.candidate_id(),
+                            entry.campaign_id
+                        );
+                    }
+
+                    match record.disposition() {
+                        CandidateDisposition::Duplicate {
+                            canonical_candidate_id,
+                        } => {
+                            if canonical_candidate_id == record.candidate_id() {
+                                bail!(
+                                    "candidate {} cannot duplicate itself in campaign {}",
+                                    record.candidate_id(),
+                                    entry.campaign_id
+                                );
+                            }
+                            let canonical_stable =
+                                state.candidates.get(canonical_candidate_id).with_context(|| {
+                                    format!(
+                                        "candidate {} duplicates missing canonical candidate {} in campaign {}",
+                                        record.candidate_id(),
+                                        canonical_candidate_id,
+                                        entry.campaign_id
+                                    )
+                                })?;
+                            if canonical_stable != &source_stable {
+                                bail!(
+                                    "candidate {} cannot duplicate candidate {} with a different stable finding id in campaign {}",
+                                    record.candidate_id(),
+                                    canonical_candidate_id,
+                                    entry.campaign_id
+                                );
+                            }
+                        }
+                        CandidateDisposition::Superseded {
+                            replacement_candidate_id,
+                        } => {
+                            if replacement_candidate_id == record.candidate_id() {
+                                bail!(
+                                    "candidate {} cannot supersede itself in campaign {}",
+                                    record.candidate_id(),
+                                    entry.campaign_id
+                                );
+                            }
+                            if !state.candidates.contains_key(replacement_candidate_id) {
+                                bail!(
+                                    "candidate {} references missing superseding candidate {} in campaign {}",
+                                    record.candidate_id(),
+                                    replacement_candidate_id,
+                                    entry.campaign_id
+                                );
+                            }
+                        }
+                        CandidateDisposition::Verified
+                        | CandidateDisposition::RejectedWithEvidence
+                        | CandidateDisposition::NeedsContractOrDocumentation
+                        | CandidateDisposition::PreExistingOutsideDiffScope => {}
+                    }
+                    state
+                        .disposed_candidates
+                        .insert(record.candidate_id().clone());
+                }
+                ConvergenceEvent::CoverageDispositionRecorded(record) => {
+                    let state = campaigns.get_mut(&entry.campaign_id).with_context(|| {
+                        format!(
+                            "coverage disposition for {} recorded before campaign {} started",
+                            record.coverage_cell_id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    record.validate().with_context(|| {
+                        format!(
+                            "invalid coverage disposition for {} in campaign {}",
+                            record.coverage_cell_id(),
+                            entry.campaign_id
+                        )
+                    })?;
+                    if !state.cells.contains_key(record.coverage_cell_id()) {
+                        bail!(
+                            "coverage disposition references undefined cell {} in campaign {}",
+                            record.coverage_cell_id(),
+                            entry.campaign_id
+                        );
+                    }
+                    if !state
+                        .disposed_cells
+                        .insert(record.coverage_cell_id().clone())
+                    {
+                        bail!(
+                            "duplicate coverage disposition for cell {} in campaign {}",
+                            record.coverage_cell_id(),
                             entry.campaign_id
                         );
                     }
@@ -292,6 +513,10 @@ impl ConvergenceLedger {
 
 #[derive(Default)]
 struct CampaignState {
-    epochs: std::collections::HashSet<EpochId>,
-    cells: std::collections::HashSet<CoverageCellId>,
+    epochs: HashSet<EpochId>,
+    cells: HashMap<CoverageCellId, EpochId>,
+    attempts: HashSet<DiscoveryAttemptId>,
+    candidates: HashMap<CandidateId, StableFindingId>,
+    disposed_candidates: HashSet<CandidateId>,
+    disposed_cells: HashSet<CoverageCellId>,
 }

@@ -9,7 +9,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
+mod evidence;
 mod ledger;
+
+pub use evidence::{
+    AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateDispositionRecord,
+    CandidateRecord, CoverageDispositionRecord, CoverageRequirement, DiscoveryAttemptRecord,
+    SessionRelativeArtifactPath,
+};
 
 pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
@@ -57,6 +64,38 @@ macro_rules! impl_validated_string {
     };
 }
 
+macro_rules! impl_generated_ulid_id {
+    ($name:ident, $label:literal) => {
+        impl $name {
+            /// Generate a new identifier.
+            #[must_use]
+            pub fn generate() -> Self {
+                Self(Ulid::new().to_string())
+            }
+
+            /// Parse and canonicalize a ULID identifier.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error when `value` is not a valid ULID.
+            pub fn parse(value: &str) -> Result<Self> {
+                let ulid = Ulid::from_string(value).map_err(|error| {
+                    anyhow::anyhow!("invalid {} ULID '{}': {}", $label, value, error)
+                })?;
+                Ok(Self(ulid.to_string()))
+            }
+
+            /// Return the canonical 26-character ULID.
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl_validated_string!($name);
+    };
+}
+
 /// Validated, canonically encoded ULID identifying a convergence campaign.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CampaignId(String);
@@ -88,11 +127,61 @@ impl CampaignId {
 
 impl_validated_string!(CampaignId);
 
+/// Validated, canonical ULID identifying one discovery attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiscoveryAttemptId(String);
+
+impl_generated_ulid_id!(DiscoveryAttemptId, "discovery attempt id");
+
+/// Validated, canonical ULID identifying one candidate observation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CandidateId(String);
+
+impl_generated_ulid_id!(CandidateId, "candidate id");
+
+/// Validated, canonical ULID identifying a CSA meta-session.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CsaSessionId(String);
+
+impl CsaSessionId {
+    /// Generate an identifier through the CSA session ID source contract.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(crate::validate::new_session_id())
+    }
+
+    /// Parse and canonicalize a CSA meta-session ULID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `value` is not accepted by the CSA session ID validator.
+    pub fn parse(value: &str) -> Result<Self> {
+        crate::validate::validate_session_id(value)?;
+        let ulid = Ulid::from_string(value)
+            .map_err(|error| anyhow::anyhow!("invalid CSA session id ULID '{value}': {error}"))?;
+        Ok(Self(ulid.to_string()))
+    }
+
+    /// Return the canonical 26-character ULID.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl_validated_string!(CsaSessionId);
+
 /// Canonical SHA-256 digest encoded as `sha256:<64 lowercase hex>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Digest(String);
 
 impl Sha256Digest {
+    /// Compute the SHA-256 digest of arbitrary evidence bytes.
+    #[must_use]
+    pub fn compute(bytes: &[u8]) -> Self {
+        Self::from_hash(&Sha256::digest(bytes))
+    }
+
     /// Parse and canonicalize a prefixed SHA-256 digest.
     ///
     /// The hexadecimal payload is case-insensitive on input and lowercase on output.

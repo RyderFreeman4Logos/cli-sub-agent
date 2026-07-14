@@ -40,6 +40,10 @@ mod convergence_tests;
 #[path = "convergence_ledger_tests.rs"]
 mod convergence_ledger_tests;
 
+#[cfg(test)]
+#[path = "convergence_evidence_tests.rs"]
+mod convergence_evidence_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
