@@ -8,7 +8,6 @@ use csa_executor::{Executor, ModelSpec};
 pub(crate) struct AdmittedExecutor {
     executor: Executor,
     // Retained for upcoming csa-session ledger provenance consumers.
-    #[allow(dead_code)]
     resolved_model_spec: ModelSpec,
     catalog_warning: Option<CatalogWarning>,
     warning_emitted: AtomicBool,
@@ -20,12 +19,18 @@ impl AdmittedExecutor {
         resolved_model_spec: ModelSpec,
         admission: CatalogAdmission,
     ) -> Self {
-        Self {
+        let admitted = Self {
             executor,
             resolved_model_spec,
             catalog_warning: admission.warning().cloned(),
             warning_emitted: AtomicBool::new(false),
-        }
+        };
+        debug_assert_eq!(
+            admitted.resolved_model_spec().tool,
+            admitted.executor.tool_name(),
+            "catalog-admitted model identity must match the executor tool"
+        );
+        admitted
     }
 
     /// Returns CSA's execution-boundary catalog-admitted identity.
@@ -33,7 +38,6 @@ impl AdmittedExecutor {
     /// This immutable snapshot records the resolved tool, provider, model, and
     /// thinking budget selected for execution. It is not a provider-reported
     /// identity from a response.
-    #[allow(dead_code)]
     pub(crate) fn resolved_model_spec(&self) -> &ModelSpec {
         &self.resolved_model_spec
     }

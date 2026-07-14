@@ -7,13 +7,6 @@ pub(super) struct ValidatedExecutorIdentity {
     pub(super) catalog_admission: csa_config::CatalogAdmission,
 }
 
-#[cfg(test)]
-impl ValidatedExecutorIdentity {
-    pub(super) fn expect(self, _message: &str) -> csa_config::CatalogAdmission {
-        self.catalog_admission
-    }
-}
-
 pub(super) fn validate_final_executor_identity(
     executor: &Executor,
     original_model_spec: Option<&str>,
