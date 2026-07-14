@@ -23,6 +23,19 @@ fn real_quota_errors_still_detected() {
 }
 
 #[test]
+fn transient_numeric_status_requires_http_context() {
+    assert!(!is_codex_transient_rate_limit_text(
+        "/tmp/csa-worktree-lock-429-probe/session"
+    ));
+    assert!(is_codex_transient_rate_limit_text(
+        "request failed with HTTP 429"
+    ));
+    assert!(is_codex_transient_rate_limit_text(
+        "provider returned statusCode: 429"
+    ));
+}
+
+#[test]
 fn stdout_billing_content_not_false_positive_in_result() {
     let execution = ExecutionResult {
         exit_code: 1,
