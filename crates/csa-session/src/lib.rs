@@ -4,6 +4,7 @@ pub mod adjudication;
 pub mod caller_detect;
 pub mod checklist_store;
 pub mod checkpoint;
+pub mod convergence;
 pub mod cooldown;
 pub mod event_writer;
 pub mod finding_id;
@@ -31,6 +32,10 @@ pub mod vcs_backends;
 #[path = "vcs_identity_tests.rs"]
 mod vcs_identity_tests;
 
+#[cfg(test)]
+#[path = "convergence_tests.rs"]
+mod convergence_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -56,6 +61,10 @@ pub use cooldown::{
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
+pub use convergence::{
+    CampaignId, CampaignRecord, CoverageCellId, CoverageCellRecord, CoverageScope, EpochId,
+    EpochRecord, GitObjectId, SemanticFindingIdentity, SemanticLens, Sha256Digest, StableFindingId,
+};
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
     SandboxInfo, SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
