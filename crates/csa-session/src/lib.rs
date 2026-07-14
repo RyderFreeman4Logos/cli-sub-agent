@@ -40,6 +40,10 @@ mod vcs_identity_tests;
 mod convergence_tests;
 
 #[cfg(test)]
+#[path = "convergence_authority_tests.rs"]
+mod convergence_authority_tests;
+
+#[cfg(test)]
 #[path = "convergence_ledger_tests.rs"]
 mod convergence_ledger_tests;
 
@@ -91,10 +95,11 @@ pub use checklist_store::ChecklistStore;
 pub use convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
-    ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord, CoverageDispositionRecord,
-    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
+    CommandAuthoritySource, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
+    ConvergenceLedgerEntry, ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
+    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
     DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GitObjectId, LedgerEventId,
     SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
     StableFindingId, next_discovery_directive,
