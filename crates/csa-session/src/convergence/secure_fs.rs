@@ -24,6 +24,10 @@ pub(crate) struct SecureDirectory {
 }
 
 impl SecureDirectory {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn file(&self) -> &File {
         &self.directory
     }
@@ -68,6 +72,99 @@ impl SecureDirectory {
         })?;
         verify_regular_file(&file, &self.path.join(name), true)?;
         Ok(file)
+    }
+
+    pub(crate) fn open_private_subdirectory(
+        &self,
+        name: &OsStr,
+        create: bool,
+    ) -> anyhow::Result<Option<Self>> {
+        let child_path = self.path.join(name);
+        let Some((child, created)) = open_directory_at(&self.directory, name, &child_path, create)?
+        else {
+            return Ok(None);
+        };
+        if created {
+            fchmod(&child, 0o700).with_context(|| {
+                format!(
+                    "failed to set secure directory mode for {}",
+                    child_path.display()
+                )
+            })?;
+        }
+        let status = status_for_file(&child).with_context(|| {
+            format!(
+                "failed to inspect secure directory {}",
+                child_path.display()
+            )
+        })?;
+        verify_owner_and_directory_mode(&status, &child_path, true)?;
+        if created {
+            child.sync_all().with_context(|| {
+                format!("failed to sync secure directory {}", child_path.display())
+            })?;
+            self.directory.sync_all().with_context(|| {
+                format!(
+                    "failed to sync secure directory link {}",
+                    child_path.display()
+                )
+            })?;
+        }
+        Ok(Some(Self {
+            directory: child,
+            parent: self
+                .directory
+                .try_clone()
+                .context("clone secure parent directory descriptor")?,
+            name: name.to_os_string(),
+            path: child_path,
+            device: status.st_dev,
+            inode: status.st_ino,
+        }))
+    }
+
+    pub(crate) fn open_private_file(&self, name: &OsStr) -> anyhow::Result<Option<File>> {
+        let Some(file) = open_file_at(self.directory.as_raw_fd(), name, LEDGER_FLAGS, 0)? else {
+            return Ok(None);
+        };
+        verify_regular_file(&file, &self.path.join(name), true)?;
+        Ok(Some(file))
+    }
+
+    pub(crate) fn verify_only_entry(&self, expected: &OsStr) -> anyhow::Result<()> {
+        self.verify_link()?;
+        let mut entries = std::fs::read_dir(&self.path)
+            .with_context(|| format!("failed to list secure directory {}", self.path.display()))?;
+        let entry = entries
+            .next()
+            .transpose()
+            .with_context(|| format!("failed to read secure directory {}", self.path.display()))?
+            .ok_or_else(|| {
+                anyhow!(
+                    "secure directory is missing expected entry {}",
+                    expected.to_string_lossy()
+                )
+            })?;
+        if entry.file_name() != expected || entries.next().is_some() {
+            bail!(
+                "secure directory must contain only {}: {}",
+                expected.to_string_lossy(),
+                self.path.display()
+            );
+        }
+        self.verify_link()
+    }
+
+    pub(crate) fn verify_empty(&self) -> anyhow::Result<()> {
+        self.verify_link()?;
+        if std::fs::read_dir(&self.path)
+            .with_context(|| format!("failed to list secure directory {}", self.path.display()))?
+            .next()
+            .is_some()
+        {
+            bail!("secure directory is not empty: {}", self.path.display());
+        }
+        self.verify_link()
     }
 }
 

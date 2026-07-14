@@ -515,3 +515,67 @@ fn convergence_store_forced_contention_does_not_lose_updates() {
     );
     assert!(lock_path(&root).is_file());
 }
+
+#[test]
+fn provider_evidence_bundle_is_private_content_addressed_and_verified() {
+    let td = tempdir().expect("temp state root");
+    let store = store_at(td.path());
+    let published = store
+        .publish_provider_evidence_bundle(b"immutable evidence")
+        .expect("publish provider evidence bundle");
+
+    assert_eq!(
+        published.digest(),
+        &crate::convergence::Sha256Digest::compute(b"immutable evidence")
+    );
+    assert_eq!(
+        published.verify().expect("verify bundle"),
+        b"immutable evidence"
+    );
+    assert_eq!(
+        fs::metadata(published.root())
+            .expect("bundle root metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(published.path())
+            .expect("bundle metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let entries = fs::read_dir(published.root())
+        .expect("list bundle root")
+        .collect::<std::io::Result<Vec<_>>>()
+        .expect("read bundle root entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].file_name(), "provider-evidence.tar");
+}
+
+#[test]
+fn provider_evidence_bundle_rejects_symlinked_storage_boundary() {
+    let td = tempdir().expect("temp state root");
+    let outside = tempdir().expect("outside directory");
+    fs::create_dir_all(convergence_dir(td.path())).expect("create convergence directory");
+    set_mode(&convergence_dir(td.path()), 0o700);
+    symlink(
+        outside.path(),
+        convergence_dir(td.path()).join("provider-bundles"),
+    )
+    .expect("install malicious symlink");
+
+    let error = store_at(td.path())
+        .publish_provider_evidence_bundle(b"immutable evidence")
+        .expect_err("symlinked bundle boundary must fail closed");
+    assert!(error.to_string().contains("provider-bundles"));
+    assert!(
+        fs::read_dir(outside.path())
+            .expect("list outside directory")
+            .next()
+            .is_none()
+    );
+}

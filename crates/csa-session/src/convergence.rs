@@ -13,6 +13,7 @@ mod discovery;
 mod evidence;
 mod finalization;
 mod ledger;
+mod provider_bundle;
 mod secure_fs;
 mod store;
 mod validation;
@@ -31,6 +32,7 @@ pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
     LedgerEventId,
 };
+pub use provider_bundle::ProviderEvidenceBundle;
 
 #[cfg(test)]
 pub(crate) use store::MAX_LEDGER_BYTES;

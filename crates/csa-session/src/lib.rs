@@ -1,6 +1,7 @@
 //! Session management with ULID-based genealogy tracking.
 
 mod atomic_state_write;
+mod session_output_artifact;
 
 pub mod adjudication;
 pub mod caller_detect;
@@ -138,6 +139,7 @@ pub use review_artifact::{
     ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
     write_findings_toml, write_review_verdict,
 };
+pub use session_output_artifact::{publish_session_output_artifact, read_session_output_artifact};
 pub use soft_fork::{SoftForkContext, soft_fork_session};
 pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 

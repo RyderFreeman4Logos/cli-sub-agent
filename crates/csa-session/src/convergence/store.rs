@@ -135,6 +135,14 @@ impl ConvergenceLedgerStore {
         })
     }
 
+    pub(super) fn secure_boundary(&self) -> &Path {
+        &self.secure_boundary
+    }
+
+    pub(super) fn project_state_root(&self) -> &Path {
+        &self.project_state_root
+    }
+
     /// Load and validate the ledger without creating or repairing any filesystem state.
     ///
     /// Only a genuinely missing secure component or ledger is treated as an empty history.
