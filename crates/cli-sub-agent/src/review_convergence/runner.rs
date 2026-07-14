@@ -8,7 +8,6 @@
 //! The persisted page envelope labels this single observation cell as a non-exhaustive
 //! walking skeleton.
 
-use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -21,8 +20,8 @@ use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 use csa_process::{ProviderTurnCompletion, StreamMode};
 use csa_session::{
-    convergence::{AdmittedModelIdentity, ArtifactEvidenceRef},
-    get_session_dir,
+    convergence::{AdmittedModelIdentity, ArtifactEvidenceRef, ProviderEvidenceBundle},
+    get_session_dir, publish_session_output_artifact, read_session_output_artifact,
 };
 
 use crate::cli::ReviewArgs;
@@ -31,12 +30,14 @@ use crate::review_routing::ReviewRoutingMetadata;
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
+use super::bundle::ProviderEvidenceRef;
 use super::engine::{
     DiscoveryRequest, DiscoveryRunOutput, DiscoveryRunner, FrozenWorkspace, WorkspaceProbe,
 };
 use super::output::encode_discovery_page_artifact;
 
 const PAGE_ARTIFACT_PATH: &str = "output/convergence-discovery-page.json";
+const PAGE_ARTIFACT_FILE: &str = "convergence-discovery-page.json";
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,14 +58,38 @@ pub(crate) fn execution_policy() -> ExecutionPolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderInput {
+    pub(crate) project_root: PathBuf,
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) bundle_digest: csa_session::convergence::Sha256Digest,
+    pub(crate) extra_readable: Vec<PathBuf>,
+}
+
+pub(crate) fn provider_input(request: &DiscoveryRequest) -> ProviderInput {
+    ProviderInput {
+        project_root: request.frozen.provider_evidence.root.clone(),
+        bundle_path: request.frozen.provider_evidence.path.clone(),
+        bundle_digest: request
+            .frozen
+            .provider_evidence
+            .identity
+            .bundle_digest
+            .clone(),
+        extra_readable: Vec::new(),
+    }
+}
+
 pub(crate) struct GitWorkspaceProbe {
     project_root: PathBuf,
+    provider_evidence: ProviderEvidenceRef,
 }
 
 impl GitWorkspaceProbe {
-    pub(crate) fn new(project_root: &Path) -> Self {
+    pub(crate) fn new(project_root: &Path, provider_evidence: ProviderEvidenceRef) -> Self {
         Self {
             project_root: project_root.to_path_buf(),
+            provider_evidence,
         }
     }
 
@@ -92,23 +117,23 @@ impl WorkspaceProbe for GitWorkspaceProbe {
             .strip_suffix("...HEAD")
             .filter(|base| !base.is_empty() && !base.contains(".."))
             .context("range must be the exact form <base>...HEAD")?;
-        let merge_base = self.git(&["merge-base", base_ref, "HEAD"])?;
-        let base_oid = String::from_utf8(merge_base.stdout)
-            .context("merge-base was not UTF-8")?
-            .trim()
-            .to_string();
-        let head = self.git(&["rev-parse", "HEAD"])?;
+        let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}"])?;
         let head_oid = String::from_utf8(head.stdout)
             .context("HEAD was not UTF-8")?
             .trim()
             .to_string();
-        let diff_range = format!("{base_oid}..{head_oid}");
+        let merge_base = self.git(&["merge-base", base_ref, &head_oid])?;
+        let base_oid = String::from_utf8(merge_base.stdout)
+            .context("merge-base was not UTF-8")?
+            .trim()
+            .to_string();
         let diff = self.git(&[
             "diff",
             "--binary",
             "--full-index",
             "--no-ext-diff",
-            &diff_range,
+            &base_oid,
+            &head_oid,
             "--",
         ])?;
         let status = self.git(&["status", "--porcelain=v1", "--untracked-files=normal"])?;
@@ -125,12 +150,13 @@ impl WorkspaceProbe for GitWorkspaceProbe {
             index_clean &= line[0] == b' ';
             worktree_clean &= line[1] == b' ';
         }
-        FrozenWorkspace::new(
+        FrozenWorkspace::new_with_provider_evidence(
             &base_oid,
             &head_oid,
             csa_session::convergence::Sha256Digest::compute(&diff.stdout),
             index_clean,
             worktree_clean,
+            self.provider_evidence.clone(),
         )
     }
 }
@@ -143,7 +169,6 @@ pub(crate) struct ProductionRunnerContext<'a> {
     pub(crate) tier_fallback_enabled: bool,
     pub(crate) tier_preference_order: Vec<String>,
     pub(crate) thinking: Option<String>,
-    pub(crate) project_root: &'a Path,
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
     pub(crate) model_catalog: &'a EffectiveModelCatalog,
@@ -159,12 +184,13 @@ pub(crate) struct ProductionRunnerContext<'a> {
     pub(crate) build_jobs: Option<u32>,
     pub(crate) fast_but_more_cost: bool,
     pub(crate) warn_no_codex_fast_mode: bool,
-    pub(crate) extra_readable: &'a [PathBuf],
+
     pub(crate) error_marker_scan_override: Option<bool>,
     pub(crate) resource_overrides: RunResourceOverrides,
     pub(crate) current_depth: u32,
     pub(crate) startup_env: &'a StartupSubtreeEnv,
     pub(crate) timeout_seconds: Option<u64>,
+    pub(crate) provider_bundle: ProviderEvidenceBundle,
 }
 
 pub(crate) struct ResolvedCommandContext<'a> {
@@ -192,7 +218,10 @@ pub(crate) struct ResolvedCommandContext<'a> {
 }
 
 impl ResolvedCommandContext<'_> {
-    pub(crate) fn runner_context(&self) -> ProductionRunnerContext<'_> {
+    pub(crate) fn runner_context(
+        &self,
+        provider_bundle: ProviderEvidenceBundle,
+    ) -> ProductionRunnerContext<'_> {
         ProductionRunnerContext {
             tool: self.tool,
             model: self.model.clone(),
@@ -201,7 +230,6 @@ impl ResolvedCommandContext<'_> {
             tier_fallback_enabled: self.tier_fallback_enabled,
             tier_preference_order: self.tier_preference_order.clone(),
             thinking: self.thinking.clone(),
-            project_root: self.project_root,
             project_config: self.project_config,
             global_config: self.global_config,
             model_catalog: self.model_catalog,
@@ -217,12 +245,13 @@ impl ResolvedCommandContext<'_> {
             build_jobs: self.args.build_jobs,
             fast_but_more_cost: self.args.fast_but_more_cost,
             warn_no_codex_fast_mode: true,
-            extra_readable: &self.args.extra_readable,
+
             error_marker_scan_override: self.args.error_marker_scan_override(),
             resource_overrides: self.args.resource_overrides(),
             current_depth: self.current_depth,
             startup_env: self.startup_env,
             timeout_seconds: self.args.timeout,
+            provider_bundle,
         }
     }
 }
@@ -238,7 +267,16 @@ impl<'a> ProductionDiscoveryRunner<'a> {
 
     async fn execute(&mut self, request: DiscoveryRequest) -> Result<DiscoveryRunOutput> {
         let prompt = build_discovery_prompt(&request);
+        let provider_input = provider_input(&request);
         let context = &self.context;
+        if context.provider_bundle.root() != provider_input.project_root
+            || context.provider_bundle.path() != provider_input.bundle_path
+            || context.provider_bundle.digest() != &provider_input.bundle_digest
+        {
+            bail!("provider evidence request does not match the published immutable bundle");
+        }
+        context.provider_bundle.verify()?;
+        let provider_root = provider_input.project_root;
         let future = crate::review_cmd::execute::execute_review_with_tier_filter(
             context.tool,
             prompt,
@@ -250,7 +288,7 @@ impl<'a> ProductionDiscoveryRunner<'a> {
             context.tier_preference_order.clone(),
             context.thinking.clone(),
             format!("convergence discovery observation for {}", request.range),
-            context.project_root,
+            &provider_root,
             context.project_config,
             context.global_config,
             context.model_catalog,
@@ -270,7 +308,7 @@ impl<'a> ProductionDiscoveryRunner<'a> {
             false,
             true,
             &[],
-            context.extra_readable,
+            &provider_input.extra_readable,
             context.error_marker_scan_override,
             context.resource_overrides,
             context.current_depth,
@@ -284,6 +322,7 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         } else {
             future.await?
         };
+        context.provider_bundle.verify()?;
         if outcome.execution.execution.exit_code != 0 || outcome.forced_decision.is_some() {
             bail!(
                 "review execution did not complete successfully: exit={} reason={}",
@@ -321,14 +360,10 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         )?;
         let session_id = outcome.execution.meta_session_id;
         let raw = outcome.execution.execution.output;
-        let session_dir = get_session_dir(context.project_root, &session_id)?;
-        let artifact_path = session_dir.join(PAGE_ARTIFACT_PATH);
-        let parent = artifact_path
-            .parent()
-            .context("convergence artifact path has no parent")?;
-        fs::create_dir_all(parent)?;
-        let artifact = encode_discovery_page_artifact(&raw)?;
-        fs::write(&artifact_path, &artifact)?;
+        let session_dir = get_session_dir(&provider_root, &session_id)?;
+        let artifact =
+            encode_discovery_page_artifact(&raw, &request.frozen.provider_evidence.identity)?;
+        publish_session_output_artifact(&session_dir, PAGE_ARTIFACT_FILE, &artifact)?;
         DiscoveryRunOutput::new_with_artifact_digest(
             raw,
             &session_id,
@@ -366,9 +401,14 @@ impl DiscoveryRunner for ProductionDiscoveryRunner<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>> {
         let result = (|| {
             let session_id = artifact.csa_session_id().to_string();
-            let session_dir = get_session_dir(self.context.project_root, &session_id)?;
-            let path = session_dir.join(artifact.path().as_str());
-            fs::read(&path).with_context(|| format!("read convergence artifact {}", path.display()))
+            self.context.provider_bundle.verify()?;
+            let session_dir = get_session_dir(&self.context.provider_bundle.root(), &session_id)?;
+            let file_name = artifact
+                .path()
+                .as_str()
+                .strip_prefix("output/")
+                .context("convergence artifact is outside the output directory")?;
+            read_session_output_artifact(&session_dir, file_name)
         })();
         Box::pin(async move { result })
     }
@@ -393,7 +433,14 @@ pub(crate) fn build_discovery_prompt(request: &DiscoveryRequest) -> String {
         )
     };
     format!(
-        "Use the csa-review skill. Observe only; do not modify files. This is one Required whole-range broad-discovery walking-skeleton observation cell, not exhaustive semantic coverage.\nRange: {}\nFrozen merge-base: {}\nFrozen HEAD: {}\nFrozen diff SHA-256: {}\nRun intent: {intent}; finalized attempts: {}.{existing}\nReturn exact JSON or one complete json fence and no prose. Use exactly this schema: {{\"schema_version\":1,\"kind\":\"convergence_discovery_page\",\"response_status\":\"complete|partial\",\"candidate_limit\":{},\"more_candidates_possible\":false,\"unscanned_items\":[],\"candidates\":[{{\"mechanism\":\"...\",\"affected_component\":\"...\",\"bug_class\":\"...\"}}]}}. The candidates array must not exceed candidate_limit. A complete page must have no continuation signals. A partial page must set more_candidates_possible or list at least one unscanned item.",
+        "Use the csa-review skill. Observe only; do not modify files. The only review evidence is the immutable bundle file ./{}, and the checkout that created it is not available to you. Before reading evidence and again after finishing, run `sha256sum {}` and require SHA-256 {}. Use read-only commands such as `tar -tf {}`, `tar -xOf {} manifest.json`, `tar -xOf {} diff.patch`, and `tar -xOf {} source.tar | tar -tf -`; do not extract files to disk. This is one Required whole-range broad-discovery walking-skeleton observation cell, not exhaustive semantic coverage.\nRange label: {}\nExact merge-base OID: {}\nExact HEAD OID: {}\nExact diff SHA-256: {}\nRun intent: {intent}; finalized attempts: {}.{existing}\nReturn exact JSON or one complete json fence and no prose. Use exactly this schema: {{\"schema_version\":1,\"kind\":\"convergence_discovery_page\",\"response_status\":\"complete|partial\",\"candidate_limit\":{},\"more_candidates_possible\":false,\"unscanned_items\":[],\"candidates\":[{{\"mechanism\":\"...\",\"affected_component\":\"...\",\"bug_class\":\"...\"}}]}}. The candidates array must not exceed candidate_limit. A complete page must have no continuation signals. A partial page must set more_candidates_possible or list at least one unscanned item.",
+        request.frozen.provider_evidence.identity.bundle_file,
+        request.frozen.provider_evidence.identity.bundle_file,
+        request.frozen.provider_evidence.identity.bundle_digest,
+        request.frozen.provider_evidence.identity.bundle_file,
+        request.frozen.provider_evidence.identity.bundle_file,
+        request.frozen.provider_evidence.identity.bundle_file,
+        request.frozen.provider_evidence.identity.bundle_file,
         request.range,
         request.frozen.base_oid,
         request.frozen.head_oid,

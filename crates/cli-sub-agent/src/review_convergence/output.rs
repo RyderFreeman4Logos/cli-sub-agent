@@ -6,7 +6,9 @@ use csa_session::convergence::{
 };
 use serde::{Deserialize, Serialize};
 
-const DISCOVERY_PAGE_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+use super::bundle::ProviderEvidenceIdentity;
+
+const DISCOVERY_PAGE_ARTIFACT_SCHEMA_VERSION: u32 = 2;
 const DISCOVERY_PAGE_ARTIFACT_KIND: &str = "convergence_discovery_observation_page";
 
 #[derive(Serialize, Deserialize)]
@@ -14,13 +16,18 @@ const DISCOVERY_PAGE_ARTIFACT_KIND: &str = "convergence_discovery_observation_pa
 struct DiscoveryPageArtifact {
     schema_version: u32,
     kind: String,
+    provider_evidence: ProviderEvidenceIdentity,
     provider_response_raw: String,
 }
 
-pub(super) fn encode_discovery_page_artifact(raw_response: &str) -> Result<Vec<u8>> {
+pub(super) fn encode_discovery_page_artifact(
+    raw_response: &str,
+    provider_evidence: &ProviderEvidenceIdentity,
+) -> Result<Vec<u8>> {
     serde_json::to_vec(&DiscoveryPageArtifact {
         schema_version: DISCOVERY_PAGE_ARTIFACT_SCHEMA_VERSION,
         kind: DISCOVERY_PAGE_ARTIFACT_KIND.to_string(),
+        provider_evidence: provider_evidence.clone(),
         provider_response_raw: raw_response.to_string(),
     })
     .context("serialize convergence discovery page artifact")
@@ -29,6 +36,7 @@ pub(super) fn encode_discovery_page_artifact(raw_response: &str) -> Result<Vec<u
 pub(super) fn decode_discovery_page_artifact(
     artifact_bytes: &[u8],
     expected_digest: &Sha256Digest,
+    expected_provider_evidence: &ProviderEvidenceIdentity,
 ) -> Result<String> {
     let actual_digest = Sha256Digest::compute(artifact_bytes);
     if &actual_digest != expected_digest {
@@ -50,6 +58,9 @@ pub(super) fn decode_discovery_page_artifact(
             artifact.kind
         );
     }
+    if &artifact.provider_evidence != expected_provider_evidence {
+        bail!("convergence discovery page artifact provider evidence identity mismatch");
+    }
     Ok(artifact.provider_response_raw)
 }
 
@@ -68,9 +79,12 @@ impl DiscoveryRunOutput {
         completion: ProviderTurnCompletion,
         model_identity: AdmittedModelIdentity,
         artifact_path: &str,
+        provider_evidence: &ProviderEvidenceIdentity,
     ) -> Result<Self> {
-        let artifact_digest =
-            Sha256Digest::compute(&encode_discovery_page_artifact(&raw_response)?);
+        let artifact_digest = Sha256Digest::compute(&encode_discovery_page_artifact(
+            &raw_response,
+            provider_evidence,
+        )?);
         Self::new_with_artifact_digest(
             raw_response,
             session_id,

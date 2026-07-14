@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
@@ -109,6 +110,7 @@ impl DiscoveryRunner for ScriptedRunner {
         &'a mut self,
         request: DiscoveryRequest,
     ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>> {
+        let provider_evidence = request.frozen.provider_evidence.identity.clone();
         self.requests.push(request);
         let step = self.steps.pop_front();
         let result = match step {
@@ -120,7 +122,7 @@ impl DiscoveryRunner for ScriptedRunner {
         if let Ok(output) = &result {
             self.artifacts.insert(
                 output.artifact.digest().to_string(),
-                encode_discovery_page_artifact(&output.raw_response)
+                encode_discovery_page_artifact(&output.raw_response, &provider_evidence)
                     .expect("encode scripted discovery artifact"),
             );
         }
@@ -145,12 +147,14 @@ fn frozen() -> FrozenWorkspace {
 }
 
 fn output(completion: ProviderTurnCompletion, raw: String) -> Result<DiscoveryRunOutput> {
+    let frozen = frozen();
     DiscoveryRunOutput::new(
         raw,
         SESSION,
         completion,
         AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high")?,
         "output/convergence-discovery-page.json",
+        &frozen.provider_evidence.identity,
     )
 }
 
@@ -520,11 +524,24 @@ fn production_runner_mapping_is_fresh_readonly_and_history_free() {
     assert!(policy.extra_writable.is_empty());
     assert!(!policy.no_fs_sandbox);
 
-    let prompt = super::runner::build_discovery_prompt(&DiscoveryRequest::for_test(frozen()));
+    let request = DiscoveryRequest::for_test(frozen());
+    let input = super::runner::provider_input(&request);
+    assert_ne!(input.project_root, Path::new("/mutable/source-checkout"));
+    assert_eq!(
+        input.bundle_path.parent(),
+        Some(input.project_root.as_path())
+    );
+    assert!(input.extra_readable.is_empty());
+
+    let prompt = super::runner::build_discovery_prompt(&request);
     assert!(prompt.contains("walking-skeleton observation cell"));
     assert!(prompt.contains("not exhaustive semantic coverage"));
+    assert!(prompt.contains("provider-evidence.tar"));
+    assert!(prompt.contains(input.bundle_digest.as_str()));
+    assert!(prompt.contains("sha256sum"));
+    assert!(prompt.contains("tar -tf"));
+    assert!(!prompt.contains("/mutable/source-checkout"));
     assert!(!prompt.contains("prior round"));
-    assert!(!prompt.contains("patch"));
 }
 
 fn parsed_review(argv: &[&str]) -> crate::cli::ReviewArgs {

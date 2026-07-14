@@ -17,6 +17,7 @@ use csa_session::convergence::{
 };
 use serde::Serialize;
 
+use super::bundle::ProviderEvidenceRef;
 pub(crate) use super::output::DiscoveryRunOutput;
 use super::recovery::recover_missing_candidate;
 use super::schema::parse_discovery_page;
@@ -32,9 +33,11 @@ pub(crate) struct FrozenWorkspace {
     pub(crate) diff_digest: Sha256Digest,
     pub(crate) index_clean: bool,
     pub(crate) worktree_clean: bool,
+    pub(crate) provider_evidence: ProviderEvidenceRef,
 }
 
 impl FrozenWorkspace {
+    #[cfg(test)]
     pub(crate) fn new(
         base_oid: &str,
         head_oid: &str,
@@ -42,12 +45,35 @@ impl FrozenWorkspace {
         index_clean: bool,
         worktree_clean: bool,
     ) -> Result<Self> {
+        let provider_evidence = ProviderEvidenceRef::synthetic(base_oid, head_oid, &diff_digest);
+        Self::new_with_provider_evidence(
+            base_oid,
+            head_oid,
+            diff_digest,
+            index_clean,
+            worktree_clean,
+            provider_evidence,
+        )
+    }
+
+    pub(crate) fn new_with_provider_evidence(
+        base_oid: &str,
+        head_oid: &str,
+        diff_digest: Sha256Digest,
+        index_clean: bool,
+        worktree_clean: bool,
+        provider_evidence: ProviderEvidenceRef,
+    ) -> Result<Self> {
+        if !provider_evidence.matches_tuple(base_oid, head_oid, &diff_digest) {
+            anyhow::bail!("provider evidence identity does not match the frozen exact-OID tuple");
+        }
         Ok(Self {
             base_oid: GitObjectId::parse(base_oid)?.as_str().to_string(),
             head_oid: GitObjectId::parse(head_oid)?.as_str().to_string(),
             diff_digest,
             index_clean,
             worktree_clean,
+            provider_evidence,
         })
     }
 
@@ -419,6 +445,7 @@ where
                     &ledger,
                     &campaign,
                     &attempt_id,
+                    &frozen.provider_evidence.identity,
                     provider_calls,
                 )
                 .await?;
