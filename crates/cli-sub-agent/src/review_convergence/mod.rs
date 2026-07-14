@@ -8,6 +8,132 @@ mod schema;
 use anyhow::Result;
 use csa_session::convergence::{ConvergenceLedgerStore, Sha256Digest};
 
+pub(super) struct EarlyCommandContext<'a> {
+    pub(super) args: &'a crate::cli::ReviewArgs,
+    pub(super) project_root: &'a std::path::Path,
+    pub(super) project_config: Option<&'a csa_config::ProjectConfig>,
+    pub(super) global_config: &'a csa_config::GlobalConfig,
+    pub(super) model_catalog: &'a csa_config::EffectiveModelCatalog,
+    pub(super) effective_tier: Option<&'a str>,
+    pub(super) selection: &'a super::session_fix::SelectionToolResolution,
+    pub(super) current_depth: u32,
+    pub(super) startup_env: &'a crate::startup_env::StartupSubtreeEnv,
+}
+
+pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Result<i32> {
+    let args = context.args;
+    let Some(range_label) = args.range.as_deref() else {
+        return Err(anyhow::anyhow!("validated convergence range is missing"));
+    };
+    let review_description = format!("convergence discovery observation for {range_label}");
+    let detected_parent_tool = crate::run_helpers::detect_parent_tool();
+    let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, context.global_config);
+    crate::run_helpers::warn_if_tier_without_tool(
+        args.tier.as_deref(),
+        context.selection.direct_tool_requested,
+    );
+    let resolved_selection = super::session_fix::resolve_selection_or_persist_error(
+        super::session_fix::SelectionResolutionCtx {
+            args,
+            project_config: context.project_config,
+            global_config: context.global_config,
+            model_catalog: context.model_catalog,
+            parent_tool: parent_tool.as_deref(),
+            project_root: context.project_root,
+            effective_tier: context.effective_tier,
+            selection_tool: context.selection.selection_tool,
+            direct_tool_requested: context.selection.direct_tool_requested,
+            session_fix: context.selection.session_fix.as_ref(),
+            review_description: &review_description,
+        },
+    )?;
+    let tool = resolved_selection.tool;
+    let resolved_model_spec = resolved_selection.model_spec;
+    let tier_preference_order = resolved_selection.tier_preference_order;
+    let tier_active = resolved_model_spec.is_some()
+        && args.model_spec.is_none()
+        && !args.force_ignore_tier_setting;
+    let execution_no_failover = super::session_fix::effective_no_failover_for_session_fix(
+        args.no_failover,
+        context.selection.session_fix.as_ref(),
+    );
+    let resolved_tier_name = if tier_active {
+        super::resolve_review_tier_name(
+            context.project_config,
+            context.global_config,
+            context.effective_tier,
+            args.force_override_user_config,
+            args.force_ignore_tier_setting,
+        )?
+    } else {
+        None
+    };
+    let config_review_model = context
+        .project_config
+        .and_then(|value| value.review.as_ref())
+        .and_then(|value| value.model.as_deref())
+        .or(context.global_config.review.model.as_deref());
+    let review_model = super::resolve_review_model(
+        args.model.as_deref(),
+        config_review_model,
+        resolved_model_spec.is_some(),
+    );
+    let review_thinking = super::resolve_review_thinking(
+        args.thinking.as_deref(),
+        context
+            .project_config
+            .and_then(|value| value.review.as_ref())
+            .and_then(|value| value.thinking.as_deref())
+            .or(context.global_config.review.thinking.as_deref()),
+        resolved_model_spec.is_some(),
+    );
+    let stream_mode = super::resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
+    let idle_timeout_seconds = crate::pipeline::resolve_effective_idle_timeout_seconds(
+        context.project_config,
+        args.idle_timeout,
+        args.timeout,
+    );
+    let initial_response_timeout_seconds =
+        super::resolve_effective_initial_response_timeout_for_tool(
+            context.project_config,
+            args.initial_response_timeout,
+            args.idle_timeout,
+            args.timeout,
+            tool.as_str(),
+        );
+    let explicit_tool_with_failover =
+        (context.selection.direct_tool_requested && tier_active && !execution_no_failover)
+            .then_some(tool);
+    let review_routing = crate::review_routing::detect_review_routing_metadata(
+        context.project_root,
+        context.project_config,
+    );
+    run_resolved_command(runner::ResolvedCommandContext {
+        project_root: context.project_root,
+        args,
+        project_config: context.project_config,
+        global_config: context.global_config,
+        model_catalog: context.model_catalog,
+        pre_session_hook: None,
+        review_routing,
+        tool,
+        tier_model_spec: resolved_model_spec,
+        tier_name: resolved_tier_name,
+        tier_fallback_enabled: tier_active,
+        tier_preference_order,
+        model: review_model,
+        thinking: review_thinking,
+        stream_mode,
+        idle_timeout_seconds,
+        initial_response_timeout_seconds,
+        no_failover: execution_no_failover,
+        explicit_tool_with_failover,
+        current_depth: context.current_depth,
+        startup_env: context.startup_env,
+    })
+    .await
+}
+
 // Canonical JSON; object and cell keys are lexically ordered.
 const POLICY_JSON: &[u8] = br#"{"coverage_cells":[{"lens":"broad_discovery","requirement":"required","scope":"whole_explicit_range"}],"kind":"convergence_discovery_observation","provider_call_budget_per_cell":4,"schema_version":1,"semantic_coverage":"walking_skeleton_not_exhaustive"}"#;
 
@@ -75,12 +201,12 @@ pub(super) fn emit_setup_block(reason_code: &'static str, error: &anyhow::Error)
 pub(super) async fn run_resolved_command(
     context: runner::ResolvedCommandContext<'_>,
 ) -> Result<i32> {
-    let range = context
-        .args
-        .range
-        .as_deref()
-        .expect("validated convergence range")
-        .to_owned();
+    let Some(range) = context.args.range.clone() else {
+        return emit_setup_block(
+            "invalid_convergence_input",
+            &anyhow::anyhow!("validated convergence range is missing"),
+        );
+    };
     run_command(context, &range).await
 }
 

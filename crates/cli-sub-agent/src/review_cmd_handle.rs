@@ -1,6 +1,19 @@
 use super::*;
 
 pub(crate) async fn handle_review(
+    args: ReviewArgs,
+    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
+) -> Result<i32> {
+    let convergence = args.converge;
+    match handle_review_inner(args, current_depth, startup_env).await {
+        Ok(exit_code) => Ok(exit_code),
+        Err(error) if convergence => review_convergence::emit_setup_block("setup_failure", &error),
+        Err(error) => Err(error),
+    }
+}
+
+async fn handle_review_inner(
     mut args: ReviewArgs,
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
@@ -40,6 +53,20 @@ pub(crate) async fn handle_review(
         effective_tier.as_deref(),
         selection.direct_tool_requested,
     )?;
+    if args.converge {
+        return review_convergence::run_early_command(review_convergence::EarlyCommandContext {
+            args: &args,
+            project_root: &project_root,
+            project_config: config.as_ref(),
+            global_config: &global_config,
+            model_catalog: &model_catalog,
+            effective_tier: effective_tier.as_deref(),
+            selection: &selection,
+            current_depth,
+            startup_env,
+        })
+        .await;
+    }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let review_pattern = verify_review_skill_available(&project_root, args.allow_fallback)?;
     if is_worktree_submodule(&project_root) {
@@ -220,35 +247,6 @@ pub(crate) async fn handle_review(
     let reviewers = reviewer_selection.reviewers;
     let explicit_tool_with_failover =
         (selection.direct_tool_requested && tier_active && !execution_no_failover).then_some(tool);
-
-    if args.converge {
-        return review_convergence::run_resolved_command(
-            review_convergence::runner::ResolvedCommandContext {
-                project_root: &project_root,
-                args: &args,
-                project_config: config.as_ref(),
-                global_config: &global_config,
-                model_catalog: &model_catalog,
-                pre_session_hook,
-                review_routing,
-                tool,
-                tier_model_spec: resolved_model_spec,
-                tier_name: resolved_tier_name,
-                tier_fallback_enabled: tier_active,
-                tier_preference_order,
-                model: review_model,
-                thinking: review_thinking,
-                stream_mode,
-                idle_timeout_seconds,
-                initial_response_timeout_seconds,
-                no_failover: execution_no_failover,
-                explicit_tool_with_failover,
-                current_depth,
-                startup_env,
-            },
-        )
-        .await;
-    }
 
     let explicit_multi_reviewer = args.reviewers.is_some() && args.requested_reviewers() > 1;
     if !explicit_multi_reviewer

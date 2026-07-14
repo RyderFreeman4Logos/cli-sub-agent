@@ -579,84 +579,87 @@ fn convergence_cli_flags_parse_validate_and_appear_in_help() {
 
 #[test]
 fn convergence_cli_rejects_unpaired_non_range_and_unsafe_options() {
+    let unsafe_case = |tail: &[&'static str]| {
+        let mut args = vec!["--converge", "--discovery-only", "--range", "main...HEAD"];
+        args.extend_from_slice(tail);
+        args
+    };
     let cases = [
         vec!["--converge", "--range", "main...HEAD"],
         vec!["--discovery-only", "--range", "main...HEAD"],
         vec!["--converge", "--discovery-only"],
         vec!["--converge", "--discovery-only", "--range", "main..HEAD"],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--check-verdict",
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--fix",
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--fix-finding",
-            "--session",
-            SESSION,
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--session",
-            SESSION,
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--reviewers",
-            "2",
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--no-fs-sandbox",
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--extra-writable",
-            "/tmp",
-        ],
-        vec![
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-            "--prior-rounds-summary",
-            "old.toml",
-        ],
+        unsafe_case(&["--check-verdict"]),
+        unsafe_case(&["--fix"]),
+        unsafe_case(&["--fix-finding", "--session", SESSION]),
+        unsafe_case(&["--session", SESSION]),
+        unsafe_case(&["--reviewers", "2"]),
+        unsafe_case(&["--no-fs-sandbox"]),
+        unsafe_case(&["--extra-readable", "/tmp/provider-input"]),
+        unsafe_case(&["--context", "context.md"]),
+        unsafe_case(&["--prompt-file", "prompt.md"]),
+        unsafe_case(&["--spec", "contract.spec"]),
+        unsafe_case(&["--extra-writable", "/tmp"]),
+        unsafe_case(&["--prior-rounds-summary", "old.toml"]),
     ];
 
-    for tail in cases {
+    for mut tail in cases {
+        let spec = tail.iter().position(|arg| *arg == "--spec").map(|index| {
+            tail.remove(index);
+            tail.remove(index).to_owned()
+        });
         let mut argv = vec!["csa", "review"];
         argv.extend(tail);
-        let args = parsed_review(&argv);
+        let mut args = parsed_review(&argv);
+        args.spec = spec;
         let error = crate::cli::validate_review_args(&args)
             .expect_err("unsafe convergence combination must fail");
         assert!(
             error.to_string().contains("experimental observe-only"),
             "unexpected validation error: {error}"
+        );
+    }
+}
+
+#[test]
+fn legacy_review_still_accepts_supplementary_read_inputs() {
+    let mut args = parsed_review(&[
+        "csa",
+        "review",
+        "--range",
+        "main...HEAD",
+        "--context",
+        "context.md",
+        "--prompt-file",
+        "prompt.md",
+        "--extra-readable",
+        "/tmp/provider-input",
+    ]);
+    args.spec = Some("contract.spec".to_owned());
+    crate::cli::validate_review_args(&args)
+        .expect("legacy review supplementary inputs must remain accepted");
+}
+
+#[test]
+fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_diff() {
+    let source = include_str!("../review_cmd_handle.rs");
+    let Some(dispatch) = source.find("if args.converge {") else {
+        panic!("convergence dispatch is missing");
+    };
+    for ordinary_step in [
+        "verify_review_skill_available",
+        "run_pre_review_quality_gate",
+        "derive_scope_for_project",
+        "resolve_review_depth_for_project",
+        "compute_review_diff_size",
+        "build_review_instruction_for_project",
+    ] {
+        let Some(position) = source.find(ordinary_step) else {
+            panic!("ordinary review step is missing: {ordinary_step}");
+        };
+        assert!(
+            dispatch < position,
+            "convergence dispatch must precede ordinary review step {ordinary_step}"
         );
     }
 }

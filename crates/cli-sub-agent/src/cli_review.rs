@@ -494,12 +494,22 @@ fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap:
         Some("--files")
     } else if args.requested_reviewers() > 1 {
         Some("--reviewers > 1")
+    } else if args.context.is_some() {
+        Some("--context")
+    } else if args.prompt.is_some() {
+        Some("--prompt")
+    } else if args.prompt_file.is_some() {
+        Some("--prompt-file")
+    } else if args.spec.is_some() {
+        Some("--spec")
     } else if args.no_fs_sandbox {
         Some("--no-fs-sandbox")
     } else if args.allow_user_daemon_ipc {
         Some("--allow-user-daemon-ipc")
     } else if !args.extra_writable.is_empty() {
         Some("--extra-writable")
+    } else if !args.extra_readable.is_empty() {
+        Some("--extra-readable")
     } else if args.prior_rounds_summary.is_some() {
         Some("--prior-rounds-summary")
     } else {
