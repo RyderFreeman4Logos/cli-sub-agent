@@ -9,6 +9,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
+mod ledger;
+
+pub use ledger::{
+    CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
+    LedgerEventId,
+};
+
 const EPOCH_DOMAIN: &[u8] = b"csa-convergence-epoch-v1\0";
 const COVERAGE_CELL_DOMAIN: &[u8] = b"csa-convergence-coverage-cell-v1\0";
 const STABLE_FINDING_DOMAIN: &[u8] = b"csa-convergence-stable-finding-v1\0";

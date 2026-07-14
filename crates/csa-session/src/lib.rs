@@ -36,6 +36,10 @@ mod vcs_identity_tests;
 #[path = "convergence_tests.rs"]
 mod convergence_tests;
 
+#[cfg(test)]
+#[path = "convergence_ledger_tests.rs"]
+mod convergence_ledger_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -62,8 +66,10 @@ pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use convergence::{
-    CampaignId, CampaignRecord, CoverageCellId, CoverageCellRecord, CoverageScope, EpochId,
-    EpochRecord, GitObjectId, SemanticFindingIdentity, SemanticLens, Sha256Digest, StableFindingId,
+    CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CampaignRecord, ConvergenceEvent,
+    ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellId, CoverageCellRecord, CoverageScope,
+    EpochId, EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
+    Sha256Digest, StableFindingId,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
