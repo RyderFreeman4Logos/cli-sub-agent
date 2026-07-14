@@ -1,12 +1,25 @@
 use anyhow::Result;
-use csa_executor::Executor;
+use csa_executor::{Executor, ModelSpec};
+
+#[derive(Debug)]
+pub(super) struct ValidatedExecutorIdentity {
+    pub(super) resolved_model_spec: ModelSpec,
+    pub(super) catalog_admission: csa_config::CatalogAdmission,
+}
+
+#[cfg(test)]
+impl ValidatedExecutorIdentity {
+    pub(super) fn expect(self, _message: &str) -> csa_config::CatalogAdmission {
+        self.catalog_admission
+    }
+}
 
 pub(super) fn validate_final_executor_identity(
     executor: &Executor,
     original_model_spec: Option<&str>,
     final_model_request: Option<&str>,
     model_catalog: &csa_config::EffectiveModelCatalog,
-) -> Result<Option<csa_config::CatalogAdmission>> {
+) -> Result<ValidatedExecutorIdentity> {
     let original = original_model_spec
         .map(csa_executor::ModelSpec::parse)
         .transpose()?;
@@ -68,8 +81,11 @@ pub(super) fn validate_final_executor_identity(
     // authoritative for its provider/model/reasoning identity. Restrict this
     // call to the selected typed tool instead of a stale global tool list.
     let known_tools = [executor.tool_name()];
-    final_spec
+    let catalog_admission = final_spec
         .validate_with_catalog(model_catalog, &known_tools)
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("execution-boundary catalog rejection: {error}"))
+        .map_err(|error| anyhow::anyhow!("execution-boundary catalog rejection: {error}"))?;
+    Ok(ValidatedExecutorIdentity {
+        resolved_model_spec: final_spec,
+        catalog_admission,
+    })
 }

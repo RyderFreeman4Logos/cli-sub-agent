@@ -1,26 +1,46 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use csa_core::model_catalog::{CatalogAdmission, CatalogWarning};
-use csa_executor::Executor;
+use csa_executor::{Executor, ModelSpec};
 
 #[derive(Debug)]
 pub(crate) struct AdmittedExecutor {
     executor: Executor,
+    // Retained for upcoming csa-session ledger provenance consumers.
+    #[allow(dead_code)]
+    resolved_model_spec: ModelSpec,
     catalog_warning: Option<CatalogWarning>,
     warning_emitted: AtomicBool,
 }
 
 impl AdmittedExecutor {
-    pub(super) fn new(executor: Executor, admission: Option<CatalogAdmission>) -> Self {
+    pub(super) fn new(
+        executor: Executor,
+        resolved_model_spec: ModelSpec,
+        admission: CatalogAdmission,
+    ) -> Self {
         Self {
             executor,
-            catalog_warning: admission
-                .as_ref()
-                .and_then(CatalogAdmission::warning)
-                .cloned(),
+            resolved_model_spec,
+            catalog_warning: admission.warning().cloned(),
             warning_emitted: AtomicBool::new(false),
         }
+    }
+
+    /// Returns CSA's execution-boundary catalog-admitted identity.
+    ///
+    /// This immutable snapshot records the resolved tool, provider, model, and
+    /// thinking budget selected for execution. It is not a provider-reported
+    /// identity from a response.
+    #[allow(dead_code)]
+    pub(crate) fn resolved_model_spec(&self) -> &ModelSpec {
+        &self.resolved_model_spec
+    }
+
+    /// Enable Codex fast-mode runtime metadata without changing model identity.
+    pub(crate) fn enable_codex_fast_mode(&mut self) {
+        self.executor.enable_codex_fast_mode();
     }
 
     #[cfg(test)]
@@ -34,12 +54,6 @@ impl Deref for AdmittedExecutor {
 
     fn deref(&self) -> &Self::Target {
         &self.executor
-    }
-}
-
-impl DerefMut for AdmittedExecutor {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.executor
     }
 }
 

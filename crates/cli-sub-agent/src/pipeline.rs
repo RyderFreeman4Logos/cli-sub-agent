@@ -423,7 +423,7 @@ pub(crate) async fn build_and_validate_executor(
     let final_model_request = final_model_request
         .as_deref()
         .or(default_model_resolved.as_deref());
-    let admission = validate_final_executor_identity(
+    let validated_identity = validate_final_executor_identity(
         &executor,
         model_spec,
         final_model_request,
@@ -464,7 +464,11 @@ pub(crate) async fn build_and_validate_executor(
         );
         anyhow::bail!("{e}");
     }
-    Ok(AdmittedExecutor::new(executor, admission))
+    Ok(AdmittedExecutor::new(
+        executor,
+        validated_identity.resolved_model_spec,
+        validated_identity.catalog_admission,
+    ))
 }
 
 async fn ensure_tool_runtime_prerequisites(
@@ -627,6 +631,10 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 
     Ok(path.canonicalize()?)
 }
+
+#[cfg(test)]
+#[path = "pipeline_admitted_executor_tests.rs"]
+mod admitted_executor_tests;
 
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
