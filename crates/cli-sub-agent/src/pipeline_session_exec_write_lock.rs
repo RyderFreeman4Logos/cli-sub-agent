@@ -189,6 +189,7 @@ mod tests {
     #[test]
     fn acquire_if_needed_blocks_post_exec_holder_while_guard_is_live() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
                 .expect("create holder session");
@@ -222,6 +223,7 @@ mod tests {
     #[test]
     fn acquire_if_needed_keeps_active_holder_session_blocked() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
                 .expect("create holder session");
@@ -249,6 +251,7 @@ mod tests {
     #[test]
     fn holder_session_is_terminal_when_phase_is_retired() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let mut holder =
             csa_session::create_session_fresh(temp.path(), Some("retired"), None, Some("codex"))
                 .expect("create holder session");
@@ -266,6 +269,7 @@ mod tests {
     #[test]
     fn holder_session_is_not_terminal_when_active_without_result() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
                 .expect("create holder session");
@@ -279,6 +283,7 @@ mod tests {
     #[test]
     fn holder_session_result_is_not_stale_when_missing() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("running"), None, Some("codex"))
                 .expect("create holder session");
@@ -292,6 +297,7 @@ mod tests {
     #[test]
     fn holder_session_result_is_not_stale_when_fresh() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
                 .expect("create holder session");
@@ -307,6 +313,7 @@ mod tests {
     #[cfg(unix)]
     fn holder_session_result_is_stale_after_threshold() {
         let temp = tempfile::tempdir().unwrap();
+        let _sandbox = ScopedSessionSandbox::new_blocking(&temp);
         let holder =
             csa_session::create_session_fresh(temp.path(), Some("done"), None, Some("codex"))
                 .expect("create holder session");
