@@ -77,6 +77,8 @@ mod prose_resolution;
 mod resolve;
 #[path = "review_cmd_result.rs"]
 mod result_handling;
+#[path = "review_convergence/mod.rs"]
+mod review_convergence;
 #[path = "review_cmd_reviewers.rs"]
 mod reviewers;
 #[path = "review_cmd_session_fix.rs"]

@@ -89,6 +89,16 @@ impl std::fmt::Display for ReviewChunkingMode {
         .multiple(false)
 ))]
 pub struct ReviewArgs {
+    /// Run the experimental observe-only convergence discovery engine.
+    /// Currently requires --discovery-only and an explicit --range <base>...HEAD.
+    #[arg(long)]
+    pub converge: bool,
+
+    /// Collect discovery evidence for the walking-skeleton observation cell only.
+    /// This does not produce a review verdict or merge attestation.
+    #[arg(long)]
+    pub discovery_only: bool,
+
     /// Check that the current branch HEAD has a passing full-diff review verdict.
     ///
     /// This is a fast, read-only state lookup used by git hooks and PR workflows.
@@ -367,6 +377,7 @@ impl ReviewArgs {
 }
 
 pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::Error> {
+    validate_convergence_args(args)?;
     let effective_review_mode = args.effective_review_mode();
 
     if args.red_team && matches!(args.review_mode, Some(ReviewMode::Standard)) {
@@ -424,6 +435,82 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
         ));
     }
 
+    Ok(())
+}
+
+fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap::Error> {
+    if !args.converge && !args.discovery_only {
+        return Ok(());
+    }
+
+    let error = |kind, detail: &str| {
+        clap::Error::raw(
+            kind,
+            format!(
+                "experimental observe-only convergence discovery: {detail}; this walking skeleton never falls back to ordinary review"
+            ),
+        )
+    };
+    if args.converge != args.discovery_only {
+        return Err(error(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "--converge and --discovery-only currently require each other",
+        ));
+    }
+    let Some(range) = args.range.as_deref() else {
+        return Err(error(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "an explicit --range <base>...HEAD is required",
+        ));
+    };
+    let Some(base) = range.strip_suffix("...HEAD") else {
+        return Err(error(
+            clap::error::ErrorKind::ValueValidation,
+            "--range must use the exact three-dot form <base>...HEAD",
+        ));
+    };
+    if base.is_empty() || base.contains("..") {
+        return Err(error(
+            clap::error::ErrorKind::ValueValidation,
+            "--range must name a nonempty base in the exact form <base>...HEAD",
+        ));
+    }
+
+    let conflict = if args.check_verdict {
+        Some("--check-verdict")
+    } else if args.fix {
+        Some("--fix")
+    } else if args.fix_finding {
+        Some("--fix-finding")
+    } else if args.session.is_some() {
+        Some("--session/--resume")
+    } else if args.diff {
+        Some("--diff")
+    } else if args.branch.is_some() {
+        Some("--branch")
+    } else if args.commit.is_some() {
+        Some("--commit")
+    } else if args.files.is_some() {
+        Some("--files")
+    } else if args.requested_reviewers() > 1 {
+        Some("--reviewers > 1")
+    } else if args.no_fs_sandbox {
+        Some("--no-fs-sandbox")
+    } else if args.allow_user_daemon_ipc {
+        Some("--allow-user-daemon-ipc")
+    } else if !args.extra_writable.is_empty() {
+        Some("--extra-writable")
+    } else if args.prior_rounds_summary.is_some() {
+        Some("--prior-rounds-summary")
+    } else {
+        None
+    };
+    if let Some(flag) = conflict {
+        return Err(error(
+            clap::error::ErrorKind::ArgumentConflict,
+            &format!("{flag} is outside this immutable discovery-only slice"),
+        ));
+    }
     Ok(())
 }
 

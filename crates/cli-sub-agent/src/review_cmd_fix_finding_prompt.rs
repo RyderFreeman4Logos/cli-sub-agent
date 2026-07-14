@@ -96,6 +96,8 @@ mod tests {
 
     fn fix_finding_prompt_args() -> ReviewArgs {
         ReviewArgs {
+            converge: false,
+            discovery_only: false,
             check_verdict: false,
             tool: None,
             sa_mode: None,

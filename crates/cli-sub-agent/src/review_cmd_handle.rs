@@ -221,6 +221,35 @@ pub(crate) async fn handle_review(
     let explicit_tool_with_failover =
         (selection.direct_tool_requested && tier_active && !execution_no_failover).then_some(tool);
 
+    if args.converge {
+        return review_convergence::run_resolved_command(
+            review_convergence::runner::ResolvedCommandContext {
+                project_root: &project_root,
+                args: &args,
+                project_config: config.as_ref(),
+                global_config: &global_config,
+                model_catalog: &model_catalog,
+                pre_session_hook,
+                review_routing,
+                tool,
+                tier_model_spec: resolved_model_spec,
+                tier_name: resolved_tier_name,
+                tier_fallback_enabled: tier_active,
+                tier_preference_order,
+                model: review_model,
+                thinking: review_thinking,
+                stream_mode,
+                idle_timeout_seconds,
+                initial_response_timeout_seconds,
+                no_failover: execution_no_failover,
+                explicit_tool_with_failover,
+                current_depth,
+                startup_env,
+            },
+        )
+        .await;
+    }
+
     let explicit_multi_reviewer = args.reviewers.is_some() && args.requested_reviewers() > 1;
     if !explicit_multi_reviewer
         && !chunking::should_bypass_chunking(args.chunked_review, args.fix, args.session.is_some())
