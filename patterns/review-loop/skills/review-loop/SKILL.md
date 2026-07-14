@@ -10,8 +10,12 @@ triggers:
 
 # Review Loop
 
-Bounded iterative review-fix loop. Runs `csa review --diff` up to 2 rounds,
-fixing issues between rounds until clean or max rounds exhausted.
+Bounded diagnostic review-fix front end. It may run at most 2 identical serial
+`review → fix → review` rounds. If the branch is still not clean, the serial loop
+MUST stop and change topology: freeze HEAD, fan out read-only discovery by
+semantic scope × lens, verify/deduplicate, cluster root causes, batch repairs,
+and finish with a fresh whole-range clean-room gate. Reaching the budget never
+authorizes PASS, push, or merge.
 
 ## Usage
 
@@ -34,7 +38,9 @@ breaks prompt-guard propagation.
    - **Multi-finding optimization**: When 2+ findings affect different files,
      uses `parallel-fix` pattern (parallel RECON / serial EDIT) for faster fix rounds.
 3. If clean: exits successfully
-4. If max rounds reached: reports remaining issues
+4. If max rounds are reached: keeps the branch blocked, persists remaining
+   findings, and escalates to convergence topology; never returns PASS merely
+   because the serial budget is exhausted
 
 ## Variables
 
