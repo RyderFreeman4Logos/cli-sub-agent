@@ -6,9 +6,10 @@ use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
     ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellRecord,
-    CoverageDispositionRecord, CoverageRequirement, CoverageScope, CsaSessionId,
-    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, GitObjectId, LedgerEventId,
-    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
+    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
+    SessionRelativeArtifactPath, Sha256Digest,
 };
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -57,6 +58,7 @@ fn model() -> AdmittedModelIdentity {
 
 fn artifact(path: &str, bytes: &[u8]) -> ArtifactEvidenceRef {
     ArtifactEvidenceRef::new(
+        CsaSessionId::parse(SESSION).unwrap(),
         SessionRelativeArtifactPath::new(path).unwrap(),
         Sha256Digest::compute(bytes),
     )
@@ -73,7 +75,6 @@ fn attempt_for(
         id,
         epoch.id().clone(),
         cell.id().clone(),
-        CsaSessionId::parse(SESSION).unwrap(),
         at(4),
         completion,
         model(),
@@ -145,6 +146,18 @@ fn discovery_history(
         campaign_start(),
         ConvergenceEvent::EpochOpened(epoch.clone()),
         ConvergenceEvent::CoverageCellDefined(cell.clone()),
+        ConvergenceEvent::CoverageDispositionRecorded(
+            CoverageDispositionRecord::new(
+                cell.id().clone(),
+                CoverageRequirement::Required,
+                "review_policy",
+                "The campaign policy requires correctness coverage.",
+            )
+            .unwrap(),
+        ),
+        ConvergenceEvent::CoveragePlanFinalized(CoveragePlanFinalizationRecord::new(
+            epoch.id().clone(),
+        )),
         ConvergenceEvent::DiscoveryAttemptRecorded(attempt.clone()),
     ]
 }
@@ -157,7 +170,6 @@ fn convergence_evidence_natural_zero_candidate_attempt_round_trips() {
         DiscoveryAttemptId::parse(ATTEMPT).unwrap(),
         epoch.id().clone(),
         cell.id().clone(),
-        CsaSessionId::parse(SESSION).unwrap(),
         at(4),
         ProviderTurnCompletion::Natural,
         model(),
@@ -230,7 +242,6 @@ fn convergence_evidence_strict_attempt_inputs_and_json_are_rejected() {
             DiscoveryAttemptId::generate(),
             epoch.id().clone(),
             cell.id().clone(),
-            CsaSessionId::parse(SESSION).unwrap(),
             at(4),
             ProviderTurnCompletion::Unknown,
             model(),
@@ -272,7 +283,7 @@ fn convergence_evidence_strict_attempt_inputs_and_json_are_rejected() {
     assert!(serde_json::from_value::<DiscoveryAttemptRecord>(missing_completion).is_err());
 
     let mut invalid_session = serde_json::to_value(valid).unwrap();
-    invalid_session["csa_session_id"] = json!("invalid");
+    invalid_session["artifact"]["csa_session_id"] = json!("invalid");
     assert!(serde_json::from_value::<DiscoveryAttemptRecord>(invalid_session).is_err());
 }
 
@@ -301,7 +312,6 @@ fn convergence_evidence_attempt_requires_prior_matching_epoch_and_cell() {
         DiscoveryAttemptId::generate(),
         epoch_b.id().clone(),
         cell_a.id().clone(),
-        CsaSessionId::parse(SESSION).unwrap(),
         at(5),
         ProviderTurnCompletion::Natural,
         model(),
@@ -321,13 +331,9 @@ fn convergence_evidence_attempt_requires_prior_matching_epoch_and_cell() {
     ]);
     assert!(mismatch.validate().is_err());
 
-    let duplicate = ledger(vec![
-        campaign_start(),
-        ConvergenceEvent::EpochOpened(epoch('a')),
-        ConvergenceEvent::CoverageCellDefined(cell(&epoch('a'), "a")),
-        ConvergenceEvent::DiscoveryAttemptRecorded(attempt_a.clone()),
-        ConvergenceEvent::DiscoveryAttemptRecorded(attempt_a),
-    ]);
+    let mut duplicate_events = discovery_history(&epoch('a'), &cell(&epoch('a'), "a"), &attempt_a);
+    duplicate_events.push(ConvergenceEvent::DiscoveryAttemptRecorded(attempt_a));
+    let duplicate = ledger(duplicate_events);
     assert!(duplicate.validate().is_err());
 }
 
@@ -397,6 +403,9 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         ConvergenceEvent::CandidateRecorded(canonical.clone()),
         ConvergenceEvent::CandidateRecorded(duplicate.clone()),
         ConvergenceEvent::CandidateRecorded(different.clone()),
+        ConvergenceEvent::DiscoveryAttemptFinalized(DiscoveryAttemptFinalizationRecord::new(
+            attempt_id.clone(),
+        )),
     ]);
 
     let accepted = CandidateDispositionRecord::new(

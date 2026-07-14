@@ -10,13 +10,17 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
 mod evidence;
+mod finalization;
 mod ledger;
+mod validation;
 
 pub use evidence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateDispositionRecord,
     CandidateRecord, CoverageDispositionRecord, CoverageRequirement, DiscoveryAttemptRecord,
     SessionRelativeArtifactPath,
 };
+
+pub use finalization::{CoveragePlanFinalizationRecord, DiscoveryAttemptFinalizationRecord};
 
 pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
@@ -702,15 +706,18 @@ fn normalize_nonblank(field: &str, value: &str) -> Result<String> {
     if normalized.is_empty() {
         bail!("{field} must not be blank");
     }
+    if normalized.contains('\0') {
+        bail!("{field} must not contain NUL bytes");
+    }
     Ok(normalized.to_string())
 }
 
-fn hash_fields(domain: &[u8], fields: &[&str]) -> Sha256Digest {
+pub(crate) fn hash_fields(domain: &[u8], fields: &[&str]) -> Sha256Digest {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     for field in fields {
+        hasher.update((field.len() as u64).to_be_bytes());
         hasher.update(field.as_bytes());
-        hasher.update(b"\0");
     }
     Sha256Digest::from_hash(&hasher.finalize())
 }

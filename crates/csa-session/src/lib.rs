@@ -44,6 +44,10 @@ mod convergence_ledger_tests;
 #[path = "convergence_evidence_tests.rs"]
 mod convergence_evidence_tests;
 
+#[cfg(test)]
+#[path = "convergence_protocol_tests.rs"]
+mod convergence_protocol_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -70,10 +74,14 @@ pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use convergence::{
-    CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CampaignRecord, ConvergenceEvent,
-    ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellId, CoverageCellRecord, CoverageScope,
-    EpochId, EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
-    Sha256Digest, StableFindingId,
+    AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
+    CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
+    ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellId,
+    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
+    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochId, EpochRecord, GitObjectId, LedgerEventId,
+    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    StableFindingId,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

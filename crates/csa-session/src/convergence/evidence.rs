@@ -87,6 +87,9 @@ impl SessionRelativeArtifactPath {
         if value.is_empty() || value.trim() != value {
             bail!("session-relative artifact path must be nonblank and normalized");
         }
+        if value.contains('\0') {
+            bail!("session-relative artifact path must not contain NUL bytes");
+        }
         if Path::new(value).is_absolute() {
             bail!("session-relative artifact path must not be absolute");
         }
@@ -153,19 +156,33 @@ impl<'de> Deserialize<'de> for SessionRelativeArtifactPath {
     }
 }
 
-/// Digest-bound reference to one persisted discovery evidence artifact.
+/// Session-locatable, digest-bound reference to one persisted discovery evidence artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactEvidenceRef {
+    csa_session_id: CsaSessionId,
     path: SessionRelativeArtifactPath,
     digest: Sha256Digest,
 }
 
 impl ArtifactEvidenceRef {
-    /// Construct a digest-bound artifact evidence reference.
+    /// Construct a self-contained artifact evidence reference.
     #[must_use]
-    pub fn new(path: SessionRelativeArtifactPath, digest: Sha256Digest) -> Self {
-        Self { path, digest }
+    pub fn new(
+        csa_session_id: CsaSessionId,
+        path: SessionRelativeArtifactPath,
+        digest: Sha256Digest,
+    ) -> Self {
+        Self {
+            csa_session_id,
+            path,
+            digest,
+        }
+    }
+    /// Return the CSA meta-session containing the referenced artifact.
+    #[must_use]
+    pub fn csa_session_id(&self) -> &CsaSessionId {
+        &self.csa_session_id
     }
     /// Return the validated session-relative artifact path.
     #[must_use]
@@ -185,7 +202,6 @@ pub struct DiscoveryAttemptRecord {
     id: DiscoveryAttemptId,
     epoch_id: EpochId,
     coverage_cell_id: CoverageCellId,
-    csa_session_id: CsaSessionId,
     completed_at: DateTime<Utc>,
     completion: ProviderTurnCompletion,
     model_identity: AdmittedModelIdentity,
@@ -210,7 +226,6 @@ impl DiscoveryAttemptRecord {
         id: DiscoveryAttemptId,
         epoch_id: EpochId,
         coverage_cell_id: CoverageCellId,
-        csa_session_id: CsaSessionId,
         completed_at: DateTime<Utc>,
         completion: ProviderTurnCompletion,
         model_identity: AdmittedModelIdentity,
@@ -243,7 +258,6 @@ impl DiscoveryAttemptRecord {
             id,
             epoch_id,
             coverage_cell_id,
-            csa_session_id,
             completed_at,
             completion,
             model_identity,
@@ -269,10 +283,10 @@ impl DiscoveryAttemptRecord {
     pub fn coverage_cell_id(&self) -> &CoverageCellId {
         &self.coverage_cell_id
     }
-    /// Return the CSA meta-session that performed the attempt.
+    /// Return the CSA meta-session containing this attempt's evidence.
     #[must_use]
     pub fn csa_session_id(&self) -> &CsaSessionId {
-        &self.csa_session_id
+        self.artifact.csa_session_id()
     }
     /// Return when the attempt completed or stopped producing evidence.
     #[must_use]
@@ -324,7 +338,6 @@ impl DiscoveryAttemptRecord {
             self.id.clone(),
             self.epoch_id.clone(),
             self.coverage_cell_id.clone(),
-            self.csa_session_id.clone(),
             self.completed_at,
             self.completion,
             self.model_identity.clone(),
@@ -349,7 +362,6 @@ impl<'de> Deserialize<'de> for DiscoveryAttemptRecord {
             id: DiscoveryAttemptId,
             epoch_id: EpochId,
             coverage_cell_id: CoverageCellId,
-            csa_session_id: CsaSessionId,
             completed_at: DateTime<Utc>,
             completion: ProviderTurnCompletion,
             model_identity: AdmittedModelIdentity,
@@ -365,7 +377,6 @@ impl<'de> Deserialize<'de> for DiscoveryAttemptRecord {
             raw.id,
             raw.epoch_id,
             raw.coverage_cell_id,
-            raw.csa_session_id,
             raw.completed_at,
             raw.completion,
             raw.model_identity,
