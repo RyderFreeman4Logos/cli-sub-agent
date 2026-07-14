@@ -283,12 +283,15 @@ async fn handle_run_no_preflight_skips_ai_config_check() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    let project_dir = tempdir().unwrap();
+    let project_dir = tempfile::Builder::new()
+        .prefix("csa-worktree-lock-429-probe")
+        .tempdir()
+        .unwrap();
     let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
     sandbox.track_env("PATH");
@@ -299,8 +302,8 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let fake_codex = bin_dir.join("codex");
-    std::fs::write(&fake_codex, "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
+    let execution_marker = bin_dir.join("codex.executed");
+    std::fs::write(&fake_codex, "#!/bin/sh\n: > \"$0.executed\"\nexit 0\n").unwrap();
     {
         let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
         perms.set_mode(0o755);
@@ -385,6 +388,11 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     .expect_err("run writer should fail before tool execution when worktree lock is held");
     let err = err.to_string();
 
+    assert!(
+        !execution_marker.exists(),
+        "Codex must not execute when worktree preflight fails: {}",
+        execution_marker.display()
+    );
     assert!(
         err.contains("concurrent write session blocked"),
         "unexpected error: {err}"
