@@ -12,6 +12,7 @@ use ulid::Ulid;
 mod evidence;
 mod finalization;
 mod ledger;
+mod store;
 mod validation;
 
 pub use evidence::{
@@ -26,6 +27,10 @@ pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
     LedgerEventId,
 };
+
+#[cfg(test)]
+pub(crate) use store::MAX_LEDGER_BYTES;
+pub use store::{ConvergenceAppendError, ConvergenceLedgerStore};
 
 const EPOCH_DOMAIN: &[u8] = b"csa-convergence-epoch-v1\0";
 const COVERAGE_CELL_DOMAIN: &[u8] = b"csa-convergence-coverage-cell-v1\0";

@@ -1,5 +1,7 @@
 //! Session management with ULID-based genealogy tracking.
 
+mod atomic_state_write;
+
 pub mod adjudication;
 pub mod caller_detect;
 pub mod checklist_store;
@@ -48,6 +50,10 @@ mod convergence_evidence_tests;
 #[path = "convergence_protocol_tests.rs"]
 mod convergence_protocol_tests;
 
+#[cfg(test)]
+#[path = "convergence_store_tests.rs"]
+mod convergence_store_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -76,12 +82,12 @@ pub use checklist_store::ChecklistStore;
 pub use convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellId,
-    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
-    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochId, EpochRecord, GitObjectId, LedgerEventId,
-    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
-    StableFindingId,
+    ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
+    ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochId,
+    EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
+    SessionRelativeArtifactPath, Sha256Digest, StableFindingId,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

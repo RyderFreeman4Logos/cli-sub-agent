@@ -8,8 +8,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-#[path = "atomic_state_write.rs"]
-mod atomic_state_write;
 #[path = "manager_access.rs"]
 mod manager_access;
 #[path = "manager_audit.rs"]
@@ -343,7 +341,18 @@ pub fn save_session_in(base_dir: &Path, state: &MetaSessionState) -> Result<()> 
 
     let contents = toml::to_string_pretty(state).context("Failed to serialize session state")?;
 
-    atomic_state_write::write_state_atomically(&session_dir, &state_path, &contents)
+    crate::atomic_state_write::publish_bytes(&session_dir, &state_path, contents.as_bytes())
+        .map_err(|error| match error {
+            crate::atomic_state_write::AtomicPublishError::BeforePublish(error) => error.context(
+                format!("Failed to publish state file: {}", state_path.display()),
+            ),
+            crate::atomic_state_write::AtomicPublishError::PublishedButDurabilityUnconfirmed(
+                error,
+            ) => error.context(format!(
+                "State file rename completed but durability is unconfirmed; reload before retrying: {}",
+                state_path.display()
+            )),
+        })
 }
 
 /// Delete a session and its directory
