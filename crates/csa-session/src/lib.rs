@@ -51,6 +51,10 @@ mod convergence_evidence_tests;
 mod convergence_protocol_tests;
 
 #[cfg(test)]
+#[path = "convergence_discovery_tests.rs"]
+mod convergence_discovery_tests;
+
+#[cfg(test)]
 #[path = "convergence_store_tests.rs"]
 mod convergence_store_tests;
 
@@ -89,9 +93,10 @@ pub use convergence::{
     ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
     ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord, CoverageDispositionRecord,
     CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochId,
-    EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
-    SessionRelativeArtifactPath, Sha256Digest, StableFindingId,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GitObjectId, LedgerEventId,
+    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    StableFindingId, next_discovery_directive,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

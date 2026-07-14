@@ -9,12 +9,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
+mod discovery;
 mod evidence;
 mod finalization;
 mod ledger;
 mod secure_fs;
 mod store;
 mod validation;
+
+pub use discovery::{DiscoveryDirective, DiscoveryRunIntent, next_discovery_directive};
 
 pub use evidence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateDispositionRecord,
