@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -15,9 +15,11 @@ use crate::convergence::{
 
 const CAMPAIGN_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CAMPAIGN_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const CAMPAIGN_C: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
 const CHILD_ROLE_ENV: &str = "CSA_CONVERGENCE_STORE_CHILD";
 const CHILD_ROOT_ENV: &str = "CSA_CONVERGENCE_STORE_ROOT";
 const CHILD_CAMPAIGN_ENV: &str = "CSA_CONVERGENCE_STORE_CAMPAIGN";
+const CHILD_READY_ENV: &str = "CSA_CONVERGENCE_STORE_READY";
 
 fn campaign(value: &str) -> CampaignId {
     CampaignId::parse(value).unwrap()
@@ -77,6 +79,7 @@ fn assert_corrupt_append_preserves_bytes(root: &Path, bytes: &[u8]) {
     assert!(matches!(error, ConvergenceAppendError::NotPublished(_)));
     assert!(error.retry_is_safe());
     assert!(!error.may_have_been_published());
+    assert!(error.attempted_entry().is_none());
     assert_eq!(fs::read(ledger_path(root)).unwrap(), before);
 }
 
@@ -289,7 +292,16 @@ fn convergence_store_pre_rename_failure_is_not_published_and_preserves_old_bytes
 
     assert!(matches!(error, ConvergenceAppendError::NotPublished(_)));
     assert!(error.retry_is_safe());
+    assert!(error.attempted_entry().is_none());
     assert_eq!(fs::read(ledger_path(&root)).unwrap(), before);
+    let names = fs::read_dir(convergence_dir(&root))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["ledger.json".into(), "ledger.lock".into()])
+    );
 }
 
 #[test]
@@ -307,10 +319,11 @@ fn convergence_store_post_rename_failure_reports_publication_uncertainty() {
 
     assert!(matches!(
         error,
-        ConvergenceAppendError::PublishedButDurabilityUnconfirmed(_)
+        ConvergenceAppendError::PublishedButDurabilityUnconfirmed { .. }
     ));
     assert!(error.may_have_been_published());
     assert!(!error.retry_is_safe());
+    assert!(error.attempted_entry().is_some());
     let visible = store.load().unwrap();
     visible.validate().unwrap();
     assert_eq!(visible.entries().len(), 2);
@@ -349,10 +362,11 @@ fn convergence_store_child_append_helper() {
     let campaign_id = std::env::var(CHILD_CAMPAIGN_ENV).unwrap();
     let store = store_at(&root);
     let (campaign_id, event) = campaign_start(&campaign_id);
+    fs::write(std::env::var_os(CHILD_READY_ENV).unwrap(), b"ready\n").unwrap();
     store.append(campaign_id, event).unwrap();
 }
 
-fn spawn_child(root: &Path, campaign_id: &str) -> Child {
+fn spawn_child(root: &Path, campaign_id: &str, readiness: &Path) -> Child {
     Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg("convergence_store_tests::convergence_store_child_append_helper")
@@ -360,61 +374,136 @@ fn spawn_child(root: &Path, campaign_id: &str) -> Child {
         .env(CHILD_ROLE_ENV, "append")
         .env(CHILD_ROOT_ENV, root)
         .env(CHILD_CAMPAIGN_ENV, campaign_id)
+        .env(CHILD_READY_ENV, readiness)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap()
 }
 
-fn wait_for_children(children: &mut [Child]) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut done = vec![false; children.len()];
-    while done.iter().any(|finished| !finished) && Instant::now() < deadline {
-        for (index, child) in children.iter_mut().enumerate() {
-            if !done[index] {
-                done[index] = child.try_wait().unwrap().is_some();
+struct ChildProcess {
+    child: Child,
+    status: Option<ExitStatus>,
+}
+
+impl Drop for ChildProcess {
+    fn drop(&mut self) {
+        if self.status.is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+struct ChildSet {
+    children: Vec<ChildProcess>,
+}
+
+impl ChildSet {
+    fn spawn(root: &Path, campaigns: [(&str, &Path); 2]) -> Self {
+        Self {
+            children: campaigns
+                .into_iter()
+                .map(|(campaign, readiness)| ChildProcess {
+                    child: spawn_child(root, campaign, readiness),
+                    status: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn poll(&mut self) {
+        for child in &mut self.children {
+            if child.status.is_none() {
+                child.status = child.child.try_wait().unwrap();
             }
         }
-        std::thread::sleep(Duration::from_millis(10));
     }
-    for (index, child) in children.iter_mut().enumerate() {
-        if !done[index] {
-            let _ = child.kill();
-            panic!("convergence store child {index} timed out");
+
+    fn all_running(&mut self) -> bool {
+        self.poll();
+        self.children.iter().all(|child| child.status.is_none())
+    }
+
+    fn wait_success(mut self) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while self.children.iter().any(|child| child.status.is_none()) {
+            self.poll();
+            assert!(
+                Instant::now() < deadline,
+                "convergence store children timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
-        let status = child.wait().unwrap();
-        let stderr = child
-            .stderr
-            .take()
-            .map(|mut stderr| {
-                let mut bytes = Vec::new();
-                std::io::Read::read_to_end(&mut stderr, &mut bytes).unwrap();
-                bytes
-            })
-            .unwrap_or_default();
-        assert!(
-            status.success(),
-            "child {index} failed: {}",
-            String::from_utf8_lossy(&stderr)
-        );
+        for (index, child) in self.children.iter_mut().enumerate() {
+            let status = child.status.unwrap();
+            let stderr = child
+                .child
+                .stderr
+                .take()
+                .map(|mut stderr| {
+                    let mut bytes = Vec::new();
+                    std::io::Read::read_to_end(&mut stderr, &mut bytes).unwrap();
+                    bytes
+                })
+                .unwrap_or_default();
+            assert!(
+                status.success(),
+                "child {index} failed: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+    }
+}
+
+fn wait_for_readiness(paths: &[PathBuf]) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while paths.iter().any(|path| !path.is_file()) {
+        assert!(Instant::now() < deadline, "child readiness timed out");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 #[test]
-fn convergence_store_two_process_appenders_do_not_lose_updates() {
+fn convergence_store_forced_contention_does_not_lose_updates() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("state");
-    let mut children = [
-        spawn_child(&root, CAMPAIGN_A),
-        spawn_child(&root, CAMPAIGN_B),
+    let readiness = [
+        temp.path().join("child-b.ready"),
+        temp.path().join("child-c.ready"),
     ];
-    wait_for_children(&mut children);
+    let store = store_at(&root);
+    let (campaign_id, event) = campaign_start(CAMPAIGN_A);
+    let mut children = None;
+    store
+        .append_with_before_publish(campaign_id, event, |path| {
+            let probe_file = OpenOptions::new().read(true).write(true).open(path)?;
+            let mut probe = fd_lock::RwLock::new(probe_file);
+            assert!(probe.try_write().is_err());
+            let mut child_set = ChildSet::spawn(
+                &root,
+                [
+                    (CAMPAIGN_B, readiness[0].as_path()),
+                    (CAMPAIGN_C, readiness[1].as_path()),
+                ],
+            );
+            wait_for_readiness(&readiness);
+            assert!(
+                child_set.all_running(),
+                "children must remain blocked while the parent holds the ledger lock"
+            );
+            children = Some(child_set);
+            Ok(())
+        })
+        .unwrap();
+    children.unwrap().wait_success();
 
     let ledger = store_at(&root).load().unwrap();
     ledger.validate().unwrap();
-    assert_eq!(ledger.entries().len(), 2);
+    assert_eq!(ledger.entries().len(), 3);
     assert_eq!(ledger.entries()[0].sequence(), 1);
     assert_eq!(ledger.entries()[1].sequence(), 2);
+    assert_eq!(ledger.entries()[2].sequence(), 3);
     let campaigns = ledger
         .entries()
         .iter()
@@ -422,7 +511,7 @@ fn convergence_store_two_process_appenders_do_not_lose_updates() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(
         campaigns,
-        std::collections::HashSet::from([CAMPAIGN_A, CAMPAIGN_B])
+        std::collections::HashSet::from([CAMPAIGN_A, CAMPAIGN_B, CAMPAIGN_C])
     );
     assert!(lock_path(&root).is_file());
 }

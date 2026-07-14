@@ -54,6 +54,10 @@ mod convergence_protocol_tests;
 #[path = "convergence_store_tests.rs"]
 mod convergence_store_tests;
 
+#[cfg(test)]
+#[path = "convergence_store_review_tests.rs"]
+mod convergence_store_review_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.

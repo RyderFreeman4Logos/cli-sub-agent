@@ -12,6 +12,7 @@ use ulid::Ulid;
 mod evidence;
 mod finalization;
 mod ledger;
+mod secure_fs;
 mod store;
 mod validation;
 
