@@ -40,6 +40,9 @@ pub const CSA_PROJECT_ROOT_ENV_KEY: &str = "CSA_PROJECT_ROOT";
 /// Parent session ULID inherited by a nested CSA process.
 pub const CSA_PARENT_SESSION_ENV_KEY: &str = "CSA_PARENT_SESSION";
 
+/// Legacy parent-session key that must not leak into leaf provider processes.
+pub const CSA_PARENT_SESSION_ID_ENV_KEY: &str = "CSA_PARENT_SESSION_ID";
+
 /// Marker that a nested execution command was spawned by CSA itself.
 pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
 
@@ -271,6 +274,7 @@ pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
     CSA_PROJECT_ROOT_ENV_KEY,
     CSA_SESSION_DIR_ENV_KEY,
     CSA_PARENT_SESSION_ENV_KEY,
+    CSA_PARENT_SESSION_ID_ENV_KEY,
     CSA_PARENT_SESSION_DIR_ENV_KEY,
     CSA_INTERNAL_INVOCATION_ENV_KEY,
     CSA_MODEL_SPEC_ENV_KEY,
@@ -353,6 +357,10 @@ mod tests {
     fn scrub_subtree_contract_env_map_removes_full_startup_contract() {
         let mut env = HashMap::from([
             (CSA_SESSION_ID_ENV_KEY.to_string(), "01KSESSION".to_string()),
+            (
+                CSA_PARENT_SESSION_ID_ENV_KEY.to_string(),
+                "01KLEGACYPARENT".to_string(),
+            ),
             (CSA_DEPTH_ENV_KEY.to_string(), "7".to_string()),
             (CSA_PROJECT_ROOT_ENV_KEY.to_string(), "/repo".to_string()),
             (CSA_INTERNAL_INVOCATION_ENV_KEY.to_string(), "1".to_string()),
@@ -371,6 +379,10 @@ mod tests {
                 "startup subtree-contract key {key} must be scrubbed"
             );
         }
+        assert!(
+            !env.contains_key(CSA_PARENT_SESSION_ID_ENV_KEY),
+            "legacy parent-session key must be scrubbed"
+        );
         assert_eq!(env.get("KEEP_ME").map(String::as_str), Some("value"));
     }
 
