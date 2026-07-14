@@ -20,7 +20,10 @@ use csa_config::{EffectiveModelCatalog, GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 use csa_process::{ProviderTurnCompletion, StreamMode};
-use csa_session::{convergence::AdmittedModelIdentity, get_session_dir};
+use csa_session::{
+    convergence::{AdmittedModelIdentity, ArtifactEvidenceRef},
+    get_session_dir,
+};
 
 use crate::cli::ReviewArgs;
 use crate::pipeline::SessionCreationMode;
@@ -31,6 +34,7 @@ use crate::startup_env::StartupSubtreeEnv;
 use super::engine::{
     DiscoveryRequest, DiscoveryRunOutput, DiscoveryRunner, FrozenWorkspace, WorkspaceProbe,
 };
+use super::output::encode_discovery_page_artifact;
 
 const PAGE_ARTIFACT_PATH: &str = "output/convergence-discovery-page.json";
 
@@ -323,11 +327,7 @@ impl<'a> ProductionDiscoveryRunner<'a> {
             .parent()
             .context("convergence artifact path has no parent")?;
         fs::create_dir_all(parent)?;
-        let artifact = serde_json::to_vec(&serde_json::json!({
-            "kind": "convergence_discovery_observation_page",
-            "semantic_coverage": "walking_skeleton_not_exhaustive",
-            "provider_response_raw": raw,
-        }))?;
+        let artifact = encode_discovery_page_artifact(&raw)?;
         fs::write(&artifact_path, &artifact)?;
         DiscoveryRunOutput::new_with_artifact_digest(
             raw,
@@ -359,6 +359,19 @@ impl DiscoveryRunner for ProductionDiscoveryRunner<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>> {
         Box::pin(self.execute(request))
     }
+
+    fn read_artifact<'a>(
+        &'a mut self,
+        artifact: &'a ArtifactEvidenceRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>> {
+        let result = (|| {
+            let session_id = artifact.csa_session_id().to_string();
+            let session_dir = get_session_dir(self.context.project_root, &session_id)?;
+            let path = session_dir.join(artifact.path().as_str());
+            fs::read(&path).with_context(|| format!("read convergence artifact {}", path.display()))
+        })();
+        Box::pin(async move { result })
+    }
 }
 
 pub(crate) fn build_discovery_prompt(request: &DiscoveryRequest) -> String {
@@ -380,7 +393,7 @@ pub(crate) fn build_discovery_prompt(request: &DiscoveryRequest) -> String {
         )
     };
     format!(
-        "Use the csa-review skill. Observe only; do not modify files. This is one Required whole-range broad-discovery walking-skeleton observation cell, not exhaustive semantic coverage.\nRange: {}\nFrozen merge-base: {}\nFrozen HEAD: {}\nFrozen diff SHA-256: {}\nRun intent: {intent}; finalized attempts: {}.{existing}\nReturn exact JSON or one complete json fence and no prose. Use exactly this schema: {{\"response_status\":\"complete|incomplete\",\"completion\":\"natural\",\"candidate_limit\":{},\"candidate_count\":0,\"more_candidates_possible\":false,\"unscanned_items\":[],\"candidates\":[{{\"mechanism\":\"...\",\"affected_component\":\"...\",\"bug_class\":\"...\"}}]}}. candidate_count must equal candidates length and never exceed candidate_limit.",
+        "Use the csa-review skill. Observe only; do not modify files. This is one Required whole-range broad-discovery walking-skeleton observation cell, not exhaustive semantic coverage.\nRange: {}\nFrozen merge-base: {}\nFrozen HEAD: {}\nFrozen diff SHA-256: {}\nRun intent: {intent}; finalized attempts: {}.{existing}\nReturn exact JSON or one complete json fence and no prose. Use exactly this schema: {{\"schema_version\":1,\"kind\":\"convergence_discovery_page\",\"response_status\":\"complete|partial\",\"candidate_limit\":{},\"more_candidates_possible\":false,\"unscanned_items\":[],\"candidates\":[{{\"mechanism\":\"...\",\"affected_component\":\"...\",\"bug_class\":\"...\"}}]}}. The candidates array must not exceed candidate_limit. A complete page must have no continuation signals. A partial page must set more_candidates_possible or list at least one unscanned item.",
         request.range,
         request.frozen.base_oid,
         request.frozen.head_oid,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
-    CampaignId, CampaignRecord, CandidateId, CandidateRecord, ConvergenceEvent, ConvergenceLedger,
+    ArtifactEvidenceRef, CampaignId, CampaignRecord, ConvergenceEvent, ConvergenceLedger,
     ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord, CoverageRequirement,
     CoverageScope, DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryDirective,
     DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticLens, Sha256Digest,
@@ -18,7 +18,8 @@ use csa_session::convergence::{
 use serde::Serialize;
 
 pub(crate) use super::output::DiscoveryRunOutput;
-use super::schema::{PageResponseStatus, parse_discovery_page};
+use super::recovery::recover_missing_candidate;
+use super::schema::parse_discovery_page;
 
 /// Walking-skeleton guardrail: one cell can consume at most four provider calls.
 pub(crate) const MAX_PROVIDER_CALLS_PER_CELL: usize = 4;
@@ -112,6 +113,11 @@ pub(crate) trait DiscoveryRunner {
         &'a mut self,
         request: DiscoveryRequest,
     ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>>;
+
+    fn read_artifact<'a>(
+        &'a mut self,
+        artifact: &'a ArtifactEvidenceRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>>;
 }
 
 #[derive(Debug, Clone)]
@@ -214,7 +220,11 @@ impl fmt::Display for EngineError {
 
 impl Error for EngineError {}
 
-fn blocked(reason_code: &'static str, message: impl Into<String>, calls: usize) -> EngineError {
+pub(super) fn blocked(
+    reason_code: &'static str,
+    message: impl Into<String>,
+    calls: usize,
+) -> EngineError {
     EngineError(BlockedDiagnostic {
         kind: "convergence_discovery_blocked",
         reason_code,
@@ -266,7 +276,6 @@ where
     let planning = planning_started.elapsed();
     let mut execution = Duration::ZERO;
     let mut provider_calls = recorded_attempt_count(&ledger, &campaign, &epoch);
-    let mut pending: HashMap<String, VecDeque<CandidateRecord>> = HashMap::new();
 
     loop {
         let directive =
@@ -353,24 +362,16 @@ where
                 let page = parse_discovery_page(&output.raw_response).map_err(|error| {
                     blocked("parser_failure", format!("{error:#}"), provider_calls)
                 })?;
-                if page.completion != output.completion {
+                if page.candidate_limit != request.candidate_limit {
                     return Err(blocked(
-                        "completion_provenance_mismatch",
-                        "response completion does not match transport completion",
+                        "candidate_limit_mismatch",
+                        "response candidate_limit did not equal the requested limit",
                         provider_calls,
                     ));
                 }
-                if page.candidate_limit > request.candidate_limit {
-                    return Err(blocked(
-                        "candidate_limit_overflow",
-                        "response candidate_limit exceeded the requested limit",
-                        provider_calls,
-                    ));
-                }
-                let mut records = VecDeque::new();
                 let attempt_id = DiscoveryAttemptId::generate();
-                for identity in page.candidates {
-                    let stable = csa_session::convergence::StableFindingId::compute(&identity);
+                for identity in &page.candidates {
+                    let stable = csa_session::convergence::StableFindingId::compute(identity);
                     if fingerprints.contains(stable.as_str()) {
                         return Err(blocked(
                             "duplicate_existing_fingerprint",
@@ -378,14 +379,8 @@ where
                             provider_calls,
                         ));
                     }
-                    records.push_back(CandidateRecord::new(
-                        CandidateId::generate(),
-                        attempt_id.clone(),
-                        identity,
-                        output.artifact.clone(),
-                    ));
                 }
-                let count = u32::try_from(records.len()).map_err(|error| {
+                let count = u32::try_from(page.candidates.len()).map_err(|error| {
                     blocked(
                         "candidate_count_overflow",
                         error.to_string(),
@@ -402,8 +397,8 @@ where
                     output.artifact,
                     page.candidate_limit,
                     count,
-                    page.more_candidates_possible || page.status == PageResponseStatus::Incomplete,
-                    page.unscanned_items,
+                    page.continuation_required(),
+                    page.unscanned_items.clone(),
                 )
                 .map_err(|error| blocked("parser_failure", format!("{error:#}"), provider_calls))?;
                 persist(
@@ -414,22 +409,19 @@ where
                     &mut persistence,
                     provider_calls,
                 )?;
-                pending.insert(attempt_id.as_str().to_string(), records);
             }
             DiscoveryDirective::RecordMissingCandidates {
                 attempt_id,
                 missing_candidate_count: _,
             } => {
-                let record = pending
-                    .get_mut(attempt_id.as_str())
-                    .and_then(VecDeque::pop_front)
-                    .ok_or_else(|| {
-                        blocked(
-                            "unrecoverable_partial_attempt",
-                            "candidate payload is unavailable for an unfinalized persisted attempt",
-                            provider_calls,
-                        )
-                    })?;
+                let record = recover_missing_candidate(
+                    runner,
+                    &ledger,
+                    &campaign,
+                    &attempt_id,
+                    provider_calls,
+                )
+                .await?;
                 persist(
                     store,
                     &campaign,

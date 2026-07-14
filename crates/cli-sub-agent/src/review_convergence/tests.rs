@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -7,8 +7,8 @@ use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
-    AdmittedModelIdentity, CampaignId, ConvergenceEvent, ConvergenceLedger, DiscoveryRunIntent,
-    Sha256Digest,
+    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, ConvergenceEvent, ConvergenceLedger,
+    DiscoveryRunIntent, Sha256Digest,
 };
 use serde_json::{Value, json};
 
@@ -16,6 +16,7 @@ use super::engine::{
     DiscoveryRequest, DiscoveryRunOutput, DiscoveryRunner, FrozenWorkspace, LedgerPort,
     ObservationInput, WorkspaceProbe, run_discovery_observation,
 };
+use super::output::encode_discovery_page_artifact;
 use super::schema::parse_discovery_page;
 
 const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -32,6 +33,14 @@ struct MemoryStore {
 impl MemoryStore {
     fn fail_next(&self) {
         self.fail_at.set(Some(self.append_count.get()));
+    }
+
+    fn fail_at_append(&self, append_index: usize) {
+        self.fail_at.set(Some(append_index));
+    }
+
+    fn clear_failure(&self) {
+        self.fail_at.set(None);
     }
 }
 
@@ -82,6 +91,7 @@ enum RunnerStep {
 struct ScriptedRunner {
     steps: VecDeque<RunnerStep>,
     requests: Vec<DiscoveryRequest>,
+    artifacts: HashMap<String, Vec<u8>>,
 }
 
 impl ScriptedRunner {
@@ -89,6 +99,7 @@ impl ScriptedRunner {
         Self {
             steps: pages.into_iter().map(RunnerStep::Page).collect(),
             requests: Vec::new(),
+            artifacts: HashMap::new(),
         }
     }
 }
@@ -100,14 +111,32 @@ impl DiscoveryRunner for ScriptedRunner {
     ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>> {
         self.requests.push(request);
         let step = self.steps.pop_front();
-        Box::pin(async move {
-            match step {
-                Some(RunnerStep::Page(raw)) => output(ProviderTurnCompletion::Natural, raw),
-                Some(RunnerStep::Completion(completion, raw)) => output(completion, raw),
-                Some(RunnerStep::Failure(message)) => Err(anyhow!(message)),
-                None => Err(anyhow!("scripted runner exhausted")),
-            }
-        })
+        let result = match step {
+            Some(RunnerStep::Page(raw)) => output(ProviderTurnCompletion::Natural, raw),
+            Some(RunnerStep::Completion(completion, raw)) => output(completion, raw),
+            Some(RunnerStep::Failure(message)) => Err(anyhow!(message)),
+            None => Err(anyhow!("scripted runner exhausted")),
+        };
+        if let Ok(output) = &result {
+            self.artifacts.insert(
+                output.artifact.digest().to_string(),
+                encode_discovery_page_artifact(&output.raw_response)
+                    .expect("encode scripted discovery artifact"),
+            );
+        }
+        Box::pin(async move { result })
+    }
+
+    fn read_artifact<'a>(
+        &'a mut self,
+        artifact: &'a ArtifactEvidenceRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>> {
+        let result = self
+            .artifacts
+            .get(&artifact.digest().to_string())
+            .cloned()
+            .ok_or_else(|| anyhow!("scripted artifact not found"));
+        Box::pin(async move { result })
     }
 }
 
@@ -145,10 +174,10 @@ fn page(
     candidates: Vec<Value>,
 ) -> String {
     json!({
+        "schema_version": 1,
+        "kind": "convergence_discovery_page",
         "response_status": response_status,
-        "completion": "natural",
         "candidate_limit": limit,
-        "candidate_count": candidates.len(),
         "more_candidates_possible": more,
         "unscanned_items": unscanned,
         "candidates": candidates,
@@ -160,14 +189,14 @@ fn page(
 async fn hidden_top_k_collects_union_on_one_frozen_tuple_before_zero_new_challenge() {
     let pages = [
         page(
-            "complete",
-            2,
-            false,
+            "partial",
+            8,
+            true,
             &[],
             vec![candidate("top-a"), candidate("top-b")],
         ),
-        page("complete", 2, false, &[], vec![candidate("hidden-c")]),
-        page("complete", 2, false, &[], Vec::new()),
+        page("complete", 8, false, &[], vec![candidate("hidden-c")]),
+        page("complete", 8, false, &[], Vec::new()),
     ];
     let mut probe = ScriptedProbe::stable(7);
     let mut runner = ScriptedRunner::pages(pages);
@@ -204,17 +233,20 @@ async fn hidden_top_k_collects_union_on_one_frozen_tuple_before_zero_new_challen
 
 #[tokio::test]
 async fn every_page_continuation_signal_forces_another_call() {
+    let full_page = (0..8)
+        .map(|index| candidate(&format!("limit-full-{index}")))
+        .collect();
     let signal_pages = [
-        page("incomplete", 2, false, &[], Vec::new()),
-        page("complete", 2, true, &[], Vec::new()),
-        page("complete", 2, false, &["src/unscanned.rs"], Vec::new()),
-        page("complete", 1, false, &[], vec![candidate("limit-full")]),
+        page("partial", 8, true, &[], Vec::new()),
+        page("partial", 8, true, &["src/unscanned.rs"], Vec::new()),
+        page("partial", 8, false, &["src/unscanned.rs"], Vec::new()),
+        page("complete", 8, false, &[], full_page),
     ];
 
     for signal in signal_pages {
         let mut probe = ScriptedProbe::stable(5);
         let mut runner =
-            ScriptedRunner::pages([signal, page("complete", 2, false, &[], Vec::new())]);
+            ScriptedRunner::pages([signal, page("complete", 8, false, &[], Vec::new())]);
         let store = MemoryStore::default();
         let summary = run_discovery_observation(&input(), &mut probe, &mut runner, &store)
             .await
@@ -263,7 +295,7 @@ async fn budget_exhaustion_is_blocked_and_never_evidence_complete() {
         .map(|index| {
             page(
                 "complete",
-                2,
+                8,
                 false,
                 &[],
                 vec![candidate(&format!("candidate-{index}"))],
@@ -291,7 +323,7 @@ async fn malformed_provider_failure_and_noncompletion_fail_closed() {
         RunnerStep::Failure("provider unavailable"),
         RunnerStep::Completion(
             ProviderTurnCompletion::Incomplete,
-            page("complete", 2, false, &[], Vec::new()),
+            page("complete", 8, false, &[], Vec::new()),
         ),
     ];
 
@@ -300,6 +332,7 @@ async fn malformed_provider_failure_and_noncompletion_fail_closed() {
         let mut runner = ScriptedRunner {
             steps: [step].into_iter().collect(),
             requests: Vec::new(),
+            ..ScriptedRunner::default()
         };
         let store = MemoryStore::default();
         assert!(
@@ -318,7 +351,7 @@ async fn persisted_history_resumes_from_the_same_reducer_directive() {
         steps: [
             RunnerStep::Page(page(
                 "complete",
-                2,
+                8,
                 false,
                 &[],
                 vec![candidate("persisted")],
@@ -328,6 +361,7 @@ async fn persisted_history_resumes_from_the_same_reducer_directive() {
         .into_iter()
         .collect(),
         requests: Vec::new(),
+        ..ScriptedRunner::default()
     };
     assert!(
         run_discovery_observation(&input(), &mut first_probe, &mut first_runner, &store)
@@ -336,7 +370,7 @@ async fn persisted_history_resumes_from_the_same_reducer_directive() {
     );
 
     let mut resumed_probe = ScriptedProbe::stable(3);
-    let mut resumed_runner = ScriptedRunner::pages([page("complete", 2, false, &[], Vec::new())]);
+    let mut resumed_runner = ScriptedRunner::pages([page("complete", 8, false, &[], Vec::new())]);
     let summary =
         run_discovery_observation(&input(), &mut resumed_probe, &mut resumed_runner, &store)
             .await
@@ -346,6 +380,61 @@ async fn persisted_history_resumes_from_the_same_reducer_directive() {
         DiscoveryRunIntent::SaturationChallenge
     );
     assert_eq!(summary.candidates, 1);
+}
+
+#[tokio::test]
+async fn persisted_partial_attempt_recovers_candidates_from_its_artifact() {
+    let store = MemoryStore::default();
+    // Campaign, epoch, cell, disposition, plan, and attempt all publish first.
+    // The next append fails before the candidate is durable.
+    store.fail_at_append(6);
+    let mut first_probe = ScriptedProbe::stable(3);
+    let mut first_runner = ScriptedRunner::pages([page(
+        "complete",
+        8,
+        false,
+        &[],
+        vec![candidate("recoverable")],
+    )]);
+    let first_error =
+        run_discovery_observation(&input(), &mut first_probe, &mut first_runner, &store)
+            .await
+            .expect_err("candidate publication should hit the scripted failure");
+    assert_eq!(first_error.diagnostic().reason_code, "store_failure");
+    assert!(
+        store
+            .ledger
+            .borrow()
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry.event(), ConvergenceEvent::DiscoveryAttemptRecorded(_)))
+    );
+    assert!(
+        !store
+            .ledger
+            .borrow()
+            .entries()
+            .iter()
+            .any(|entry| matches!(entry.event(), ConvergenceEvent::CandidateRecorded(_)))
+    );
+
+    let durable_artifacts = std::mem::take(&mut first_runner.artifacts);
+    store.clear_failure();
+    let mut resumed_probe = ScriptedProbe::stable(3);
+    let mut resumed_runner = ScriptedRunner::pages([page("complete", 8, false, &[], Vec::new())]);
+    resumed_runner.artifacts = durable_artifacts;
+    let summary =
+        run_discovery_observation(&input(), &mut resumed_probe, &mut resumed_runner, &store)
+            .await
+            .expect("resume should recover the missing candidate from durable page evidence");
+
+    assert_eq!(summary.provider_calls, 2);
+    assert_eq!(summary.candidates, 1);
+    assert_eq!(resumed_runner.requests.len(), 1);
+    assert_eq!(
+        resumed_runner.requests[0].intent,
+        DiscoveryRunIntent::SaturationChallenge
+    );
 }
 
 #[tokio::test]
@@ -372,22 +461,22 @@ fn parser_accepts_exact_json_or_one_complete_fence_and_rejects_ambiguous_pages()
         format!("```json\n{valid}\n```\ntrailing"),
         "{}".to_string(),
         json!({
-            "response_status": "complete", "completion": "natural",
-            "candidate_limit": 1, "candidate_count": 0,
+            "schema_version": 1, "kind": "convergence_discovery_page",
+            "response_status": "complete", "candidate_limit": 1,
             "more_candidates_possible": false, "unscanned_items": [],
             "candidates": [], "unknown": true
         })
         .to_string(),
         json!({
-            "response_status": "complete", "completion": "natural",
-            "candidate_limit": 1, "candidate_count": 1,
+            "schema_version": 1, "kind": "convergence_discovery_page",
+            "response_status": "complete", "completion": "natural", "candidate_limit": 1,
             "more_candidates_possible": false, "unscanned_items": [],
             "candidates": []
         })
         .to_string(),
         json!({
-            "response_status": "complete", "completion": "natural",
-            "candidate_limit": 1, "candidate_count": 2,
+            "schema_version": 1, "kind": "convergence_discovery_page",
+            "response_status": "complete", "candidate_limit": 1,
             "more_candidates_possible": false, "unscanned_items": [],
             "candidates": [candidate("a"), candidate("b")]
         })
@@ -399,6 +488,9 @@ fn parser_accepts_exact_json_or_one_complete_fence_and_rejects_ambiguous_pages()
             &[],
             vec![candidate("duplicate"), candidate("duplicate")],
         ),
+        page("complete", 2, true, &[], Vec::new()),
+        page("complete", 2, false, &["src/unscanned.rs"], Vec::new()),
+        page("partial", 2, false, &[], Vec::new()),
     ];
     for raw in invalid {
         assert!(

@@ -1,5 +1,6 @@
 pub(super) mod engine;
 mod output;
+mod recovery;
 pub(super) mod runner;
 mod schema;
 

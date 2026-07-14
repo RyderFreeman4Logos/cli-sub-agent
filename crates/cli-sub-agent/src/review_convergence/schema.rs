@@ -1,15 +1,22 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::SemanticFindingIdentity;
 use serde::Deserialize;
+
+const DISCOVERY_PAGE_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PageKind {
+    ConvergenceDiscoveryPage,
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PageResponseStatus {
     Complete,
-    Incomplete,
+    Partial,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,10 +30,10 @@ struct RawCandidate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPage {
+    schema_version: u32,
+    kind: PageKind,
     response_status: PageResponseStatus,
-    completion: ProviderTurnCompletion,
     candidate_limit: u32,
-    candidate_count: u32,
     more_candidates_possible: bool,
     unscanned_items: Vec<String>,
     candidates: Vec<RawCandidate>,
@@ -34,11 +41,19 @@ struct RawPage {
 
 pub(super) struct ParsedDiscoveryPage {
     pub(super) status: PageResponseStatus,
-    pub(super) completion: ProviderTurnCompletion,
     pub(super) candidate_limit: u32,
     pub(super) more_candidates_possible: bool,
     pub(super) unscanned_items: Vec<String>,
     pub(super) candidates: Vec<SemanticFindingIdentity>,
+}
+
+impl ParsedDiscoveryPage {
+    pub(super) fn continuation_required(&self) -> bool {
+        self.status == PageResponseStatus::Partial
+            || self.more_candidates_possible
+            || !self.unscanned_items.is_empty()
+            || u32::try_from(self.candidates.len()).ok() == Some(self.candidate_limit)
+    }
 }
 
 pub(super) fn parse_discovery_page(raw: &str) -> Result<ParsedDiscoveryPage> {
@@ -57,19 +72,41 @@ pub(super) fn parse_discovery_page(raw: &str) -> Result<ParsedDiscoveryPage> {
     deserializer
         .end()
         .context("discovery page contains trailing content")?;
+    if page.schema_version != DISCOVERY_PAGE_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported discovery page schema version {}",
+            page.schema_version
+        );
+    }
+    if !matches!(page.kind, PageKind::ConvergenceDiscoveryPage) {
+        anyhow::bail!("unexpected discovery page kind");
+    }
     if page.candidate_limit == 0 {
         anyhow::bail!("candidate_limit must be greater than zero");
     }
     let actual_count = u32::try_from(page.candidates.len()).context("candidate count overflow")?;
-    if page.candidate_count != actual_count {
-        anyhow::bail!(
-            "candidate_count {} does not match {} candidates",
-            page.candidate_count,
-            actual_count
-        );
+    if actual_count > page.candidate_limit {
+        anyhow::bail!("candidate array exceeds candidate_limit");
     }
-    if page.candidate_count > page.candidate_limit {
-        anyhow::bail!("candidate_count exceeds candidate_limit");
+    let continuation_signalled = page.more_candidates_possible || !page.unscanned_items.is_empty();
+    match page.response_status {
+        PageResponseStatus::Complete if continuation_signalled => {
+            anyhow::bail!("complete page must not carry continuation signals");
+        }
+        PageResponseStatus::Partial if !continuation_signalled => {
+            anyhow::bail!("partial page must carry an explicit continuation signal");
+        }
+        PageResponseStatus::Complete | PageResponseStatus::Partial => {}
+    }
+    let mut unscanned = HashSet::new();
+    for item in &page.unscanned_items {
+        let normalized = item.trim();
+        if normalized.is_empty() {
+            anyhow::bail!("unscanned_items must not contain blank entries");
+        }
+        if !unscanned.insert(normalized) {
+            anyhow::bail!("unscanned_items must not contain duplicates");
+        }
     }
     let mut fingerprints = HashSet::new();
     let mut candidates = Vec::with_capacity(page.candidates.len());
@@ -87,7 +124,6 @@ pub(super) fn parse_discovery_page(raw: &str) -> Result<ParsedDiscoveryPage> {
     }
     Ok(ParsedDiscoveryPage {
         status: page.response_status,
-        completion: page.completion,
         candidate_limit: page.candidate_limit,
         more_candidates_possible: page.more_candidates_possible,
         unscanned_items: page.unscanned_items,
