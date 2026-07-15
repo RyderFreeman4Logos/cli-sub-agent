@@ -37,10 +37,14 @@ use arg_helpers::{
 pub(crate) mod antigravity_settings;
 pub(crate) use antigravity_settings::AntigravitySettingsGuard;
 
+#[path = "executor_clean_room.rs"]
+mod clean_room;
 #[path = "executor_codex_tmux.rs"]
 mod codex_tmux;
 #[path = "executor_command.rs"]
 mod command;
+#[cfg(test)]
+pub(crate) use clean_room::validate_clean_room_request;
 #[path = "executor_env.rs"]
 pub(crate) mod executor_env;
 #[path = "executor_pre_session.rs"]
@@ -639,6 +643,9 @@ include!("executor_runtime_transport.rs");
 #[cfg(test)]
 #[path = "executor_build_cmd_tests.rs"]
 mod build_cmd_tests;
+#[cfg(test)]
+#[path = "executor_clean_room_tests.rs"]
+mod clean_room_tests;
 #[cfg(test)]
 #[path = "executor_prompt_transport_tests.rs"]
 mod prompt_transport_tests;

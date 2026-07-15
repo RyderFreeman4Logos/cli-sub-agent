@@ -9,6 +9,9 @@ use csa_resource::filesystem_sandbox::FilesystemCapability;
 use csa_resource::isolation_plan::IsolationPlan;
 use csa_resource::sandbox::ResourceCapability;
 
+use super::command_environment::{
+    ClearedCommandEnvironment, apply_cleared_environment, validate_program,
+};
 use super::{PreExecPolicy, SandboxHandle, SpawnOptions};
 
 /// Spawn a tool process without waiting for it to complete.
@@ -217,6 +220,7 @@ pub async fn spawn_tool_sandboxed(
                 FsSandboxParams {
                     _has_bwrap: has_bwrap,
                     landlock_paths,
+                    clean_environment: None,
                 },
             )
             .await
@@ -254,6 +258,111 @@ pub async fn spawn_tool_sandboxed(
             )
             .await?;
 
+            let handle = if has_bwrap {
+                SandboxHandle::Bwrap
+            } else if has_landlock {
+                SandboxHandle::Landlock
+            } else {
+                SandboxHandle::None
+            };
+            Ok((child, handle))
+        }
+    }
+}
+
+/// Spawn a tool from a cleared, deterministic environment.
+///
+/// The effective environment is composed before wrapper construction and then
+/// re-applied after every transformation so the final OS-spawned command never
+/// inherits the parent process environment.
+pub async fn spawn_tool_sandboxed_in_environment(
+    mut cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+    spawn_options: SpawnOptions,
+    isolation: Option<&IsolationPlan>,
+    tool_name: &str,
+    session_id: &str,
+    environment: &ClearedCommandEnvironment,
+) -> Result<(tokio::process::Child, SandboxHandle)> {
+    let effective = environment.effective_entries(isolation)?;
+    apply_cleared_environment(cmd.as_std_mut(), &effective);
+    validate_program(cmd.as_std().get_program(), &effective)?;
+
+    let Some(plan) = isolation else {
+        let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
+        return Ok((child, SandboxHandle::None));
+    };
+
+    let mut landlock_paths = None;
+    let mut cmd = match plan.filesystem {
+        FilesystemCapability::Bwrap => wrap_command_with_bwrap_required(cmd, plan, &effective)?,
+        FilesystemCapability::Landlock => {
+            let paths = if plan.readonly_project_root {
+                plan.writable_paths
+                    .iter()
+                    .filter(|path| plan.project_root.as_ref().is_none_or(|root| *path != root))
+                    .cloned()
+                    .collect()
+            } else {
+                plan.writable_paths.clone()
+            };
+            landlock_paths = Some(paths);
+            cmd
+        }
+        FilesystemCapability::None => cmd,
+    };
+    apply_cleared_environment(cmd.as_std_mut(), &effective);
+    validate_program(cmd.as_std().get_program(), &effective)?;
+
+    let has_bwrap = plan.filesystem == FilesystemCapability::Bwrap;
+    let has_landlock = landlock_paths.is_some();
+    match plan.resource {
+        ResourceCapability::CgroupV2 => {
+            spawn_with_cgroup(
+                cmd,
+                stdin_data,
+                spawn_options,
+                plan,
+                tool_name,
+                session_id,
+                FsSandboxParams {
+                    _has_bwrap: has_bwrap,
+                    landlock_paths,
+                    clean_environment: Some(&effective),
+                },
+            )
+            .await
+        }
+        ResourceCapability::Setrlimit => {
+            let child = spawn_tool_with_pre_exec(
+                cmd,
+                stdin_data,
+                PreExecPolicy::Rlimits {
+                    memory_max_mb: plan.memory_max_mb.unwrap_or(0),
+                    pids_max: plan.pids_max.map(u64::from),
+                },
+                spawn_options,
+                landlock_paths,
+            )
+            .await?;
+            let handle = if has_bwrap {
+                SandboxHandle::Bwrap
+            } else if has_landlock {
+                SandboxHandle::Landlock
+            } else {
+                SandboxHandle::Rlimit
+            };
+            Ok((child, handle))
+        }
+        ResourceCapability::None => {
+            let child = spawn_tool_with_pre_exec(
+                cmd,
+                stdin_data,
+                PreExecPolicy::OomAdj,
+                spawn_options,
+                landlock_paths,
+            )
+            .await?;
             let handle = if has_bwrap {
                 SandboxHandle::Bwrap
             } else if has_landlock {
@@ -323,10 +432,36 @@ fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
     }
 }
 
+pub(crate) fn wrap_command_with_bwrap_required(
+    cmd: Command,
+    plan: &IsolationPlan,
+    effective: &std::collections::BTreeMap<String, String>,
+) -> Result<Command> {
+    let tool_binary = cmd.as_std().get_program().to_string_lossy().into_owned();
+    let tool_args = cmd
+        .as_std()
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut wrapper_plan = plan.clone();
+    wrapper_plan.env_overrides = effective
+        .get("HOME")
+        .map(|home| std::iter::once(("HOME".to_string(), home.clone())).collect())
+        .unwrap_or_default();
+    let wrapped = csa_resource::bwrap::from_isolation_plan(&wrapper_plan, &tool_binary, &tool_args)
+        .ok_or_else(|| anyhow::anyhow!("required bwrap wrapper could not be constructed"))?;
+    let mut wrapped = Command::from(wrapped);
+    if let Some(directory) = cmd.as_std().get_current_dir() {
+        wrapped.current_dir(directory);
+    }
+    Ok(wrapped)
+}
+
 /// Filesystem isolation parameters for cgroup spawn.
-struct FsSandboxParams {
+struct FsSandboxParams<'a> {
     _has_bwrap: bool,
     landlock_paths: Option<Vec<std::path::PathBuf>>,
+    clean_environment: Option<&'a std::collections::BTreeMap<String, String>>,
 }
 
 /// Spawn inside a systemd cgroup scope.
@@ -337,7 +472,7 @@ async fn spawn_with_cgroup(
     plan: &IsolationPlan,
     tool_name: &str,
     session_id: &str,
-    fs_sandbox: FsSandboxParams,
+    fs_sandbox: FsSandboxParams<'_>,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
     if fs_sandbox.landlock_paths.is_some() {
         return Err(anyhow::anyhow!(
@@ -351,8 +486,17 @@ async fn spawn_with_cgroup(
         pids_max: plan.pids_max.or(Some(512)),
     };
 
-    let mut tokio_cmd =
-        build_cgroup_scope_command(&original_cmd, tool_name, session_id, &cgroup_config);
+    let mut tokio_cmd = if let Some(environment) = fs_sandbox.clean_environment {
+        build_clean_cgroup_scope_command(
+            &original_cmd,
+            tool_name,
+            session_id,
+            &cgroup_config,
+            environment,
+        )?
+    } else {
+        build_cgroup_scope_command(&original_cmd, tool_name, session_id, &cgroup_config)
+    };
     tokio_cmd.kill_on_drop(true);
 
     let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
@@ -366,6 +510,20 @@ async fn spawn_with_cgroup(
 
     // Cgroup guard needs to live for cleanup regardless of filesystem isolation.
     Ok((child, SandboxHandle::Cgroup(guard)))
+}
+
+pub(crate) fn build_clean_cgroup_scope_command(
+    original_cmd: &Command,
+    tool_name: &str,
+    session_id: &str,
+    cgroup_config: &csa_resource::cgroup::SandboxConfig,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> Result<Command> {
+    let mut command =
+        build_cgroup_scope_command(original_cmd, tool_name, session_id, cgroup_config);
+    apply_cleared_environment(command.as_std_mut(), environment);
+    validate_program(command.as_std().get_program(), environment)?;
+    Ok(command)
 }
 
 fn build_cgroup_scope_command(
@@ -408,219 +566,5 @@ fn build_cgroup_scope_command(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use csa_resource::sandbox::ResourceCapability;
-    use std::collections::HashMap;
-
-    fn recorded_env(cmd: &Command) -> HashMap<String, Option<String>> {
-        cmd.as_std()
-            .get_envs()
-            .map(|(key, value)| {
-                (
-                    key.to_string_lossy().into_owned(),
-                    value.map(|v| v.to_string_lossy().into_owned()),
-                )
-            })
-            .collect()
-    }
-
-    fn bwrap_plan() -> IsolationPlan {
-        IsolationPlan {
-            resource: ResourceCapability::None,
-            filesystem: FilesystemCapability::Bwrap,
-            writable_paths: vec![std::path::PathBuf::from("/tmp")],
-            readable_paths: Vec::new(),
-            env_overrides: HashMap::new(),
-            degraded_reasons: Vec::new(),
-            memory_max_mb: None,
-            memory_swap_max_mb: None,
-            pids_max: None,
-            readonly_project_root: false,
-            user_daemon_ipc: false,
-            project_root: None,
-            soft_limit_percent: None,
-            memory_monitor_interval_seconds: None,
-        }
-    }
-
-    fn no_filesystem_wrapper_plan_with_tmpdir(tmpdir: &str) -> IsolationPlan {
-        IsolationPlan {
-            resource: ResourceCapability::None,
-            filesystem: FilesystemCapability::None,
-            writable_paths: Vec::new(),
-            readable_paths: Vec::new(),
-            env_overrides: HashMap::from([("TMPDIR".to_string(), tmpdir.to_string())]),
-            degraded_reasons: Vec::new(),
-            memory_max_mb: None,
-            memory_swap_max_mb: None,
-            pids_max: None,
-            readonly_project_root: false,
-            user_daemon_ipc: false,
-            project_root: None,
-            soft_limit_percent: None,
-            memory_monitor_interval_seconds: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn non_bwrap_spawn_applies_plan_env_overrides_over_explicit_env() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let session_tmp = temp.path().join("session-tmp");
-        std::fs::create_dir_all(&session_tmp).expect("create session tmpdir");
-        let expected_tmpdir = session_tmp.to_string_lossy().into_owned();
-        let mut original = Command::new("/bin/sh");
-        original
-            .arg("-c")
-            .arg("printf probe > \"$TMPDIR/probe\" && printf '%s' \"$TMPDIR\"")
-            .env("TMPDIR", "/usr/local/tmp");
-        let plan = no_filesystem_wrapper_plan_with_tmpdir(&expected_tmpdir);
-
-        let (child, _handle) = spawn_tool_sandboxed(
-            original,
-            None,
-            SpawnOptions::default(),
-            Some(&plan),
-            "codex",
-            "01KTEST",
-        )
-        .await
-        .expect("spawn should succeed");
-        let result = crate::wait_and_capture(child, crate::StreamMode::BufferOnly)
-            .await
-            .expect("wait should succeed");
-
-        assert_eq!(result.exit_code, 0);
-        assert_eq!(
-            result.output, expected_tmpdir,
-            "non-bwrap sandbox paths must still apply IsolationPlan env overrides"
-        );
-        assert_eq!(
-            std::fs::read_to_string(session_tmp.join("probe")).expect("read tmpdir probe"),
-            "probe",
-            "normalized TMPDIR must be writable by the child process"
-        );
-    }
-
-    #[test]
-    fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
-        let original = Command::new("/usr/bin/tool");
-        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
-        let env = recorded_env(&wrapped);
-
-        for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
-            assert_eq!(
-                env.get(*key),
-                Some(&None),
-                "bwrap wrapper must env_remove ambient subtree-contract key {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn bwrap_wrapper_scrubs_ambient_git_push_authorization_env() {
-        let original = Command::new("/usr/bin/tool");
-        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
-        let env = recorded_env(&wrapped);
-
-        for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
-            assert_eq!(
-                env.get(*key),
-                Some(&None),
-                "bwrap wrapper must env_remove ambient git-push authorization key {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn bwrap_wrapper_preserves_explicit_typed_git_push_authorization() {
-        let mut original = Command::new("/usr/bin/tool");
-        original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
-
-        let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
-        let env = recorded_env(&wrapped);
-
-        assert_eq!(
-            env.get(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY),
-            Some(&Some("true".to_string())),
-            "explicit typed git-push authorization must survive bwrap wrapping"
-        );
-        assert_eq!(
-            env.get(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY),
-            Some(&None),
-            "internal git-push marker must remain stripped"
-        );
-    }
-
-    #[test]
-    fn cgroup_wrapper_scrubs_ambient_then_preserves_explicit_fresh_env() {
-        let mut original = Command::new("/usr/bin/tool");
-        original
-            .env(csa_core::env::CSA_DEPTH_ENV_KEY, "3")
-            .env(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY, "1");
-        let config = csa_resource::cgroup::SandboxConfig {
-            memory_max_mb: 1024,
-            memory_swap_max_mb: None,
-            pids_max: Some(64),
-        };
-
-        let wrapped = build_cgroup_scope_command(&original, "codex", "01KTEST", &config);
-        let env = recorded_env(&wrapped);
-
-        assert_eq!(
-            env.get(csa_core::env::CSA_DEPTH_ENV_KEY),
-            Some(&Some("3".to_string())),
-            "fresh explicit CSA_DEPTH must be preserved after wrapper scrub"
-        );
-        assert_eq!(
-            env.get(csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY),
-            Some(&Some("1".to_string())),
-            "fresh explicit CSA_INTERNAL_INVOCATION must be preserved"
-        );
-        for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS
-            .iter()
-            .filter(|key| {
-                **key != csa_core::env::CSA_DEPTH_ENV_KEY
-                    && **key != csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY
-            })
-        {
-            assert_eq!(
-                env.get(*key),
-                Some(&None),
-                "cgroup wrapper must env_remove ambient subtree-contract key {key}"
-            );
-        }
-        for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
-            assert_eq!(
-                env.get(*key),
-                Some(&None),
-                "cgroup wrapper must env_remove ambient git-push authorization key {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn cgroup_wrapper_preserves_explicit_typed_git_push_authorization() {
-        let mut original = Command::new("/usr/bin/tool");
-        original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
-        let config = csa_resource::cgroup::SandboxConfig {
-            memory_max_mb: 1024,
-            memory_swap_max_mb: None,
-            pids_max: Some(64),
-        };
-
-        let wrapped = build_cgroup_scope_command(&original, "codex", "01KTEST", &config);
-        let env = recorded_env(&wrapped);
-
-        assert_eq!(
-            env.get(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY),
-            Some(&Some("true".to_string())),
-            "explicit typed git-push authorization must survive cgroup wrapping"
-        );
-        assert_eq!(
-            env.get(csa_core::env::CSA_RUN_GIT_PUSH_AUTHORIZED_ENV_KEY),
-            Some(&None),
-            "internal git-push marker must remain stripped"
-        );
-    }
-}
+#[path = "lib_spawn_tests.rs"]
+mod tests;

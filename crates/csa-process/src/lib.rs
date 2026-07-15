@@ -7,6 +7,10 @@ use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::MissedTickBehavior;
 use tracing::warn;
+pub mod command_environment;
+pub use command_environment::{
+    CleanEnvironmentError, ClearedCommandEnvironment, EnvironmentInheritance,
+};
 #[path = "lib_execution_result.rs"]
 mod execution_result;
 pub use execution_result::{
@@ -173,7 +177,9 @@ pub(crate) enum PreExecPolicy {
 
 #[path = "lib_spawn.rs"]
 mod spawn;
-pub use spawn::{spawn_tool, spawn_tool_sandboxed, spawn_tool_with_options};
+pub use spawn::{
+    spawn_tool, spawn_tool_sandboxed, spawn_tool_sandboxed_in_environment, spawn_tool_with_options,
+};
 
 /// Wait for a spawned child process and capture its output.
 ///
@@ -257,6 +263,36 @@ fn poll_child_exited(child: &mut tokio::process::Child, consumed: &mut bool) -> 
     *consumed
 }
 
+#[cfg(test)]
+fn clean_env(entries: &[(&str, &str)]) -> ClearedCommandEnvironment {
+    ClearedCommandEnvironment::try_new(
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    )
+    .expect("valid clean environment")
+}
+
+#[cfg(test)]
+fn assert_recorded_env(command: &Command, expected: &std::collections::BTreeMap<String, String>) {
+    let actual = command
+        .as_std()
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(&actual, expected);
+}
+
+#[cfg(test)]
+#[path = "lib_spawn_clean_tests.rs"]
+mod spawn_clean_tests;
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
