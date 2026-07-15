@@ -51,12 +51,14 @@ impl LedgerPort for MemoryStore {
         Ok(self.ledger.borrow().clone())
     }
 
-    fn append(&self, campaign_id: CampaignId, event: ConvergenceEvent) -> Result<()> {
+    fn append_batch(&self, campaign_id: CampaignId, events: Vec<ConvergenceEvent>) -> Result<()> {
         let count = self.append_count.get();
         if self.fail_at.get() == Some(count) {
             return Err(anyhow!("scripted store failure"));
         }
-        self.ledger.borrow_mut().append(campaign_id, event)?;
+        let mut next = self.ledger.borrow().clone();
+        next.append_batch(campaign_id, events)?;
+        *self.ledger.borrow_mut() = next;
         self.append_count.set(count + 1);
         Ok(())
     }

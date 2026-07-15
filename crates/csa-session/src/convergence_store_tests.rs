@@ -10,7 +10,7 @@ use tempfile::tempdir;
 use crate::atomic_state_write::AtomicWriteFault;
 use crate::convergence::{
     CampaignId, CampaignRecord, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
-    ConvergenceLedgerStore, MAX_LEDGER_BYTES,
+    ConvergenceLedgerStore, EpochRecord, GitObjectId, MAX_LEDGER_BYTES, Sha256Digest,
 };
 
 const CAMPAIGN_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -30,6 +30,22 @@ fn campaign_start(value: &str) -> (CampaignId, ConvergenceEvent) {
     (
         id.clone(),
         ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(id, Utc::now(), None)),
+    )
+}
+
+fn campaign_batch(value: &str) -> (CampaignId, Vec<ConvergenceEvent>) {
+    let id = campaign(value);
+    let epoch = EpochRecord::new(
+        GitObjectId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        GitObjectId::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
+        Sha256Digest::parse(&format!("sha256:{}", "c".repeat(64))).unwrap(),
+    );
+    (
+        id.clone(),
+        vec![
+            ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(id, Utc::now(), None)),
+            ConvergenceEvent::EpochOpened(epoch),
+        ],
     )
 }
 
@@ -302,6 +318,28 @@ fn convergence_store_pre_rename_failure_is_not_published_and_preserves_old_bytes
         names,
         std::collections::HashSet::from(["ledger.json".into(), "ledger.lock".into()])
     );
+}
+
+#[test]
+fn convergence_store_batch_pre_rename_failure_preserves_the_complete_old_prefix() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("state");
+    let store = store_at(&root);
+    let (campaign_id, event) = campaign_start(CAMPAIGN_A);
+    store.append(campaign_id, event).unwrap();
+    let before = fs::read(ledger_path(&root)).unwrap();
+    let (campaign_id, events) = campaign_batch(CAMPAIGN_B);
+
+    let error = store
+        .append_batch_with_fault(campaign_id, events, AtomicWriteFault::BeforeRename)
+        .expect_err("a pre-rename fault must not expose part of a batch");
+
+    assert!(matches!(error, ConvergenceAppendError::NotPublished(_)));
+    assert_eq!(fs::read(ledger_path(&root)).unwrap(), before);
+    let visible = store.load().unwrap();
+    assert_eq!(visible.entries().len(), 1);
+    assert_eq!(visible.entries()[0].campaign_id(), &campaign(CAMPAIGN_A));
+    visible.validate().unwrap();
 }
 
 #[test]

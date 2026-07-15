@@ -128,6 +128,44 @@ fn convergence_ledger_accepts_valid_campaign_epoch_cell_history() {
 }
 
 #[test]
+fn convergence_ledger_append_batch_validates_the_full_batch_before_publication() {
+    let campaign_id = campaign(CAMPAIGN_A);
+    let epoch = epoch_record();
+    let cell = cell_record(&epoch);
+    let mut ledger = ConvergenceLedger::empty();
+
+    let error = ledger
+        .append_batch(
+            campaign_id.clone(),
+            vec![
+                ConvergenceEvent::CampaignStarted(campaign_record(&campaign_id)),
+                ConvergenceEvent::EpochOpened(epoch.clone()),
+                ConvergenceEvent::CoverageCellDefined(cell.clone()),
+                ConvergenceEvent::CoverageCellDefined(cell),
+            ],
+        )
+        .expect_err("the duplicate final event makes the complete batch invalid");
+
+    assert!(error.to_string().contains("coverage cell"));
+    assert_eq!(ledger, ConvergenceLedger::empty());
+
+    ledger
+        .append_batch(
+            campaign_id.clone(),
+            vec![
+                ConvergenceEvent::CampaignStarted(campaign_record(&campaign_id)),
+                ConvergenceEvent::EpochOpened(epoch.clone()),
+                ConvergenceEvent::CoverageCellDefined(cell_record(&epoch)),
+            ],
+        )
+        .expect("a valid batch must become visible together");
+    assert_eq!(ledger.entries().len(), 3);
+    assert_eq!(ledger.entries()[0].sequence(), 1);
+    assert_eq!(ledger.entries()[2].sequence(), 3);
+    ledger.validate().expect("published batch must be valid");
+}
+
+#[test]
 fn convergence_ledger_rejects_noncontiguous_sequence_and_duplicate_event_ids() {
     let campaign_id = campaign(CAMPAIGN_A);
     let noncontiguous = ledger(vec![entry(

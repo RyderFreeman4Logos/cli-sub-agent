@@ -41,8 +41,8 @@ pub enum ConvergenceAppendError {
         "convergence ledger may have been published, but durability is unconfirmed; reload before deciding whether to retry: {source:#}"
     )]
     PublishedButDurabilityUnconfirmed {
-        /// The exact entry whose publication must be reconciled by event ID.
-        attempted_entry: Box<ConvergenceLedgerEntry>,
+        /// The complete entry suffix whose publication must be reconciled by event ID.
+        attempted_entries: Box<[ConvergenceLedgerEntry]>,
         /// The publication or post-publication verification failure.
         #[source]
         source: anyhow::Error,
@@ -62,15 +62,24 @@ impl ConvergenceAppendError {
         !self.may_have_been_published()
     }
 
-    /// Return the exact attempted entry when publication may already have occurred.
+    /// Return the complete attempted entry suffix when publication may already have occurred.
+    #[must_use]
+    pub fn attempted_entries(&self) -> &[ConvergenceLedgerEntry] {
+        match self {
+            Self::NotPublished(_) => &[],
+            Self::PublishedButDurabilityUnconfirmed {
+                attempted_entries, ..
+            } => attempted_entries,
+        }
+    }
+
+    /// Return the first attempted entry when publication may already have occurred.
+    ///
+    /// Single-event callers retain this convenience accessor; batch callers must reconcile the
+    /// complete suffix from [`Self::attempted_entries`].
     #[must_use]
     pub fn attempted_entry(&self) -> Option<&ConvergenceLedgerEntry> {
-        match self {
-            Self::NotPublished(_) => None,
-            Self::PublishedButDurabilityUnconfirmed {
-                attempted_entry, ..
-            } => Some(attempted_entry),
-        }
+        self.attempted_entries().first()
     }
 }
 
@@ -193,6 +202,39 @@ impl ConvergenceLedgerStore {
         )
     }
 
+    /// Append and durably publish a complete event batch under one persistent project lock.
+    ///
+    /// The ledger remains its prior valid prefix until the one publication rename succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified error that tells callers whether the complete batch may need
+    /// reconciliation after reloading the ledger.
+    pub fn append_batch(
+        &self,
+        campaign_id: CampaignId,
+        events: Vec<ConvergenceEvent>,
+    ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.append_batch_transaction(
+            campaign_id,
+            events,
+            MAX_LEDGER_BYTES,
+            |_| Ok(()),
+            |directory, path, bytes| {
+                atomic_state_write::publish_bytes_in(
+                    directory.file(),
+                    Some(directory.parent()),
+                    ledger_name(),
+                    path,
+                    bytes,
+                )
+            },
+        )
+    }
+
     fn append_transaction<B, P>(
         &self,
         campaign_id: CampaignId,
@@ -201,6 +243,30 @@ impl ConvergenceLedgerStore {
         before_publish: B,
         publisher: P,
     ) -> Result<ConvergenceLedgerEntry, ConvergenceAppendError>
+    where
+        B: FnOnce(&SecureDirectory) -> anyhow::Result<()>,
+        P: FnOnce(&SecureDirectory, &Path, &[u8]) -> Result<(), AtomicPublishError>,
+    {
+        let mut appended = self.append_batch_transaction(
+            campaign_id,
+            vec![event],
+            max_bytes,
+            before_publish,
+            publisher,
+        )?;
+        appended
+            .pop()
+            .ok_or_else(|| not_published(anyhow!("convergence append produced no entry")))
+    }
+
+    fn append_batch_transaction<B, P>(
+        &self,
+        campaign_id: CampaignId,
+        events: Vec<ConvergenceEvent>,
+        max_bytes: u64,
+        before_publish: B,
+        publisher: P,
+    ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError>
     where
         B: FnOnce(&SecureDirectory) -> anyhow::Result<()>,
         P: FnOnce(&SecureDirectory, &Path, &[u8]) -> Result<(), AtomicPublishError>,
@@ -234,17 +300,22 @@ impl ConvergenceLedgerStore {
             .load_from_directory(&directory)
             .map_err(not_published)?;
         let prefix = ledger.entries().to_vec();
-        ledger.append(campaign_id, event).map_err(not_published)?;
+        let event_count = events.len();
+        ledger
+            .append_batch(campaign_id, events)
+            .map_err(not_published)?;
         if ledger.entries().get(..prefix.len()) != Some(prefix.as_slice()) {
             return Err(not_published(anyhow!(
                 "convergence append changed the existing ledger prefix"
             )));
         }
-        let appended = ledger
-            .entries()
-            .last()
-            .cloned()
-            .ok_or_else(|| not_published(anyhow!("convergence append produced no entry")))?;
+        let appended = ledger.entries()[prefix.len()..].to_vec();
+        if appended.len() != event_count {
+            return Err(not_published(anyhow!(
+                "convergence append batch produced {} entries for {event_count} events",
+                appended.len()
+            )));
+        }
         let bytes = serialize_ledger(&ledger, &prefix, max_bytes).map_err(not_published)?;
 
         before_publish(&directory).map_err(not_published)?;
@@ -283,6 +354,31 @@ impl ConvergenceLedgerStore {
         self.append_transaction(
             campaign_id,
             event,
+            MAX_LEDGER_BYTES,
+            |_| Ok(()),
+            |directory, path, bytes| {
+                atomic_state_write::publish_bytes_in_with_fault(
+                    directory.file(),
+                    Some(directory.parent()),
+                    ledger_name(),
+                    path,
+                    bytes,
+                    fault,
+                )
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn append_batch_with_fault(
+        &self,
+        campaign_id: CampaignId,
+        events: Vec<ConvergenceEvent>,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
+        self.append_batch_transaction(
+            campaign_id,
+            events,
             MAX_LEDGER_BYTES,
             |_| Ok(()),
             |directory, path, bytes| {
@@ -422,22 +518,22 @@ fn not_published(error: anyhow::Error) -> ConvergenceAppendError {
 
 fn uncertain(
     source: anyhow::Error,
-    attempted_entry: &ConvergenceLedgerEntry,
+    attempted_entries: &[ConvergenceLedgerEntry],
 ) -> ConvergenceAppendError {
     ConvergenceAppendError::PublishedButDurabilityUnconfirmed {
-        attempted_entry: Box::new(attempted_entry.clone()),
+        attempted_entries: attempted_entries.into(),
         source,
     }
 }
 
 fn map_publish_error(
     error: AtomicPublishError,
-    attempted_entry: &ConvergenceLedgerEntry,
+    attempted_entries: &[ConvergenceLedgerEntry],
 ) -> ConvergenceAppendError {
     match error {
         AtomicPublishError::BeforePublish(error) => ConvergenceAppendError::NotPublished(error),
         AtomicPublishError::PublishedButDurabilityUnconfirmed(error) => {
-            uncertain(error, attempted_entry)
+            uncertain(error, attempted_entries)
         }
     }
 }

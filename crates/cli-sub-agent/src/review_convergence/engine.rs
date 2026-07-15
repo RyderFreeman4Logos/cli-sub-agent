@@ -92,7 +92,7 @@ pub(crate) trait WorkspaceProbe {
 
 pub(crate) trait LedgerPort {
     fn load(&self) -> Result<ConvergenceLedger>;
-    fn append(&self, campaign_id: CampaignId, event: ConvergenceEvent) -> Result<()>;
+    fn append_batch(&self, campaign_id: CampaignId, events: Vec<ConvergenceEvent>) -> Result<()>;
 }
 
 impl LedgerPort for ConvergenceLedgerStore {
@@ -100,8 +100,8 @@ impl LedgerPort for ConvergenceLedgerStore {
         ConvergenceLedgerStore::load(self)
     }
 
-    fn append(&self, campaign_id: CampaignId, event: ConvergenceEvent) -> Result<()> {
-        ConvergenceLedgerStore::append(self, campaign_id, event)
+    fn append_batch(&self, campaign_id: CampaignId, events: Vec<ConvergenceEvent>) -> Result<()> {
+        ConvergenceLedgerStore::append_batch(self, campaign_id, events)
             .map(|_| ())
             .map_err(|error| anyhow!(error))
     }
@@ -571,7 +571,7 @@ fn persist<S: LedgerPort>(
 ) -> std::result::Result<(), EngineError> {
     let started = Instant::now();
     store
-        .append(campaign.id().clone(), event)
+        .append_batch(campaign.id().clone(), vec![event])
         .map_err(|error| blocked("store_failure", format!("{error:#}"), calls))?;
     *ledger = store
         .load()

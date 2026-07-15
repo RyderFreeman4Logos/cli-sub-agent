@@ -210,6 +210,37 @@ impl ConvergenceLedger {
     /// Returns an error when the next sequence cannot be represented or when replaying the
     /// tentative history violates any ledger protocol invariant.
     pub fn append(&mut self, campaign_id: CampaignId, event: ConvergenceEvent) -> Result<()> {
+        self.append_batch(campaign_id, vec![event])
+    }
+
+    /// Append a complete event batch only when the resulting history is valid.
+    ///
+    /// The batch is constructed and validated on a clone, so callers never observe a partial
+    /// suffix when any event in the batch violates the convergence protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a sequence cannot be represented or the complete tentative history
+    /// violates a ledger protocol invariant.
+    pub fn append_batch(
+        &mut self,
+        campaign_id: CampaignId,
+        events: Vec<ConvergenceEvent>,
+    ) -> Result<()> {
+        let mut next = self.clone();
+        for event in events {
+            next.append_unvalidated(campaign_id.clone(), event)?;
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    fn append_unvalidated(
+        &mut self,
+        campaign_id: CampaignId,
+        event: ConvergenceEvent,
+    ) -> Result<()> {
         let sequence = u64::try_from(self.entries.len())
             .context("convergence ledger contains more entries than u64 can address")?
             .checked_add(1)
@@ -221,10 +252,6 @@ impl ConvergenceLedger {
             Utc::now(),
             event,
         ));
-        if let Err(error) = self.validate() {
-            let _ = self.entries.pop();
-            return Err(error);
-        }
         Ok(())
     }
 
