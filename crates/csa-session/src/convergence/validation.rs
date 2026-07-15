@@ -46,6 +46,7 @@ pub(super) fn validate_ledger(
     for (campaign_id, state) in &campaigns {
         repair_validation::validate_complete_clustering(campaign_id, state)?;
     }
+    super::validation_attestation::validate_terminal_pair(entries)?;
     Ok(())
 }
 
@@ -432,6 +433,8 @@ fn apply_event(
         ConvergenceEvent::RepairHandoffRecorded(record) => {
             repair_validation::record_repair_handoff(campaigns, entry, record)?;
         }
+        ConvergenceEvent::FinalReviewRecorded(_)
+        | ConvergenceEvent::MergeAttestationRecorded(_) => {}
     }
     Ok(())
 }

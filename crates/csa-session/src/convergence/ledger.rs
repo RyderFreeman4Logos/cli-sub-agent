@@ -1,15 +1,17 @@
-use std::{fmt, str::FromStr};
+use std::{collections::HashSet, fmt, str::FromStr};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use ulid::Ulid;
 
 use super::{
-    CampaignId, CampaignRecord, CandidateDispositionRecord, CandidateRecord, CoverageCellRecord,
-    CoverageDispositionRecord, CoveragePlanFinalizationRecord, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptRecord, EpochRecord, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
-    validation,
+    ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
+    CandidateDispositionRecord, CandidateRecord, CleanRoomReviewRecord, CoverageCellRecord,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
+    MergeAttestationRecord, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
+    Sha256Digest, hash_fields, validation,
 };
 
 /// Current on-disk schema version for convergence ledgers.
@@ -110,6 +112,10 @@ pub enum ConvergenceEvent {
     RepairBatchRecorded(RepairBatchRecord),
     /// One validated repair batch received an immutable writer handoff.
     RepairHandoffRecorded(RepairHandoffRecord),
+    /// A fresh clean-room review reported an exact zero-finding terminal result.
+    FinalReviewRecorded(CleanRoomReviewRecord),
+    /// The authoritative terminal bindings were sealed for merge.
+    MergeAttestationRecorded(Box<MergeAttestationRecord>),
 }
 
 /// One ordered, immutable convergence history event.
@@ -271,4 +277,177 @@ impl ConvergenceLedger {
     pub fn validate(&self) -> Result<()> {
         validation::validate_ledger(self.schema_version, &self.entries)
     }
+}
+
+const BINDING_DOMAIN: &[u8] = b"csa-convergence-attestation-binding-v1\0";
+
+pub(super) struct SetDigests {
+    pub(super) coverage: Sha256Digest,
+    pub(super) candidates: Sha256Digest,
+    pub(super) dispositions: Sha256Digest,
+    pub(super) clusters: Sha256Digest,
+    pub(super) repairs: Sha256Digest,
+}
+
+pub(super) fn set_digests(
+    entries: &[ConvergenceLedgerEntry],
+    campaign_id: &CampaignId,
+    epoch: &EpochRecord,
+) -> Result<SetDigests> {
+    let mut cells = HashSet::new();
+    let mut required = HashSet::new();
+    let mut attempted = HashSet::new();
+    let mut attempts = HashSet::<DiscoveryAttemptId>::new();
+    let mut finalized = 0_usize;
+    let mut candidate_count = 0_usize;
+    let mut coverage = Vec::new();
+    let mut candidate_set = Vec::new();
+    let mut dispositions = Vec::new();
+    let mut clusters = Vec::new();
+    let mut repairs = Vec::new();
+    let mut plan_finalized = false;
+
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign_id)
+    {
+        match entry.event() {
+            ConvergenceEvent::CoverageCellDefined(record) if record.epoch_id() == epoch.id() => {
+                cells.insert(record.id().clone());
+                coverage.push(record_digest("coverage_cell", record));
+            }
+            ConvergenceEvent::CoverageDispositionRecorded(record)
+                if cells.contains(record.coverage_cell_id()) =>
+            {
+                if record.requirement() == CoverageRequirement::Required {
+                    required.insert(record.coverage_cell_id().clone());
+                }
+                coverage.push(record_digest("coverage_disposition", record));
+            }
+            ConvergenceEvent::CoveragePlanFinalized(record) if record.epoch_id() == epoch.id() => {
+                plan_finalized = true;
+                coverage.push(record_digest("coverage_finalized", record));
+            }
+            ConvergenceEvent::DiscoveryAttemptRecorded(record)
+                if record.epoch_id() == epoch.id() =>
+            {
+                if record.more_candidates_possible() || !record.unscanned_items().is_empty() {
+                    bail!("current epoch discovery is incomplete");
+                }
+                attempts.insert(record.id().clone());
+                attempted.insert(record.coverage_cell_id().clone());
+            }
+            ConvergenceEvent::DiscoveryAttemptFinalized(record)
+                if attempts.contains(record.discovery_attempt_id()) =>
+            {
+                finalized += 1;
+            }
+            ConvergenceEvent::CandidateRecorded(record)
+                if attempts.contains(record.discovery_attempt_id()) =>
+            {
+                candidate_count += 1;
+                candidate_set.push(record_digest("candidate", record));
+            }
+            ConvergenceEvent::CandidateDispositionRecorded(record)
+                if record.epoch_id() == epoch.id() =>
+            {
+                dispositions.push(record.clone());
+            }
+            ConvergenceEvent::RootClusterRecorded(record) if record.epoch_id() == epoch.id() => {
+                clusters.push(record.clone());
+            }
+            ConvergenceEvent::RepairBatchRecorded(record) if record.epoch_id() == epoch.id() => {
+                repairs.push(record.clone());
+            }
+            _ => {}
+        }
+    }
+    let verified = dispositions
+        .iter()
+        .filter(|record| record.disposition() == &CandidateDisposition::Verified)
+        .map(CandidateDispositionRecord::candidate_id)
+        .collect::<HashSet<_>>();
+    let clustered = clusters
+        .iter()
+        .flat_map(|record| record.candidate_ids())
+        .collect::<HashSet<_>>();
+    if !plan_finalized
+        || !required.is_subset(&attempted)
+        || attempts.len() != finalized
+        || candidate_count != dispositions.len()
+        || verified != clustered
+    {
+        bail!("current epoch coverage, candidate, or disposition set is incomplete");
+    }
+    coverage.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+    candidate_set.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(SetDigests {
+        coverage: bind("coverage_manifest", &digest_refs(&coverage)),
+        candidates: bind("candidate_set", &digest_refs(&candidate_set)),
+        dispositions: CandidateDispositionRecord::set_digest(&dispositions),
+        clusters: RootClusterRecord::set_digest(&clusters),
+        repairs: RepairBatchRecord::set_digest(&repairs),
+    })
+}
+
+fn record_digest(label: &str, record: &impl serde::Serialize) -> Sha256Digest {
+    let bytes = serde_json::to_vec(record).expect("validated records serialize");
+    bind(label, &[Sha256Digest::compute(&bytes).as_str()])
+}
+
+pub(super) fn terminal_pair(
+    entries: &[ConvergenceLedgerEntry],
+) -> Result<(&CleanRoomReviewRecord, &MergeAttestationRecord)> {
+    match entries {
+        [.., review_entry, attestation_entry] => {
+            match (review_entry.event(), attestation_entry.event()) {
+                (
+                    ConvergenceEvent::FinalReviewRecorded(review),
+                    ConvergenceEvent::MergeAttestationRecorded(attestation),
+                ) => Ok((review, attestation)),
+                _ => bail!("ledger has no terminal attestation pair"),
+            }
+        }
+        _ => bail!("ledger has no terminal attestation pair"),
+    }
+}
+
+pub(super) fn artifact_refs<'a>(
+    entries: &'a [ConvergenceLedgerEntry],
+    campaign_id: &CampaignId,
+) -> Vec<&'a ArtifactEvidenceRef> {
+    entries
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign_id)
+        .filter_map(|entry| match entry.event() {
+            ConvergenceEvent::DiscoveryAttemptRecorded(record) => Some(record.artifact()),
+            ConvergenceEvent::CandidateRecorded(record) => Some(record.artifact()),
+            ConvergenceEvent::CandidateDispositionRecorded(record) => Some(record.artifact()),
+            ConvergenceEvent::RepairHandoffRecorded(record) => Some(record.artifact()),
+            ConvergenceEvent::FinalReviewRecorded(record) => Some(record.artifact()),
+            ConvergenceEvent::MergeAttestationRecorded(record) => {
+                Some(record.gate_evidence.artifact())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(super) fn bind(label: &str, fields: &[&str]) -> Sha256Digest {
+    let mut framed = Vec::with_capacity(fields.len() + 1);
+    framed.push(label);
+    framed.extend_from_slice(fields);
+    hash_fields(BINDING_DOMAIN, &framed)
+}
+
+fn digest_refs(digests: &[Sha256Digest]) -> Vec<&str> {
+    digests.iter().map(Sha256Digest::as_str).collect()
+}
+
+pub(super) fn require_schema(bytes: &[u8], expected: &str) -> Result<()> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).context("artifact is not JSON")?;
+    if value.get("schema").and_then(serde_json::Value::as_str) != Some(expected) {
+        bail!("artifact schema is not '{expected}'");
+    }
+    Ok(())
 }

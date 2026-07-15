@@ -71,6 +71,10 @@ mod convergence_store_tests;
 #[path = "convergence_store_review_tests.rs"]
 mod convergence_store_review_tests;
 
+#[cfg(test)]
+#[path = "convergence_attestation_tests.rs"]
+mod convergence_attestation_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -97,18 +101,21 @@ pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use convergence::{
-    AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
-    CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
-    CommandAuthoritySource, ConsolidatedRepairAuthorization, ConvergenceAppendError,
-    ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry, ConvergenceLedgerStore,
-    CoverageCellId, CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
-    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryDirective, DiscoveryRunIntent, EpochId,
-    EpochRecord, GitObjectId, LedgerEventId, RepairBatchId, RepairBatchRecord, RepairHandoffId,
-    RepairHandoffRecord, RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
+    AdmittedModelIdentity, ArtifactEvidenceRef, AttestationArtifactReader,
+    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID, CONVERGENCE_LEDGER_SCHEMA_VERSION,
+    CampaignId, CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId,
+    CandidateRecord, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource,
+    ConsolidatedRepairAuthorization, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
+    ConvergenceLedgerEntry, ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
+    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GATE_EVIDENCE_SCHEMA_ID,
+    GateCommandResult, GateEvidenceRecord, GitObjectId, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
+    MergeAttestationRecord, RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord,
+    RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
     SessionRelativeArtifactPath, Sha256Digest, StableFindingId, authorize_consolidated_repairs,
-    next_discovery_directive,
+    compute_attestation_bindings, next_discovery_directive, verify_merge_attestation,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

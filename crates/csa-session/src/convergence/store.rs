@@ -8,7 +8,10 @@ use fd_lock::RwLock;
 use thiserror::Error;
 
 use super::secure_fs::{self, SecureDirectory};
-use super::{CampaignId, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry};
+use super::{
+    CampaignId, CleanRoomReviewRecord, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
+    MergeAttestationRecord,
+};
 use crate::atomic_state_write::{self, AtomicPublishError};
 
 pub(crate) const MAX_LEDGER_BYTES: u64 = 64 * 1024 * 1024;
@@ -263,6 +266,25 @@ impl ConvergenceLedgerStore {
         )
     }
 
+    /// Atomically publish the terminal clean-room review and matching merge attestation.
+    ///
+    /// # Errors
+    /// Returns a classified error when the complete pair cannot be durably published.
+    pub fn publish_final_attestation(
+        &self,
+        campaign_id: CampaignId,
+        final_review: CleanRoomReviewRecord,
+        attestation: MergeAttestationRecord,
+    ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
+        self.append_batch(
+            campaign_id,
+            vec![
+                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
+            ],
+        )
+    }
+
     fn append_transaction<B, P>(
         &self,
         campaign_id: CampaignId,
@@ -417,6 +439,37 @@ impl ConvergenceLedgerStore {
                     path,
                     bytes,
                     fault,
+                )
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_final_attestation_with_before_publish<F>(
+        &self,
+        campaign_id: CampaignId,
+        final_review: CleanRoomReviewRecord,
+        attestation: MergeAttestationRecord,
+        probe: F,
+    ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError>
+    where
+        F: FnOnce(&Path) -> anyhow::Result<()>,
+    {
+        self.append_batch_transaction(
+            campaign_id,
+            vec![
+                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
+            ],
+            MAX_LEDGER_BYTES,
+            |_| probe(&self.lock_path),
+            |directory, path, bytes| {
+                atomic_state_write::publish_bytes_in(
+                    directory.file(),
+                    Some(directory.parent()),
+                    ledger_name(),
+                    path,
+                    bytes,
                 )
             },
         )
