@@ -1,8 +1,16 @@
 pub(super) mod bundle;
 mod clean_room;
 mod clustering;
+// Slice 3A defines the deterministic core without changing legacy production dispatch.
+#[allow(dead_code)]
+mod completion;
 mod continuation;
 mod coverage;
+// Slice 3B will wire the strict completion-only contract and clean-room prompt.
+#[allow(dead_code)]
+mod discovery_contract;
+#[allow(dead_code)]
+mod discovery_prompt;
 pub(super) mod engine;
 mod gate_evidence;
 mod output;
@@ -16,6 +24,8 @@ pub(super) use repair_authorization::{
 mod clean_room_provider_tests;
 #[cfg(test)]
 mod clean_room_tests;
+#[cfg(test)]
+mod completion_tests;
 #[cfg(test)]
 mod gate_evidence_tests;
 pub(super) mod runner;
