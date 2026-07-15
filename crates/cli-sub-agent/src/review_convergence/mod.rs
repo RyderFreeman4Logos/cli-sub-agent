@@ -1,8 +1,10 @@
 pub(super) mod bundle;
+mod clean_room;
 mod clustering;
 mod continuation;
 mod coverage;
 pub(super) mod engine;
+mod gate_evidence;
 mod output;
 mod persistence;
 mod recovery;
@@ -10,6 +12,10 @@ pub(super) mod repair_authorization;
 pub(super) use repair_authorization::{
     RepairOnlyContext as RepairContext, run_repair_only_command as run_repair,
 };
+#[cfg(test)]
+mod clean_room_tests;
+#[cfg(test)]
+mod gate_evidence_tests;
 pub(super) mod runner;
 mod schema;
 pub(super) mod verification;
