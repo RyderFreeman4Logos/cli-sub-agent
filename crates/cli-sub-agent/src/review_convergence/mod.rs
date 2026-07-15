@@ -13,6 +13,8 @@ pub(super) use repair_authorization::{
     RepairOnlyContext as RepairContext, run_repair_only_command as run_repair,
 };
 #[cfg(test)]
+mod clean_room_provider_tests;
+#[cfg(test)]
 mod clean_room_tests;
 #[cfg(test)]
 mod gate_evidence_tests;
