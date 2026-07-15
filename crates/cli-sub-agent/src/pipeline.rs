@@ -63,10 +63,15 @@ pub(crate) mod model_failover_session;
 pub(crate) mod lefthook_auto_install;
 
 // Re-export session execution API so callers keep using `crate::pipeline::*`.
-#[cfg(test)]
-pub(crate) use session_exec::execute_with_session_and_meta;
+#[allow(unused_imports)]
 pub(crate) use session_exec::{
+    CleanRoomExecutionContract, CleanRoomExecutionLimits, execute_clean_room_session,
     execute_with_session, execute_with_session_and_meta_with_parent_source,
+};
+#[cfg(test)]
+pub(crate) use session_exec::{
+    CleanRoomSandboxInput, clean_room_execution_policy_effects, clean_room_runtime_prompt_for_test,
+    execute_with_session_and_meta, resolve_clean_room_sandbox_options_with_capabilities,
 };
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
@@ -547,6 +552,7 @@ pub(crate) fn acquire_slot(
 }
 
 /// Execution result with the resolved CSA meta session ID used by this run.
+#[derive(Debug)]
 pub(crate) struct SessionExecutionResult {
     pub execution: ExecutionResult,
     pub meta_session_id: String,
@@ -639,6 +645,14 @@ mod admitted_executor_tests;
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_clean_room_execution.rs"]
+mod clean_room_execution_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_clean_room_integration.rs"]
+mod clean_room_integration_tests;
 
 #[cfg(test)]
 #[path = "pipeline_tests_thinking.rs"]

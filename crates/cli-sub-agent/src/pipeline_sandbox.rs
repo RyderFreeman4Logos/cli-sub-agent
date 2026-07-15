@@ -19,6 +19,11 @@ use tracing::{info, warn};
 
 use crate::run_resource_overrides::RunResourceOverrides;
 
+#[cfg(test)]
+use crate::pipeline::{
+    CleanRoomSandboxInput, resolve_clean_room_sandbox_options_with_capabilities,
+};
+
 #[path = "pipeline_sandbox_memory_balloon.rs"]
 mod memory_balloon;
 #[path = "pipeline_sandbox_memory_override.rs"]
