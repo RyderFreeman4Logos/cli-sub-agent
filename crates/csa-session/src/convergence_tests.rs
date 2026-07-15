@@ -119,6 +119,7 @@ fn coverage_cell_id_is_semantic_and_rejects_blank_scope_or_lens() {
 #[test]
 fn stable_finding_id_ignores_location_evidence_and_changes_with_semantics() {
     let identity = SemanticFindingIdentity::new(
+        " cancellation must terminate every review worker ",
         " missing cancellation guard ",
         " review worker lifecycle ",
         " resource leak ",
@@ -133,17 +134,41 @@ fn stable_finding_id_ignores_location_evidence_and_changes_with_semantics() {
     let after = StableFindingId::compute(&identity);
     assert_eq!(before, after, "location evidence must not affect identity");
 
-    let changed = SemanticFindingIdentity::new(
+    let changed_bug_class = SemanticFindingIdentity::new(
+        "cancellation must terminate every review worker",
         "missing cancellation guard",
         "review worker lifecycle",
         "deadlock",
     )
     .unwrap();
-    assert_ne!(before, StableFindingId::compute(&changed));
+    assert_ne!(before, StableFindingId::compute(&changed_bug_class));
 
-    assert!(SemanticFindingIdentity::new("", "component", "class").is_err());
-    assert!(SemanticFindingIdentity::new("mechanism", " ", "class").is_err());
-    assert!(SemanticFindingIdentity::new("mechanism", "component", "\n").is_err());
+    for changed in [
+        SemanticFindingIdentity::new(
+            "workers must flush pending evidence before cancellation",
+            "missing cancellation guard",
+            "review worker lifecycle",
+            "resource leak",
+        ),
+        SemanticFindingIdentity::new(
+            "cancellation must terminate every review worker",
+            "timeout races with cancellation",
+            "review worker lifecycle",
+            "resource leak",
+        ),
+        SemanticFindingIdentity::new(
+            "cancellation must terminate every review worker",
+            "missing cancellation guard",
+            "review supervisor lifecycle",
+            "resource leak",
+        ),
+    ] {
+        assert_ne!(before, StableFindingId::compute(&changed.unwrap()));
+    }
+
+    assert!(SemanticFindingIdentity::new("", "trigger", "component", "class").is_err());
+    assert!(SemanticFindingIdentity::new("invariant", " ", "component", "class").is_err());
+    assert!(SemanticFindingIdentity::new("invariant", "trigger", "\n", "class").is_err());
 }
 
 #[test]
@@ -177,7 +202,8 @@ fn schema_round_trip_rejects_unknown_fields() {
     missing.as_object_mut().unwrap().remove("lens");
     assert!(serde_json::from_value::<CoverageCellRecord>(missing).is_err());
 
-    let identity = SemanticFindingIdentity::new("mechanism", "component", "class").unwrap();
+    let identity =
+        SemanticFindingIdentity::new("invariant", "trigger", "component", "class").unwrap();
     let mut identity_json = serde_json::to_value(&identity).unwrap();
     identity_json["path"] = serde_json::json!("src/lib.rs");
     assert!(serde_json::from_value::<SemanticFindingIdentity>(identity_json).is_err());

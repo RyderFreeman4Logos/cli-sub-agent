@@ -650,8 +650,9 @@ impl CoverageCellRecord {
 /// Canonical semantic identity of a finding, independent of location evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct SemanticFindingIdentity {
-    mechanism: String,
-    affected_component: String,
+    violated_invariant: String,
+    trigger_failure_mode: String,
+    primary_component: String,
     bug_class: String,
 }
 
@@ -663,27 +664,42 @@ impl SemanticFindingIdentity {
     /// # Errors
     ///
     /// Returns an error when any normalized semantic field is blank.
-    pub fn new(mechanism: &str, affected_component: &str, bug_class: &str) -> Result<Self> {
+    pub fn new(
+        violated_invariant: &str,
+        trigger_failure_mode: &str,
+        primary_component: &str,
+        bug_class: &str,
+    ) -> Result<Self> {
         Ok(Self {
-            mechanism: normalize_nonblank("finding mechanism", mechanism)?,
-            affected_component: normalize_nonblank(
-                "finding affected component",
-                affected_component,
+            violated_invariant: normalize_nonblank(
+                "finding violated invariant",
+                violated_invariant,
             )?,
+            trigger_failure_mode: normalize_nonblank(
+                "finding trigger or failure mode",
+                trigger_failure_mode,
+            )?,
+            primary_component: normalize_nonblank("finding primary component", primary_component)?,
             bug_class: normalize_nonblank("finding bug class", bug_class)?,
         })
     }
 
-    /// Return the canonical mechanism.
+    /// Return the invariant the finding violates.
     #[must_use]
-    pub fn mechanism(&self) -> &str {
-        &self.mechanism
+    pub fn violated_invariant(&self) -> &str {
+        &self.violated_invariant
     }
 
-    /// Return the canonical affected component.
+    /// Return the trigger or failure mode that exposes the violation.
     #[must_use]
-    pub fn affected_component(&self) -> &str {
-        &self.affected_component
+    pub fn trigger_failure_mode(&self) -> &str {
+        &self.trigger_failure_mode
+    }
+
+    /// Return the primary component or symbol affected by the finding.
+    #[must_use]
+    pub fn primary_component(&self) -> &str {
+        &self.primary_component
     }
 
     /// Return the canonical bug class.
@@ -701,13 +717,20 @@ impl<'de> Deserialize<'de> for SemanticFindingIdentity {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct RawSemanticFindingIdentity {
-            mechanism: String,
-            affected_component: String,
+            violated_invariant: String,
+            trigger_failure_mode: String,
+            primary_component: String,
             bug_class: String,
         }
 
         let raw = RawSemanticFindingIdentity::deserialize(deserializer)?;
-        Self::new(&raw.mechanism, &raw.affected_component, &raw.bug_class).map_err(D::Error::custom)
+        Self::new(
+            &raw.violated_invariant,
+            &raw.trigger_failure_mode,
+            &raw.primary_component,
+            &raw.bug_class,
+        )
+        .map_err(D::Error::custom)
     }
 }
 
@@ -722,8 +745,9 @@ impl StableFindingId {
         Self(hash_fields(
             STABLE_FINDING_DOMAIN,
             &[
-                identity.mechanism(),
-                identity.affected_component(),
+                identity.violated_invariant(),
+                identity.trigger_failure_mode(),
+                identity.primary_component(),
                 identity.bug_class(),
             ],
         ))

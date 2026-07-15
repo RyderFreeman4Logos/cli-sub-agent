@@ -1,4 +1,3 @@
-use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -19,6 +18,7 @@ use csa_session::convergence::{
 use serde::Serialize;
 
 use super::bundle::ProviderEvidenceRef;
+use super::continuation::{ContinuationEvidence, from_ledger as continuation_from_ledger};
 pub(crate) use super::output::DiscoveryRunOutput;
 use super::persistence::{persist, persist_batch};
 use super::recovery::recover_missing_candidate;
@@ -116,21 +116,22 @@ pub(crate) struct DiscoveryRequest {
     pub(crate) prior_finalized_attempt_count: u32,
     pub(crate) intent: DiscoveryRunIntent,
     pub(crate) candidate_limit: u32,
-    pub(crate) existing_fingerprints: Vec<String>,
+    pub(crate) continuation: ContinuationEvidence,
 }
 
 impl DiscoveryRequest {
     #[cfg(test)]
     pub(crate) fn for_test(frozen: FrozenWorkspace) -> Self {
         let epoch = frozen.epoch().expect("test epoch");
+        let cell = observation_cell(&epoch, "main...HEAD").expect("test cell");
         Self {
             frozen,
             range: "main...HEAD".to_string(),
-            cell: observation_cell(&epoch, "main...HEAD").expect("test cell"),
+            cell: cell.clone(),
             prior_finalized_attempt_count: 0,
             intent: DiscoveryRunIntent::Initial,
             candidate_limit: PAGE_CANDIDATE_LIMIT,
-            existing_fingerprints: Vec::new(),
+            continuation: ContinuationEvidence::new(Vec::new(), Vec::new(), vec![cell], Vec::new()),
         }
     }
 }
@@ -361,7 +362,9 @@ where
                     ));
                 }
                 assert_frozen(probe, input, &frozen, provider_calls)?;
-                let fingerprints = existing_fingerprints(&ledger, &campaign, &epoch);
+                let continuation =
+                    continuation_from_ledger(&ledger, &campaign, &epoch, vec![cell.clone()]);
+                let fingerprints = continuation.stable_finding_ids();
                 let request = DiscoveryRequest {
                     frozen: frozen.clone(),
                     range: input.range.clone(),
@@ -369,7 +372,7 @@ where
                     prior_finalized_attempt_count,
                     intent,
                     candidate_limit: PAGE_CANDIDATE_LIMIT,
-                    existing_fingerprints: fingerprints.iter().cloned().collect(),
+                    continuation,
                 };
                 let execution_started = Instant::now();
                 let run_result = runner.run(request.clone()).await;
@@ -497,7 +500,9 @@ where
                     worktree_clean: frozen.worktree_clean,
                     coverage_cell_count: 1,
                     provider_calls,
-                    candidates: existing_fingerprints(&ledger, &campaign, &epoch).len(),
+                    candidates: continuation_from_ledger(&ledger, &campaign, &epoch, Vec::new())
+                        .findings
+                        .len(),
                     phase_timings: PhaseTimings {
                         planning_ms: millis(planning),
                         execution_ms: millis(execution),
@@ -596,39 +601,6 @@ fn assert_frozen<P: WorkspaceProbe>(
         ));
     }
     Ok(())
-}
-
-fn existing_fingerprints(
-    ledger: &ConvergenceLedger,
-    campaign: &CampaignRecord,
-    epoch: &EpochRecord,
-) -> BTreeSet<String> {
-    let attempts = ledger
-        .entries()
-        .iter()
-        .filter(|entry| entry.campaign_id() == campaign.id())
-        .filter_map(|entry| match entry.event() {
-            ConvergenceEvent::DiscoveryAttemptRecorded(record)
-                if record.epoch_id() == epoch.id() =>
-            {
-                Some(record.id().as_str().to_string())
-            }
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
-    ledger
-        .entries()
-        .iter()
-        .filter(|entry| entry.campaign_id() == campaign.id())
-        .filter_map(|entry| match entry.event() {
-            ConvergenceEvent::CandidateRecorded(record)
-                if attempts.contains(record.discovery_attempt_id().as_str()) =>
-            {
-                Some(record.stable_finding_id().as_str().to_string())
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 fn recorded_attempt_count(

@@ -49,7 +49,13 @@ fn model() -> AdmittedModelIdentity {
 }
 
 fn identity() -> SemanticFindingIdentity {
-    SemanticFindingIdentity::new("unchecked transition", "csa-session", "missing guard").unwrap()
+    SemanticFindingIdentity::new(
+        "state transitions must be checked",
+        "unchecked transition",
+        "csa-session",
+        "missing guard",
+    )
+    .unwrap()
 }
 
 #[derive(Clone)]
@@ -260,7 +266,7 @@ fn convergence_protocol_nul_inputs_are_rejected_and_hash_fields_are_framed() {
     assert!(AdmittedModelIdentity::new("codex\0x", "openai", "gpt", "high").is_err());
     assert!(CoverageScope::new("crate", "csa\0session").is_err());
     assert!(SemanticLens::new("correctness\0security").is_err());
-    assert!(SemanticFindingIdentity::new("a", "b\0c", "d").is_err());
+    assert!(SemanticFindingIdentity::new("a", "b", "c\0d", "e").is_err());
 
     let fixture = Fixture::new();
     assert!(

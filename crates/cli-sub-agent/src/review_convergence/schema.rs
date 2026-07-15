@@ -22,8 +22,9 @@ pub(super) enum PageResponseStatus {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawCandidate {
-    mechanism: String,
-    affected_component: String,
+    violated_invariant: String,
+    trigger_failure_mode: String,
+    primary_component: String,
     bug_class: String,
 }
 
@@ -113,8 +114,9 @@ pub(super) fn parse_discovery_page(raw: &str) -> Result<ParsedDiscoveryPage> {
     let mut candidates = Vec::with_capacity(page.candidates.len());
     for raw_candidate in page.candidates {
         let identity = SemanticFindingIdentity::new(
-            &raw_candidate.mechanism,
-            &raw_candidate.affected_component,
+            &raw_candidate.violated_invariant,
+            &raw_candidate.trigger_failure_mode,
+            &raw_candidate.primary_component,
             &raw_candidate.bug_class,
         )?;
         let fingerprint = csa_session::convergence::StableFindingId::compute(&identity);

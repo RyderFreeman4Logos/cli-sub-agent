@@ -173,8 +173,13 @@ fn candidate(id: &str, attempt_id: &DiscoveryAttemptId) -> CandidateRecord {
     CandidateRecord::new(
         CandidateId::parse(id).unwrap(),
         attempt_id.clone(),
-        SemanticFindingIdentity::new("unchecked transition", "csa-session", "missing guard")
-            .unwrap(),
+        SemanticFindingIdentity::new(
+            "state transitions must be checked",
+            "unchecked transition",
+            "csa-session",
+            "missing guard",
+        )
+        .unwrap(),
         artifact(&format!("candidates/{id}.json"), id.as_bytes()),
     )
 }

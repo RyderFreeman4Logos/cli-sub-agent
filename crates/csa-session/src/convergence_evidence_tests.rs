@@ -88,7 +88,13 @@ fn attempt_for(
 }
 
 fn identity(bug_class: &str) -> SemanticFindingIdentity {
-    SemanticFindingIdentity::new("unchecked state transition", "csa-session", bug_class).unwrap()
+    SemanticFindingIdentity::new(
+        "state transitions must be checked",
+        "unchecked state transition",
+        "csa-session",
+        bug_class,
+    )
+    .unwrap()
 }
 
 fn candidate_for(

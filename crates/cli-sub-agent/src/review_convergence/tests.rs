@@ -175,10 +175,11 @@ fn authority(model: &str) -> CommandAuthoritySnapshot {
     .unwrap()
 }
 
-fn candidate(mechanism: &str) -> Value {
+fn candidate(trigger_failure_mode: &str) -> Value {
     json!({
-        "mechanism": mechanism,
-        "affected_component": "review convergence",
+        "violated_invariant": "discovery evidence must be complete before finalization",
+        "trigger_failure_mode": trigger_failure_mode,
+        "primary_component": "review convergence",
         "bug_class": "evidence gap"
     })
 }
@@ -647,3 +648,4 @@ fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
 #[path = "campaign_authority_tests.rs"]
 mod campaign_authority_tests;
 mod page_publication;
+mod semantic_continuation;
