@@ -1,5 +1,6 @@
 pub(super) mod bundle;
 mod continuation;
+mod coverage;
 pub(super) mod engine;
 mod output;
 mod persistence;
@@ -135,10 +136,10 @@ pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Resul
     .await
 }
 
-// Canonical JSON; object and cell keys are lexically ordered.
-const POLICY_JSON: &[u8] = br#"{"coverage_cells":[{"lens":"broad_discovery","requirement":"required","scope":"whole_explicit_range"}],"kind":"convergence_discovery_observation","provider_call_budget_per_cell":4,"schema_version":1,"semantic_coverage":"walking_skeleton_not_exhaustive"}"#;
+// Canonical JSON; scope and lens dimensions are lexically ordered.
+const POLICY_JSON: &[u8] = br#"{"coverage_manifest":{"lenses":["correctness","resource_lifecycle","security"],"scope_kinds":["crate","domain","module"]},"kind":"convergence_discovery_observation","provider_call_budget_per_cell":4,"schema_version":1,"semantic_coverage":"scope_lens_manifest"}"#;
 
-fn walking_skeleton_policy_digest() -> Sha256Digest {
+fn coverage_manifest_policy_digest() -> Sha256Digest {
     Sha256Digest::compute(POLICY_JSON)
 }
 

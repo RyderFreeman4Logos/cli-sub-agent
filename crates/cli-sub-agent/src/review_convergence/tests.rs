@@ -62,6 +62,7 @@ impl LedgerPort for MemoryStore {
 
 struct ScriptedProbe {
     captures: VecDeque<Result<FrozenWorkspace>>,
+    stable_fallback: Option<FrozenWorkspace>,
 }
 
 impl ScriptedProbe {
@@ -69,6 +70,7 @@ impl ScriptedProbe {
         let frozen = frozen();
         Self {
             captures: (0..call_count).map(|_| Ok(frozen.clone())).collect(),
+            stable_fallback: Some(frozen),
         }
     }
 }
@@ -77,6 +79,7 @@ impl WorkspaceProbe for ScriptedProbe {
     fn capture(&mut self, _range: &str) -> Result<FrozenWorkspace> {
         self.captures
             .pop_front()
+            .or_else(|| self.stable_fallback.clone().map(Ok))
             .unwrap_or_else(|| Err(anyhow!("unexpected workspace capture")))
     }
 }
@@ -90,6 +93,7 @@ enum RunnerStep {
 #[derive(Default)]
 struct ScriptedRunner {
     steps: VecDeque<RunnerStep>,
+    saturation_fallback: Option<String>,
     requests: Vec<DiscoveryRequest>,
     artifacts: HashMap<String, Vec<u8>>,
 }
@@ -98,6 +102,7 @@ impl ScriptedRunner {
     fn pages(pages: impl IntoIterator<Item = String>) -> Self {
         Self {
             steps: pages.into_iter().map(RunnerStep::Page).collect(),
+            saturation_fallback: Some(page("complete", 8, false, &[], Vec::new())),
             requests: Vec::new(),
             artifacts: HashMap::new(),
         }
@@ -111,7 +116,11 @@ impl DiscoveryRunner for ScriptedRunner {
     ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>> {
         let provider_evidence = request.frozen.provider_evidence.identity.clone();
         self.requests.push(request);
-        let step = self.steps.pop_front();
+        let step = self.steps.pop_front().or_else(|| {
+            self.saturation_fallback
+                .as_ref()
+                .map(|page| RunnerStep::Page(page.clone()))
+        });
         let result = match step {
             Some(RunnerStep::Page(raw)) => output(ProviderTurnCompletion::Natural, raw),
             Some(RunnerStep::Completion(completion, raw)) => output(completion, raw),
@@ -224,7 +233,10 @@ async fn hidden_top_k_collects_union_on_one_frozen_tuple_before_zero_new_challen
         .await
         .expect("discovery should reach zero-new evidence");
 
-    assert_eq!(summary.provider_calls, 3);
+    assert_eq!(
+        summary.provider_calls,
+        usize::try_from(summary.coverage_cell_count).expect("cell count fits usize") + 2
+    );
     assert_eq!(summary.candidates, 3);
     assert_eq!(summary.base_oid, BASE);
     assert_eq!(summary.head_oid, HEAD);
@@ -235,6 +247,7 @@ async fn hidden_top_k_collects_union_on_one_frozen_tuple_before_zero_new_challen
         runner
             .requests
             .iter()
+            .take(3)
             .map(|request| request.intent)
             .collect::<Vec<_>>(),
         vec![
@@ -242,6 +255,14 @@ async fn hidden_top_k_collects_union_on_one_frozen_tuple_before_zero_new_challen
             DiscoveryRunIntent::Continuation,
             DiscoveryRunIntent::SaturationChallenge,
         ]
+    );
+    assert!(
+        runner
+            .requests
+            .iter()
+            .skip(3)
+            .all(|request| request.intent == DiscoveryRunIntent::Initial),
+        "the remaining manifest cells must independently receive a fresh initial pass"
     );
     assert!(
         probe.captures.is_empty(),
@@ -269,7 +290,10 @@ async fn every_page_continuation_signal_forces_another_call() {
         let summary = run_discovery_observation(&input(), &mut probe, &mut runner, &store)
             .await
             .expect("continuation signal should be resolved by zero-new page");
-        assert_eq!(summary.provider_calls, 2);
+        assert_eq!(
+            summary.provider_calls,
+            usize::try_from(summary.coverage_cell_count).expect("cell count fits usize") + 1
+        );
         assert_eq!(runner.requests[1].intent, DiscoveryRunIntent::Continuation);
     }
 }
@@ -282,6 +306,7 @@ async fn workspace_mutation_blocks_without_accepting_mixed_evidence() {
         captures: [Ok(frozen()), Ok(frozen()), Ok(changed)]
             .into_iter()
             .collect(),
+        stable_fallback: None,
     };
     let mut runner = ScriptedRunner::pages([page(
         "complete",
@@ -470,7 +495,7 @@ fn success_json_is_observation_only_and_never_claims_pass_clean_or_attestation()
     assert!(rendered.contains("convergence_discovery_observation"));
     assert!(rendered.contains("\"review_verdict\":null"));
     assert!(rendered.contains("\"merge_attestation\":false"));
-    assert!(rendered.contains("not exhaustive semantic coverage"));
+    assert!(rendered.contains("deterministic scope-by-lens manifest"));
     assert!(!rendered.contains("PASS"));
     assert!(!rendered.contains("CLEAN"));
 }
@@ -493,8 +518,8 @@ fn production_runner_mapping_is_fresh_readonly_and_history_free() {
     assert!(input.extra_readable.is_empty());
 
     let prompt = super::runner::build_discovery_prompt(&request);
-    assert!(prompt.contains("walking-skeleton observation cell"));
-    assert!(prompt.contains("not exhaustive semantic coverage"));
+    assert!(prompt.contains("deterministic scope-by-semantic-lens manifest"));
+    assert!(prompt.contains("every required manifest cell"));
     assert!(prompt.contains("provider-evidence.tar"));
     assert!(prompt.contains(input.bundle_digest.as_str()));
     assert!(prompt.contains("sha256sum"));
@@ -647,5 +672,6 @@ fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
 
 #[path = "campaign_authority_tests.rs"]
 mod campaign_authority_tests;
+mod coverage_manifest;
 mod page_publication;
 mod semantic_continuation;

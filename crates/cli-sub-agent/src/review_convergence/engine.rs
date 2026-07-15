@@ -10,20 +10,21 @@ use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
     ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId, CandidateRecord,
     CommandAuthoritySnapshot, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerStore,
-    CoverageCellRecord, CoverageDispositionRecord, CoverageRequirement, CoverageScope,
+    CoverageCellRecord, CoverageDispositionRecord, CoverageRequirement,
     DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
-    DiscoveryDirective, DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticLens, Sha256Digest,
+    DiscoveryDirective, DiscoveryRunIntent, EpochRecord, GitObjectId, Sha256Digest,
     next_discovery_directive,
 };
 use serde::Serialize;
 
 use super::bundle::ProviderEvidenceRef;
 use super::continuation::{ContinuationEvidence, from_ledger as continuation_from_ledger};
+use super::coverage::{CoverageManifestPlan, plan_coverage_manifest, uncovered_manifest_cells};
 pub(crate) use super::output::DiscoveryRunOutput;
 use super::persistence::{persist, persist_batch};
 use super::recovery::recover_missing_candidate;
 
-/// Walking-skeleton guardrail: one cell can consume at most four provider calls.
+/// One deterministic manifest cell can consume at most four provider calls.
 pub(crate) const MAX_PROVIDER_CALLS_PER_CELL: usize = 4;
 pub(crate) const PAGE_CANDIDATE_LIMIT: u32 = 8;
 
@@ -35,6 +36,7 @@ pub(crate) struct FrozenWorkspace {
     pub(crate) index_clean: bool,
     pub(crate) worktree_clean: bool,
     pub(crate) provider_evidence: ProviderEvidenceRef,
+    pub(crate) changed_paths: Vec<String>,
 }
 
 impl FrozenWorkspace {
@@ -54,6 +56,7 @@ impl FrozenWorkspace {
             index_clean,
             worktree_clean,
             provider_evidence,
+            vec!["crates/cli-sub-agent/src/review_convergence/engine.rs".to_string()],
         )
     }
 
@@ -64,6 +67,7 @@ impl FrozenWorkspace {
         index_clean: bool,
         worktree_clean: bool,
         provider_evidence: ProviderEvidenceRef,
+        changed_paths: Vec<String>,
     ) -> Result<Self> {
         if !provider_evidence.matches_tuple(base_oid, head_oid, &diff_digest) {
             anyhow::bail!("provider evidence identity does not match the frozen exact-OID tuple");
@@ -75,6 +79,7 @@ impl FrozenWorkspace {
             index_clean,
             worktree_clean,
             provider_evidence,
+            changed_paths,
         })
     }
 
@@ -123,7 +128,12 @@ impl DiscoveryRequest {
     #[cfg(test)]
     pub(crate) fn for_test(frozen: FrozenWorkspace) -> Self {
         let epoch = frozen.epoch().expect("test epoch");
-        let cell = observation_cell(&epoch, "main...HEAD").expect("test cell");
+        let CoverageManifestPlan::Ready(manifest) =
+            plan_coverage_manifest(&epoch, &frozen.changed_paths).expect("test manifest")
+        else {
+            panic!("test manifest must be bounded");
+        };
+        let cell = manifest.cells()[0].clone();
         Self {
             frozen,
             range: "main...HEAD".to_string(),
@@ -203,7 +213,7 @@ impl ObservationSummary {
             diff_digest: frozen.diff_digest.to_string(),
             index_clean: frozen.index_clean,
             worktree_clean: frozen.worktree_clean,
-            coverage_cell_count: 1,
+            coverage_cell_count: 9,
             provider_calls: 0,
             candidates: 0,
             phase_timings: PhaseTimings {
@@ -215,7 +225,7 @@ impl ObservationSummary {
             discovery_evidence_complete: true,
             review_verdict: None,
             merge_attestation: false,
-            semantic_coverage: "walking-skeleton observation cell; not exhaustive semantic coverage",
+            semantic_coverage: "deterministic scope-by-lens manifest; every required cell saturated",
         }
     }
 }
@@ -290,9 +300,24 @@ where
     let epoch = frozen
         .epoch()
         .map_err(|error| blocked("workspace_probe_failure", format!("{error:#}"), 0))?;
-    let cell = observation_cell(&epoch, &input.range)
-        .map_err(|error| blocked("planning_failure", format!("{error:#}"), 0))?;
-    let policy_digest = super::walking_skeleton_policy_digest();
+    let manifest = match plan_coverage_manifest(&epoch, &frozen.changed_paths)
+        .map_err(|error| blocked("planning_failure", format!("{error:#}"), 0))?
+    {
+        CoverageManifestPlan::Ready(manifest) => manifest,
+        CoverageManifestPlan::DecompositionRequired {
+            scope_count,
+            maximum_scope_count,
+        } => {
+            return Err(blocked(
+                "decomposition_required",
+                format!(
+                    "changed paths resolve to {scope_count} coverage scopes, exceeding the bounded manifest maximum of {maximum_scope_count}"
+                ),
+                0,
+            ));
+        }
+    };
+    let policy_digest = super::coverage_manifest_policy_digest();
     let mut persistence = Duration::ZERO;
     let (campaign, mut ledger) = initialize_campaign(
         store,
@@ -306,11 +331,8 @@ where
     let mut provider_calls = recorded_attempt_count(&ledger, &campaign, &epoch);
 
     loop {
-        let directive =
-            next_discovery_directive(&ledger, &campaign, &epoch, std::slice::from_ref(&cell))
-                .map_err(|error| {
-                    blocked("reducer_failure", format!("{error:#}"), provider_calls)
-                })?;
+        let directive = next_discovery_directive(&ledger, &campaign, &epoch, manifest.cells())
+            .map_err(|error| blocked("reducer_failure", format!("{error:#}"), provider_calls))?;
         match directive {
             DiscoveryDirective::DefineCoverageCell { cell } => persist(
                 store,
@@ -324,10 +346,12 @@ where
                 let record = CoverageDispositionRecord::new(
                     cell.id().clone(),
                     CoverageRequirement::Required,
-                    "walking_skeleton_observation",
-                    "Required whole-range broad-discovery observation cell; this is not exhaustive semantic coverage.",
+                    "deterministic_coverage_manifest",
+                    "Required deterministic scope-by-lens coverage manifest cell.",
                 )
-                .map_err(|error| blocked("planning_failure", format!("{error:#}"), provider_calls))?;
+                .map_err(|error| {
+                    blocked("planning_failure", format!("{error:#}"), provider_calls)
+                })?;
                 persist(
                     store,
                     &campaign,
@@ -356,14 +380,18 @@ where
                     return Err(blocked(
                         "provider_call_budget_exhausted",
                         format!(
-                            "walking-skeleton cell exceeded its {MAX_PROVIDER_CALLS_PER_CELL}-call safety budget"
+                            "coverage manifest cell exceeded its {MAX_PROVIDER_CALLS_PER_CELL}-call safety budget"
                         ),
                         provider_calls,
                     ));
                 }
                 assert_frozen(probe, input, &frozen, provider_calls)?;
-                let continuation =
-                    continuation_from_ledger(&ledger, &campaign, &epoch, vec![cell.clone()]);
+                let continuation = continuation_from_ledger(
+                    &ledger,
+                    &campaign,
+                    &epoch,
+                    uncovered_manifest_cells(&ledger, &campaign, &manifest),
+                );
                 let fingerprints = continuation.stable_finding_ids();
                 let request = DiscoveryRequest {
                     frozen: frozen.clone(),
@@ -498,7 +526,9 @@ where
                     diff_digest: frozen.diff_digest.to_string(),
                     index_clean: frozen.index_clean,
                     worktree_clean: frozen.worktree_clean,
-                    coverage_cell_count: 1,
+                    coverage_cell_count: u32::try_from(manifest.cells().len()).map_err(
+                        |error| blocked("planning_failure", error.to_string(), provider_calls),
+                    )?,
                     provider_calls,
                     candidates: continuation_from_ledger(&ledger, &campaign, &epoch, Vec::new())
                         .findings
@@ -512,19 +542,11 @@ where
                     discovery_evidence_complete: true,
                     review_verdict: None,
                     merge_attestation: false,
-                    semantic_coverage: "walking-skeleton observation cell; not exhaustive semantic coverage",
+                    semantic_coverage: "deterministic scope-by-lens manifest; every required cell saturated",
                 });
             }
         }
     }
-}
-
-fn observation_cell(epoch: &EpochRecord, range: &str) -> Result<CoverageCellRecord> {
-    Ok(CoverageCellRecord::new(
-        epoch.id().clone(),
-        CoverageScope::new("explicit_whole_range", range)?,
-        SemanticLens::new("broad_discovery_walking_skeleton_observation")?,
-    ))
 }
 
 fn initialize_campaign<S: LedgerPort>(

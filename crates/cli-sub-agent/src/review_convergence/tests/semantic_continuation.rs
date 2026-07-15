@@ -65,9 +65,12 @@ async fn continuation_request_reconstructs_semantic_evidence_from_the_finalized_
         continuation.latest_finalized_unscanned_items,
         ["cross-domain authorization checks"]
     );
-    assert_eq!(
-        continuation.uncovered_cells,
-        [runner.requests[1].cell.clone()]
+    assert!(continuation.uncovered_cells.len() > 1);
+    assert!(
+        continuation
+            .uncovered_cells
+            .contains(&runner.requests[1].cell),
+        "the partial page's cell remains uncovered alongside the other manifest cells"
     );
     assert_eq!(
         continuation.uncovered_items,

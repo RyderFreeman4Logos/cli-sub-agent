@@ -71,9 +71,16 @@ async fn restart_recovers_legacy_partial_attempt_from_durable_artifact_and_ledge
             .await
             .expect("resume should recover the missing candidate from durable page evidence");
 
-    assert_eq!(summary.provider_calls, 2);
+    assert_eq!(
+        summary.provider_calls,
+        usize::try_from(summary.coverage_cell_count).expect("cell count fits usize") + 1
+    );
     assert_eq!(summary.candidates, 1);
-    assert_eq!(resumed_runner.requests.len(), 1);
+    assert_eq!(
+        resumed_runner.requests.len(),
+        summary.coverage_cell_count as usize,
+        "recovery must saturate the recovered cell and then cover every other manifest cell"
+    );
     assert_eq!(
         resumed_runner.requests[0].intent,
         DiscoveryRunIntent::SaturationChallenge
