@@ -104,9 +104,6 @@ pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Resul
             args.timeout,
             tool.as_str(),
         );
-    let explicit_tool_with_failover =
-        (context.selection.direct_tool_requested && tier_active && !execution_no_failover)
-            .then_some(tool);
     let review_routing = crate::review_routing::detect_review_routing_metadata(
         context.project_root,
         context.project_config,
@@ -130,7 +127,6 @@ pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Resul
         idle_timeout_seconds,
         initial_response_timeout_seconds,
         no_failover: execution_no_failover,
-        explicit_tool_with_failover,
         current_depth: context.current_depth,
         startup_env: context.startup_env,
     })
@@ -150,7 +146,7 @@ pub(super) async fn run_command(
 ) -> Result<i32> {
     let project_root = context.project_root;
     let command_authority = capture_command_authority(&context).await?;
-    let input = engine::ObservationInput::new(range, command_authority);
+    let input = engine::ObservationInput::new(range, command_authority.clone());
     let store = match ConvergenceLedgerStore::for_project(project_root) {
         Ok(store) => store,
         Err(error) => return emit_setup_block("store_failure", &error),
@@ -163,7 +159,7 @@ pub(super) async fn run_command(
         Ok(published) => published,
         Err(error) => return emit_setup_block("evidence_publish_failure", &error),
     };
-    let runner_context = context.runner_context(provider_bundle);
+    let runner_context = context.runner_context(provider_bundle, command_authority);
     let mut probe = runner::GitWorkspaceProbe::new(project_root, provider_evidence);
     let mut discovery_runner = runner::ProductionDiscoveryRunner::new(runner_context);
     match engine::run_discovery_observation(&input, &mut probe, &mut discovery_runner, &store).await

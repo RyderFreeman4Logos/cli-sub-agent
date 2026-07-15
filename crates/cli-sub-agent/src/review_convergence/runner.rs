@@ -20,7 +20,10 @@ use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
 use csa_process::{ProviderTurnCompletion, StreamMode};
 use csa_session::{
-    convergence::{AdmittedModelIdentity, ArtifactEvidenceRef, ProviderEvidenceBundle},
+    convergence::{
+        AdmittedModelIdentity, ArtifactEvidenceRef, CommandAuthoritySnapshot,
+        ProviderEvidenceBundle,
+    },
     get_session_dir, publish_session_output_artifact, read_session_output_artifact,
 };
 
@@ -162,13 +165,7 @@ impl WorkspaceProbe for GitWorkspaceProbe {
 }
 
 pub(crate) struct ProductionRunnerContext<'a> {
-    pub(crate) tool: ToolName,
-    pub(crate) model: Option<String>,
-    pub(crate) tier_model_spec: Option<String>,
-    pub(crate) tier_name: Option<String>,
-    pub(crate) tier_fallback_enabled: bool,
-    pub(crate) tier_preference_order: Vec<String>,
-    pub(crate) thinking: Option<String>,
+    pub(crate) command_authority: CommandAuthoritySnapshot,
     pub(crate) project_config: Option<&'a ProjectConfig>,
     pub(crate) global_config: &'a GlobalConfig,
     pub(crate) model_catalog: &'a EffectiveModelCatalog,
@@ -178,9 +175,7 @@ pub(crate) struct ProductionRunnerContext<'a> {
     pub(crate) idle_timeout_seconds: u64,
     pub(crate) initial_response_timeout_seconds: Option<u64>,
     pub(crate) force_override_user_config: bool,
-    pub(crate) force_ignore_tier_setting: bool,
-    pub(crate) no_failover: bool,
-    pub(crate) explicit_tool_with_failover: Option<ToolName>,
+
     pub(crate) build_jobs: Option<u32>,
     pub(crate) fast_but_more_cost: bool,
     pub(crate) warn_no_codex_fast_mode: bool,
@@ -212,7 +207,6 @@ pub(crate) struct ResolvedCommandContext<'a> {
     pub(crate) idle_timeout_seconds: u64,
     pub(crate) initial_response_timeout_seconds: Option<u64>,
     pub(crate) no_failover: bool,
-    pub(crate) explicit_tool_with_failover: Option<ToolName>,
     pub(crate) current_depth: u32,
     pub(crate) startup_env: &'a StartupSubtreeEnv,
 }
@@ -221,15 +215,10 @@ impl ResolvedCommandContext<'_> {
     pub(crate) fn runner_context(
         &self,
         provider_bundle: ProviderEvidenceBundle,
+        command_authority: CommandAuthoritySnapshot,
     ) -> ProductionRunnerContext<'_> {
         ProductionRunnerContext {
-            tool: self.tool,
-            model: self.model.clone(),
-            tier_model_spec: self.tier_model_spec.clone(),
-            tier_name: self.tier_name.clone(),
-            tier_fallback_enabled: self.tier_fallback_enabled,
-            tier_preference_order: self.tier_preference_order.clone(),
-            thinking: self.thinking.clone(),
+            command_authority,
             project_config: self.project_config,
             global_config: self.global_config,
             model_catalog: self.model_catalog,
@@ -239,9 +228,7 @@ impl ResolvedCommandContext<'_> {
             idle_timeout_seconds: self.idle_timeout_seconds,
             initial_response_timeout_seconds: self.initial_response_timeout_seconds,
             force_override_user_config: self.args.force_override_user_config,
-            force_ignore_tier_setting: self.args.force_ignore_tier_setting,
-            no_failover: self.no_failover,
-            explicit_tool_with_failover: self.explicit_tool_with_failover,
+
             build_jobs: self.args.build_jobs,
             fast_but_more_cost: self.args.fast_but_more_cost,
             warn_no_codex_fast_mode: true,
@@ -277,16 +264,38 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         }
         context.provider_bundle.verify()?;
         let provider_root = provider_input.project_root;
+        let frozen_identity = context
+            .command_authority
+            .ordered_admitted()
+            .first()
+            .context("frozen command authority has no admitted executor")?;
+        let frozen_tool = match frozen_identity.tool() {
+            "gemini-cli" => ToolName::GeminiCli,
+            "opencode" => ToolName::Opencode,
+            "codex" => ToolName::Codex,
+            "claude-code" => ToolName::ClaudeCode,
+            "openai-compat" => ToolName::OpenaiCompat,
+            "hermes" => ToolName::Hermes,
+            "antigravity-cli" => ToolName::AntigravityCli,
+            tool => bail!("unknown tool {tool} in frozen command authority"),
+        };
+        let frozen_spec = format!(
+            "{}/{}/{}/{}",
+            frozen_identity.tool(),
+            frozen_identity.provider(),
+            frozen_identity.model(),
+            frozen_identity.reasoning()
+        );
         let future = crate::review_cmd::execute::execute_review_with_tier_filter(
-            context.tool,
+            frozen_tool,
             prompt,
             None,
-            context.model.clone(),
-            context.tier_model_spec.clone(),
-            context.tier_name.clone(),
-            context.tier_fallback_enabled,
-            context.tier_preference_order.clone(),
-            context.thinking.clone(),
+            None,
+            Some(frozen_spec.clone()),
+            None,
+            false,
+            Vec::new(),
+            None,
             format!("convergence discovery observation for {}", request.range),
             &provider_root,
             context.project_config,
@@ -298,9 +307,9 @@ impl<'a> ProductionDiscoveryRunner<'a> {
             context.idle_timeout_seconds,
             context.initial_response_timeout_seconds,
             context.force_override_user_config,
-            context.force_ignore_tier_setting,
-            context.no_failover,
-            context.explicit_tool_with_failover,
+            context.command_authority.policy().force_ignore(),
+            true,
+            None,
             context.build_jobs,
             context.fast_but_more_cost,
             context.warn_no_codex_fast_mode,
@@ -341,22 +350,12 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         let admitted_spec = outcome
             .routed_to
             .as_deref()
-            .or(context.tier_model_spec.as_deref())
+            .or(Some(frozen_spec.as_str()))
             .context("review adapter did not expose a full admitted model spec")?;
-        let admitted = ModelSpec::parse(admitted_spec)
-            .with_context(|| format!("parse admitted review model spec {admitted_spec}"))?;
-        if admitted.tool != outcome.executed_tool.as_str() {
-            bail!(
-                "admitted model tool {} differs from executed tool {}",
-                admitted.tool,
-                outcome.executed_tool
-            );
-        }
-        let identity = AdmittedModelIdentity::new(
-            &admitted.tool,
-            &admitted.provider,
-            &admitted.model,
-            &thinking_budget_label(&admitted.thinking_budget),
+        let identity = finalize_frozen_identity(
+            &context.command_authority,
+            admitted_spec,
+            outcome.executed_tool.as_str(),
         )?;
         let session_id = outcome.execution.meta_session_id;
         let raw = outcome.execution.execution.output;
@@ -373,6 +372,35 @@ impl<'a> ProductionDiscoveryRunner<'a> {
             csa_session::convergence::Sha256Digest::compute(&artifact),
         )
     }
+}
+
+pub(crate) fn finalize_frozen_identity(
+    authority: &CommandAuthoritySnapshot,
+    admitted_spec: &str,
+    executed_tool: &str,
+) -> Result<AdmittedModelIdentity> {
+    let admitted = ModelSpec::parse(admitted_spec)
+        .with_context(|| format!("parse admitted review model spec {admitted_spec}"))?;
+    if admitted.tool != executed_tool {
+        bail!(
+            "admitted model tool {} differs from executed tool {}",
+            admitted.tool,
+            executed_tool
+        );
+    }
+    let identity = AdmittedModelIdentity::new(
+        &admitted.tool,
+        &admitted.provider,
+        &admitted.model,
+        &thinking_budget_label(&admitted.thinking_budget),
+    )?;
+    if !authority.contains(&identity) {
+        bail!(
+            "actual executor {admitted_spec} is outside frozen command authority {}",
+            authority.digest()
+        );
+    }
+    Ok(identity)
 }
 
 fn thinking_budget_label(budget: &csa_executor::ThinkingBudget) -> String {
