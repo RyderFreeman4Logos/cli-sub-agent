@@ -9,9 +9,10 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
-    ArtifactEvidenceRef, CampaignId, CampaignRecord, CommandAuthoritySnapshot, ConvergenceEvent,
-    ConvergenceLedger, ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord,
-    CoverageRequirement, CoverageScope, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId, CandidateRecord,
+    CommandAuthoritySnapshot, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerStore,
+    CoverageCellRecord, CoverageDispositionRecord, CoverageRequirement, CoverageScope,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
     DiscoveryDirective, DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticLens, Sha256Digest,
     next_discovery_directive,
 };
@@ -19,8 +20,8 @@ use serde::Serialize;
 
 use super::bundle::ProviderEvidenceRef;
 pub(crate) use super::output::DiscoveryRunOutput;
+use super::persistence::{persist, persist_batch};
 use super::recovery::recover_missing_candidate;
-use super::schema::parse_discovery_page;
 
 /// Walking-skeleton guardrail: one cell can consume at most four provider calls.
 pub(crate) const MAX_PROVIDER_CALLS_PER_CELL: usize = 4;
@@ -385,9 +386,13 @@ where
                         provider_calls,
                     ));
                 }
-                let page = parse_discovery_page(&output.raw_response).map_err(|error| {
-                    blocked("parser_failure", format!("{error:#}"), provider_calls)
-                })?;
+                let DiscoveryRunOutput {
+                    page,
+                    completion,
+                    model_identity,
+                    artifact,
+                    ..
+                } = output;
                 if page.candidate_limit != request.candidate_limit {
                     return Err(blocked(
                         "candidate_limit_mismatch",
@@ -418,19 +423,32 @@ where
                     epoch.id().clone(),
                     request.cell.id().clone(),
                     Utc::now(),
-                    output.completion,
-                    output.model_identity,
-                    output.artifact,
+                    completion,
+                    model_identity,
+                    artifact.clone(),
                     page.candidate_limit,
                     count,
                     page.continuation_required(),
                     page.unscanned_items.clone(),
                 )
                 .map_err(|error| blocked("parser_failure", format!("{error:#}"), provider_calls))?;
-                persist(
+                let mut events = Vec::with_capacity(page.candidates.len() + 2);
+                events.push(ConvergenceEvent::DiscoveryAttemptRecorded(attempt));
+                events.extend(page.candidates.into_iter().map(|identity| {
+                    ConvergenceEvent::CandidateRecorded(CandidateRecord::new(
+                        CandidateId::generate(),
+                        attempt_id.clone(),
+                        identity,
+                        artifact.clone(),
+                    ))
+                }));
+                events.push(ConvergenceEvent::DiscoveryAttemptFinalized(
+                    DiscoveryAttemptFinalizationRecord::new(attempt_id),
+                ));
+                persist_batch(
                     store,
                     &campaign,
-                    ConvergenceEvent::DiscoveryAttemptRecorded(attempt),
+                    events,
                     &mut ledger,
                     &mut persistence,
                     provider_calls,
@@ -559,25 +577,6 @@ fn initialize_campaign<S: LedgerPort>(
         )?;
     }
     Ok((campaign, ledger))
-}
-
-fn persist<S: LedgerPort>(
-    store: &S,
-    campaign: &CampaignRecord,
-    event: ConvergenceEvent,
-    ledger: &mut ConvergenceLedger,
-    elapsed: &mut Duration,
-    calls: usize,
-) -> std::result::Result<(), EngineError> {
-    let started = Instant::now();
-    store
-        .append_batch(campaign.id().clone(), vec![event])
-        .map_err(|error| blocked("store_failure", format!("{error:#}"), calls))?;
-    *ledger = store
-        .load()
-        .map_err(|error| blocked("store_failure", format!("{error:#}"), calls))?;
-    *elapsed += started.elapsed();
-    Ok(())
 }
 
 fn assert_frozen<P: WorkspaceProbe>(

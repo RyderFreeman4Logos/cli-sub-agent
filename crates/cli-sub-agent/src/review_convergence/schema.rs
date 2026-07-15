@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use csa_session::convergence::SemanticFindingIdentity;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const DISCOVERY_PAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -12,7 +12,7 @@ enum PageKind {
     ConvergenceDiscoveryPage,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PageResponseStatus {
     Complete,
@@ -39,6 +39,7 @@ struct RawPage {
     candidates: Vec<RawCandidate>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(super) struct ParsedDiscoveryPage {
     pub(super) status: PageResponseStatus,
     pub(super) candidate_limit: u32,

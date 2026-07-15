@@ -5,20 +5,22 @@ use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
+use chrono::Utc;
 use clap::{CommandFactory, Parser};
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CommandAuthorityCatalogIdentity,
     CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent,
-    ConvergenceLedger, DiscoveryRunIntent, Sha256Digest,
+    ConvergenceLedger, DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryRunIntent,
+    Sha256Digest,
 };
 use serde_json::{Value, json};
 
 use super::engine::{
     DiscoveryRequest, DiscoveryRunOutput, DiscoveryRunner, FrozenWorkspace, LedgerPort,
-    ObservationInput, WorkspaceProbe, run_discovery_observation,
+    ObservationInput, PAGE_CANDIDATE_LIMIT, WorkspaceProbe, run_discovery_observation,
 };
-use super::output::encode_discovery_page_artifact;
+use super::output::{decode_discovery_page_artifact, encode_discovery_page_artifact};
 use super::schema::parse_discovery_page;
 
 const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -28,6 +30,7 @@ const SESSION: &str = "01J00000000000000000000000";
 #[derive(Default)]
 struct MemoryStore {
     ledger: RefCell<ConvergenceLedger>,
+    published_snapshots: RefCell<Vec<ConvergenceLedger>>,
     append_count: Cell<usize>,
     fail_at: Cell<Option<usize>>,
 }
@@ -35,14 +38,6 @@ struct MemoryStore {
 impl MemoryStore {
     fn fail_next(&self) {
         self.fail_at.set(Some(self.append_count.get()));
-    }
-
-    fn fail_at_append(&self, append_index: usize) {
-        self.fail_at.set(Some(append_index));
-    }
-
-    fn clear_failure(&self) {
-        self.fail_at.set(None);
     }
 }
 
@@ -58,7 +53,8 @@ impl LedgerPort for MemoryStore {
         }
         let mut next = self.ledger.borrow().clone();
         next.append_batch(campaign_id, events)?;
-        *self.ledger.borrow_mut() = next;
+        *self.ledger.borrow_mut() = next.clone();
+        self.published_snapshots.borrow_mut().push(next);
         self.append_count.set(count + 1);
         Ok(())
     }
@@ -125,8 +121,12 @@ impl DiscoveryRunner for ScriptedRunner {
         if let Ok(output) = &result {
             self.artifacts.insert(
                 output.artifact.digest().to_string(),
-                encode_discovery_page_artifact(&output.raw_response, &provider_evidence)
-                    .expect("encode scripted discovery artifact"),
+                encode_discovery_page_artifact(
+                    &output.raw_response,
+                    &output.page,
+                    &provider_evidence,
+                )
+                .expect("encode scripted discovery artifact"),
             );
         }
         Box::pin(async move { result })
@@ -400,61 +400,6 @@ async fn persisted_history_resumes_from_the_same_reducer_directive() {
 }
 
 #[tokio::test]
-async fn persisted_partial_attempt_recovers_candidates_from_its_artifact() {
-    let store = MemoryStore::default();
-    // Campaign, epoch, cell, disposition, plan, and attempt all publish first.
-    // The next append fails before the candidate is durable.
-    store.fail_at_append(6);
-    let mut first_probe = ScriptedProbe::stable(3);
-    let mut first_runner = ScriptedRunner::pages([page(
-        "complete",
-        8,
-        false,
-        &[],
-        vec![candidate("recoverable")],
-    )]);
-    let first_error =
-        run_discovery_observation(&input(), &mut first_probe, &mut first_runner, &store)
-            .await
-            .expect_err("candidate publication should hit the scripted failure");
-    assert_eq!(first_error.diagnostic().reason_code, "store_failure");
-    assert!(
-        store
-            .ledger
-            .borrow()
-            .entries()
-            .iter()
-            .any(|entry| matches!(entry.event(), ConvergenceEvent::DiscoveryAttemptRecorded(_)))
-    );
-    assert!(
-        !store
-            .ledger
-            .borrow()
-            .entries()
-            .iter()
-            .any(|entry| matches!(entry.event(), ConvergenceEvent::CandidateRecorded(_)))
-    );
-
-    let durable_artifacts = std::mem::take(&mut first_runner.artifacts);
-    store.clear_failure();
-    let mut resumed_probe = ScriptedProbe::stable(3);
-    let mut resumed_runner = ScriptedRunner::pages([page("complete", 8, false, &[], Vec::new())]);
-    resumed_runner.artifacts = durable_artifacts;
-    let summary =
-        run_discovery_observation(&input(), &mut resumed_probe, &mut resumed_runner, &store)
-            .await
-            .expect("resume should recover the missing candidate from durable page evidence");
-
-    assert_eq!(summary.provider_calls, 2);
-    assert_eq!(summary.candidates, 1);
-    assert_eq!(resumed_runner.requests.len(), 1);
-    assert_eq!(
-        resumed_runner.requests[0].intent,
-        DiscoveryRunIntent::SaturationChallenge
-    );
-}
-
-#[tokio::test]
 async fn store_failure_is_a_structured_block() {
     let store = MemoryStore::default();
     store.fail_next();
@@ -701,3 +646,4 @@ fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
 
 #[path = "campaign_authority_tests.rs"]
 mod campaign_authority_tests;
+mod page_publication;

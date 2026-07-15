@@ -38,6 +38,7 @@ use super::engine::{
     DiscoveryRequest, DiscoveryRunOutput, DiscoveryRunner, FrozenWorkspace, WorkspaceProbe,
 };
 use super::output::encode_discovery_page_artifact;
+use super::schema::parse_discovery_page;
 
 const PAGE_ARTIFACT_PATH: &str = "output/convergence-discovery-page.json";
 const PAGE_ARTIFACT_FILE: &str = "convergence-discovery-page.json";
@@ -359,12 +360,18 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         )?;
         let session_id = outcome.execution.meta_session_id;
         let raw = outcome.execution.execution.output;
+        let page = parse_discovery_page(&raw)
+            .context("parse convergence discovery page before durable artifact publication")?;
         let session_dir = get_session_dir(&provider_root, &session_id)?;
-        let artifact =
-            encode_discovery_page_artifact(&raw, &request.frozen.provider_evidence.identity)?;
+        let artifact = encode_discovery_page_artifact(
+            &raw,
+            &page,
+            &request.frozen.provider_evidence.identity,
+        )?;
         publish_session_output_artifact(&session_dir, PAGE_ARTIFACT_FILE, &artifact)?;
         DiscoveryRunOutput::new_with_artifact_digest(
             raw,
+            page,
             &session_id,
             completion,
             identity,

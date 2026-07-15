@@ -1,6 +1,7 @@
 pub(super) mod bundle;
 pub(super) mod engine;
 mod output;
+mod persistence;
 mod recovery;
 pub(super) mod runner;
 mod schema;

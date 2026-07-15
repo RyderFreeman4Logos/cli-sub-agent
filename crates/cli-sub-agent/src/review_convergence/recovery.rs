@@ -8,7 +8,7 @@ use csa_session::convergence::{
 use super::bundle::ProviderEvidenceIdentity;
 use super::engine::{DiscoveryRunner, EngineError, blocked};
 use super::output::decode_discovery_page_artifact;
-use super::schema::{ParsedDiscoveryPage, parse_discovery_page};
+use super::schema::ParsedDiscoveryPage;
 
 pub(super) async fn recover_missing_candidate<R: DiscoveryRunner>(
     runner: &mut R,
@@ -39,14 +39,13 @@ pub(super) async fn recover_missing_candidate<R: DiscoveryRunner>(
         .read_artifact(attempt.artifact())
         .await
         .map_err(|error| blocked("artifact_read_failure", format!("{error:#}"), calls))?;
-    let raw = decode_discovery_page_artifact(
+    let envelope = decode_discovery_page_artifact(
         &artifact_bytes,
         attempt.artifact().digest(),
         expected_provider_evidence,
     )
     .map_err(|error| blocked("artifact_validation_failure", format!("{error:#}"), calls))?;
-    let page = parse_discovery_page(&raw)
-        .map_err(|error| blocked("artifact_parser_failure", format!("{error:#}"), calls))?;
+    let page = envelope.parsed_page;
     validate_recovered_page(attempt, &page, calls)?;
 
     let recorded = ledger
