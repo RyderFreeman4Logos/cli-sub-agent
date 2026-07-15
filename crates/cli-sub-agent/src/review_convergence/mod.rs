@@ -7,10 +7,13 @@ mod persistence;
 mod recovery;
 pub(super) mod runner;
 mod schema;
+pub(super) mod verification;
+mod verification_runner;
+mod verification_schema;
 
 use anyhow::Result;
 use csa_session::convergence::{
-    AdmittedModelIdentity, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
+    AdmittedModelIdentity, CampaignId, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
     CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceLedgerStore, Sha256Digest,
 };
 
@@ -168,8 +171,42 @@ pub(super) async fn run_command(
     match engine::run_discovery_observation(&input, &mut probe, &mut discovery_runner, &store).await
     {
         Ok(summary) => {
-            println!("{}", serde_json::to_string(&summary)?);
-            Ok(0)
+            let verification = async {
+                let frozen = engine::WorkspaceProbe::capture(&mut probe, range)?;
+                let epoch = frozen.epoch()?;
+                if summary.epoch_id != epoch.id().as_str() {
+                    anyhow::bail!(
+                        "discovery summary epoch differs from the current immutable workspace epoch"
+                    );
+                }
+                let campaign_id = CampaignId::parse(&summary.campaign_id)?;
+                let ledger = store.load()?;
+                let campaign = verification::campaign_epoch(&ledger, &campaign_id, &epoch)?;
+                let mut verifier = verification_runner::ProductionVerificationRunner::new(
+                    discovery_runner.into_context(),
+                );
+                verification::verify_campaign(&store, &campaign, &epoch, &frozen, &mut verifier)
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
+            .await;
+            match verification {
+                Ok(verification) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "kind": "convergence_verification_complete",
+                            "discovery": summary,
+                            "canonical_candidates": verification.canonical_candidates,
+                            "terminal_dispositions": verification.terminal_dispositions,
+                            "review_verdict": null,
+                            "merge_attestation": false,
+                        })
+                    );
+                    Ok(0)
+                }
+                Err(error) => emit_setup_block("verification_failure", &error),
+            }
         }
         Err(error) => {
             eprintln!("{}", serde_json::to_string(error.diagnostic())?);

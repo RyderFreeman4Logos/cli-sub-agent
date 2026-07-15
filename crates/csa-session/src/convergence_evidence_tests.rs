@@ -5,11 +5,12 @@ use serde_json::json;
 use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry, CoverageCellRecord,
-    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
-    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
-    EpochRecord, GitObjectId, LedgerEventId, SemanticFindingIdentity, SemanticLens,
-    SessionRelativeArtifactPath, Sha256Digest,
+    CandidateVerificationEvidence, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
+    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
+    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, GitObjectId, LedgerEventId,
+    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    VerificationIndependence,
 };
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -61,6 +62,16 @@ fn artifact(path: &str, bytes: &[u8]) -> ArtifactEvidenceRef {
         CsaSessionId::parse(SESSION).unwrap(),
         SessionRelativeArtifactPath::new(path).unwrap(),
         Sha256Digest::compute(bytes),
+    )
+}
+
+fn verification(epoch: &EpochRecord, path: &str, bytes: &[u8]) -> CandidateVerificationEvidence {
+    CandidateVerificationEvidence::new(
+        epoch.id().clone(),
+        model(),
+        VerificationIndependence::degraded("the frozen test authority admits one executor")
+            .unwrap(),
+        artifact(path, bytes),
     )
 }
 
@@ -419,7 +430,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         CandidateDisposition::Duplicate {
             canonical_candidate_id: canonical.id().clone(),
         },
-        artifact("dispositions/duplicate.json", b"duplicate"),
+        verification(&epoch, "dispositions/duplicate.json", b"duplicate"),
     );
     let mut accepted_events = base.clone();
     accepted_events.push(ConvergenceEvent::CandidateDispositionRecorded(
@@ -434,7 +445,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         CandidateDisposition::Duplicate {
             canonical_candidate_id: canonical.id().clone(),
         },
-        artifact("dispositions/mismatch.json", b"mismatch"),
+        verification(&epoch, "dispositions/mismatch.json", b"mismatch"),
     );
     let mut mismatched_events = base.clone();
     mismatched_events.push(ConvergenceEvent::CandidateDispositionRecorded(mismatched));
@@ -451,7 +462,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         let record = CandidateDispositionRecord::new(
             canonical.id().clone(),
             disposition,
-            artifact("dispositions/self.json", b"self"),
+            verification(&epoch, "dispositions/self.json", b"self"),
         );
         let mut events = base.clone();
         events.push(ConvergenceEvent::CandidateDispositionRecorded(record));
@@ -470,7 +481,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         let record = CandidateDispositionRecord::new(
             canonical.id().clone(),
             disposition,
-            artifact("dispositions/missing.json", b"missing"),
+            verification(&epoch, "dispositions/missing.json", b"missing"),
         );
         let mut events = base.clone();
         events.push(ConvergenceEvent::CandidateDispositionRecorded(record));
@@ -483,7 +494,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
         CandidateDispositionRecord::new(
             duplicate.id().clone(),
             CandidateDisposition::Verified,
-            artifact("dispositions/verified.json", b"verified"),
+            verification(&epoch, "dispositions/verified.json", b"verified"),
         ),
     ));
     assert!(ledger(twice).validate().is_err());
@@ -491,6 +502,7 @@ fn convergence_evidence_duplicate_disposition_relations_are_validated() {
 
 #[test]
 fn convergence_evidence_all_terminal_disposition_variants_round_trip() {
+    let epoch = epoch('a');
     let candidate = CandidateId::parse(CANDIDATE_1).unwrap();
     let target = CandidateId::parse(CANDIDATE_2).unwrap();
     let dispositions = [
@@ -510,7 +522,7 @@ fn convergence_evidence_all_terminal_disposition_variants_round_trip() {
         let record = CandidateDispositionRecord::new(
             candidate.clone(),
             disposition,
-            artifact("dispositions/evidence.json", b"evidence"),
+            verification(&epoch, "dispositions/evidence.json", b"evidence"),
         );
         let round_trip: CandidateDispositionRecord =
             serde_json::from_value(serde_json::to_value(&record).unwrap()).unwrap();

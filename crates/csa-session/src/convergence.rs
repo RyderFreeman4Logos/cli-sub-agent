@@ -20,20 +20,22 @@ mod repair;
 mod secure_fs;
 mod store;
 mod validation;
+mod verification_evidence;
 
 pub use authority::{
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
     CommandAuthoritySource,
 };
 pub use discovery::{DiscoveryDirective, DiscoveryRunIntent, next_discovery_directive};
-
 pub use evidence::{
-    AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateDispositionRecord,
-    CandidateRecord, CoverageDispositionRecord, CoverageRequirement, DiscoveryAttemptRecord,
+    AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateRecord,
+    CoverageDispositionRecord, CoverageRequirement, DiscoveryAttemptRecord,
     SessionRelativeArtifactPath,
 };
-
 pub use finalization::{CoveragePlanFinalizationRecord, DiscoveryAttemptFinalizationRecord};
+pub use verification_evidence::{
+    CandidateDispositionRecord, CandidateVerificationEvidence, VerificationIndependence,
+};
 
 pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,

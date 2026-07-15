@@ -4,12 +4,13 @@ use serde_json::json;
 
 use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
-    CandidateDispositionRecord, CandidateId, CandidateRecord, ConvergenceEvent, ConvergenceLedger,
-    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
-    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryDirective, DiscoveryRunIntent,
-    EpochRecord, GitObjectId, SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath,
-    Sha256Digest, next_discovery_directive,
+    CandidateDispositionRecord, CandidateId, CandidateRecord, CandidateVerificationEvidence,
+    ConvergenceEvent, ConvergenceLedger, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticFindingIdentity,
+    SemanticLens, SessionRelativeArtifactPath, Sha256Digest, VerificationIndependence,
+    next_discovery_directive,
 };
 
 const CAMPAIGN_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -229,7 +230,7 @@ fn run_intent(directive: DiscoveryDirective) -> (CoverageCellRecord, u32, Discov
             prior_finalized_attempt_count,
             intent,
         } => (cell, prior_finalized_attempt_count, intent),
-        other => panic!("expected RunDiscovery, got {other:?}"),
+        other => panic!("expected discovery: {other:?}"),
     }
 }
 
@@ -244,7 +245,7 @@ fn discovery_reducer_validates_ledger_campaign_epoch_and_snapshot_digests_first(
     let invalid: ConvergenceLedger = serde_json::from_value(invalid_json).unwrap();
     let error =
         next_discovery_directive(&invalid, &campaign, &epoch, std::slice::from_ref(&expected))
-            .expect_err("invalid ledger must fail before manifest work");
+            .expect_err("invalid ledger");
     assert!(
         error
             .to_string()
@@ -523,7 +524,12 @@ fn discovery_reducer_ignores_candidate_dispositions_for_saturation() {
             ConvergenceEvent::CandidateDispositionRecorded(CandidateDispositionRecord::new(
                 CandidateId::parse(CANDIDATE_A).unwrap(),
                 CandidateDisposition::Verified,
-                artifact("dispositions/a.json", b"verified"),
+                CandidateVerificationEvidence::new(
+                    epoch.id().clone(),
+                    model(),
+                    VerificationIndependence::degraded("one").unwrap(),
+                    artifact("dispositions/a.json", b"verified"),
+                ),
             )),
         )
         .unwrap();

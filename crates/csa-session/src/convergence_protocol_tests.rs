@@ -4,11 +4,12 @@ use serde_json::json;
 
 use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
-    CandidateDispositionRecord, CandidateId, CandidateRecord, ConvergenceEvent, ConvergenceLedger,
-    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
-    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, GitObjectId, SemanticFindingIdentity,
-    SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    CandidateDispositionRecord, CandidateId, CandidateRecord, CandidateVerificationEvidence,
+    ConvergenceEvent, ConvergenceLedger, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
+    GitObjectId, SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    VerificationIndependence,
 };
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -163,6 +164,21 @@ impl Fixture {
     }
 }
 
+fn verification(
+    fixture: &Fixture,
+    session_id: &str,
+    path: &str,
+    bytes: &[u8],
+) -> CandidateVerificationEvidence {
+    CandidateVerificationEvidence::new(
+        fixture.epoch.id().clone(),
+        model(),
+        VerificationIndependence::degraded("the frozen test authority admits one executor")
+            .unwrap(),
+        artifact(session_id, path, bytes),
+    )
+}
+
 fn append_attempt(
     ledger: &mut ConvergenceLedger,
     fixture: &Fixture,
@@ -240,7 +256,8 @@ fn convergence_protocol_artifact_provenance_is_self_contained_and_cross_checked(
     let disposition = CandidateDispositionRecord::new(
         CandidateId::parse(CANDIDATE_A).unwrap(),
         CandidateDisposition::Verified,
-        artifact(
+        verification(
+            &fixture,
             SESSION_B,
             "dispositions/verifier.json",
             b"verified elsewhere",
@@ -316,7 +333,7 @@ fn convergence_protocol_append_builds_history_and_rolls_back_invalid_events() {
             ConvergenceEvent::CandidateDispositionRecorded(CandidateDispositionRecord::new(
                 CandidateId::parse(CANDIDATE_A).unwrap(),
                 CandidateDisposition::Verified,
-                artifact(SESSION_B, "dispositions/a.json", b"verified"),
+                verification(&fixture, SESSION_B, "dispositions/a.json", b"verified"),
             )),
         )
         .unwrap();
@@ -334,7 +351,7 @@ fn convergence_protocol_append_builds_history_and_rolls_back_invalid_events() {
                 ConvergenceEvent::CandidateDispositionRecorded(CandidateDispositionRecord::new(
                     CandidateId::parse(CANDIDATE_A).unwrap(),
                     CandidateDisposition::Verified,
-                    artifact(SESSION_B, "dispositions/again.json", b"again"),
+                    verification(&fixture, SESSION_B, "dispositions/again.json", b"again"),
                 )),
             )
             .is_err()
@@ -547,7 +564,7 @@ fn convergence_protocol_dispositions_require_finalized_source_and_target_attempt
         ConvergenceEvent::CandidateDispositionRecorded(CandidateDispositionRecord::new(
             candidate_a.id().clone(),
             CandidateDisposition::Verified,
-            artifact(SESSION_B, "dispositions/source.json", b"source"),
+            verification(&fixture, SESSION_B, "dispositions/source.json", b"source"),
         ))
     };
     assert!(
@@ -559,11 +576,11 @@ fn convergence_protocol_dispositions_require_finalized_source_and_target_attempt
 
     let duplicate = || {
         ConvergenceEvent::CandidateDispositionRecorded(CandidateDispositionRecord::new(
-            candidate_a.id().clone(),
+            candidate_b.id().clone(),
             CandidateDisposition::Duplicate {
-                canonical_candidate_id: candidate_b.id().clone(),
+                canonical_candidate_id: candidate_a.id().clone(),
             },
-            artifact(SESSION_B, "dispositions/target.json", b"target"),
+            verification(&fixture, SESSION_B, "dispositions/target.json", b"target"),
         ))
     };
     assert!(

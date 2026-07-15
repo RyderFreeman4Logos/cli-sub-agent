@@ -269,6 +269,12 @@ impl<'a> ProductionDiscoveryRunner<'a> {
         Self { context }
     }
 
+    /// Transfer immutable command context after discovery has finished.
+    #[must_use]
+    pub(crate) fn into_context(self) -> ProductionRunnerContext<'a> {
+        self.context
+    }
+
     async fn execute(&mut self, request: DiscoveryRequest) -> Result<DiscoveryRunOutput> {
         let prompt = build_discovery_prompt(&request);
         let provider_input = provider_input(&request);

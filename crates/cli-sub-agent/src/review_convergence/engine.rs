@@ -83,7 +83,7 @@ impl FrozenWorkspace {
         })
     }
 
-    fn epoch(&self) -> Result<EpochRecord> {
+    pub(crate) fn epoch(&self) -> Result<EpochRecord> {
         Ok(EpochRecord::new(
             GitObjectId::parse(&self.base_oid)?,
             GitObjectId::parse(&self.head_oid)?,

@@ -3,12 +3,14 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 
 use super::{
-    CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CandidateDisposition, CandidateId,
-    ConvergenceEvent, ConvergenceLedgerEntry, CoverageCellId, CoverageRequirement, CsaSessionId,
-    DiscoveryAttemptId, EpochId, LedgerEventId, RepairBatchId, RepairHandoffId, RootClusterId,
-    StableFindingId,
+    AdmittedModelIdentity, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CandidateDisposition,
+    CandidateId, CommandAuthoritySnapshot, ConvergenceEvent, ConvergenceLedgerEntry,
+    CoverageCellId, CoverageRequirement, CsaSessionId, DiscoveryAttemptId, EpochId, LedgerEventId,
+    RepairBatchId, RepairHandoffId, RootClusterId, StableFindingId,
 };
 
+#[path = "validation_disposition.rs"]
+mod disposition_validation;
 #[path = "validation_repair.rs"]
 mod repair_validation;
 
@@ -58,7 +60,10 @@ fn apply_event(
                 );
             }
             if campaigns
-                .insert(entry.campaign_id().clone(), CampaignState::default())
+                .insert(
+                    entry.campaign_id().clone(),
+                    CampaignState::new(record.command_authority().clone()),
+                )
                 .is_some()
             {
                 bail!("duplicate campaign start for {}", entry.campaign_id());
@@ -249,10 +254,12 @@ fn apply_event(
                 .insert(
                     record.id().clone(),
                     AttemptState {
+                        epoch_id: record.epoch_id().clone(),
                         expected_candidate_count: record.reported_candidate_count(),
                         observed_candidate_count: 0,
                         producing_session: record.csa_session_id().clone(),
                         coverage_cell_id: record.coverage_cell_id().clone(),
+                        model_identity: record.model_identity().clone(),
                         finalized: false,
                     },
                 )
@@ -331,6 +338,10 @@ fn apply_event(
                     discovery_attempt_id: record.discovery_attempt_id().clone(),
                 },
             );
+            state
+                .canonical_candidates
+                .entry(record.stable_finding_id().clone())
+                .or_insert_with(|| record.id().clone());
         }
         ConvergenceEvent::DiscoveryAttemptFinalized(record) => {
             let state = campaign_state(campaigns, entry, "discovery attempt finalization")?;
@@ -364,6 +375,13 @@ fn apply_event(
         }
         ConvergenceEvent::CandidateDispositionRecorded(record) => {
             let state = campaign_state(campaigns, entry, "candidate disposition")?;
+            record.validate().with_context(|| {
+                format!(
+                    "invalid candidate disposition for {} in campaign {}",
+                    record.candidate_id(),
+                    entry.campaign_id()
+                )
+            })?;
             let source = state
                 .candidates
                 .get(record.candidate_id())
@@ -383,7 +401,21 @@ fn apply_event(
                     entry.campaign_id()
                 );
             }
-            validate_candidate_relation(state, record, &source, entry.campaign_id())?;
+            disposition_validation::validate_candidate_relation(
+                state,
+                record,
+                &source,
+                entry.campaign_id(),
+            )?;
+            disposition_validation::validate_verifier_evidence(
+                state,
+                record,
+                &source,
+                entry.campaign_id(),
+            )?;
+            state
+                .dispositions
+                .insert(record.candidate_id().clone(), record.disposition().clone());
             state
                 .disposed_candidates
                 .insert(record.candidate_id().clone());
@@ -435,65 +467,38 @@ fn require_finalized_attempt(
     Ok(())
 }
 
-fn validate_candidate_relation(
-    state: &CampaignState,
-    record: &super::CandidateDispositionRecord,
-    source: &CandidateState,
-    campaign_id: &CampaignId,
-) -> Result<()> {
-    let target_id = match record.disposition() {
-        CandidateDisposition::Duplicate {
-            canonical_candidate_id,
-        } => Some((canonical_candidate_id, true, "duplicates")),
-        CandidateDisposition::Superseded {
-            replacement_candidate_id,
-        } => Some((replacement_candidate_id, false, "references superseding")),
-        CandidateDisposition::Verified
-        | CandidateDisposition::RejectedWithEvidence
-        | CandidateDisposition::NeedsContractOrDocumentation
-        | CandidateDisposition::PreExistingOutsideDiffScope => None,
-    };
-    let Some((target_id, requires_same_stable_id, relation)) = target_id else {
-        return Ok(());
-    };
-    if target_id == record.candidate_id() {
-        bail!(
-            "candidate {} cannot relate to itself in campaign {}",
-            record.candidate_id(),
-            campaign_id
-        );
-    }
-    let target = state.candidates.get(target_id).with_context(|| {
-        format!(
-            "candidate {} {relation} missing candidate {} in campaign {}",
-            record.candidate_id(),
-            target_id,
-            campaign_id
-        )
-    })?;
-    require_finalized_attempt(state, target_id, target, campaign_id)?;
-    if requires_same_stable_id && target.stable_finding_id != source.stable_finding_id {
-        bail!(
-            "candidate {} cannot duplicate candidate {} with a different stable finding id in campaign {}",
-            record.candidate_id(),
-            target_id,
-            campaign_id
-        );
-    }
-    Ok(())
-}
-
-#[derive(Default)]
 struct CampaignState {
+    command_authority: CommandAuthoritySnapshot,
     epochs: HashSet<EpochId>,
     finalized_epochs: HashSet<EpochId>,
     cells: HashMap<CoverageCellId, CoverageCellState>,
     attempts: HashMap<DiscoveryAttemptId, AttemptState>,
     candidates: HashMap<CandidateId, CandidateState>,
+    canonical_candidates: HashMap<StableFindingId, CandidateId>,
     disposed_candidates: HashSet<CandidateId>,
+    dispositions: HashMap<CandidateId, CandidateDisposition>,
     root_clusters: HashMap<RootClusterId, RootClusterState>,
     repair_batches: HashMap<RepairBatchId, RepairBatchState>,
     repair_handoffs: HashSet<RepairHandoffId>,
+}
+
+impl CampaignState {
+    fn new(command_authority: CommandAuthoritySnapshot) -> Self {
+        Self {
+            command_authority,
+            epochs: HashSet::new(),
+            finalized_epochs: HashSet::new(),
+            cells: HashMap::new(),
+            attempts: HashMap::new(),
+            candidates: HashMap::new(),
+            canonical_candidates: HashMap::new(),
+            disposed_candidates: HashSet::new(),
+            dispositions: HashMap::new(),
+            root_clusters: HashMap::new(),
+            repair_batches: HashMap::new(),
+            repair_handoffs: HashSet::new(),
+        }
+    }
 }
 
 struct CoverageCellState {
@@ -502,10 +507,12 @@ struct CoverageCellState {
 }
 
 struct AttemptState {
+    epoch_id: EpochId,
     expected_candidate_count: u32,
     observed_candidate_count: u32,
     producing_session: CsaSessionId,
     coverage_cell_id: CoverageCellId,
+    model_identity: AdmittedModelIdentity,
     finalized: bool,
 }
 

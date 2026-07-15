@@ -519,46 +519,6 @@ pub enum CandidateDisposition {
     },
 }
 
-/// Immutable terminal disposition evidence for one candidate observation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateDispositionRecord {
-    candidate_id: CandidateId,
-    disposition: CandidateDisposition,
-    artifact: ArtifactEvidenceRef,
-}
-
-impl CandidateDispositionRecord {
-    /// Construct terminal disposition evidence for a candidate.
-    #[must_use]
-    pub fn new(
-        candidate_id: CandidateId,
-        disposition: CandidateDisposition,
-        artifact: ArtifactEvidenceRef,
-    ) -> Self {
-        Self {
-            candidate_id,
-            disposition,
-            artifact,
-        }
-    }
-    /// Return the candidate receiving this terminal disposition.
-    #[must_use]
-    pub fn candidate_id(&self) -> &CandidateId {
-        &self.candidate_id
-    }
-    /// Return the terminal disposition and any candidate relation it carries.
-    #[must_use]
-    pub fn disposition(&self) -> &CandidateDisposition {
-        &self.disposition
-    }
-    /// Return the required disposition artifact evidence.
-    #[must_use]
-    pub fn artifact(&self) -> &ArtifactEvidenceRef {
-        &self.artifact
-    }
-}
-
 /// Planning requirement assigned to a defined coverage cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
