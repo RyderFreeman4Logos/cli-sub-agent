@@ -1,10 +1,13 @@
 pub(super) mod bundle;
 mod clean_room;
 mod clustering;
+mod production_clean_room_provider;
 mod provider_command_authority;
 // Slice 3A defines the deterministic core without changing legacy production dispatch.
 #[allow(dead_code)]
 mod completion;
+#[allow(dead_code)]
+mod completion_types;
 mod continuation;
 mod coverage;
 // Slice 3B will wire the strict completion-only contract and clean-room prompt.
