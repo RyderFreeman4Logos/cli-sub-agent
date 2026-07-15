@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{Commands, parse_cli_tool_name, parse_model_spec_arg, parse_spec_path_arg};
 
+#[path = "cli_review_repair.rs"]
+mod repair_args;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum ReviewMode {
@@ -98,6 +101,14 @@ pub struct ReviewArgs {
     /// This does not produce a review verdict or merge attestation.
     #[arg(long)]
     pub discovery_only: bool,
+
+    /// Execute only ledger-authorized consolidated repair batches for one campaign.
+    #[arg(long)]
+    pub repair_only: bool,
+
+    /// Durable convergence campaign authorizing `--repair-only`.
+    #[arg(long, value_name = "CAMPAIGN_ID")]
+    pub campaign: Option<String>,
 
     /// Check that the current branch HEAD has a passing full-diff review verdict.
     ///
@@ -439,6 +450,9 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
 }
 
 fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap::Error> {
+    if args.repair_only || args.campaign.is_some() {
+        return repair_args::validate_repair_only_args(args);
+    }
     if !args.converge && !args.discovery_only {
         return Ok(());
     }

@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
 mod authority;
+mod authorization;
 mod campaign;
 mod discovery;
 mod evidence;
@@ -21,11 +22,11 @@ mod secure_fs;
 mod store;
 mod validation;
 mod verification_evidence;
-
 pub use authority::{
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
     CommandAuthoritySource,
 };
+pub use authorization::{ConsolidatedRepairAuthorization, authorize_consolidated_repairs};
 pub use discovery::{DiscoveryDirective, DiscoveryRunIntent, next_discovery_directive};
 pub use evidence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateRecord,
@@ -780,12 +781,11 @@ impl_validated_string!(StableFindingId);
 
 fn normalize_nonblank(field: &str, value: &str) -> Result<String> {
     let normalized = value.trim();
-    if normalized.is_empty() {
-        bail!("{field} must not be blank");
-    }
-    if normalized.contains('\0') {
-        bail!("{field} must not contain NUL bytes");
-    }
+    anyhow::ensure!(!normalized.is_empty(), "{field} must not be blank");
+    anyhow::ensure!(
+        !normalized.contains('\0'),
+        "{field} must not contain NUL bytes"
+    );
     Ok(normalized.to_string())
 }
 

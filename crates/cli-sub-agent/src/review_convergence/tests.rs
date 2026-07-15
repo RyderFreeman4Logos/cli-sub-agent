@@ -630,6 +630,7 @@ fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_
     let Some(dispatch) = source.find("if args.converge {") else {
         panic!("convergence dispatch is missing");
     };
+
     for ordinary_step in [
         "verify_review_skill_available",
         "run_pre_review_quality_gate",
@@ -674,4 +675,6 @@ fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
 mod campaign_authority_tests;
 mod coverage_manifest;
 mod page_publication;
+#[path = "repair_authorization_tests.rs"]
+mod repair_authorization_tests;
 mod semantic_continuation;

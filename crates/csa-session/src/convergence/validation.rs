@@ -481,10 +481,13 @@ struct CampaignState {
     disposed_candidates: HashSet<CandidateId>,
     dispositions: HashMap<CandidateId, CandidateDispositionRecord>,
     root_clusters: HashMap<RootClusterId, RootClusterState>,
+    root_cluster_records: Vec<super::RootClusterRecord>,
     clustered_blocking_candidates: HashSet<CandidateId>,
     repair_batches: HashMap<RepairBatchId, RepairBatchState>,
+    repair_batch_records: Vec<super::RepairBatchRecord>,
     repair_batches_by_cluster: HashMap<RootClusterId, RepairBatchId>,
     repair_handoffs: HashSet<RepairHandoffId>,
+    repair_handoffs_by_batch: HashSet<RepairBatchId>,
 }
 
 impl CampaignState {
@@ -500,10 +503,13 @@ impl CampaignState {
             disposed_candidates: HashSet::new(),
             dispositions: HashMap::new(),
             root_clusters: HashMap::new(),
+            root_cluster_records: Vec::new(),
             clustered_blocking_candidates: HashSet::new(),
             repair_batches: HashMap::new(),
+            repair_batch_records: Vec::new(),
             repair_batches_by_cluster: HashMap::new(),
             repair_handoffs: HashSet::new(),
+            repair_handoffs_by_batch: HashSet::new(),
         }
     }
 }

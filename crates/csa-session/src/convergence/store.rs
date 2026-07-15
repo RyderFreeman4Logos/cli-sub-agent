@@ -175,6 +175,34 @@ impl ConvergenceLedgerStore {
         Ok(ledger)
     }
 
+    /// Derive consolidated repair authority while holding the campaign read lock.
+    ///
+    /// # Errors
+    /// Returns an error when the ledger or selected campaign is not fully authorized.
+    pub fn authorize_consolidated_repairs_locked(
+        &self,
+        campaign_id: &CampaignId,
+    ) -> anyhow::Result<super::ConsolidatedRepairAuthorization> {
+        let Some(directory) = secure_fs::open_convergence_directory(
+            &self.secure_boundary,
+            &self.project_state_root,
+            false,
+        )?
+        else {
+            bail!("selected campaign {campaign_id} is missing");
+        };
+        let lock_file = directory.open_lock(lock_name())?;
+        let lock = RwLock::new(lock_file);
+        let _guard = lock
+            .read()
+            .map_err(|error| anyhow!(error).context("acquire convergence campaign read lock"))?;
+        directory.verify_link()?;
+        let ledger = self.load_from_directory(&directory)?;
+        let authorization = super::authorize_consolidated_repairs(&ledger, campaign_id)?;
+        directory.verify_link()?;
+        Ok(authorization)
+    }
+
     /// Append one event under the persistent project lock and durably publish the new ledger.
     ///
     /// # Errors

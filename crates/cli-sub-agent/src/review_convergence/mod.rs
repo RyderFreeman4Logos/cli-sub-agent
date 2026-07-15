@@ -6,6 +6,10 @@ pub(super) mod engine;
 mod output;
 mod persistence;
 mod recovery;
+pub(super) mod repair_authorization;
+pub(super) use repair_authorization::{
+    RepairOnlyContext as RepairContext, run_repair_only_command as run_repair,
+};
 pub(super) mod runner;
 mod schema;
 pub(super) mod verification;

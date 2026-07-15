@@ -33,6 +33,18 @@ async fn handle_review_inner(
     else {
         return Ok(1);
     };
+    if args.repair_only {
+        return review_convergence::run_repair(review_convergence::RepairContext::new(
+            &args,
+            &project_root,
+            config.as_ref(),
+            &global_config,
+            &model_catalog,
+            current_depth,
+            startup_env,
+        ))
+        .await;
+    }
     let inherited_model_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);

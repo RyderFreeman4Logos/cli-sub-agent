@@ -9,6 +9,7 @@ use crate::convergence::{
     DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
     GitObjectId, RepairBatchRecord, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
     SessionRelativeArtifactPath, Sha256Digest, VerificationIndependence,
+    authorize_consolidated_repairs,
 };
 
 fn digest(fill: char) -> Sha256Digest {
@@ -96,7 +97,9 @@ fn repair_records_digest_complete_sets_canonically() {
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
 const ATTEMPT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB3";
+const CLEAN_ATTEMPT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB8";
 const DISCOVERY_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB4";
+const CLEAN_DISCOVERY_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB9";
 const VERIFIER_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB5";
 const CANDIDATE_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB6";
 const CANDIDATE_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB7";
@@ -177,11 +180,26 @@ impl RepairFixture {
             Vec::new(),
         )
         .unwrap();
+        let clean_attempt_id = DiscoveryAttemptId::parse(CLEAN_ATTEMPT).unwrap();
+        let clean_attempt = DiscoveryAttemptRecord::new(
+            clean_attempt_id.clone(),
+            epoch.id().clone(),
+            cell.id().clone(),
+            Utc.with_ymd_and_hms(2026, 7, 14, 12, 2, 0).unwrap(),
+            ProviderTurnCompletion::Natural,
+            AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high").unwrap(),
+            artifact(CLEAN_DISCOVERY_SESSION, "discovery/clean.json"),
+            8,
+            0,
+            false,
+            Vec::new(),
+        )
+        .unwrap();
         let events = vec![
             ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(
                 campaign_id.clone(),
                 Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap(),
-                None,
+                Some(digest('f')),
             )),
             ConvergenceEvent::EpochOpened(epoch.clone()),
             ConvergenceEvent::CoverageCellDefined(cell.clone()),
@@ -202,6 +220,10 @@ impl RepairFixture {
             ConvergenceEvent::CandidateRecorded(candidate_b),
             ConvergenceEvent::DiscoveryAttemptFinalized(DiscoveryAttemptFinalizationRecord::new(
                 attempt_id,
+            )),
+            ConvergenceEvent::DiscoveryAttemptRecorded(clean_attempt),
+            ConvergenceEvent::DiscoveryAttemptFinalized(DiscoveryAttemptFinalizationRecord::new(
+                clean_attempt_id,
             )),
             ConvergenceEvent::CandidateDispositionRecorded(dispositions[0].clone()),
             ConvergenceEvent::CandidateDispositionRecorded(dispositions[1].clone()),
@@ -341,4 +363,177 @@ fn disposition_set_digest_is_order_stable_and_evidence_sensitive() {
         CandidateDispositionRecord::set_digest(&fixture.dispositions),
         CandidateDispositionRecord::set_digest(&changed_set)
     );
+}
+
+#[test]
+fn complete_current_epoch_authorizes_one_consolidated_batch_per_root() {
+    let mut fixture = RepairFixture::new();
+    fixture
+        .ledger
+        .append_batch(
+            fixture.campaign_id.clone(),
+            fixture.records_for(&[0, 1], "shared root"),
+        )
+        .unwrap();
+
+    let authorization =
+        authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id).unwrap();
+
+    assert_eq!(authorization.epoch().id(), fixture.epoch.id());
+    assert_eq!(authorization.batches().len(), 1);
+    assert_eq!(
+        authorization.batches()[0].corrections(),
+        ["repair shared root"]
+    );
+}
+
+#[test]
+fn opening_changed_head_epoch_invalidates_prior_authorization() {
+    let mut fixture = RepairFixture::new();
+    fixture
+        .ledger
+        .append_batch(
+            fixture.campaign_id.clone(),
+            fixture.records_for(&[0, 1], "shared root"),
+        )
+        .unwrap();
+    let changed_epoch = EpochRecord::new(
+        fixture.epoch.base_oid().clone(),
+        GitObjectId::parse(&"d".repeat(40)).unwrap(),
+        digest('e'),
+    );
+    fixture
+        .ledger
+        .append(
+            fixture.campaign_id.clone(),
+            ConvergenceEvent::EpochOpened(changed_epoch),
+        )
+        .unwrap();
+
+    let error = authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id)
+        .expect_err("a new epoch must invalidate every earlier authorization");
+
+    assert!(error.to_string().contains("current epoch"));
+}
+
+#[test]
+fn incomplete_wrong_campaign_and_workspace_evidence_fail_closed() {
+    let fixture = RepairFixture::new();
+    let before = fixture.ledger.clone();
+    let error = authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id)
+        .expect_err("missing clusters and batches must not authorize repair");
+    assert!(error.to_string().contains("no complete consolidated"));
+    assert_eq!(fixture.ledger, before);
+
+    let wrong_campaign = CampaignId::parse("01ARZ3NDEKTSV4RRFFQ69G5FBB").unwrap();
+    assert!(authorize_consolidated_repairs(&fixture.ledger, &wrong_campaign).is_err());
+
+    let mut complete = RepairFixture::new();
+    complete
+        .ledger
+        .append_batch(
+            complete.campaign_id.clone(),
+            complete.records_for(&[0, 1], "shared root"),
+        )
+        .unwrap();
+    let authorization =
+        authorize_consolidated_repairs(&complete.ledger, &complete.campaign_id).unwrap();
+    let changed = EpochRecord::new(
+        complete.epoch.base_oid().clone(),
+        GitObjectId::parse(&"d".repeat(40)).unwrap(),
+        digest('e'),
+    );
+    assert!(authorization.validate_observed_epoch(&changed).is_err());
+}
+
+#[test]
+fn multiple_roots_authorize_exactly_one_nonduplicable_handoff_each() {
+    let mut fixture = RepairFixture::new();
+    let mut records = fixture.records_for(&[0], "root a");
+    records.extend(fixture.records_for(&[1], "root b"));
+    fixture
+        .ledger
+        .append_batch(fixture.campaign_id.clone(), records)
+        .unwrap();
+    let authorization =
+        authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id).unwrap();
+    assert_eq!(authorization.batches().len(), 2);
+
+    let actual = AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high").unwrap();
+    let artifact = ArtifactEvidenceRef::new(
+        CsaSessionId::parse("01ARZ3NDEKTSV4RRFFQ69G5FBC").unwrap(),
+        SessionRelativeArtifactPath::new("output/repair-handoff.json").unwrap(),
+        Sha256Digest::compute(b"one actual writer receipt"),
+    );
+    let handoffs = authorization
+        .batches()
+        .iter()
+        .map(|batch| {
+            authorization
+                .handoff_for(batch.id(), actual.clone(), artifact.clone())
+                .map(ConvergenceEvent::RepairHandoffRecorded)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    fixture
+        .ledger
+        .append_batch(fixture.campaign_id.clone(), handoffs)
+        .expect("one handoff per root must be accepted atomically");
+
+    let duplicate = authorization
+        .handoff_for(authorization.batches()[0].id(), actual, artifact)
+        .unwrap();
+    assert!(
+        fixture
+            .ledger
+            .append(
+                fixture.campaign_id.clone(),
+                ConvergenceEvent::RepairHandoffRecorded(duplicate),
+            )
+            .is_err(),
+        "a second writer handoff for one root batch must fail closed"
+    );
+}
+
+#[test]
+fn handoff_requires_actual_executor_membership_and_complete_evidence() {
+    let mut fixture = RepairFixture::new();
+    fixture
+        .ledger
+        .append_batch(
+            fixture.campaign_id.clone(),
+            fixture.records_for(&[0, 1], "shared root"),
+        )
+        .unwrap();
+    let authorization =
+        authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id).unwrap();
+    let batch = &authorization.batches()[0];
+    let artifact = ArtifactEvidenceRef::new(
+        CsaSessionId::parse("01ARZ3NDEKTSV4RRFFQ69G5FBA").unwrap(),
+        SessionRelativeArtifactPath::new("output/repair-handoff.json").unwrap(),
+        Sha256Digest::compute(b"actual writer receipt"),
+    );
+    let requested_but_not_actual =
+        AdmittedModelIdentity::new("codex", "other", "unadmitted", "high").unwrap();
+
+    let error = authorization
+        .handoff_for(batch.id(), requested_but_not_actual, artifact.clone())
+        .expect_err("requested routing is not actual executor evidence");
+    assert!(error.to_string().contains("actual repair executor"));
+
+    let actual = AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high").unwrap();
+    let handoff = authorization
+        .handoff_for(batch.id(), actual.clone(), artifact)
+        .unwrap();
+    assert_eq!(handoff.actual_executor(), &actual);
+    fixture
+        .ledger
+        .append(
+            fixture.campaign_id.clone(),
+            ConvergenceEvent::RepairHandoffRecorded(handoff),
+        )
+        .expect("actual executor evidence should become durable once");
+    let error = authorize_consolidated_repairs(&fixture.ledger, &fixture.campaign_id)
+        .expect_err("durable handoff consumes the current authorization");
+    assert!(error.to_string().contains("already-used"));
 }

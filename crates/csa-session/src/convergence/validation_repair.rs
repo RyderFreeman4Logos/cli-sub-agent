@@ -165,6 +165,7 @@ pub(super) fn record_root_cluster(
     state
         .clustered_blocking_candidates
         .extend(record.candidate_ids().iter().cloned());
+    state.root_cluster_records.push(record.clone());
     Ok(())
 }
 
@@ -236,6 +237,7 @@ pub(super) fn record_repair_batch(
     state
         .repair_batches_by_cluster
         .insert(record.root_cluster_id().clone(), record.id().clone());
+    state.repair_batch_records.push(record.clone());
     Ok(())
 }
 
@@ -278,6 +280,46 @@ pub(super) fn record_repair_handoff(
         bail!(
             "repair handoff {} does not preserve its repair batch immutable union in campaign {}",
             record.id(),
+            entry.campaign_id()
+        );
+    }
+    if record.command_authority_digest() != &state.command_authority.digest()
+        || !state.command_authority.contains(record.actual_executor())
+    {
+        bail!(
+            "repair handoff {} actual executor or command authority does not match campaign {}",
+            record.id(),
+            entry.campaign_id()
+        );
+    }
+    let clusters = state
+        .root_cluster_records
+        .iter()
+        .filter(|cluster| cluster.epoch_id() == record.epoch_id())
+        .cloned()
+        .collect::<Vec<_>>();
+    let batches = state
+        .repair_batch_records
+        .iter()
+        .filter(|candidate| candidate.epoch_id() == record.epoch_id())
+        .cloned()
+        .collect::<Vec<_>>();
+    if record.cluster_set_digest() != &RootClusterRecord::set_digest(&clusters)
+        || record.repair_batch_set_digest() != &RepairBatchRecord::set_digest(&batches)
+    {
+        bail!(
+            "repair handoff {} does not bind the complete cluster and batch sets in campaign {}",
+            record.id(),
+            entry.campaign_id()
+        );
+    }
+    if !state
+        .repair_handoffs_by_batch
+        .insert(record.repair_batch_id().clone())
+    {
+        bail!(
+            "repair batch {} already has a writer handoff in campaign {}",
+            record.repair_batch_id(),
             entry.campaign_id()
         );
     }

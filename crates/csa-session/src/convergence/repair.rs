@@ -5,8 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use ulid::Ulid;
 
 use super::{
-    ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, Sha256Digest, hash_fields,
-    normalize_nonblank,
+    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, Sha256Digest,
+    hash_fields, normalize_nonblank,
 };
 
 const CANDIDATE_SET_DOMAIN: &[u8] = b"csa-convergence-candidate-set-v1\0";
@@ -439,6 +439,7 @@ pub struct RepairHandoffRecord {
     disposition_set_digest: Sha256Digest,
     cluster_set_digest: Sha256Digest,
     repair_batch_set_digest: Sha256Digest,
+    actual_executor: AdmittedModelIdentity,
     artifact: ArtifactEvidenceRef,
     content_digest: Sha256Digest,
 }
@@ -460,6 +461,7 @@ impl RepairHandoffRecord {
         disposition_set_digest: Sha256Digest,
         cluster_set_digest: Sha256Digest,
         repair_batch_set_digest: Sha256Digest,
+        actual_executor: AdmittedModelIdentity,
         artifact: ArtifactEvidenceRef,
     ) -> Self {
         let content_digest = repair_handoff_content_digest(
@@ -471,6 +473,7 @@ impl RepairHandoffRecord {
             &disposition_set_digest,
             &cluster_set_digest,
             &repair_batch_set_digest,
+            &actual_executor,
             &artifact,
         );
         Self {
@@ -484,6 +487,7 @@ impl RepairHandoffRecord {
             disposition_set_digest,
             cluster_set_digest,
             repair_batch_set_digest,
+            actual_executor,
             artifact,
             content_digest,
         }
@@ -549,6 +553,12 @@ impl RepairHandoffRecord {
         &self.repair_batch_set_digest
     }
 
+    /// Return the executor that actually produced the writer artifact.
+    #[must_use]
+    pub fn actual_executor(&self) -> &AdmittedModelIdentity {
+        &self.actual_executor
+    }
+
     /// Return the immutable union artifact reference.
     #[must_use]
     pub fn artifact(&self) -> &ArtifactEvidenceRef {
@@ -575,6 +585,7 @@ impl RepairHandoffRecord {
             &self.disposition_set_digest,
             &self.cluster_set_digest,
             &self.repair_batch_set_digest,
+            &self.actual_executor,
             &self.artifact,
         );
         if content_digest != self.content_digest {
@@ -684,6 +695,7 @@ fn repair_handoff_content_digest(
     disposition_set_digest: &Sha256Digest,
     cluster_set_digest: &Sha256Digest,
     repair_batch_set_digest: &Sha256Digest,
+    actual_executor: &AdmittedModelIdentity,
     artifact: &ArtifactEvidenceRef,
 ) -> Sha256Digest {
     hash_fields(
@@ -697,6 +709,10 @@ fn repair_handoff_content_digest(
             disposition_set_digest.as_str(),
             cluster_set_digest.as_str(),
             repair_batch_set_digest.as_str(),
+            actual_executor.tool(),
+            actual_executor.provider(),
+            actual_executor.model(),
+            actual_executor.reasoning(),
             artifact.csa_session_id().as_str(),
             artifact.path().as_str(),
             artifact.digest().as_str(),
