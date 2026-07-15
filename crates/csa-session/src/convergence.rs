@@ -16,6 +16,7 @@ mod evidence;
 mod finalization;
 mod ledger;
 mod provider_bundle;
+mod repair;
 mod secure_fs;
 mod store;
 mod validation;
@@ -39,6 +40,10 @@ pub use ledger::{
     LedgerEventId,
 };
 pub use provider_bundle::ProviderEvidenceBundle;
+pub use repair::{
+    RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord, RootClusterId,
+    RootClusterRecord,
+};
 
 #[cfg(test)]
 pub(crate) use store::MAX_LEDGER_BYTES;

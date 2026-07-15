@@ -5,8 +5,12 @@ use anyhow::{Context, Result, bail};
 use super::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CandidateDisposition, CandidateId,
     ConvergenceEvent, ConvergenceLedgerEntry, CoverageCellId, CoverageRequirement, CsaSessionId,
-    DiscoveryAttemptId, EpochId, LedgerEventId, StableFindingId,
+    DiscoveryAttemptId, EpochId, LedgerEventId, RepairBatchId, RepairHandoffId, RootClusterId,
+    StableFindingId,
 };
+
+#[path = "validation_repair.rs"]
+mod repair_validation;
 
 /// Replay a convergence ledger and enforce all cross-event protocol invariants.
 pub(super) fn validate_ledger(
@@ -384,6 +388,15 @@ fn apply_event(
                 .disposed_candidates
                 .insert(record.candidate_id().clone());
         }
+        ConvergenceEvent::RootClusterRecorded(record) => {
+            repair_validation::record_root_cluster(campaigns, entry, record)?;
+        }
+        ConvergenceEvent::RepairBatchRecorded(record) => {
+            repair_validation::record_repair_batch(campaigns, entry, record)?;
+        }
+        ConvergenceEvent::RepairHandoffRecorded(record) => {
+            repair_validation::record_repair_handoff(campaigns, entry, record)?;
+        }
     }
     Ok(())
 }
@@ -478,6 +491,9 @@ struct CampaignState {
     attempts: HashMap<DiscoveryAttemptId, AttemptState>,
     candidates: HashMap<CandidateId, CandidateState>,
     disposed_candidates: HashSet<CandidateId>,
+    root_clusters: HashMap<RootClusterId, RootClusterState>,
+    repair_batches: HashMap<RepairBatchId, RepairBatchState>,
+    repair_handoffs: HashSet<RepairHandoffId>,
 }
 
 struct CoverageCellState {
@@ -497,4 +513,16 @@ struct AttemptState {
 struct CandidateState {
     stable_finding_id: StableFindingId,
     discovery_attempt_id: DiscoveryAttemptId,
+}
+
+struct RootClusterState {
+    epoch_id: EpochId,
+    candidate_set_digest: super::Sha256Digest,
+    disposition_set_digest: super::Sha256Digest,
+}
+
+struct RepairBatchState {
+    epoch_id: EpochId,
+    candidate_set_digest: super::Sha256Digest,
+    disposition_set_digest: super::Sha256Digest,
 }

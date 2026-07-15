@@ -8,7 +8,8 @@ use ulid::Ulid;
 use super::{
     CampaignId, CampaignRecord, CandidateDispositionRecord, CandidateRecord, CoverageCellRecord,
     CoverageDispositionRecord, CoveragePlanFinalizationRecord, DiscoveryAttemptFinalizationRecord,
-    DiscoveryAttemptRecord, EpochRecord, validation,
+    DiscoveryAttemptRecord, EpochRecord, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
+    validation,
 };
 
 /// Current on-disk schema version for convergence ledgers.
@@ -103,6 +104,12 @@ pub enum ConvergenceEvent {
     DiscoveryAttemptFinalized(DiscoveryAttemptFinalizationRecord),
     /// One candidate received its immutable terminal disposition.
     CandidateDispositionRecorded(CandidateDispositionRecord),
+    /// Verified blocking candidates were clustered by a common root cause.
+    RootClusterRecorded(RootClusterRecord),
+    /// One root cluster received exactly one consolidated repair batch.
+    RepairBatchRecorded(RepairBatchRecord),
+    /// One validated repair batch received an immutable writer handoff.
+    RepairHandoffRecorded(RepairHandoffRecord),
 }
 
 /// One ordered, immutable convergence history event.
