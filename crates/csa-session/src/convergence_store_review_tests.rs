@@ -25,7 +25,7 @@ fn campaign_start(value: &str) -> (CampaignId, ConvergenceEvent) {
     let id = CampaignId::parse(value).unwrap();
     (
         id.clone(),
-        ConvergenceEvent::CampaignStarted(CampaignRecord::new(id, Utc::now(), None, None)),
+        ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(id, Utc::now(), None)),
     )
 }
 

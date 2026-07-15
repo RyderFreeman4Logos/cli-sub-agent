@@ -6,7 +6,10 @@ pub(super) mod runner;
 mod schema;
 
 use anyhow::Result;
-use csa_session::convergence::{ConvergenceLedgerStore, Sha256Digest};
+use csa_session::convergence::{
+    AdmittedModelIdentity, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
+    CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceLedgerStore, Sha256Digest,
+};
 
 pub(super) struct EarlyCommandContext<'a> {
     pub(super) args: &'a crate::cli::ReviewArgs,
@@ -146,14 +149,8 @@ pub(super) async fn run_command(
     range: &str,
 ) -> Result<i32> {
     let project_root = context.project_root;
-    // This is a canonical serialization of the resolved, ordered catalog slice
-    // the authoritative CSA adapter can actually admit for this command.
-    let catalog_snapshot = serde_json::to_vec(&(
-        context.tier_name.as_deref(),
-        context.tier_model_spec.as_deref(),
-        context.tier_preference_order.as_slice(),
-    ))?;
-    let input = engine::ObservationInput::new(range, Sha256Digest::compute(&catalog_snapshot));
+    let command_authority = capture_command_authority(&context).await?;
+    let input = engine::ObservationInput::new(range, command_authority);
     let store = match ConvergenceLedgerStore::for_project(project_root) {
         Ok(store) => store,
         Err(error) => return emit_setup_block("store_failure", &error),
@@ -180,6 +177,83 @@ pub(super) async fn run_command(
             Ok(1)
         }
     }
+}
+
+async fn capture_command_authority(
+    context: &runner::ResolvedCommandContext<'_>,
+) -> Result<CommandAuthoritySnapshot> {
+    let candidates = super::tier_candidates::review_ordered_tier_candidates(
+        super::tier_candidates::ReviewTierCandidateRequest {
+            initial_tool: context.tool,
+            initial_model_spec: context.tier_model_spec.as_deref(),
+            tier_name: context.tier_name.as_deref(),
+            project_config: context.project_config,
+            global_config: Some(context.global_config),
+            model_catalog: context.model_catalog,
+            tier_fallback_enabled: context.tier_fallback_enabled,
+            no_failover: context.no_failover,
+            tier_preference_order: &context.tier_preference_order,
+        },
+    )?;
+    let mut admitted_identities = Vec::with_capacity(candidates.len());
+    for (tool, model_spec) in &candidates {
+        let admitted = crate::pipeline::build_and_validate_executor(
+            tool,
+            model_spec.as_deref(),
+            context.model.as_deref(),
+            context.thinking.as_deref(),
+            crate::pipeline::ConfigRefs {
+                project: context.project_config,
+                global: Some(context.global_config),
+                model_catalog: Some(context.model_catalog),
+            },
+            context.tier_name.is_some()
+                && model_spec.is_some()
+                && !context.args.force_ignore_tier_setting,
+            context.args.force_override_user_config,
+            false,
+        )
+        .await?;
+        let spec = admitted.resolved_model_spec();
+        let reasoning = match &spec.thinking_budget {
+            csa_executor::ThinkingBudget::DefaultBudget => "default".to_string(),
+            csa_executor::ThinkingBudget::Low => "low".to_string(),
+            csa_executor::ThinkingBudget::Medium => "medium".to_string(),
+            csa_executor::ThinkingBudget::High => "high".to_string(),
+            csa_executor::ThinkingBudget::Xhigh => "xhigh".to_string(),
+            csa_executor::ThinkingBudget::Max => "max".to_string(),
+            csa_executor::ThinkingBudget::Custom(value) => value.to_string(),
+        };
+        admitted_identities.push(AdmittedModelIdentity::new(
+            &spec.tool,
+            &spec.provider,
+            &spec.model,
+            &reasoning,
+        )?);
+    }
+    let source = if let Some(tier) = context.tier_name.as_deref() {
+        CommandAuthoritySource::tier(tier, "review.tier")?
+    } else if context.args.tool.is_some()
+        || context.args.model_spec.is_some()
+        || context.args.model.is_some()
+    {
+        CommandAuthoritySource::direct("review.command")?
+    } else {
+        CommandAuthoritySource::default_model("review.default")?
+    };
+    let catalog_version =
+        Sha256Digest::compute(&serde_json::to_vec(&admitted_identities)?).to_string();
+    CommandAuthoritySnapshot::new(
+        source,
+        CommandAuthorityPolicy::new(
+            context.tier_fallback_enabled && !context.no_failover,
+            context.tier_preference_order.clone(),
+            context.args.force_ignore_tier_setting,
+            context.no_failover,
+        )?,
+        CommandAuthorityCatalogIdentity::new("effective command catalog", &catalog_version)?,
+        admitted_identities,
+    )
 }
 
 pub(super) fn emit_setup_block(reason_code: &'static str, error: &anyhow::Error) -> Result<i32> {

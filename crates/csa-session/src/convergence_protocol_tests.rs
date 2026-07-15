@@ -78,10 +78,9 @@ impl Fixture {
         ledger
             .append(
                 self.campaign_id.clone(),
-                ConvergenceEvent::CampaignStarted(CampaignRecord::new(
+                ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(
                     self.campaign_id.clone(),
                     Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap(),
-                    None,
                     None,
                 )),
             )

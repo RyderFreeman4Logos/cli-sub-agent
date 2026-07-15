@@ -148,11 +148,10 @@ fn stable_finding_id_ignores_location_evidence_and_changes_with_semantics() {
 
 #[test]
 fn schema_round_trip_rejects_unknown_fields() {
-    let campaign = CampaignRecord::new(
+    let campaign = CampaignRecord::for_test(
         CampaignId::parse("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
         Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap(),
         Some(digest('a')),
-        Some(digest('b')),
     );
     let campaign_json = serde_json::to_string(&campaign).unwrap();
     assert_eq!(

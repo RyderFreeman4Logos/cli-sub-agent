@@ -9,10 +9,10 @@ use anyhow::{Result, anyhow};
 use chrono::Utc;
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
-    ArtifactEvidenceRef, CampaignId, CampaignRecord, ConvergenceEvent, ConvergenceLedger,
-    ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord, CoverageRequirement,
-    CoverageScope, DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryDirective,
-    DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticLens, Sha256Digest,
+    ArtifactEvidenceRef, CampaignId, CampaignRecord, CommandAuthoritySnapshot, ConvergenceEvent,
+    ConvergenceLedger, ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord,
+    CoverageRequirement, CoverageScope, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochRecord, GitObjectId, SemanticLens, Sha256Digest,
     next_discovery_directive,
 };
 use serde::Serialize;
@@ -149,14 +149,14 @@ pub(crate) trait DiscoveryRunner {
 #[derive(Debug, Clone)]
 pub(crate) struct ObservationInput {
     pub(crate) range: String,
-    pub(crate) catalog_digest: Sha256Digest,
+    pub(crate) command_authority: CommandAuthoritySnapshot,
 }
 
 impl ObservationInput {
-    pub(crate) fn new(range: &str, catalog_digest: Sha256Digest) -> Self {
+    pub(crate) fn new(range: &str, command_authority: CommandAuthoritySnapshot) -> Self {
         Self {
             range: range.to_string(),
-            catalog_digest,
+            command_authority,
         }
     }
 }
@@ -296,7 +296,7 @@ where
         store,
         &epoch,
         &policy_digest,
-        &input.catalog_digest,
+        &input.command_authority,
         &mut persistence,
     )?;
     let planning = planning_started.elapsed();
@@ -508,7 +508,7 @@ fn initialize_campaign<S: LedgerPort>(
     store: &S,
     epoch: &EpochRecord,
     policy_digest: &Sha256Digest,
-    catalog_digest: &Sha256Digest,
+    command_authority: &CommandAuthoritySnapshot,
     persistence: &mut Duration,
 ) -> std::result::Result<(CampaignRecord, ConvergenceLedger), EngineError> {
     let mut ledger = store
@@ -519,15 +519,15 @@ fn initialize_campaign<S: LedgerPort>(
             return None;
         };
         (campaign.policy_digest() == Some(policy_digest)
-            && campaign.catalog_digest() == Some(catalog_digest))
-        .then(|| campaign.clone())
+            && campaign.command_authority_digest() == &command_authority.digest())
+            .then(|| campaign.clone())
     });
     let campaign = campaign.unwrap_or_else(|| {
         CampaignRecord::new(
             CampaignId::generate(),
             Utc::now(),
             Some(policy_digest.clone()),
-            Some(catalog_digest.clone()),
+            command_authority.clone(),
         )
     });
     let campaign_exists = ledger.entries().iter().any(|entry| {

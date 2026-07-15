@@ -8,8 +8,9 @@ use anyhow::{Result, anyhow};
 use clap::{CommandFactory, Parser};
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
-    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, ConvergenceEvent, ConvergenceLedger,
-    DiscoveryRunIntent, Sha256Digest,
+    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent,
+    ConvergenceLedger, DiscoveryRunIntent, Sha256Digest,
 };
 use serde_json::{Value, json};
 
@@ -159,7 +160,17 @@ fn output(completion: ProviderTurnCompletion, raw: String) -> Result<DiscoveryRu
 }
 
 fn input() -> ObservationInput {
-    ObservationInput::new("main...HEAD", Sha256Digest::compute(b"catalog"))
+    ObservationInput::new("main...HEAD", authority("gpt-5.6"))
+}
+
+fn authority(model: &str) -> CommandAuthoritySnapshot {
+    CommandAuthoritySnapshot::new(
+        CommandAuthoritySource::tier("quality", "review.tier").unwrap(),
+        CommandAuthorityPolicy::new(false, vec!["codex".to_string()], false, true).unwrap(),
+        CommandAuthorityCatalogIdentity::new("effective command catalog", "test-v1").unwrap(),
+        vec![AdmittedModelIdentity::new("codex", "openai", model, "high").unwrap()],
+    )
+    .unwrap()
 }
 
 fn candidate(mechanism: &str) -> Value {
@@ -685,3 +696,6 @@ fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
         assert!(crate::cli::Cli::try_parse_from(argv).is_err());
     }
 }
+
+#[path = "campaign_authority_tests.rs"]
+mod campaign_authority_tests;

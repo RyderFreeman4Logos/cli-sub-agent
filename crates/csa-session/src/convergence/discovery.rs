@@ -256,9 +256,11 @@ fn validate_target_snapshots(
             expected_campaign.id()
         );
     }
-    if expected_campaign.catalog_digest().is_none() {
+    if expected_campaign.command_authority_digest()
+        != &expected_campaign.command_authority().digest()
+    {
         bail!(
-            "campaign {} has no frozen model catalog digest",
+            "campaign {} has a mismatched command authority digest",
             expected_campaign.id()
         );
     }

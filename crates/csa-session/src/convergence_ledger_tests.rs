@@ -37,7 +37,7 @@ fn oid(fill: char) -> GitObjectId {
 }
 
 fn campaign_record(id: &CampaignId) -> CampaignRecord {
-    CampaignRecord::new(id.clone(), at(0), Some(digest('d')), Some(digest('e')))
+    CampaignRecord::for_test(id.clone(), at(0), Some(digest('d')))
 }
 
 fn epoch_record() -> EpochRecord {

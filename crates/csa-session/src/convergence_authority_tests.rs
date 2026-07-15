@@ -1,7 +1,8 @@
 use crate::convergence::{
-    AdmittedModelIdentity, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
-    CommandAuthoritySnapshot, CommandAuthoritySource,
+    AdmittedModelIdentity, CampaignId, CampaignRecord, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, Sha256Digest,
 };
+use chrono::{TimeZone, Utc};
 
 fn admitted(tool: &str, provider: &str, model: &str, reasoning: &str) -> AdmittedModelIdentity {
     AdmittedModelIdentity::new(tool, provider, model, reasoning).unwrap()
@@ -227,4 +228,31 @@ fn command_authority_rejects_ambiguous_or_empty_authority() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn campaign_persists_authority_and_rejects_a_mismatched_digest() {
+    let authority = snapshot(
+        vec![admitted("codex", "openai", "gpt-5.6", "xhigh")],
+        &["codex"],
+        false,
+        false,
+        true,
+    );
+    let campaign = CampaignRecord::new(
+        CampaignId::parse("01J00000000000000000000000").unwrap(),
+        Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap(),
+        Some(Sha256Digest::compute(b"policy")),
+        authority.clone(),
+    );
+
+    assert_eq!(campaign.command_authority(), &authority);
+    assert_eq!(campaign.command_authority_digest(), &authority.digest());
+    let round_trip: CampaignRecord =
+        serde_json::from_value(serde_json::to_value(&campaign).unwrap()).unwrap();
+    assert_eq!(round_trip, campaign);
+
+    let mut corrupted = serde_json::to_value(&campaign).unwrap();
+    corrupted["command_authority_digest"] = serde_json::json!("f".repeat(64));
+    assert!(serde_json::from_value::<CampaignRecord>(corrupted).is_err());
 }

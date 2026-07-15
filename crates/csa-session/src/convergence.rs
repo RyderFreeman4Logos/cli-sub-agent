@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use ulid::Ulid;
 
 mod authority;
+mod campaign;
 mod discovery;
 mod evidence;
 mod finalization;
@@ -274,13 +275,14 @@ impl GitObjectId {
 impl_validated_string!(GitObjectId);
 
 /// Immutable metadata snapshot for a convergence campaign.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CampaignRecord {
     id: CampaignId,
     created_at: DateTime<Utc>,
     policy_digest: Option<Sha256Digest>,
-    catalog_digest: Option<Sha256Digest>,
+    command_authority: CommandAuthoritySnapshot,
+    command_authority_digest: Sha256Digest,
 }
 
 impl CampaignRecord {
@@ -290,14 +292,36 @@ impl CampaignRecord {
         id: CampaignId,
         created_at: DateTime<Utc>,
         policy_digest: Option<Sha256Digest>,
-        catalog_digest: Option<Sha256Digest>,
+        command_authority: CommandAuthoritySnapshot,
     ) -> Self {
+        let command_authority_digest = command_authority.digest();
         Self {
             id,
             created_at,
             policy_digest,
-            catalog_digest,
+            command_authority,
+            command_authority_digest,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        id: CampaignId,
+        created_at: DateTime<Utc>,
+        policy_digest: Option<Sha256Digest>,
+    ) -> Self {
+        let authority = CommandAuthoritySnapshot::new(
+            CommandAuthoritySource::direct("test fixture").expect("test source"),
+            CommandAuthorityPolicy::new(false, Vec::new(), false, true).expect("test policy"),
+            CommandAuthorityCatalogIdentity::new("test catalog", "v1")
+                .expect("test catalog identity"),
+            vec![
+                AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high")
+                    .expect("test admitted identity"),
+            ],
+        )
+        .expect("test authority");
+        Self::new(id, created_at, policy_digest, authority)
     }
 
     /// Return the campaign identifier.
@@ -318,10 +342,16 @@ impl CampaignRecord {
         self.policy_digest.as_ref()
     }
 
-    /// Return the optional model catalog snapshot digest.
+    /// Return the canonical command authority captured for this campaign.
     #[must_use]
-    pub fn catalog_digest(&self) -> Option<&Sha256Digest> {
-        self.catalog_digest.as_ref()
+    pub fn command_authority(&self) -> &CommandAuthoritySnapshot {
+        &self.command_authority
+    }
+
+    /// Return the verified digest of the canonical command authority.
+    #[must_use]
+    pub fn command_authority_digest(&self) -> &Sha256Digest {
+        &self.command_authority_digest
     }
 }
 

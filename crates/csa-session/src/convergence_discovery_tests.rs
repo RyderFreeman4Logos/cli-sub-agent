@@ -30,11 +30,10 @@ fn oid(fill: char) -> GitObjectId {
 }
 
 fn campaign(id: &str) -> CampaignRecord {
-    CampaignRecord::new(
+    CampaignRecord::for_test(
         CampaignId::parse(id).unwrap(),
         Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap(),
         Some(digest('d')),
-        Some(digest('e')),
     )
 }
 
@@ -263,7 +262,7 @@ fn discovery_reducer_validates_ledger_campaign_epoch_and_snapshot_digests_first(
         campaign.id().clone(),
         Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 1).unwrap(),
         campaign.policy_digest().cloned(),
-        campaign.catalog_digest().cloned(),
+        campaign.command_authority().clone(),
     );
     assert!(
         next_discovery_directive(
@@ -287,28 +286,23 @@ fn discovery_reducer_validates_ledger_campaign_epoch_and_snapshot_digests_first(
         .is_err()
     );
 
-    for (policy, catalog) in [
-        (None, campaign.catalog_digest().cloned()),
-        (campaign.policy_digest().cloned(), None),
-    ] {
-        let missing = CampaignRecord::new(
-            campaign.id().clone(),
-            *campaign.created_at(),
-            policy,
-            catalog,
-        );
-        let mut missing_ledger = ConvergenceLedger::empty();
-        open(&mut missing_ledger, &missing, &epoch);
-        assert!(
-            next_discovery_directive(
-                &missing_ledger,
-                &missing,
-                &epoch,
-                std::slice::from_ref(&expected),
-            )
-            .is_err()
-        );
-    }
+    let missing = CampaignRecord::new(
+        campaign.id().clone(),
+        *campaign.created_at(),
+        None,
+        campaign.command_authority().clone(),
+    );
+    let mut missing_ledger = ConvergenceLedger::empty();
+    open(&mut missing_ledger, &missing, &epoch);
+    assert!(
+        next_discovery_directive(
+            &missing_ledger,
+            &missing,
+            &epoch,
+            std::slice::from_ref(&expected),
+        )
+        .is_err()
+    );
 }
 
 #[test]

@@ -134,7 +134,7 @@ fn ledger(events: Vec<ConvergenceEvent>) -> ConvergenceLedger {
 
 fn campaign_start() -> ConvergenceEvent {
     let id = campaign_id();
-    ConvergenceEvent::CampaignStarted(CampaignRecord::new(id, at(0), None, None))
+    ConvergenceEvent::CampaignStarted(CampaignRecord::for_test(id, at(0), None))
 }
 
 fn discovery_history(
