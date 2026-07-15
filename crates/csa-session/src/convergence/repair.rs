@@ -218,6 +218,7 @@ impl RootClusterRecord {
 pub struct RepairBatchRecord {
     id: RepairBatchId,
     root_cluster_id: RootClusterId,
+    root_cluster_content_digest: Sha256Digest,
     epoch_id: EpochId,
     candidate_ids: Vec<CandidateId>,
     candidate_set_digest: Sha256Digest,
@@ -242,6 +243,7 @@ impl RepairBatchRecord {
     )]
     pub fn new(
         root_cluster_id: RootClusterId,
+        root_cluster_content_digest: Sha256Digest,
         epoch_id: EpochId,
         candidate_ids: Vec<CandidateId>,
         disposition_set_digest: Sha256Digest,
@@ -264,7 +266,7 @@ impl RepairBatchRecord {
             canonical_work_items("repair sibling call site", sibling_call_sites)?;
         let candidate_set_digest = candidate_set_digest(&candidate_ids);
         let content_digest = repair_batch_content_digest(
-            &root_cluster_id,
+            &root_cluster_content_digest,
             &epoch_id,
             &candidate_set_digest,
             &disposition_set_digest,
@@ -277,6 +279,7 @@ impl RepairBatchRecord {
         Ok(Self {
             id: RepairBatchId::generate(),
             root_cluster_id,
+            root_cluster_content_digest,
             epoch_id,
             candidate_ids,
             candidate_set_digest,
@@ -300,6 +303,12 @@ impl RepairBatchRecord {
     #[must_use]
     pub fn root_cluster_id(&self) -> &RootClusterId {
         &self.root_cluster_id
+    }
+
+    /// Return the canonical content digest of the sole root cluster.
+    #[must_use]
+    pub fn root_cluster_content_digest(&self) -> &Sha256Digest {
+        &self.root_cluster_content_digest
     }
 
     /// Return the immutable epoch represented by this batch.
@@ -388,7 +397,7 @@ impl RepairBatchRecord {
             }
         }
         let content_digest = repair_batch_content_digest(
-            &self.root_cluster_id,
+            &self.root_cluster_content_digest,
             &self.epoch_id,
             &self.candidate_set_digest,
             &self.disposition_set_digest,
@@ -424,6 +433,7 @@ pub struct RepairHandoffRecord {
     campaign_id: CampaignId,
     epoch_id: EpochId,
     repair_batch_id: RepairBatchId,
+    repair_batch_content_digest: Sha256Digest,
     command_authority_digest: Sha256Digest,
     candidate_set_digest: Sha256Digest,
     disposition_set_digest: Sha256Digest,
@@ -444,6 +454,7 @@ impl RepairHandoffRecord {
         campaign_id: CampaignId,
         epoch_id: EpochId,
         repair_batch_id: RepairBatchId,
+        repair_batch_content_digest: Sha256Digest,
         command_authority_digest: Sha256Digest,
         candidate_set_digest: Sha256Digest,
         disposition_set_digest: Sha256Digest,
@@ -454,7 +465,7 @@ impl RepairHandoffRecord {
         let content_digest = repair_handoff_content_digest(
             &campaign_id,
             &epoch_id,
-            &repair_batch_id,
+            &repair_batch_content_digest,
             &command_authority_digest,
             &candidate_set_digest,
             &disposition_set_digest,
@@ -467,6 +478,7 @@ impl RepairHandoffRecord {
             campaign_id,
             epoch_id,
             repair_batch_id,
+            repair_batch_content_digest,
             command_authority_digest,
             candidate_set_digest,
             disposition_set_digest,
@@ -499,6 +511,12 @@ impl RepairHandoffRecord {
     #[must_use]
     pub fn repair_batch_id(&self) -> &RepairBatchId {
         &self.repair_batch_id
+    }
+
+    /// Return the canonical content digest of the sole repair batch.
+    #[must_use]
+    pub fn repair_batch_content_digest(&self) -> &Sha256Digest {
+        &self.repair_batch_content_digest
     }
 
     /// Return the frozen command authority digest required before writer launch.
@@ -551,7 +569,7 @@ impl RepairHandoffRecord {
         let content_digest = repair_handoff_content_digest(
             &self.campaign_id,
             &self.epoch_id,
-            &self.repair_batch_id,
+            &self.repair_batch_content_digest,
             &self.command_authority_digest,
             &self.candidate_set_digest,
             &self.disposition_set_digest,
@@ -624,7 +642,7 @@ fn root_cluster_content_digest(
     reason = "the entire repair union is digest-bound"
 )]
 fn repair_batch_content_digest(
-    root_cluster_id: &RootClusterId,
+    root_cluster_content_digest: &Sha256Digest,
     epoch_id: &EpochId,
     candidate_set_digest: &Sha256Digest,
     disposition_set_digest: &Sha256Digest,
@@ -635,7 +653,7 @@ fn repair_batch_content_digest(
     sibling_call_sites: &[String],
 ) -> Sha256Digest {
     let mut fields = vec![
-        root_cluster_id.as_str(),
+        root_cluster_content_digest.as_str(),
         epoch_id.as_str(),
         candidate_set_digest.as_str(),
         disposition_set_digest.as_str(),
@@ -660,7 +678,7 @@ fn repair_batch_content_digest(
 fn repair_handoff_content_digest(
     campaign_id: &CampaignId,
     epoch_id: &EpochId,
-    repair_batch_id: &RepairBatchId,
+    repair_batch_content_digest: &Sha256Digest,
     command_authority_digest: &Sha256Digest,
     candidate_set_digest: &Sha256Digest,
     disposition_set_digest: &Sha256Digest,
@@ -673,7 +691,7 @@ fn repair_handoff_content_digest(
         &[
             campaign_id.as_str(),
             epoch_id.as_str(),
-            repair_batch_id.as_str(),
+            repair_batch_content_digest.as_str(),
             command_authority_digest.as_str(),
             candidate_set_digest.as_str(),
             disposition_set_digest.as_str(),

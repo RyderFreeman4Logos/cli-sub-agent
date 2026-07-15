@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 
 use super::{
-    AdmittedModelIdentity, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId, CandidateDisposition,
-    CandidateId, CommandAuthoritySnapshot, ConvergenceEvent, ConvergenceLedgerEntry,
-    CoverageCellId, CoverageRequirement, CsaSessionId, DiscoveryAttemptId, EpochId, LedgerEventId,
-    RepairBatchId, RepairHandoffId, RootClusterId, StableFindingId,
+    AdmittedModelIdentity, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
+    CandidateDispositionRecord, CandidateId, CommandAuthoritySnapshot, ConvergenceEvent,
+    ConvergenceLedgerEntry, CoverageCellId, CoverageRequirement, CsaSessionId, DiscoveryAttemptId,
+    EpochId, LedgerEventId, RepairBatchId, RepairHandoffId, RootClusterId, StableFindingId,
 };
 
 #[path = "validation_disposition.rs"]
@@ -42,6 +42,9 @@ pub(super) fn validate_ledger(
             bail!("duplicate convergence ledger event id {}", entry.event_id());
         }
         apply_event(&mut campaigns, entry)?;
+    }
+    for (campaign_id, state) in &campaigns {
+        repair_validation::validate_complete_clustering(campaign_id, state)?;
     }
     Ok(())
 }
@@ -415,7 +418,7 @@ fn apply_event(
             )?;
             state
                 .dispositions
-                .insert(record.candidate_id().clone(), record.disposition().clone());
+                .insert(record.candidate_id().clone(), record.clone());
             state
                 .disposed_candidates
                 .insert(record.candidate_id().clone());
@@ -476,9 +479,11 @@ struct CampaignState {
     candidates: HashMap<CandidateId, CandidateState>,
     canonical_candidates: HashMap<StableFindingId, CandidateId>,
     disposed_candidates: HashSet<CandidateId>,
-    dispositions: HashMap<CandidateId, CandidateDisposition>,
+    dispositions: HashMap<CandidateId, CandidateDispositionRecord>,
     root_clusters: HashMap<RootClusterId, RootClusterState>,
+    clustered_blocking_candidates: HashSet<CandidateId>,
     repair_batches: HashMap<RepairBatchId, RepairBatchState>,
+    repair_batches_by_cluster: HashMap<RootClusterId, RepairBatchId>,
     repair_handoffs: HashSet<RepairHandoffId>,
 }
 
@@ -495,7 +500,9 @@ impl CampaignState {
             disposed_candidates: HashSet::new(),
             dispositions: HashMap::new(),
             root_clusters: HashMap::new(),
+            clustered_blocking_candidates: HashSet::new(),
             repair_batches: HashMap::new(),
+            repair_batches_by_cluster: HashMap::new(),
             repair_handoffs: HashSet::new(),
         }
     }
@@ -524,12 +531,15 @@ struct CandidateState {
 
 struct RootClusterState {
     epoch_id: EpochId,
+    candidate_ids: Vec<CandidateId>,
     candidate_set_digest: super::Sha256Digest,
     disposition_set_digest: super::Sha256Digest,
+    content_digest: super::Sha256Digest,
 }
 
 struct RepairBatchState {
     epoch_id: EpochId,
     candidate_set_digest: super::Sha256Digest,
     disposition_set_digest: super::Sha256Digest,
+    content_digest: super::Sha256Digest,
 }

@@ -1,4 +1,5 @@
 pub(super) mod bundle;
+mod clustering;
 mod continuation;
 mod coverage;
 pub(super) mod engine;
@@ -187,18 +188,28 @@ pub(super) async fn run_command(
                 );
                 verification::verify_campaign(&store, &campaign, &epoch, &frozen, &mut verifier)
                     .await
-                    .map_err(anyhow::Error::from)
+                    .map_err(anyhow::Error::from)?;
+                clustering::cluster_verified_findings(
+                    &store,
+                    &campaign,
+                    &epoch,
+                    &frozen,
+                    &mut verifier,
+                )
+                .await
+                .map_err(anyhow::Error::from)
             }
             .await;
             match verification {
-                Ok(verification) => {
+                Ok(clustering) => {
                     println!(
                         "{}",
                         serde_json::json!({
-                            "kind": "convergence_verification_complete",
+                            "kind": "convergence_clustering_complete",
                             "discovery": summary,
-                            "canonical_candidates": verification.canonical_candidates,
-                            "terminal_dispositions": verification.terminal_dispositions,
+                            "root_clusters": clustering.root_clusters,
+                            "repair_batches": clustering.repair_batches,
+                            "blocking_candidates": clustering.blocking_candidates,
                             "review_verdict": null,
                             "merge_attestation": false,
                         })

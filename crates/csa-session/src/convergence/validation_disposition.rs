@@ -84,7 +84,7 @@ pub(super) fn validate_candidate_relation(
         }
         if matches!(
             state.dispositions.get(target_id),
-            Some(CandidateDisposition::Duplicate { .. })
+            Some(record) if matches!(record.disposition(), CandidateDisposition::Duplicate { .. })
         ) {
             bail!(
                 "candidate {} cannot duplicate noncanonical duplicate target {} in campaign {}",

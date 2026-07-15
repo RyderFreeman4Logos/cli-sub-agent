@@ -11,10 +11,11 @@ use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CsaSessionId, SessionRelativeArtifactPath,
     Sha256Digest,
 };
-use csa_session::{get_session_dir, publish_session_output_artifact};
+use csa_session::{get_session_dir, publish_session_output_artifact, read_session_output_artifact};
 
 use crate::pipeline::SessionCreationMode;
 
+use super::clustering::VerificationArtifactReader;
 use super::runner::{ProductionRunnerContext, finalize_frozen_identity};
 use super::verification::{
     CandidateVerificationOutput, CandidateVerificationRequest, CandidateVerifier,
@@ -154,6 +155,28 @@ impl CandidateVerifier for ProductionVerificationRunner<'_> {
         request: CandidateVerificationRequest,
     ) -> Pin<Box<dyn Future<Output = Result<CandidateVerificationOutput>> + 'a>> {
         Box::pin(self.execute(request))
+    }
+}
+
+impl VerificationArtifactReader for ProductionVerificationRunner<'_> {
+    fn read_verifier_artifact<'a>(
+        &'a mut self,
+        artifact: &'a ArtifactEvidenceRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>> {
+        let result = (|| {
+            self.context.provider_bundle.verify()?;
+            let session_dir = get_session_dir(
+                &self.context.provider_bundle.root(),
+                artifact.csa_session_id().as_str(),
+            )?;
+            let file_name = artifact
+                .path()
+                .as_str()
+                .strip_prefix("output/")
+                .context("candidate verifier artifact is outside the output directory")?;
+            read_session_output_artifact(&session_dir, file_name)
+        })();
+        Box::pin(async move { result })
     }
 }
 
