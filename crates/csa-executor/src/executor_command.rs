@@ -46,6 +46,29 @@ impl Executor {
         )
     }
 
+    pub(crate) fn build_clean_command(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        contract: &crate::command_isolation::CleanCommandContract,
+    ) -> Result<(Command, Option<Vec<u8>>)> {
+        let _exact_delivery = contract.prompt_delivery();
+        let mut command = Command::new(contract.program().as_path());
+        command.current_dir(contract.working_directory().as_path());
+        let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
+        self.append_tool_args_with_transport(
+            &mut command,
+            prompt,
+            tool_state,
+            prompt_transport,
+            &[],
+        );
+        if matches!(self, Self::Codex { .. }) {
+            command = Self::sanitize_codex_command_args(command);
+        }
+        Ok((command, stdin_data))
+    }
+
     pub(crate) fn build_command_with_git_push_allowed(
         &self,
         prompt: &str,

@@ -20,7 +20,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1096"
+version = "0.1.1097"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -72,6 +72,7 @@ sysinfo = "0.38"
 which = "8.0"
 libc = "0.2"
 tempfile = "3.10"
+tar = { version = "0.4", default-features = false }
 
 # Utilities
 regex = "1.11"

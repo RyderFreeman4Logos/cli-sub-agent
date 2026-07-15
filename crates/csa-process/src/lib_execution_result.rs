@@ -1,4 +1,23 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// Provenance-aware classification of how a provider model turn ended.
+///
+/// This classification is derived from explicit transport evidence and does
+/// not treat a successful process exit or output presence as proof that the
+/// provider reached a natural stopping point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderTurnCompletion {
+    /// The provider explicitly reported a natural end to the model turn.
+    Natural,
+    /// The provider explicitly reported a terminal but non-natural limit or refusal.
+    TerminalNonNatural,
+    /// The model turn was interrupted or the provider process was signal-killed.
+    Incomplete,
+    /// Explicit evidence is absent, ambiguous, or not recognized.
+    #[default]
+    Unknown,
+}
 
 /// Result of executing a command.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -78,6 +97,29 @@ pub struct ExecutionResult {
 }
 
 impl ExecutionResult {
+    /// Classify provider-turn completion from existing explicit evidence.
+    ///
+    /// An explicit incomplete boolean or process signal takes precedence over
+    /// any terminal reason. Otherwise, only recognized transport reasons are
+    /// classified; exit status, output, and `model_completed == Some(true)` do
+    /// not independently establish natural completion.
+    pub fn provider_turn_completion(&self) -> ProviderTurnCompletion {
+        if self.model_completed == Some(false) || self.exit_signal.is_some() {
+            return ProviderTurnCompletion::Incomplete;
+        }
+
+        match self.terminal_reason.as_deref() {
+            Some("end_turn" | "turn.completed" | "success") => ProviderTurnCompletion::Natural,
+            Some("max_tokens" | "max_turn_requests" | "refusal") => {
+                ProviderTurnCompletion::TerminalNonNatural
+            }
+            Some(
+                "cancelled" | "idle_timeout" | "initial_response_timeout" | "error" | "failed",
+            ) => ProviderTurnCompletion::Incomplete,
+            _ => ProviderTurnCompletion::Unknown,
+        }
+    }
+
     /// Mark a CSA-own deterministic gate as failed: force the effective `exit_code`
     /// to `1` and record an explicit failure `reason` so the outcome classifier treats
     /// this session as authoritative-fatal (never downgraded to success-with-warnings).

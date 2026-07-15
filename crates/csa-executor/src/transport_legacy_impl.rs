@@ -16,6 +16,72 @@ impl Transport for LegacyTransport {
         }
     }
 
+    fn clean_room_capability(&self) -> crate::command_isolation::CleanRoomCapability {
+        use crate::command_isolation::CleanRoomCapability;
+        match &self.executor {
+            Executor::Codex { .. } if self.executor.codex_tmux_mode_enabled() => {
+                CleanRoomCapability::Unsupported {
+                    reason: "Codex tmux transport adds an untyped wrapper",
+                }
+            }
+            Executor::Codex { .. } | Executor::Opencode { .. } => {
+                CleanRoomCapability::ExactPromptAndClearedEnvironment
+            }
+            _ => CleanRoomCapability::Unsupported {
+                reason: "legacy clean-room execution is implemented only for Codex and OpenCode",
+            },
+        }
+    }
+
+    async fn execute_with_command_isolation(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
+        options: TransportOptions<'_>,
+        policy: &crate::command_isolation::CommandIsolationPolicy,
+    ) -> Result<TransportResult> {
+        use crate::command_isolation::{
+            CleanRoomCapability, CommandIsolationError, CommandIsolationPolicy,
+        };
+        let CommandIsolationPolicy::CleanRoom(contract) = policy else {
+            return self
+                .execute(prompt, tool_state, session, extra_env, options)
+                .await;
+        };
+        if let CleanRoomCapability::Unsupported { reason } = self.clean_room_capability() {
+            return Err(CommandIsolationError::Unsupported { reason }.into());
+        }
+        let invalid = extra_env.is_some()
+            || options.subtree_pin.is_some()
+            || options.allow_git_push
+            || options.setting_sources.is_some()
+            || options.sandbox.is_some_and(|sandbox| {
+                sandbox.best_effort || !sandbox.isolation_plan.degraded_reasons.is_empty()
+            });
+        if invalid {
+            return Err(CommandIsolationError::InvalidRequest {
+                reason: "legacy transport received a second authority or fallback channel",
+            }
+            .into());
+        }
+        self.execute_single_attempt(
+            &self.executor,
+            prompt,
+            tool_state,
+            session,
+            LegacyAttemptEnv {
+                extra_env: None,
+                gemini_shared_npm_cache_raw_path: None,
+                gemini_shared_npm_cache_source: None,
+                clean_contract: Some(contract),
+            },
+            options,
+        )
+        .await
+    }
+
     async fn execute(
         &self,
         prompt: &str,
@@ -94,6 +160,7 @@ impl Transport for LegacyTransport {
                             gemini_shared_npm_cache_raw_path: gemini_shared_npm_cache_raw_path
                                 .as_deref(),
                             gemini_shared_npm_cache_source,
+                            clean_contract: None,
                         },
                         options.clone(),
                     )
@@ -240,6 +307,7 @@ impl Transport for LegacyTransport {
                                     gemini_shared_npm_cache_raw_path: gemini_shared_npm_cache_raw_path
                                         .as_deref(),
                                     gemini_shared_npm_cache_source,
+                                    clean_contract: None,
                                 },
                                 retry_options,
                             )

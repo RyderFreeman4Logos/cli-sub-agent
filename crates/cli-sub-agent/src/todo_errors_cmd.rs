@@ -187,36 +187,9 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_session_sandbox::ScopedSessionSandbox;
     use chrono::{Duration, TimeZone};
     use csa_session::SessionResult;
-    use std::ffi::{OsStr, OsString};
-    use std::path::PathBuf;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-            let original = std::env::var_os(key);
-            // SAFETY: callers are serialized tests that restore the variable on drop.
-            unsafe { std::env::set_var(key, value) };
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: callers are serialized tests that restore the variable on drop.
-            unsafe {
-                match self.original.as_deref() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
 
     fn session_result(status: &str, exit_code: i32, summary: &str, tool: &str) -> SessionResult {
         let started_at = Utc
@@ -262,19 +235,12 @@ mod tests {
         session
     }
 
-    fn setup_state(tmp: &Path) -> (EnvVarGuard, EnvVarGuard, PathBuf) {
-        let home_guard = EnvVarGuard::set("HOME", tmp);
-        let state_guard = EnvVarGuard::set("XDG_STATE_HOME", tmp.join(".local/state"));
-        let project = tmp.join("project");
-        std::fs::create_dir_all(&project).expect("create project");
-        (home_guard, state_guard, project)
-    }
-
     #[test]
-    #[serial_test::serial]
     fn plan_error_rows_include_only_failed_sessions_for_plan() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let (_home_guard, _state_guard, project) = setup_state(tmp.path());
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).expect("create project");
         let manager = TodoManager::new(&project).expect("todo manager");
         let plan = manager
             .create("Error aggregation", Some("feat/errors"))
@@ -320,10 +286,11 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn plan_error_rows_include_sessions_explicitly_linked_to_plan() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let (_home_guard, _state_guard, project) = setup_state(tmp.path());
+        let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).expect("create project");
         let manager = TodoManager::new(&project).expect("todo manager");
         let plan = manager
             .create("Linked session", Some("feat/errors"))

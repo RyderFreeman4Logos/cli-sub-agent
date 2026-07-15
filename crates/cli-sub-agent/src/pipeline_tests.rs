@@ -89,10 +89,9 @@ fn final_executor_validation_preserves_configured_warning_for_dispatch() {
         Some(csa_executor::ThinkingBudget::High),
     );
 
-    let admission = validate_final_executor_identity(&executor, None, None, &catalog)
-        .unwrap()
-        .expect("model override should be validated");
-    let warning = admission
+    let validated = validate_final_executor_identity(&executor, None, None, &catalog).unwrap();
+    let warning = validated
+        .catalog_admission
         .warning()
         .expect("configured warning must reach final dispatch");
     assert!(warning.to_string().contains("gpt-future-dispatch"));

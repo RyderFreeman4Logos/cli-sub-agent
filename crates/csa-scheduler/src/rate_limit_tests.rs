@@ -689,8 +689,6 @@ fn test_quota_exhausted_patterns_do_not_set_quota_from_stdout() {
     }
 }
 
-// --- #1473: codex quota error in stdout JSON triggers failover ---
-
 #[test]
 fn test_codex_usage_limit_in_stdout_json_triggers_failover() {
     let detected = detect_rate_limit(
@@ -733,17 +731,12 @@ fn test_codex_usage_limit_in_stderr_sets_quota_exhausted() {
 }
 
 #[test]
-fn test_transient_rate_limit_patterns_still_match_stdout() {
-    let detected = detect_rate_limit(
-        "codex",
-        "process exited with status 1",
-        "HTTP 429 Too Many Requests",
-        1,
-        None,
-    )
-    .expect("transient stdout rate limit should still classify");
-
-    assert_eq!(detected.matched_pattern, "429");
+fn test_codex_bare_429_requires_http_status_context() {
+    let path_error = detect_rate_limit("codex", "/tmp/csa-worktree-lock-429-probe", "", 1, None);
+    assert!(path_error.is_none());
+    let detected =
+        detect_rate_limit("codex", "", "statusCode: 429", 1, None).expect("contextual 429");
+    assert_eq!(detected.matched_pattern, "statuscode 429");
     assert_eq!(detected.reason, "HTTP 429");
     assert!(!detected.quota_exhausted);
 }

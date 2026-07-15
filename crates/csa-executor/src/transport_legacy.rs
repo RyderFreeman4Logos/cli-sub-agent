@@ -28,6 +28,7 @@ struct LegacyAttemptEnv<'a> {
     extra_env: Option<&'a HashMap<String, String>>,
     gemini_shared_npm_cache_raw_path: Option<&'a Path>,
     gemini_shared_npm_cache_source: Option<transport_gemini_helpers::GeminiSharedNpmCacheSource>,
+    clean_contract: Option<&'a crate::command_isolation::CleanCommandContract>,
 }
 
 impl LegacyTransport {
@@ -163,20 +164,29 @@ impl LegacyTransport {
         attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        let clean_contract = attempt_env.clean_contract;
         // Stage the antigravity-cli `model` field in
         // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,
         // and hold the RAII guard so the original contents are restored
         // when this function returns (#1620). For all other executors this
         // is `None` and a no-op.
-        let _antigravity_guard = executor.antigravity_settings_guard()?;
-        let (cmd, stdin_data) = executor.build_command_with_git_push_allowed(
-            prompt,
-            tool_state,
-            session,
-            attempt_env.extra_env,
-            options.subtree_pin.as_ref(),
-            options.allow_git_push,
-        );
+        let _antigravity_guard = clean_contract
+            .is_none()
+            .then(|| executor.antigravity_settings_guard())
+            .transpose()?
+            .flatten();
+        let (cmd, stdin_data) = if let Some(contract) = clean_contract {
+            executor.build_clean_command(prompt, tool_state, contract)?
+        } else {
+            executor.build_command_with_git_push_allowed(
+                prompt,
+                tool_state,
+                session,
+                attempt_env.extra_env,
+                options.subtree_pin.as_ref(),
+                options.allow_git_push,
+            )
+        };
 
         let gemini_sandbox_plan = options
             .sandbox
@@ -231,18 +241,31 @@ impl LegacyTransport {
             Self::consume_resolved_transport_initial_response_timeout_seconds(
                 options.initial_response_timeout,
             );
-        let (child, sandbox_handle) = match spawn_tool_sandboxed(
-            cmd,
-            stdin_data.clone(),
-            spawn_options,
-            isolation_plan,
-            tool_name,
-            session_id,
-        )
-        .await
-        {
+        let spawned = if let Some(contract) = clean_contract {
+            csa_process::spawn_tool_sandboxed_in_environment(
+                cmd,
+                stdin_data.clone(),
+                spawn_options,
+                isolation_plan,
+                tool_name,
+                session_id,
+                contract.environment(),
+            )
+            .await
+        } else {
+            spawn_tool_sandboxed(
+                cmd,
+                stdin_data.clone(),
+                spawn_options,
+                isolation_plan,
+                tool_name,
+                session_id,
+            )
+            .await
+        };
+        let (child, sandbox_handle) = match spawned {
             Ok(result) => result,
-            Err(e) if best_effort => {
+            Err(e) if best_effort && clean_contract.is_none() => {
                 tracing::warn!(
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );

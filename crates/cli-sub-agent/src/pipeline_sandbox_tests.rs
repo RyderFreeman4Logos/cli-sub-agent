@@ -407,6 +407,138 @@ fn test_none_config_heavyweight_gets_sandbox() {
     }
 }
 
+#[test]
+fn clean_room_sandbox_fails_closed_on_missing_or_degraded_capability() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project");
+    let session = temp.path().join("state/session");
+    let evidence = temp.path().join("evidence.md");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::create_dir_all(&session).expect("session");
+    std::fs::write(&evidence, "evidence").expect("evidence");
+    let config = parse_project_config(
+        r#"
+[resources]
+min_free_memory_mb = 1
+enforcement_mode = "best-effort"
+"#,
+    );
+    let input = CleanRoomSandboxInput {
+        config: Some(&config),
+        tool_name: "opencode",
+        session_id: "clean-session",
+        project_root: &project,
+        evidence_bundle: &evidence,
+        session_dir: &session,
+        idle_timeout_seconds: 30,
+        initial_response_timeout_seconds: Some(10),
+    };
+
+    assert!(
+        resolve_clean_room_sandbox_options_with_capabilities(
+            input,
+            RunResourceOverrides::default(),
+            csa_resource::FilesystemCapability::None,
+            csa_resource::ResourceCapability::None,
+        )
+        .is_err(),
+        "missing filesystem isolation must fail closed"
+    );
+    assert!(
+        resolve_clean_room_sandbox_options_with_capabilities(
+            input,
+            RunResourceOverrides::default(),
+            csa_resource::FilesystemCapability::Bwrap,
+            csa_resource::ResourceCapability::None,
+        )
+        .is_err(),
+        "resource best-effort degradation must fail closed"
+    );
+}
+
+#[test]
+fn clean_room_sandbox_plan_is_strict_readonly_and_has_exact_exposures() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project");
+    let session = temp.path().join("state/session");
+    let evidence = temp.path().join("evidence.md");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::create_dir_all(&session).expect("session");
+    std::fs::write(&evidence, "evidence").expect("evidence");
+    let config = parse_project_config(
+        r#"
+[resources]
+min_free_memory_mb = 1
+enforcement_mode = "off"
+"#,
+    );
+
+    let options = resolve_clean_room_sandbox_options_with_capabilities(
+        CleanRoomSandboxInput {
+            config: Some(&config),
+            tool_name: "opencode",
+            session_id: "clean-session",
+            project_root: &project,
+            evidence_bundle: &evidence,
+            session_dir: &session,
+            idle_timeout_seconds: 30,
+            initial_response_timeout_seconds: Some(10),
+        },
+        RunResourceOverrides::default(),
+        csa_resource::FilesystemCapability::Bwrap,
+        csa_resource::ResourceCapability::None,
+    )
+    .expect("strict clean-room plan");
+    let sandbox = options.sandbox.expect("required sandbox context");
+    let plan = sandbox.isolation_plan;
+
+    assert!(!sandbox.best_effort);
+    assert!(plan.readonly_project_root);
+    assert_eq!(plan.project_root.as_deref(), Some(project.as_path()));
+    assert!(!plan.user_daemon_ipc);
+    assert!(plan.degraded_reasons.is_empty());
+    assert!(plan.env_overrides.is_empty());
+    assert_eq!(plan.readable_paths, vec![evidence.canonicalize().unwrap()]);
+    assert_eq!(
+        plan.writable_paths,
+        vec![
+            project.canonicalize().unwrap(),
+            session.canonicalize().unwrap()
+        ]
+    );
+}
+
+#[test]
+fn clean_room_sandbox_rejects_read_write_overlap_before_spawn() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project");
+    let session = temp.path().join("state/session");
+    std::fs::create_dir_all(&project).expect("project");
+    std::fs::create_dir_all(&session).expect("session");
+    let config =
+        parse_project_config("[resources]\nmin_free_memory_mb = 1\nenforcement_mode = \"off\"\n");
+    let input = CleanRoomSandboxInput {
+        config: Some(&config),
+        tool_name: "opencode",
+        session_id: "clean-session",
+        project_root: &project,
+        evidence_bundle: &session,
+        session_dir: &session,
+        idle_timeout_seconds: 30,
+        initial_response_timeout_seconds: Some(10),
+    };
+
+    assert!(
+        resolve_clean_room_sandbox_options_with_capabilities(
+            input,
+            RunResourceOverrides::default(),
+            csa_resource::FilesystemCapability::Bwrap,
+            csa_resource::ResourceCapability::None,
+        )
+        .is_err()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Per-tool filesystem sandbox integration tests
 include!("pipeline_sandbox_tests_tail.rs");

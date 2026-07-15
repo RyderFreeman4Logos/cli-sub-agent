@@ -17,6 +17,12 @@ use std::{
     time::Duration,
 };
 use tracing::{info, warn};
+#[path = "pipeline_session_exec_clean_room.rs"]
+mod clean_room;
+#[path = "pipeline_session_exec_clean_room_completion.rs"]
+mod clean_room_completion;
+#[path = "pipeline_session_exec_runtime_contract.rs"]
+mod runtime_contract;
 #[path = "pipeline_session_exec_api.rs"]
 mod session_exec_api;
 #[path = "pipeline_session_exec_audit.rs"]
@@ -51,9 +57,43 @@ use self::session_exec_pre_exec::{
     PipelinePreExecFailureDetails, check_resources_before_spawn, persist_pipeline_pre_exec_failure,
     write_fatal_error_marker_sidecar,
 };
+use clean_room::execute_clean_room_session_core;
+#[cfg(test)]
+pub(crate) use clean_room::{
+    CleanRoomSandboxInput, resolve_clean_room_sandbox_options_with_capabilities,
+};
 pub(crate) use session_exec_api::execute_with_session;
 #[cfg(test)]
 pub(crate) use session_exec_api::execute_with_session_and_meta;
+pub(crate) use session_exec_api::{
+    CleanRoomExecutionContract, CleanRoomExecutionLimits, execute_clean_room_session,
+};
+
+#[cfg(test)]
+pub(crate) struct CleanRoomPolicyEffects {
+    pub(crate) bootstrap: &'static [&'static str],
+    pub(crate) runtime: &'static [&'static str],
+    pub(crate) completion: &'static [&'static str],
+    pub(crate) forbidden: &'static [&'static str],
+}
+
+#[cfg(test)]
+pub(crate) fn clean_room_execution_policy_effects() -> CleanRoomPolicyEffects {
+    let _legacy_bootstrap_effects = session_exec_bootstrap::BootstrapPlan::Legacy.effect_names();
+    let _legacy_runtime_effects = clean_room::RuntimePlan::Legacy.effect_names();
+    let _legacy_completion_effects = clean_room_completion::CompletionPlan::Legacy.effect_names();
+    CleanRoomPolicyEffects {
+        bootstrap: session_exec_bootstrap::BootstrapPlan::CleanRoom.effect_names(),
+        runtime: clean_room::RuntimePlan::CleanRoom.effect_names(),
+        completion: clean_room_completion::CompletionPlan::CleanRoom.effect_names(),
+        forbidden: &[],
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn clean_room_runtime_prompt_for_test(prompt: &str) -> String {
+    prompt.to_owned()
+}
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]

@@ -13,6 +13,35 @@ use crate::pipeline::{ParentSessionSource, SessionCreationMode};
 use crate::run_helpers::truncate_prompt;
 use crate::startup_env::StartupSubtreeEnv;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
+pub(super) enum BootstrapPlan {
+    Legacy,
+    CleanRoom,
+}
+
+#[cfg(test)]
+impl BootstrapPlan {
+    pub(super) const fn effect_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Legacy => &[
+                "setup-recovery",
+                "resume-or-create",
+                "parent-lineage",
+                "continuation-recall",
+            ],
+            Self::CleanRoom => &[
+                "symlink-preflight",
+                "fresh-session",
+                "budget-init",
+                "state-cap",
+                "resource-admission",
+                "slot-reservation",
+            ],
+        }
+    }
+}
+
 pub(super) struct SessionBootstrap {
     pub(super) session: MetaSessionState,
     pub(super) resolved_provider_session_id: Option<String>,
@@ -182,6 +211,53 @@ pub(super) async fn bootstrap_session(
     Ok(SessionBootstrap {
         session,
         resolved_provider_session_id,
+    })
+}
+
+pub(super) fn bootstrap_clean_room_session(
+    tool: &ToolName,
+    project_root: &Path,
+    config: Option<&ProjectConfig>,
+    global_config: Option<&GlobalConfig>,
+    tier_name: Option<&str>,
+) -> Result<SessionBootstrap> {
+    let preflight_check_config = config
+        .map(|cfg| &cfg.preflight.ai_config_symlink_check)
+        .or_else(|| global_config.map(|cfg| &cfg.preflight.ai_config_symlink_check));
+    if let Some(preflight_check_config) = preflight_check_config {
+        crate::preflight_symlink::run_ai_config_symlink_check(
+            project_root,
+            preflight_check_config,
+        )?;
+    }
+    let mut session = create_session_fresh(
+        project_root,
+        Some("clean-room execution"),
+        None,
+        Some(tool.as_str()),
+    )?;
+    session.task_context = csa_session::TaskContext {
+        task_type: None,
+        tier_name: tier_name.map(str::to_string),
+    };
+    let tier_budget = tier_token_budget(config, tier_name);
+    let max_turns = tier_max_turns(config, tier_name);
+    let issue_budget = global_config.map(|cfg| cfg.budget.resolved_max_tokens_per_issue());
+    let allocated_budget = match (tier_budget, issue_budget) {
+        (Some(tier), Some(issue)) => Some(tier.min(issue)),
+        (Some(tier), None) => Some(tier),
+        (None, Some(issue)) => Some(issue),
+        (None, None) => None,
+    };
+    if allocated_budget.is_some() || max_turns.is_some() {
+        let mut budget = csa_session::state::TokenBudget::new(allocated_budget.unwrap_or(u64::MAX));
+        budget.max_turns = max_turns;
+        session.token_budget = Some(budget);
+    }
+    csa_session::save_session(&session).context("persist fresh clean-room session")?;
+    Ok(SessionBootstrap {
+        session,
+        resolved_provider_session_id: None,
     })
 }
 

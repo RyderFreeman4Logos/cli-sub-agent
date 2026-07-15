@@ -7,6 +7,7 @@ use std::time::Duration;
 use tracing::warn;
 
 use csa_core::transport_events::StreamingMetadata;
+use csa_executor::command_isolation::{CleanCommandContract, CommandIsolationPolicy};
 use csa_executor::{ExecuteOptions, Executor, PeakMemoryContext, SessionConfig, TransportResult};
 use csa_session::{
     MetaSessionState, PhaseEvent, SessionPhase, SessionResult, ToolState, save_result, save_session,
@@ -15,6 +16,12 @@ use csa_session::{
 use crate::session_guard::SessionCleanupGuard;
 
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportFailurePolicy {
+    Legacy,
+    CleanRoom,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_transport_with_signal(
@@ -30,6 +37,7 @@ pub(crate) async fn execute_transport_with_signal(
     execution_start_time: chrono::DateTime<chrono::Utc>,
     wall_timeout: Option<Duration>,
 ) -> Result<TransportResult> {
+    let failure_policy = TransportFailurePolicy::Legacy;
     let exec_result = {
         #[cfg(unix)]
         {
@@ -171,6 +179,7 @@ pub(crate) async fn execute_transport_with_signal(
             Ok(result)
         }
         Err(e) => {
+            debug_assert_eq!(failure_policy, TransportFailurePolicy::Legacy);
             // Record a failure result with accurate timing: started_at is when
             // execution began (before ACP init), not "now", fixing the
             // Start == End timing bug for slow failures like ACP init timeout.
@@ -254,6 +263,106 @@ pub(crate) async fn execute_transport_with_signal(
                 cg.defuse();
             }
             Err(e).context("Failed to execute tool via transport")
+        }
+    }
+}
+
+pub(crate) async fn execute_clean_transport_with_signal(
+    executor: &Executor,
+    effective_prompt: &str,
+    session: &MetaSessionState,
+    execute_options: ExecuteOptions,
+    command: CleanCommandContract,
+    execution_start_time: chrono::DateTime<chrono::Utc>,
+    wall_timeout: Option<Duration>,
+) -> Result<TransportResult> {
+    let failure_policy = TransportFailurePolicy::CleanRoom;
+    let exec_result = {
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .context("Failed to register clean-room SIGTERM handler")?;
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .context("Failed to register clean-room SIGINT handler")?;
+            let timeout_future = async {
+                if let Some(timeout) = wall_timeout {
+                    tokio::time::sleep(timeout).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+            tokio::pin!(timeout_future);
+            tokio::select! {
+                _ = sigterm.recv() => Ok(signal_interrupted_transport_result(
+                    143,
+                    Some(libc::SIGTERM),
+                    "sigterm",
+                    "Execution interrupted by SIGTERM",
+                )),
+                _ = sigint.recv() => Ok(signal_interrupted_transport_result(
+                    130,
+                    Some(libc::SIGINT),
+                    "sigint",
+                    "Execution interrupted by SIGINT",
+                )),
+                _ = &mut timeout_future => {
+                    let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
+                    Ok(signal_interrupted_transport_result(
+                        RUN_TIMEOUT_EXIT_CODE,
+                        None,
+                        "timeout",
+                        &format!("Execution timed out after {timeout_secs}s"),
+                    ))
+                },
+                result = executor.execute_with_command_isolation(
+                    effective_prompt,
+                    None,
+                    session,
+                    None,
+                    execute_options,
+                    None,
+                    CommandIsolationPolicy::CleanRoom(command),
+                ) => result,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let execution = executor.execute_with_command_isolation(
+                effective_prompt,
+                None,
+                session,
+                None,
+                execute_options,
+                None,
+                CommandIsolationPolicy::CleanRoom(command),
+            );
+            if let Some(timeout) = wall_timeout {
+                match tokio::time::timeout(timeout, execution).await {
+                    Ok(result) => result,
+                    Err(_) => Ok(signal_interrupted_transport_result(
+                        RUN_TIMEOUT_EXIT_CODE,
+                        None,
+                        "timeout",
+                        &format!("Execution timed out after {}s", timeout.as_secs().max(1)),
+                    )),
+                }
+            } else {
+                execution.await
+            }
+        }
+    };
+    match exec_result {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            debug_assert_eq!(failure_policy, TransportFailurePolicy::CleanRoom);
+            let elapsed = chrono::Utc::now()
+                .signed_duration_since(execution_start_time)
+                .num_milliseconds();
+            Err(error).with_context(|| {
+                format!("clean-room transport failed after {elapsed}ms without legacy side effects")
+            })
         }
     }
 }

@@ -31,12 +31,26 @@ pub(crate) fn codex_rate_limit_backoff(retry_count: u8) -> Duration {
 
 fn is_codex_rate_limited_text(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
-    lowered.contains("429")
+    has_contextual_http_429(&lowered)
         || lowered.contains("too many requests")
         || lowered.contains("rate_limit_exceeded")
         || lowered.contains("ratelimiterror")
         || lowered.contains("retry-after")
         || lowered.contains("retry after")
+}
+
+fn has_contextual_http_429(text: &str) -> bool {
+    let mut previous_token = None;
+    for token in text.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if matches!(previous_token, Some("http" | "status" | "statuscode")) && token == "429" {
+            return true;
+        }
+        previous_token = Some(token);
+    }
+    false
 }
 
 fn is_codex_permanent_quota_text(text: &str) -> bool {

@@ -528,12 +528,6 @@ fn patterns_for_tool(tool: &str) -> &'static [FailoverPattern] {
                 quota_exhausted: false,
             },
             FailoverPattern {
-                pattern: "429",
-                reason: "HTTP 429",
-                advance_to_next_model: true,
-                quota_exhausted: false,
-            },
-            FailoverPattern {
                 pattern: "http 401",
                 reason: "HTTP 401",
                 advance_to_next_model: true,

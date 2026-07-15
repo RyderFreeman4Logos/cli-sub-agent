@@ -2,10 +2,11 @@ use std::path::Path;
 use std::process::Command;
 
 use super::*;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 
 #[test]
 fn require_commit_with_commit_created_ignores_untracked_scratch() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
@@ -42,7 +43,7 @@ fn require_commit_with_commit_created_ignores_untracked_scratch() {
 
 #[test]
 fn require_commit_with_commit_created_and_dirty_tracked_work_fails() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     std::fs::write(root.join("tracked.txt"), "committed\n").expect("write committed change");
     run_git(root, &["add", "tracked.txt"]);
@@ -100,7 +101,7 @@ fn require_commit_with_commit_created_and_dirty_tracked_work_fails() {
 
 #[test]
 fn require_commit_with_commit_created_and_clean_tracked_work_passes() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
@@ -140,7 +141,7 @@ fn require_commit_with_commit_created_and_clean_tracked_work_passes() {
 
 #[test]
 fn require_commit_with_commit_created_fails_when_clean_tree_probe_is_unknown() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
@@ -195,7 +196,7 @@ fn require_commit_with_commit_created_fails_when_clean_tree_probe_is_unknown() {
 
 #[test]
 fn require_commit_without_created_commit_fails_successful_self_report() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
@@ -240,7 +241,7 @@ fn require_commit_without_created_commit_fails_successful_self_report() {
 
 #[test]
 fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     std::fs::write(root.join("tracked.txt"), "staged but not committed\n")
         .expect("write tracked change");
@@ -295,7 +296,7 @@ fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
 
 #[test]
 fn require_commit_recovery_records_bounded_redacted_blocker_summary() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     std::fs::write(root.join("seed.txt"), "dirty\n").expect("dirty tracked file");
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
@@ -352,7 +353,7 @@ fn require_commit_recovery_records_bounded_redacted_blocker_summary() {
 
 #[test]
 fn require_commit_recovery_does_not_label_untracked_scratch_as_tracked_dirty() {
-    let temp = init_repo_with_initial_commit();
+    let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     std::fs::write(root.join("scratch.txt"), "untracked\n").expect("untracked scratch file");
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
@@ -433,8 +434,9 @@ fn run_git(root: &Path, args: &[&str]) {
 /// A throwaway git repo with one commit so `HEAD` exists. Hooks and GPG
 /// signing are disabled so the test stays hermetic regardless of the host's
 /// global git config.
-fn init_repo_with_initial_commit() -> tempfile::TempDir {
+fn init_repo_with_initial_commit() -> (tempfile::TempDir, ScopedSessionSandbox) {
     let temp = tempfile::tempdir().expect("tempdir");
+    let sandbox = ScopedSessionSandbox::new_blocking(&temp);
     let root = temp.path();
     run_git(root, &["init", "-q"]);
     run_git(root, &["config", "user.email", "test@example.com"]);
@@ -447,5 +449,5 @@ fn init_repo_with_initial_commit() -> tempfile::TempDir {
     std::fs::write(root.join("seed.txt"), "seed\n").expect("write seed");
     run_git(root, &["add", "seed.txt"]);
     run_git(root, &["commit", "-q", "-m", "initial"]);
-    temp
+    (temp, sandbox)
 }

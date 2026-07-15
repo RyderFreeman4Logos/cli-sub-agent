@@ -1,6 +1,19 @@
 use super::*;
 
 pub(crate) async fn handle_review(
+    args: ReviewArgs,
+    current_depth: u32,
+    startup_env: &StartupSubtreeEnv,
+) -> Result<i32> {
+    let convergence = args.converge;
+    match handle_review_inner(args, current_depth, startup_env).await {
+        Ok(exit_code) => Ok(exit_code),
+        Err(error) if convergence => review_convergence::emit_setup_block("setup_failure", &error),
+        Err(error) => Err(error),
+    }
+}
+
+async fn handle_review_inner(
     mut args: ReviewArgs,
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
@@ -20,6 +33,18 @@ pub(crate) async fn handle_review(
     else {
         return Ok(1);
     };
+    if args.repair_only {
+        return review_convergence::run_repair(review_convergence::RepairContext::new(
+            &args,
+            &project_root,
+            config.as_ref(),
+            &global_config,
+            &model_catalog,
+            current_depth,
+            startup_env,
+        ))
+        .await;
+    }
     let inherited_model_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
@@ -40,6 +65,20 @@ pub(crate) async fn handle_review(
         effective_tier.as_deref(),
         selection.direct_tool_requested,
     )?;
+    if args.converge {
+        return review_convergence::run_early_command(review_convergence::EarlyCommandContext {
+            args: &args,
+            project_root: &project_root,
+            project_config: config.as_ref(),
+            global_config: &global_config,
+            model_catalog: &model_catalog,
+            effective_tier: effective_tier.as_deref(),
+            selection: &selection,
+            current_depth,
+            startup_env,
+        })
+        .await;
+    }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let review_pattern = verify_review_skill_available(&project_root, args.allow_fallback)?;
     if is_worktree_submodule(&project_root) {

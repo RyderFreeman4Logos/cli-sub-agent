@@ -1,9 +1,13 @@
 //! Session management with ULID-based genealogy tracking.
 
+mod atomic_state_write;
+mod session_output_artifact;
+
 pub mod adjudication;
 pub mod caller_detect;
 pub mod checklist_store;
 pub mod checkpoint;
+pub mod convergence;
 pub mod cooldown;
 pub mod event_writer;
 pub mod finding_id;
@@ -31,6 +35,46 @@ pub mod vcs_backends;
 #[path = "vcs_identity_tests.rs"]
 mod vcs_identity_tests;
 
+#[cfg(test)]
+#[path = "convergence_tests.rs"]
+mod convergence_tests;
+
+#[cfg(test)]
+#[path = "convergence_authority_tests.rs"]
+mod convergence_authority_tests;
+
+#[cfg(test)]
+#[path = "convergence_ledger_tests.rs"]
+mod convergence_ledger_tests;
+
+#[cfg(test)]
+#[path = "convergence_evidence_tests.rs"]
+mod convergence_evidence_tests;
+
+#[cfg(test)]
+#[path = "convergence_protocol_tests.rs"]
+mod convergence_protocol_tests;
+
+#[cfg(test)]
+#[path = "convergence_repair_tests.rs"]
+mod convergence_repair_tests;
+
+#[cfg(test)]
+#[path = "convergence_discovery_tests.rs"]
+mod convergence_discovery_tests;
+
+#[cfg(test)]
+#[path = "convergence_store_tests.rs"]
+mod convergence_store_tests;
+
+#[cfg(test)]
+#[path = "convergence_store_review_tests.rs"]
+mod convergence_store_review_tests;
+
+#[cfg(test)]
+#[path = "convergence_attestation_tests.rs"]
+mod convergence_attestation_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -56,6 +100,23 @@ pub use cooldown::{
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
+pub use convergence::{
+    AdmittedModelIdentity, ArtifactEvidenceRef, AttestationArtifactReader,
+    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID, CONVERGENCE_LEDGER_SCHEMA_VERSION,
+    CampaignId, CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId,
+    CandidateRecord, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource,
+    ConsolidatedRepairAuthorization, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
+    ConvergenceLedgerEntry, ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
+    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GATE_EVIDENCE_SCHEMA_ID,
+    GateCommandResult, GateEvidenceRecord, GitObjectId, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
+    MergeAttestationRecord, RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord,
+    RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
+    SessionRelativeArtifactPath, Sha256Digest, StableFindingId, authorize_consolidated_repairs,
+    compute_attestation_bindings, next_discovery_directive, verify_merge_attestation,
+};
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
     SandboxInfo, SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
@@ -96,6 +157,7 @@ pub use review_artifact::{
     ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity, SeveritySummary,
     write_findings_toml, write_review_verdict,
 };
+pub use session_output_artifact::{publish_session_output_artifact, read_session_output_artifact};
 pub use soft_fork::{SoftForkContext, soft_fork_session};
 pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 

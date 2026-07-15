@@ -1,0 +1,610 @@
+use std::error::Error;
+use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
+
+use anyhow::{Result, anyhow};
+use chrono::Utc;
+use csa_process::ProviderTurnCompletion;
+use csa_session::convergence::{
+    ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId, CandidateRecord,
+    CommandAuthoritySnapshot, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerStore,
+    CoverageDispositionRecord, CoverageRequirement, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, DiscoveryDirective, EpochRecord, GitObjectId,
+    Sha256Digest, next_discovery_directive,
+};
+use serde::Serialize;
+
+use super::bundle::ProviderEvidenceRef;
+use super::continuation::from_ledger as continuation_from_ledger;
+use super::coverage::{CoverageManifestPlan, plan_coverage_manifest, uncovered_manifest_cells};
+pub(crate) use super::discovery_contract::{
+    CampaignSelection, DiscoveryRequest, ObservationInput, ObservationSummary,
+};
+pub(crate) use super::output::DiscoveryRunOutput;
+use super::persistence::{persist, persist_batch};
+use super::recovery::recover_missing_candidate;
+
+/// One deterministic manifest cell can consume at most four provider calls.
+pub(crate) const MAX_PROVIDER_CALLS_PER_CELL: usize = 4;
+pub(crate) const PAGE_CANDIDATE_LIMIT: u32 = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FrozenWorkspace {
+    pub(crate) base_oid: String,
+    pub(crate) head_oid: String,
+    pub(crate) diff_digest: Sha256Digest,
+    pub(crate) index_clean: bool,
+    pub(crate) worktree_clean: bool,
+    pub(crate) provider_evidence: ProviderEvidenceRef,
+    pub(crate) changed_paths: Vec<String>,
+}
+
+impl FrozenWorkspace {
+    #[cfg(test)]
+    pub(crate) fn new(
+        base_oid: &str,
+        head_oid: &str,
+        diff_digest: Sha256Digest,
+        index_clean: bool,
+        worktree_clean: bool,
+    ) -> Result<Self> {
+        let provider_evidence = ProviderEvidenceRef::synthetic(base_oid, head_oid, &diff_digest);
+        Self::new_with_provider_evidence(
+            base_oid,
+            head_oid,
+            diff_digest,
+            index_clean,
+            worktree_clean,
+            provider_evidence,
+            vec!["crates/cli-sub-agent/src/review_convergence/engine.rs".to_string()],
+        )
+    }
+
+    pub(crate) fn new_with_provider_evidence(
+        base_oid: &str,
+        head_oid: &str,
+        diff_digest: Sha256Digest,
+        index_clean: bool,
+        worktree_clean: bool,
+        provider_evidence: ProviderEvidenceRef,
+        changed_paths: Vec<String>,
+    ) -> Result<Self> {
+        if !provider_evidence.matches_tuple(base_oid, head_oid, &diff_digest) {
+            anyhow::bail!("provider evidence identity does not match the frozen exact-OID tuple");
+        }
+        Ok(Self {
+            base_oid: GitObjectId::parse(base_oid)?.as_str().to_string(),
+            head_oid: GitObjectId::parse(head_oid)?.as_str().to_string(),
+            diff_digest,
+            index_clean,
+            worktree_clean,
+            provider_evidence,
+            changed_paths,
+        })
+    }
+
+    pub(crate) fn epoch(&self) -> Result<EpochRecord> {
+        Ok(EpochRecord::new(
+            GitObjectId::parse(&self.base_oid)?,
+            GitObjectId::parse(&self.head_oid)?,
+            self.diff_digest.clone(),
+        ))
+    }
+}
+
+pub(crate) trait WorkspaceProbe {
+    fn capture(&mut self, range: &str) -> Result<FrozenWorkspace>;
+}
+
+pub(crate) trait LedgerPort {
+    fn load(&self) -> Result<ConvergenceLedger>;
+    fn append_batch(&self, campaign_id: CampaignId, events: Vec<ConvergenceEvent>) -> Result<()>;
+}
+
+impl LedgerPort for ConvergenceLedgerStore {
+    fn load(&self) -> Result<ConvergenceLedger> {
+        ConvergenceLedgerStore::load(self)
+    }
+
+    fn append_batch(&self, campaign_id: CampaignId, events: Vec<ConvergenceEvent>) -> Result<()> {
+        ConvergenceLedgerStore::append_batch(self, campaign_id, events)
+            .map(|_| ())
+            .map_err(|error| anyhow!(error))
+    }
+}
+
+pub(crate) trait DiscoveryRunner {
+    fn run<'a>(
+        &'a mut self,
+        request: DiscoveryRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<DiscoveryRunOutput>> + 'a>>;
+
+    fn read_artifact<'a>(
+        &'a mut self,
+        artifact: &'a ArtifactEvidenceRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + 'a>>;
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PhaseTimings {
+    pub(crate) planning_ms: u64,
+    pub(crate) execution_ms: u64,
+    pub(crate) persistence_ms: u64,
+    pub(crate) total_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct BlockedDiagnostic {
+    pub(crate) kind: &'static str,
+    pub(crate) reason_code: &'static str,
+    pub(crate) message: String,
+    pub(crate) provider_calls: usize,
+    pub(crate) discovery_evidence_complete: bool,
+    pub(crate) review_verdict: Option<String>,
+    pub(crate) merge_attestation: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct EngineError(BlockedDiagnostic);
+
+impl EngineError {
+    pub(crate) fn diagnostic(&self) -> &BlockedDiagnostic {
+        &self.0
+    }
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.0.reason_code, self.0.message)
+    }
+}
+
+impl Error for EngineError {}
+
+pub(super) fn blocked(
+    reason_code: &'static str,
+    message: impl Into<String>,
+    calls: usize,
+) -> EngineError {
+    EngineError(BlockedDiagnostic {
+        kind: "convergence_discovery_blocked",
+        reason_code,
+        message: message.into(),
+        provider_calls: calls,
+        discovery_evidence_complete: false,
+        review_verdict: None,
+        merge_attestation: false,
+    })
+}
+
+pub(crate) async fn run_discovery_observation<P, R, S>(
+    input: &ObservationInput,
+    probe: &mut P,
+    runner: &mut R,
+    store: &S,
+) -> std::result::Result<ObservationSummary, EngineError>
+where
+    P: WorkspaceProbe,
+    R: DiscoveryRunner,
+    S: LedgerPort,
+{
+    let total_started = Instant::now();
+    let planning_started = Instant::now();
+    let frozen = probe
+        .capture(&input.range)
+        .map_err(|error| blocked("workspace_probe_failure", format!("{error:#}"), 0))?;
+    if !frozen.index_clean || !frozen.worktree_clean {
+        return Err(blocked(
+            "workspace_not_clean",
+            "the explicit range must start with a clean index and worktree",
+            0,
+        ));
+    }
+    let epoch = frozen
+        .epoch()
+        .map_err(|error| blocked("workspace_probe_failure", format!("{error:#}"), 0))?;
+    let manifest = match plan_coverage_manifest(&epoch, &frozen.changed_paths)
+        .map_err(|error| blocked("planning_failure", format!("{error:#}"), 0))?
+    {
+        CoverageManifestPlan::Ready(manifest) => manifest,
+        CoverageManifestPlan::DecompositionRequired {
+            scope_count,
+            maximum_scope_count,
+        } => {
+            return Err(blocked(
+                "decomposition_required",
+                format!(
+                    "changed paths resolve to {scope_count} coverage scopes, exceeding the bounded manifest maximum of {maximum_scope_count}"
+                ),
+                0,
+            ));
+        }
+    };
+    let policy_digest = super::coverage_manifest_policy_digest();
+    let mut persistence = Duration::ZERO;
+    let (campaign, mut ledger) = initialize_campaign(
+        store,
+        &epoch,
+        &policy_digest,
+        &input.command_authority,
+        &input.campaign_selection,
+        &mut persistence,
+    )?;
+    let planning = planning_started.elapsed();
+    let mut execution = Duration::ZERO;
+    let mut provider_calls = recorded_attempt_count(&ledger, &campaign, &epoch);
+
+    loop {
+        let directive = next_discovery_directive(&ledger, &campaign, &epoch, manifest.cells())
+            .map_err(|error| blocked("reducer_failure", format!("{error:#}"), provider_calls))?;
+        match directive {
+            DiscoveryDirective::DefineCoverageCell { cell } => persist(
+                store,
+                &campaign,
+                ConvergenceEvent::CoverageCellDefined(cell),
+                &mut ledger,
+                &mut persistence,
+                provider_calls,
+            )?,
+            DiscoveryDirective::RecordCoverageDisposition { cell } => {
+                let record = CoverageDispositionRecord::new(
+                    cell.id().clone(),
+                    CoverageRequirement::Required,
+                    "deterministic_coverage_manifest",
+                    "Required deterministic scope-by-lens coverage manifest cell.",
+                )
+                .map_err(|error| {
+                    blocked("planning_failure", format!("{error:#}"), provider_calls)
+                })?;
+                persist(
+                    store,
+                    &campaign,
+                    ConvergenceEvent::CoverageDispositionRecorded(record),
+                    &mut ledger,
+                    &mut persistence,
+                    provider_calls,
+                )?;
+            }
+            DiscoveryDirective::FinalizeCoveragePlan { record } => persist(
+                store,
+                &campaign,
+                ConvergenceEvent::CoveragePlanFinalized(record),
+                &mut ledger,
+                &mut persistence,
+                provider_calls,
+            )?,
+            DiscoveryDirective::RunDiscovery {
+                cell,
+                prior_finalized_attempt_count,
+                intent,
+            } => {
+                if usize::try_from(prior_finalized_attempt_count).unwrap_or(usize::MAX)
+                    >= MAX_PROVIDER_CALLS_PER_CELL
+                {
+                    return Err(blocked(
+                        "provider_call_budget_exhausted",
+                        format!(
+                            "coverage manifest cell exceeded its {MAX_PROVIDER_CALLS_PER_CELL}-call safety budget"
+                        ),
+                        provider_calls,
+                    ));
+                }
+                assert_frozen(probe, input, &frozen, provider_calls)?;
+                let continuation = continuation_from_ledger(
+                    &ledger,
+                    &campaign,
+                    &epoch,
+                    uncovered_manifest_cells(&ledger, &campaign, &manifest),
+                );
+                let fingerprints = continuation.stable_finding_ids();
+                let request = DiscoveryRequest {
+                    frozen: frozen.clone(),
+                    range: input.range.clone(),
+                    cell,
+                    prior_finalized_attempt_count,
+                    intent,
+                    candidate_limit: PAGE_CANDIDATE_LIMIT,
+                    continuation,
+                    focus: input.focus.clone(),
+                    campaign_selection: input.campaign_selection.clone(),
+                };
+                let execution_started = Instant::now();
+                let run_result = runner.run(request.clone()).await;
+                execution += execution_started.elapsed();
+                provider_calls += 1;
+                assert_frozen(probe, input, &frozen, provider_calls)?;
+                let output = run_result.map_err(|error| {
+                    blocked("provider_failure", format!("{error:#}"), provider_calls)
+                })?;
+                if output.completion != ProviderTurnCompletion::Natural {
+                    return Err(blocked(
+                        "provider_noncompletion",
+                        format!("provider completion was {:?}", output.completion),
+                        provider_calls,
+                    ));
+                }
+                let DiscoveryRunOutput {
+                    page,
+                    completion,
+                    model_identity,
+                    artifact,
+                    ..
+                } = output;
+                if page.candidate_limit != request.candidate_limit {
+                    return Err(blocked(
+                        "candidate_limit_mismatch",
+                        "response candidate_limit did not equal the requested limit",
+                        provider_calls,
+                    ));
+                }
+                let attempt_id = DiscoveryAttemptId::generate();
+                for identity in &page.candidates {
+                    let stable = csa_session::convergence::StableFindingId::compute(identity);
+                    if fingerprints.contains(stable.as_str()) {
+                        return Err(blocked(
+                            "duplicate_existing_fingerprint",
+                            "provider repeated an existing semantic fingerprint",
+                            provider_calls,
+                        ));
+                    }
+                }
+                let count = u32::try_from(page.candidates.len()).map_err(|error| {
+                    blocked(
+                        "candidate_count_overflow",
+                        error.to_string(),
+                        provider_calls,
+                    )
+                })?;
+                let attempt = DiscoveryAttemptRecord::new(
+                    attempt_id.clone(),
+                    epoch.id().clone(),
+                    request.cell.id().clone(),
+                    Utc::now(),
+                    completion,
+                    model_identity,
+                    artifact.clone(),
+                    page.candidate_limit,
+                    count,
+                    page.continuation_required(),
+                    page.unscanned_items.clone(),
+                )
+                .map_err(|error| blocked("parser_failure", format!("{error:#}"), provider_calls))?;
+                let mut events = Vec::with_capacity(page.candidates.len() + 2);
+                events.push(ConvergenceEvent::DiscoveryAttemptRecorded(attempt));
+                events.extend(page.candidates.into_iter().map(|identity| {
+                    ConvergenceEvent::CandidateRecorded(CandidateRecord::new(
+                        CandidateId::generate(),
+                        attempt_id.clone(),
+                        identity,
+                        artifact.clone(),
+                    ))
+                }));
+                events.push(ConvergenceEvent::DiscoveryAttemptFinalized(
+                    DiscoveryAttemptFinalizationRecord::new(attempt_id),
+                ));
+                persist_batch(
+                    store,
+                    &campaign,
+                    events,
+                    &mut ledger,
+                    &mut persistence,
+                    provider_calls,
+                )?;
+            }
+            DiscoveryDirective::RecordMissingCandidates {
+                attempt_id,
+                missing_candidate_count: _,
+            } => {
+                let record = recover_missing_candidate(
+                    runner,
+                    &ledger,
+                    &campaign,
+                    &attempt_id,
+                    &frozen.provider_evidence.identity,
+                    provider_calls,
+                )
+                .await?;
+                persist(
+                    store,
+                    &campaign,
+                    ConvergenceEvent::CandidateRecorded(record),
+                    &mut ledger,
+                    &mut persistence,
+                    provider_calls,
+                )?;
+            }
+            DiscoveryDirective::FinalizeDiscoveryAttempt { record } => persist(
+                store,
+                &campaign,
+                ConvergenceEvent::DiscoveryAttemptFinalized(record),
+                &mut ledger,
+                &mut persistence,
+                provider_calls,
+            )?,
+            DiscoveryDirective::DiscoveryEvidenceComplete { epoch_id } => {
+                let total = total_started.elapsed();
+                return Ok(ObservationSummary {
+                    kind: "convergence_discovery_observation",
+                    campaign_id: campaign.id().to_string(),
+                    epoch_id: epoch_id.to_string(),
+                    base_oid: frozen.base_oid,
+                    head_oid: frozen.head_oid,
+                    diff_digest: frozen.diff_digest.to_string(),
+                    index_clean: frozen.index_clean,
+                    worktree_clean: frozen.worktree_clean,
+                    coverage_cell_count: u32::try_from(manifest.cells().len()).map_err(
+                        |error| blocked("planning_failure", error.to_string(), provider_calls),
+                    )?,
+                    provider_calls,
+                    candidates: continuation_from_ledger(&ledger, &campaign, &epoch, Vec::new())
+                        .findings
+                        .len(),
+                    phase_timings: PhaseTimings {
+                        planning_ms: millis(planning),
+                        execution_ms: millis(execution),
+                        persistence_ms: millis(persistence),
+                        total_ms: millis(total),
+                    },
+                    discovery_evidence_complete: true,
+                    review_verdict: None,
+                    merge_attestation: false,
+                    semantic_coverage: "deterministic scope-by-lens manifest; every required cell saturated",
+                });
+            }
+        }
+    }
+}
+
+pub(crate) fn initialize_campaign<S: LedgerPort>(
+    store: &S,
+    epoch: &EpochRecord,
+    policy_digest: &Sha256Digest,
+    command_authority: &CommandAuthoritySnapshot,
+    selection: &CampaignSelection,
+    persistence: &mut Duration,
+) -> std::result::Result<(CampaignRecord, ConvergenceLedger), EngineError> {
+    let mut ledger = store
+        .load()
+        .map_err(|error| blocked("store_failure", format!("{error:#}"), 0))?;
+    let compatible = |campaign: &CampaignRecord| {
+        campaign.policy_digest() == Some(policy_digest)
+            && campaign.command_authority_digest() == &command_authority.digest()
+    };
+    let campaign = match selection {
+        CampaignSelection::LegacyReuse => ledger
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| {
+                let ConvergenceEvent::CampaignStarted(campaign) = entry.event() else {
+                    return None;
+                };
+                compatible(campaign).then(|| campaign.clone())
+            })
+            .unwrap_or_else(|| {
+                CampaignRecord::new(
+                    CampaignId::generate(),
+                    Utc::now(),
+                    Some(policy_digest.clone()),
+                    command_authority.clone(),
+                )
+            }),
+        CampaignSelection::Fresh => CampaignRecord::new(
+            CampaignId::generate(),
+            Utc::now(),
+            Some(policy_digest.clone()),
+            command_authority.clone(),
+        ),
+        CampaignSelection::Continue(id) => {
+            let campaign = ledger.entries().iter().find_map(|entry| {
+                let ConvergenceEvent::CampaignStarted(campaign) = entry.event() else {
+                    return None;
+                };
+                (campaign.id() == id).then(|| campaign.clone())
+            });
+            let campaign = campaign.ok_or_else(|| {
+                blocked(
+                    "campaign_selection_failure",
+                    "continued campaign does not exist",
+                    0,
+                )
+            })?;
+            if !compatible(&campaign) {
+                return Err(blocked(
+                    "campaign_selection_failure",
+                    "continued campaign policy or command authority is incompatible",
+                    0,
+                ));
+            }
+            let terminal = ledger.entries().iter().any(|entry| {
+                entry.campaign_id() == id
+                    && matches!(
+                        entry.event(),
+                        ConvergenceEvent::FinalReviewRecorded(_)
+                            | ConvergenceEvent::MergeAttestationRecorded(_)
+                    )
+            });
+            if terminal {
+                return Err(blocked(
+                    "campaign_selection_failure",
+                    "continued campaign is terminal",
+                    0,
+                ));
+            }
+            campaign
+        }
+    };
+    let campaign_exists = ledger.entries().iter().any(|entry| {
+        entry.campaign_id() == campaign.id()
+            && matches!(entry.event(), ConvergenceEvent::CampaignStarted(_))
+    });
+    if !campaign_exists {
+        persist(
+            store,
+            &campaign,
+            ConvergenceEvent::CampaignStarted(campaign.clone()),
+            &mut ledger,
+            persistence,
+            0,
+        )?;
+    }
+    let epoch_exists = ledger.entries().iter().any(|entry| {
+        entry.campaign_id() == campaign.id()
+            && matches!(entry.event(), ConvergenceEvent::EpochOpened(record) if record == epoch)
+    });
+    if !epoch_exists {
+        persist(
+            store,
+            &campaign,
+            ConvergenceEvent::EpochOpened(epoch.clone()),
+            &mut ledger,
+            persistence,
+            0,
+        )?;
+    }
+    Ok((campaign, ledger))
+}
+
+fn assert_frozen<P: WorkspaceProbe>(
+    probe: &mut P,
+    input: &ObservationInput,
+    expected: &FrozenWorkspace,
+    calls: usize,
+) -> std::result::Result<(), EngineError> {
+    let actual = probe
+        .capture(&input.range)
+        .map_err(|error| blocked("workspace_probe_failure", format!("{error:#}"), calls))?;
+    if &actual != expected {
+        return Err(blocked(
+            "workspace_mutated",
+            "base/head/diff/cleanliness tuple changed during discovery; mixed evidence was rejected",
+            calls,
+        ));
+    }
+    Ok(())
+}
+
+fn recorded_attempt_count(
+    ledger: &ConvergenceLedger,
+    campaign: &CampaignRecord,
+    epoch: &EpochRecord,
+) -> usize {
+    ledger
+        .entries()
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign.id())
+        .filter(|entry| {
+            matches!(
+                entry.event(),
+                ConvergenceEvent::DiscoveryAttemptRecorded(record)
+                    if record.epoch_id() == epoch.id()
+            )
+        })
+        .count()
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}

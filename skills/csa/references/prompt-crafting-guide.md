@@ -245,7 +245,7 @@ generated, macro-heavy) still produce a WARNING.
 Interface documentation is 10x more token-efficient than source code.
 When interacting with modules outside your current scope:
 
-1. **First**: Use gitnexus_query/gitnexus_context or LSP to understand the API
+1. **First**: Use MCP/skills or LSP to understand the API
 2. **Second**: Read doc comments and type signatures
 3. **Last resort**: Read implementation source (only when docs are insufficient)
 

@@ -63,10 +63,15 @@ pub(crate) mod model_failover_session;
 pub(crate) mod lefthook_auto_install;
 
 // Re-export session execution API so callers keep using `crate::pipeline::*`.
-#[cfg(test)]
-pub(crate) use session_exec::execute_with_session_and_meta;
+#[allow(unused_imports)]
 pub(crate) use session_exec::{
+    CleanRoomExecutionContract, CleanRoomExecutionLimits, execute_clean_room_session,
     execute_with_session, execute_with_session_and_meta_with_parent_source,
+};
+#[cfg(test)]
+pub(crate) use session_exec::{
+    CleanRoomSandboxInput, clean_room_execution_policy_effects, clean_room_runtime_prompt_for_test,
+    execute_with_session_and_meta, resolve_clean_room_sandbox_options_with_capabilities,
 };
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
@@ -423,7 +428,7 @@ pub(crate) async fn build_and_validate_executor(
     let final_model_request = final_model_request
         .as_deref()
         .or(default_model_resolved.as_deref());
-    let admission = validate_final_executor_identity(
+    let validated_identity = validate_final_executor_identity(
         &executor,
         model_spec,
         final_model_request,
@@ -464,7 +469,11 @@ pub(crate) async fn build_and_validate_executor(
         );
         anyhow::bail!("{e}");
     }
-    Ok(AdmittedExecutor::new(executor, admission))
+    Ok(AdmittedExecutor::new(
+        executor,
+        validated_identity.resolved_model_spec,
+        validated_identity.catalog_admission,
+    ))
 }
 
 async fn ensure_tool_runtime_prerequisites(
@@ -543,6 +552,7 @@ pub(crate) fn acquire_slot(
 }
 
 /// Execution result with the resolved CSA meta session ID used by this run.
+#[derive(Debug)]
 pub(crate) struct SessionExecutionResult {
     pub execution: ExecutionResult,
     pub meta_session_id: String,
@@ -629,8 +639,20 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "pipeline_admitted_executor_tests.rs"]
+mod admitted_executor_tests;
+
+#[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_clean_room_execution.rs"]
+mod clean_room_execution_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_clean_room_integration.rs"]
+mod clean_room_integration_tests;
 
 #[cfg(test)]
 #[path = "pipeline_tests_thinking.rs"]
