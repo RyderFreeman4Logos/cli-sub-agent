@@ -7,22 +7,30 @@
 
 #![expect(
     dead_code,
-    reason = "B5 Slice 2 defines isolated ports; production orchestration is wired in a later slice"
+    reason = "B5 Slice 3B1 exposes audited clean-room provider authority before orchestration dispatch"
 )]
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_session::convergence::{
     AdmittedModelIdentity, CommandAuthoritySnapshot, EpochRecord, Sha256Digest,
 };
 
-use crate::pipeline::{AdmittedExecutor, ParentSessionSource, SessionCreationMode};
+use crate::pipeline::{
+    AdmittedExecutor, CleanRoomExecutionContract, CleanRoomExecutionLimits, ParentSessionSource,
+    SessionCreationMode, execute_clean_room_session,
+};
 use crate::startup_env::StartupSubtreeEnv;
+
+use super::provider_command_authority::ProviderCommandAuthority;
 
 /// Exact, inspectable subprocess specification. Constructing this value has no side effects.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,11 +329,41 @@ impl<D: DetachedWorkspaceDriver> CleanRoomWorkspaceFactory for ExactOidWorkspace
     }
 }
 
+/// Exact provider prompt bytes. This type deliberately exposes no transformation API.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ExactProviderPrompt(String);
+
+impl ExactProviderPrompt {
+    pub(crate) fn new(prompt: impl Into<String>) -> Self {
+        Self(prompt.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl fmt::Debug for ExactProviderPrompt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExactProviderPrompt")
+            .field("byte_len", &self.0.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Fully resolved provider invocation contract for a fresh read-only clean-room session.
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderSessionRequest {
     cwd: PathBuf,
     selected_model: AdmittedModelIdentity,
+    authority_digest: Sha256Digest,
+    exact_prompt: ExactProviderPrompt,
+    evidence_bundle: PathBuf,
     readonly_project_root: bool,
     extra_writable: Vec<PathBuf>,
     extra_readable: Vec<PathBuf>,
@@ -341,6 +379,7 @@ impl ProviderSessionRequest {
     pub(crate) fn from_authority(
         workspace: &CleanRoomWorkspace,
         authority: &CommandAuthoritySnapshot,
+        exact_prompt: ExactProviderPrompt,
     ) -> Result<Self> {
         let strongest = authority
             .ordered_admitted()
@@ -358,6 +397,9 @@ impl ProviderSessionRequest {
         Ok(Self {
             cwd: workspace.root.clone(),
             selected_model: strongest.clone(),
+            authority_digest: authority.digest().clone(),
+            exact_prompt,
+            evidence_bundle: workspace.bundle_path.clone(),
             readonly_project_root: true,
             extra_writable: Vec::new(),
             extra_readable: vec![workspace.bundle_path.clone()],
@@ -376,6 +418,18 @@ impl ProviderSessionRequest {
 
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    pub(crate) fn authority_digest(&self) -> &Sha256Digest {
+        &self.authority_digest
+    }
+
+    pub(crate) fn exact_prompt(&self) -> &str {
+        self.exact_prompt.as_str()
+    }
+
+    pub(crate) fn evidence_bundle(&self) -> &Path {
+        &self.evidence_bundle
     }
 
     pub(crate) fn selected_model(&self) -> &AdmittedModelIdentity {
@@ -445,17 +499,20 @@ impl ProviderSessionOutcome {
     }
 }
 
+pub(crate) type ProviderSessionFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<ProviderSessionOutcome>> + 'a>>;
+
 pub(crate) trait ProviderSessionFactory {
-    fn run(&mut self, request: &ProviderSessionRequest) -> Result<ProviderSessionOutcome>;
+    fn run<'a>(&'a mut self, request: &'a ProviderSessionRequest) -> ProviderSessionFuture<'a>;
 }
 
 /// Injected provider boundary that receives CSA's existing admitted executor.
 pub(crate) trait ProviderSessionDriver {
-    fn run(
-        &mut self,
-        admitted: &AdmittedExecutor,
-        request: &ProviderSessionRequest,
-    ) -> Result<ProviderSessionOutcome>;
+    fn run<'a>(
+        &'a mut self,
+        admitted: &'a AdmittedExecutor,
+        request: &'a ProviderSessionRequest,
+    ) -> ProviderSessionFuture<'a>;
 }
 
 /// Production adapter that cannot bypass catalog admission or replace the selected identity.
@@ -471,27 +528,119 @@ impl<'a, D> AdmittedProviderSessionFactory<'a, D> {
 }
 
 impl<D: ProviderSessionDriver> ProviderSessionFactory for AdmittedProviderSessionFactory<'_, D> {
-    fn run(&mut self, request: &ProviderSessionRequest) -> Result<ProviderSessionOutcome> {
-        validate_admitted_identity(self.admitted, request.selected_model())?;
-        self.driver.run(self.admitted, request)
+    fn run<'a>(&'a mut self, request: &'a ProviderSessionRequest) -> ProviderSessionFuture<'a> {
+        Box::pin(async move {
+            validate_admitted_identity(self.admitted, request.selected_model())?;
+            self.driver.run(self.admitted, request).await
+        })
     }
+}
+
+/// Production adapter from audited authority to the pipeline clean-room API.
+pub(crate) struct ProductionCleanRoomProvider<'a> {
+    admitted: &'a AdmittedExecutor,
+    authority: &'a ProviderCommandAuthority,
+    project_config: Option<&'a ProjectConfig>,
+    global_config: Option<&'a GlobalConfig>,
+    limits: CleanRoomExecutionLimits,
+}
+
+impl<'a> ProductionCleanRoomProvider<'a> {
+    pub(crate) fn new(
+        admitted: &'a AdmittedExecutor,
+        authority: &'a ProviderCommandAuthority,
+        project_config: Option<&'a ProjectConfig>,
+        global_config: Option<&'a GlobalConfig>,
+        limits: CleanRoomExecutionLimits,
+    ) -> Result<Self> {
+        authority.validate_admitted_executor(admitted)?;
+        Ok(Self {
+            admitted,
+            authority,
+            project_config,
+            global_config,
+            limits,
+        })
+    }
+}
+
+impl ProviderSessionFactory for ProductionCleanRoomProvider<'_> {
+    fn run<'a>(&'a mut self, request: &'a ProviderSessionRequest) -> ProviderSessionFuture<'a> {
+        Box::pin(async move {
+            self.authority.validate_request(self.admitted, request)?;
+            validate_production_request_policy(request)?;
+            let command = self
+                .authority
+                .clean_command_contract(self.admitted, request)?;
+            let contract = CleanRoomExecutionContract::try_new(
+                request.cwd(),
+                request.evidence_bundle(),
+                command,
+            )?;
+            let outcome = execute_clean_room_session(
+                self.admitted,
+                &self.authority.tool(),
+                request.exact_prompt(),
+                contract,
+                self.project_config,
+                self.global_config,
+                self.limits.clone(),
+            )
+            .await?;
+            if outcome.execution.exit_code != 0 {
+                bail!(
+                    "clean-room provider process exited with status {}",
+                    outcome.execution.exit_code
+                );
+            }
+            Ok(ProviderSessionOutcome::new(
+                &outcome.meta_session_id,
+                outcome.execution.output.as_bytes(),
+            ))
+        })
+    }
+}
+
+fn validate_production_request_policy(request: &ProviderSessionRequest) -> Result<()> {
+    if !request.readonly_project_root() {
+        bail!("production clean-room provider requires a read-only project root");
+    }
+    if !request.extra_writable().is_empty() {
+        bail!("production clean-room provider rejects extra writable paths");
+    }
+    if request.extra_readable() != [request.evidence_bundle().to_path_buf()] {
+        bail!("production clean-room provider allows only the evidence bundle as extra readable");
+    }
+    if request.parent_session_source() != ParentSessionSource::ExplicitOnly
+        || request.session_creation_mode() != SessionCreationMode::FreshChild
+        || request.parent().is_some()
+        || request.resume_session().is_some()
+        || !request.startup_env().to_child_env_vars().is_empty()
+    {
+        bail!("production clean-room provider request violates fresh detached session policy");
+    }
+    Ok(())
 }
 
 fn validate_admitted_identity(
     admitted: &AdmittedExecutor,
     expected: &AdmittedModelIdentity,
 ) -> Result<()> {
-    let spec = admitted.resolved_model_spec();
-    let actual = AdmittedModelIdentity::new(
-        &spec.tool,
-        &spec.provider,
-        &spec.model,
-        &reasoning_label(&spec.thinking_budget),
-    )?;
+    let actual = admitted_identity(admitted)?;
     if &actual != expected {
         bail!("clean-room provider request differs from the catalog-admitted executor identity");
     }
     Ok(())
+}
+
+pub(super) fn admitted_identity(admitted: &AdmittedExecutor) -> Result<AdmittedModelIdentity> {
+    let spec = admitted.resolved_model_spec();
+    AdmittedModelIdentity::new(
+        &spec.tool,
+        &spec.provider,
+        &spec.model,
+        &reasoning_label(&spec.thinking_budget),
+    )
 }
 
 fn reasoning_label(budget: &csa_executor::ThinkingBudget) -> String {

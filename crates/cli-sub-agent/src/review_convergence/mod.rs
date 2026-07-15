@@ -1,6 +1,7 @@
 pub(super) mod bundle;
 mod clean_room;
 mod clustering;
+mod provider_command_authority;
 // Slice 3A defines the deterministic core without changing legacy production dispatch.
 #[allow(dead_code)]
 mod completion;
@@ -28,6 +29,8 @@ mod clean_room_tests;
 mod completion_tests;
 #[cfg(test)]
 mod gate_evidence_tests;
+#[cfg(test)]
+mod provider_command_authority_tests;
 pub(super) mod runner;
 mod schema;
 pub(super) mod verification;

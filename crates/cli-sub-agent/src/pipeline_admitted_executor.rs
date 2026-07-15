@@ -51,6 +51,44 @@ impl AdmittedExecutor {
     pub(crate) fn catalog_warning_pending(&self) -> bool {
         self.catalog_warning.is_some() && !self.warning_emitted.load(Ordering::Acquire)
     }
+    /// Build the real admitted-executor type from the shipped closed catalog for
+    /// production-adapter tests that must not reconstruct authority from config.
+    #[cfg(test)]
+    pub(crate) fn from_model_spec_for_test(model_spec: &str) -> anyhow::Result<Self> {
+        let catalog = csa_core::model_catalog::EffectiveModelCatalog::shipped()?;
+        let (resolved_model_spec, admission) = ModelSpec::parse_and_validate(
+            model_spec,
+            &catalog,
+            &[
+                "opencode",
+                "codex",
+                "claude-code",
+                "openai-compat",
+                "hermes",
+            ],
+        )?;
+        let executor = Executor::from_spec(&resolved_model_spec)?;
+        Ok(Self::new(executor, resolved_model_spec, admission))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_codex_model_spec_for_test(
+        model_spec: &str,
+        runtime_metadata: csa_executor::codex_runtime::CodexRuntimeMetadata,
+    ) -> anyhow::Result<Self> {
+        let catalog = csa_core::model_catalog::EffectiveModelCatalog::shipped()?;
+        let (resolved_model_spec, admission) =
+            ModelSpec::parse_and_validate(model_spec, &catalog, &["codex"])?;
+        if resolved_model_spec.tool != "codex" {
+            anyhow::bail!("test Codex executor requires a codex model spec");
+        }
+        let executor = Executor::Codex {
+            model_override: Some(resolved_model_spec.model.clone()),
+            thinking_budget: Some(resolved_model_spec.thinking_budget.clone()),
+            runtime_metadata,
+        };
+        Ok(Self::new(executor, resolved_model_spec, admission))
+    }
 }
 
 impl Deref for AdmittedExecutor {
