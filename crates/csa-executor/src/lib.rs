@@ -130,8 +130,12 @@ fn clean_test_script(root: &std::path::Path) -> (std::path::PathBuf, std::path::
 fn clean_test_contract(
     program: impl Into<std::path::PathBuf>,
 ) -> command_isolation::CleanCommandContract {
-    command_isolation::CleanCommandContract::try_new(program, std::collections::BTreeMap::new())
-        .expect("valid contract")
+    command_isolation::CleanCommandContract::try_new(
+        program,
+        env!("CARGO_MANIFEST_DIR"),
+        std::collections::BTreeMap::new(),
+    )
+    .expect("valid contract")
 }
 
 #[cfg(test)]
@@ -168,6 +172,7 @@ fn assert_invalid_clean_program(program: &str) {
     assert!(
         command_isolation::CleanCommandContract::try_new(
             program,
+            env!("CARGO_MANIFEST_DIR"),
             std::collections::BTreeMap::new()
         )
         .is_err()

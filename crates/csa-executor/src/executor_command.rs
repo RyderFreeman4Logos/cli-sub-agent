@@ -54,6 +54,7 @@ impl Executor {
     ) -> Result<(Command, Option<Vec<u8>>)> {
         let _exact_delivery = contract.prompt_delivery();
         let mut command = Command::new(contract.program().as_path());
+        command.current_dir(contract.working_directory().as_path());
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
         self.append_tool_args_with_transport(
             &mut command,

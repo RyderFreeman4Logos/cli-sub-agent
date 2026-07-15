@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use csa_process::StreamMode;
-use csa_resource::isolation_plan::IsolationPlanBuilder;
+use csa_resource::isolation_plan::{EnforcementMode, IsolationPlanBuilder};
 
-use crate::command_isolation::{CleanCommandContract, CleanRoomCapability};
-use crate::transport::LegacyTransport;
+use crate::command_isolation::{
+    CleanCommandContract as Contract, CleanRoomCapability as Capability,
+};
+use crate::transport::LegacyTransport as Legacy;
 use crate::{
     assert_clean_request_rejected as reject, assert_invalid_clean_program as invalid_program,
     clean_test_claude as claude, clean_test_codex as codex, clean_test_contract as contract,
@@ -14,27 +16,55 @@ use crate::{
 
 use super::*;
 
+fn options() -> ExecuteOptions {
+    ExecuteOptions::new(StreamMode::BufferOnly, 60)
+}
+
+fn assert_prompt(executor: &Executor, prompt: &str) {
+    let (command, stdin) = executor
+        .build_clean_command(prompt, None, &contract("/bin/echo"))
+        .unwrap();
+    assert!(prompt.len() > MAX_ARGV_PROMPT_LEN || stdin.is_none());
+    assert!(
+        stdin.as_deref() == Some(prompt.as_bytes())
+            || command
+                .as_std()
+                .get_args()
+                .any(|argument| argument == prompt)
+    );
+}
+
 #[test]
-fn clean_contract_requires_an_absolute_program() {
+fn clean_contract_rejects_invalid_workdirs_before_spawn() {
     for program in ["relative", ""] {
         invalid_program(program);
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (script, marker) = test_script(temp.path());
+    let file = temp.path().join("file");
+    std::fs::write(&file, "not a directory").unwrap();
+    let invalid = vec![
+        std::path::PathBuf::new(),
+        "relative".into(),
+        temp.path().join("missing"),
+        file,
+    ];
+    for directory in invalid {
+        assert!(Contract::try_new(&script, directory, BTreeMap::new()).is_err());
+        assert!(!marker.exists());
     }
 }
 
 #[test]
 fn clean_room_capability_is_explicit_for_every_legacy_executor() {
-    for executor in [codex(), opencode()] {
-        assert_eq!(
-            LegacyTransport::new(executor).clean_room_capability(),
-            CleanRoomCapability::ExactPromptAndClearedEnvironment
-        );
-    }
-    for executor in unsupported_executors() {
-        assert!(matches!(
-            LegacyTransport::new(executor).clean_room_capability(),
-            CleanRoomCapability::Unsupported { .. }
-        ));
-    }
+    assert!([codex(), opencode()].into_iter().all(|executor| matches!(
+        Legacy::new(executor).clean_room_capability(),
+        Capability::ExactPromptAndClearedEnvironment
+    )));
+    assert!(unsupported_executors().into_iter().all(|executor| matches!(
+        Legacy::new(executor).clean_room_capability(),
+        Capability::Unsupported { .. }
+    )));
 }
 
 #[test]
@@ -42,54 +72,36 @@ fn clean_builder_preserves_short_and_long_prompts_for_supported_tools() {
     let short = "  $HOME 'quoted' \\slashes\\\nsecond line  ";
     let long = format!("  {short}{}  \n", "x".repeat(MAX_ARGV_PROMPT_LEN));
     for executor in [codex(), opencode()] {
-        let clean = contract("/bin/echo");
-        let (short_cmd, short_stdin) = executor
-            .build_clean_command(short, None, &clean)
-            .expect("short command");
-        assert!(short_stdin.is_none());
-        assert!(short_cmd.as_std().get_args().any(|arg| arg == short));
-
-        let (long_cmd, long_stdin) = executor
-            .build_clean_command(&long, None, &clean)
-            .expect("long command");
-        if let Some(stdin) = long_stdin {
-            assert!(stdin.as_slice() == long.as_bytes());
-        } else {
-            assert!(long_cmd.as_std().get_args().any(|arg| arg == long.as_str()));
-        }
+        assert_prompt(&executor, short);
+        assert_prompt(&executor, &long);
     }
 }
 
 #[test]
 fn clean_claude_builder_proves_prompt_path_omits_legacy_preamble() {
     let prompt = " exact claude prompt ";
-    let (cmd, stdin) = claude()
+    let (command, stdin) = claude()
         .build_clean_command(prompt, None, &contract("/bin/echo"))
-        .expect("clean command");
+        .unwrap();
     assert!(stdin.is_none());
-    let args = cmd
-        .as_std()
-        .get_args()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert!(args.contains(&prompt.to_string()));
-    assert!(!args.iter().any(|arg| arg.contains("csa-sub-agent-context")));
+    assert!(
+        command
+            .as_std()
+            .get_args()
+            .any(|argument| argument == prompt)
+    );
+    assert!(
+        !command
+            .as_std()
+            .get_args()
+            .any(|argument| argument.to_string_lossy().contains("csa-sub-agent-context"))
+    );
 }
 
 #[test]
 fn clean_request_rejects_all_dual_authority_channels() {
-    let base = ExecuteOptions::new(StreamMode::BufferOnly, 60);
-    let extra_env = HashMap::new();
-    reject(Some(&extra_env), &base);
-
-    let mut options = base.clone();
-    options.pre_session_hook = Some(csa_hooks::PreSessionHookInvocation::new(
-        csa_hooks::PreSessionHookConfig {
-            command: Some("must-not-run".into()),
-            ..Default::default()
-        },
-    ));
-    reject(None, &options);
+    let base = options();
+    reject(Some(&HashMap::new()), &base);
 
     let mut options = base.clone();
     options.allow_git_push = true;
@@ -101,11 +113,9 @@ fn clean_request_rejects_all_dual_authority_channels() {
 
     let mut options = base;
     options.sandbox = Some(SandboxContext {
-        isolation_plan: IsolationPlanBuilder::new(
-            csa_resource::isolation_plan::EnforcementMode::Off,
-        )
-        .build()
-        .expect("plan"),
+        isolation_plan: IsolationPlanBuilder::new(EnforcementMode::Off)
+            .build()
+            .unwrap(),
         tool_name: "opencode".into(),
         session_id: "clean".into(),
         best_effort: true,
@@ -115,60 +125,61 @@ fn clean_request_rejects_all_dual_authority_channels() {
 
 #[tokio::test]
 async fn supported_direct_path_spawns_once_and_delivers_exact_prompt() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let (script, marker) = test_script(temp.path());
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path();
+    let (script, marker) = test_script(cwd);
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf 'x\\n' >> \"$MARKER\"\npwd\nlast=\nfor arg in \"$@\"; do last=$arg; done\nprintf '%s' \"$last\"\n",
+    )
+    .unwrap();
 
-    let prompt = "  exact $HOME 'prompt' \\ value  ";
-    let clean = CleanCommandContract::try_new(
+    let prompt = " prompt ";
+    let clean = Contract::try_new(
         script,
-        BTreeMap::from([("MARKER".to_string(), marker.display().to_string())]),
+        cwd,
+        BTreeMap::from([("MARKER".into(), marker.display().to_string())]),
     )
-    .expect("contract");
-    let session = crate::transport::build_ephemeral_meta_session(temp.path());
-    let result = execute_clean_test(
-        &opencode(),
-        prompt,
-        &session,
-        ExecuteOptions::new(StreamMode::BufferOnly, 60),
-        clean,
-    )
-    .await
-    .expect("clean execution");
-    assert_eq!(result.execution.output, prompt);
+    .unwrap();
+    let session = crate::transport::build_ephemeral_meta_session(cwd);
+    let parent_cwd = std::env::current_dir().unwrap();
+    assert_ne!(parent_cwd, cwd);
+    let result = execute_clean_test(&opencode(), prompt, &session, options(), clean)
+        .await
+        .unwrap();
     assert_eq!(
-        std::fs::read_to_string(marker).expect("spawn marker"),
-        "x\n",
-        "clean direct transport must spawn exactly once"
+        result.execution.output,
+        format!("{}\n{prompt}", cwd.display())
     );
+    assert_eq!(std::env::current_dir().unwrap(), parent_cwd);
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "x\n");
 }
 
 #[tokio::test]
 async fn unsupported_transport_and_pre_session_hook_fail_before_spawn() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir().unwrap();
     let session = crate::transport::build_ephemeral_meta_session(temp.path());
-    let unsupported = execute_clean_test(
-        &claude(),
-        "prompt",
-        &session,
-        ExecuteOptions::new(StreamMode::BufferOnly, 60),
-        contract("/definitely/missing"),
-    )
-    .await
-    .expect_err("configured ACP transport is unsupported");
-    assert!(unsupported.to_string().contains("unsupported"));
-
     let hook = csa_hooks::PreSessionHookInvocation::new(csa_hooks::PreSessionHookConfig {
         command: Some("must-not-run".into()),
         ..Default::default()
     });
-    let rejected = execute_clean_test(
-        &opencode(),
-        "prompt",
-        &session,
-        ExecuteOptions::new(StreamMode::BufferOnly, 60).with_pre_session_hook(hook),
-        contract("/definitely/missing"),
-    )
-    .await
-    .expect_err("hook must fail before transport invocation");
-    assert!(rejected.to_string().contains("pre-session"));
+    for (executor, options, expected) in [
+        (claude(), options(), "unsupported"),
+        (
+            opencode(),
+            options().with_pre_session_hook(hook),
+            "pre-session",
+        ),
+    ] {
+        let error = execute_clean_test(
+            &executor,
+            "prompt",
+            &session,
+            options,
+            contract("/definitely/missing"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains(expected));
+    }
 }
