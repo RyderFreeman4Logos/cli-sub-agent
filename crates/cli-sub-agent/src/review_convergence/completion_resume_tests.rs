@@ -282,7 +282,25 @@ fn clustered_start_dispatches_only_ledger_authorized_repairs_and_preserves_budge
     assert_eq!(transition.state.policy_digest, Some(claim.policy_digest));
     assert!(matches!(
         transition.action,
-        Some(Action::RunAuthorizedRepairs { batches, .. }) if batches == claim.repair_batches
+        Some(Action::RunAuthorizedRepairs { ref batches, .. }) if batches == &claim.repair_batches
+    ));
+}
+
+#[test]
+fn persisted_clustered_campaign_rebuilds_the_same_strict_start_without_cli_identifiers() {
+    let (ledger, claim) = clustered_claim(true);
+    let start =
+        CompletionStart::from_persisted_clustered_campaign(&ledger, claim.campaign_id.clone())
+            .expect("persisted clustered campaign");
+    let transition = start_completion(Budget::new(12, 8).unwrap(), start).expect("first action");
+
+    assert!(matches!(
+        transition.action,
+        Some(Action::RunAuthorizedRepairs { ref batches, .. }) if batches == &claim.repair_batches
+    ));
+    assert!(matches!(
+        transition.action,
+        Some(Action::RunAuthorizedRepairs { .. } | Action::RunFinalGates { .. })
     ));
 }
 

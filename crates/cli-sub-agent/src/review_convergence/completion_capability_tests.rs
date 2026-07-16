@@ -1,4 +1,134 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+
+use super::{SESSION, parsed_review};
+
+#[test]
+fn convergence_cli_modes_parse_validate_and_appear_in_help() {
+    let report = parsed_review(&["csa", "review", "--converge", "--range", "main...HEAD"]);
+    assert!(report.converge);
+    assert!(!report.discovery_only);
+    assert!(!report.execute_completion);
+    crate::cli::validate_review_args(&report).expect("read-only report invocation should validate");
+
+    let non_interactive_report = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--range",
+        "main...HEAD",
+        "--sa-mode",
+        "true",
+    ]);
+    assert!(non_interactive_report.sa_mode.is_some());
+    assert!(
+        !non_interactive_report.execute_completion,
+        "non-interactive mode must not gain completion execution by default"
+    );
+
+    let args = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--discovery-only",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert!(args.converge);
+    assert!(args.discovery_only);
+    crate::cli::validate_review_args(&args).expect("experimental invocation should validate");
+
+    let execute = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--execute-completion",
+        "--campaign",
+        "01ARZ3NDEKTSV4RRFFQ69G5FB2",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert!(execute.execute_completion);
+    crate::cli::validate_review_args(&execute)
+        .expect("explicit completion execution invocation should validate");
+
+    let mut command = crate::cli::Cli::command();
+    let help = command
+        .find_subcommand_mut("review")
+        .expect("review subcommand")
+        .render_long_help()
+        .to_string();
+    assert!(help.contains("--converge"));
+    assert!(help.contains("--discovery-only"));
+    assert!(help.contains("--execute-completion"));
+    assert!(help.contains("read-only"));
+    assert!(help.contains("execution"));
+}
+
+#[test]
+fn convergence_cli_rejects_unpaired_non_range_and_unsafe_options() {
+    let unsafe_case = |tail: &[&'static str]| {
+        let mut args = vec!["--converge", "--discovery-only", "--range", "main...HEAD"];
+        args.extend_from_slice(tail);
+        args
+    };
+    let cases = [
+        vec!["--discovery-only", "--range", "main...HEAD"],
+        vec!["--execute-completion", "--range", "main...HEAD"],
+        vec![
+            "--converge",
+            "--execute-completion",
+            "--range",
+            "main...HEAD",
+        ],
+        vec![
+            "--converge",
+            "--campaign",
+            "01ARZ3NDEKTSV4RRFFQ69G5FB2",
+            "--range",
+            "main...HEAD",
+        ],
+        vec![
+            "--converge",
+            "--discovery-only",
+            "--execute-completion",
+            "--range",
+            "main...HEAD",
+        ],
+        vec!["--converge", "--discovery-only"],
+        vec!["--converge", "--discovery-only", "--range", "main..HEAD"],
+        unsafe_case(&["--check-verdict"]),
+        unsafe_case(&["--fix"]),
+        unsafe_case(&["--fix-finding", "--session", SESSION]),
+        unsafe_case(&["--session", SESSION]),
+        unsafe_case(&["--reviewers", "2"]),
+        unsafe_case(&["--no-fs-sandbox"]),
+        unsafe_case(&["--extra-readable", "/tmp/provider-input"]),
+        unsafe_case(&["--context", "context.md"]),
+        unsafe_case(&["--prompt-file", "prompt.md"]),
+        unsafe_case(&["--spec", "contract.spec"]),
+        unsafe_case(&["--extra-writable", "/tmp"]),
+        unsafe_case(&["--prior-rounds-summary", "old.toml"]),
+    ];
+
+    for mut tail in cases {
+        let spec = tail.iter().position(|arg| *arg == "--spec").map(|index| {
+            tail.remove(index);
+            tail.remove(index).to_owned()
+        });
+        let mut argv = vec!["csa", "review"];
+        argv.extend(tail);
+        let mut args = parsed_review(&argv);
+        args.spec = spec;
+        let error = crate::cli::validate_review_args(&args)
+            .expect_err("unsafe convergence combination must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("convergence report/execute capability"),
+            "unexpected validation error: {error}"
+        );
+    }
+}
 
 #[test]
 fn convergence_report_dispatch_precedes_config_and_all_execution_paths() {
@@ -27,7 +157,7 @@ fn convergence_report_dispatch_precedes_config_and_all_execution_paths() {
 fn execute_completion_policy_admission_precedes_provider_selection_and_dispatch() {
     let source = include_str!("../review_cmd_handle.rs");
     let admission = source
-        .find("ensure_completion_execution_is_allowed(")
+        .find("completion_policy::resolve(")
         .expect("completion policy admission is missing");
     for provider_boundary in [
         "resolve_selection_tool",
@@ -42,6 +172,10 @@ fn execute_completion_policy_admission_precedes_provider_selection_and_dispatch(
             "completion policy admission must precede {provider_boundary}"
         );
     }
+    assert!(
+        include_str!("../review_cmd_completion_policy.rs")
+            .contains("ensure_completion_execution_is_allowed(")
+    );
 }
 
 #[test]
@@ -51,15 +185,37 @@ fn discovery_only_keeps_the_legacy_clustering_json_contract() {
         .find("\"kind\": \"convergence_clustering_complete\"")
         .expect("legacy discovery-only JSON output is missing");
     let execute_output = source
-        .find("\"reason_code\": \"completion_runtime_not_wired\"")
-        .expect("explicit completion safety block is missing");
+        .find("run_clustered_completion")
+        .expect("explicit clustered completion dispatch is missing");
     assert!(
         execute_output < legacy_output,
-        "execute-only safety block must not replace the legacy discovery-only JSON path"
+        "execute-only dispatch must not replace the legacy discovery-only JSON path"
     );
     let legacy_tail = &source[legacy_output..];
     assert!(legacy_tail.contains("\"review_verdict\": null"));
     assert!(legacy_tail.contains("\"merge_attestation\": false"));
+}
+
+#[test]
+fn execute_completion_constructs_production_ports_and_drives_the_clustered_start() {
+    let command = include_str!("../review_convergence/mod.rs");
+    assert!(command.contains("ProductionCompletionPorts::new"));
+    assert!(command.contains("run_to_attestation_from_start(&mut ports, budget, start)"));
+    assert!(
+        !command.contains("production_completion_ports_missing"),
+        "an admitted execute request must not stop at the former wiring placeholder"
+    );
+
+    let ports = include_str!("../review_convergence/production_completion.rs");
+    let final_gates = ports
+        .find("fn run_final_gates")
+        .expect("production final-gates port is missing");
+    let clean_room = ports
+        .find("async fn run_clean_room")
+        .expect("production clean-room port is missing");
+    assert!(final_gates < clean_room);
+    assert!(ports.contains("lease: Option<DetachedWorkspaceLease<CurrentCheckoutCleanup>>"));
+    assert!(ports.contains("lease.workspace()"));
 }
 
 #[test]

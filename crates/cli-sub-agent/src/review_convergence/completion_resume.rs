@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use csa_session::convergence::{CandidateId, ConvergenceEvent, ConvergenceLedger, RootClusterId};
+use csa_session::convergence::{
+    CampaignId, CandidateId, ConvergenceEvent, ConvergenceLedger, RootClusterId,
+};
 
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction, CompletionBudget, CompletionError, CompletionEvent,
@@ -10,6 +12,115 @@ use super::completion::{
 use super::completion_types::ClusteredCompletionStart;
 
 impl CompletionStart {
+    /// Derive an exact clustered checkpoint from one persisted campaign.
+    ///
+    /// The CLI never accepts candidate, cluster, or repair identifiers from its input. Instead,
+    /// it reconstructs the claim from the durable ledger and then sends that claim through the
+    /// same strict validator used by recovery and unit tests.
+    pub(crate) fn from_persisted_clustered_campaign(
+        ledger: &ConvergenceLedger,
+        campaign_id: CampaignId,
+    ) -> Result<Self, CompletionError> {
+        ledger
+            .validate()
+            .map_err(|_| CompletionError::IdentityMismatch)?;
+        let campaign = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .find_map(|entry| match entry.event() {
+                ConvergenceEvent::CampaignStarted(campaign) => Some(campaign),
+                _ => None,
+            })
+            .ok_or(CompletionError::IdentityMismatch)?;
+        let policy_digest = campaign
+            .policy_digest()
+            .cloned()
+            .ok_or(CompletionError::PolicyDigestMismatch)?;
+        let epoch = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::EpochOpened(epoch) => Some(epoch),
+                _ => None,
+            })
+            .next_back()
+            .cloned()
+            .ok_or(CompletionError::IdentityMismatch)?;
+        let discovery_attempts = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::DiscoveryAttemptRecorded(attempt)
+                    if attempt.epoch_id() == epoch.id() =>
+                {
+                    Some(attempt.id().clone())
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let candidate_ids = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::CandidateRecorded(candidate)
+                    if discovery_attempts.contains(candidate.discovery_attempt_id()) =>
+                {
+                    Some(candidate.id().clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let root_cluster_ids = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::RootClusterRecorded(cluster)
+                    if cluster.epoch_id() == epoch.id() =>
+                {
+                    Some(cluster.id().clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let repair_batches = ledger
+            .entries()
+            .iter()
+            .filter(|entry| entry.campaign_id() == &campaign_id)
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::RepairBatchRecorded(batch) if batch.epoch_id() == epoch.id() => {
+                    Some(AuthorizedRepairBatch::new(
+                        batch.root_cluster_id().clone(),
+                        batch.id().clone(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let ledger_generation = ledger.entries().last().map_or(
+            0,
+            csa_session::convergence::ConvergenceLedgerEntry::sequence,
+        );
+        Self::clustered(
+            ledger,
+            super::completion_types::ClusteredCompletionClaim {
+                campaign_id,
+                epoch,
+                candidate_ids,
+                root_cluster_ids,
+                repair_batches,
+                cycles: 0,
+                provider_turns: 0,
+                ledger_generation,
+                policy_digest,
+            },
+        )
+    }
+
     /// Restore an executable clustered start only when its checkpoint exactly matches the ledger.
     ///
     /// The ledger is validated before checking the caller-provided checkpoint, so an otherwise

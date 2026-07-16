@@ -20,6 +20,7 @@ use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -279,6 +280,77 @@ impl CleanRoomWorkspace {
     pub(crate) fn epoch(&self) -> &EpochRecord {
         &self.epoch
     }
+}
+
+/// Cleanup capability for the current checkout. Completion leases the checkout's identity; it
+/// must never remove or otherwise mutate the caller's working directory on release.
+#[derive(Debug, Default)]
+pub(crate) struct CurrentCheckoutCleanup;
+
+impl WorkspaceCleanup for CurrentCheckoutCleanup {
+    fn cleanup(&mut self, _timeout: Duration) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Acquire an owned lease for the current repository checkout without materializing a worktree.
+///
+/// The lease records the actual current-directory device, inode, nonce, campaign, and frozen
+/// epoch. A direct `.git` directory is deliberately required as the same-filesystem durable
+/// lease store; linked worktrees are rejected rather than silently creating another checkout.
+pub(crate) fn acquire_current_checkout_lease(
+    project_root: &Path,
+    bundle_path: &Path,
+    campaign_id: CampaignId,
+    generation: u64,
+    epoch: EpochRecord,
+    cleanup_timeout: Duration,
+    failure_ledger: CleanupFailureLedger,
+) -> Result<DetachedWorkspaceLease<CurrentCheckoutCleanup>> {
+    let (root, _) = direct_directory_metadata("current repository checkout", project_root)?;
+    let bundle_path = bundle_path.canonicalize().with_context(|| {
+        format!(
+            "canonicalize provider evidence bundle {}",
+            bundle_path.display()
+        )
+    })?;
+    if !bundle_path.is_absolute() || !bundle_path.is_file() {
+        bail!("provider evidence bundle must be an absolute regular file");
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-parse", "--verify", "HEAD^{commit}", "--end-of-options"])
+        .output()
+        .context("resolve current checkout HEAD with direct git argv")?;
+    if !output.status.success() {
+        bail!(
+            "current checkout HEAD validation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let observed_head = String::from_utf8(output.stdout)
+        .context("current checkout HEAD was not UTF-8")?
+        .trim()
+        .to_string();
+    if observed_head != epoch.head_oid().as_str() {
+        bail!("current checkout HEAD differs from the clustered completion epoch");
+    }
+    let store = DetachedWorkspaceLeaseStore::open(&root.join(".git"))?;
+    let context = DetachedWorkspaceLeaseContext::new(campaign_id, generation, store)?;
+    let workspace = CleanRoomWorkspace {
+        root,
+        bundle_path,
+        epoch,
+    };
+    let acquired = context.acquire(&workspace)?;
+    Ok(DetachedWorkspaceLease::from_acquired(
+        workspace,
+        acquired,
+        CurrentCheckoutCleanup,
+        cleanup_timeout,
+        failure_ledger,
+    ))
 }
 
 /// Shared audit channel for failures that can only be observed from `Drop`.

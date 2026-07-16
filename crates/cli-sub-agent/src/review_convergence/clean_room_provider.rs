@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use anyhow::{Context, Result, bail};
+use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
     AdmittedModelIdentity, CommandAuthoritySnapshot, EpochRecord, Sha256Digest,
 };
@@ -170,14 +171,25 @@ pub(crate) struct ProviderSessionOutcome {
     session_id: String,
     artifact: Vec<u8>,
     artifact_digest: Sha256Digest,
+    provider_turn_completion: ProviderTurnCompletion,
 }
 
 impl ProviderSessionOutcome {
     pub(crate) fn new(session_id: &str, artifact: &[u8]) -> Self {
+        Self::with_provider_turn_completion(session_id, artifact, ProviderTurnCompletion::Unknown)
+    }
+
+    /// Retain host-observed transport completion metadata beside opaque provider output.
+    pub(crate) fn with_provider_turn_completion(
+        session_id: &str,
+        artifact: &[u8],
+        provider_turn_completion: ProviderTurnCompletion,
+    ) -> Self {
         Self {
             session_id: session_id.to_string(),
             artifact: artifact.to_vec(),
             artifact_digest: Sha256Digest::compute(artifact),
+            provider_turn_completion,
         }
     }
 
@@ -191,6 +203,11 @@ impl ProviderSessionOutcome {
 
     pub(crate) fn artifact_digest(&self) -> &Sha256Digest {
         &self.artifact_digest
+    }
+
+    /// Return the completion classification observed by the host transport.
+    pub(crate) fn provider_turn_completion(&self) -> ProviderTurnCompletion {
+        self.provider_turn_completion
     }
 }
 

@@ -3,13 +3,19 @@ mod clean_room;
 mod clean_room_provider;
 #[expect(
     dead_code,
-    reason = "Task 6 provides audited v2 clean-room evidence before Task 10 wires production completion ports"
+    reason = "v2 parsing keeps inspection-only legacy validation beside the production artifact writer"
 )]
 mod clean_room_v2;
 mod clustering;
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "authorization evidence exposes its lease binding for recovery-oriented callers"
+)]
 mod completion_authorization;
 mod production_clean_room_provider;
+mod production_completion;
+mod production_completion_gate;
+mod production_completion_support;
 mod provider_command_authority;
 // Slice 3A defines the deterministic core without changing legacy production dispatch.
 #[allow(dead_code)]
@@ -82,6 +88,7 @@ pub(super) struct EarlyCommandContext<'a> {
     pub(super) selection: &'a super::session_fix::SelectionToolResolution,
     pub(super) current_depth: u32,
     pub(super) startup_env: &'a crate::startup_env::StartupSubtreeEnv,
+    pub(super) completion_policy: csa_config::EffectiveConvergenceCompletionPolicy,
 }
 
 type EarlyCommandInputs<'a> = (
@@ -94,6 +101,7 @@ type EarlyCommandInputs<'a> = (
     &'a super::session_fix::SelectionToolResolution,
     u32,
     &'a crate::startup_env::StartupSubtreeEnv,
+    csa_config::EffectiveConvergenceCompletionPolicy,
 );
 
 /// Run the legacy discovery path only after the caller has completed its common admission checks.
@@ -108,6 +116,7 @@ pub(super) async fn maybe_run_early_command(input: EarlyCommandInputs<'_>) -> Re
         selection,
         current_depth,
         startup_env,
+        completion_policy,
     ) = input;
     if !args.converge {
         return Ok(None);
@@ -122,6 +131,7 @@ pub(super) async fn maybe_run_early_command(input: EarlyCommandInputs<'_>) -> Re
         selection,
         current_depth,
         startup_env,
+        completion_policy,
     })
     .await
     .map(Some)
@@ -142,24 +152,6 @@ pub(super) fn emit_report_only(range: Option<&str>) -> Result<i32> {
         })
     );
     Ok(0)
-}
-
-/// Refuse an admitted execute request until clustered-resume ports are wired in a later slice.
-///
-/// This is deliberately before model selection, leases, provider calls, gates, or ledger writes.
-pub(super) fn emit_completion_not_wired() -> Result<i32> {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "kind": "convergence_completion_blocked",
-            "reason_code": "completion_runtime_not_wired",
-            "message": "completion execution was explicitly requested and admitted by policy, but clustered-resume execution is not wired yet",
-            "provider_calls": 0,
-            "review_verdict": null,
-            "merge_attestation": false,
-        })
-    );
-    Ok(1)
 }
 
 /// Admit the explicit capability before selecting a provider or creating execution state.
@@ -277,6 +269,7 @@ pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Resul
         no_failover: execution_no_failover,
         current_depth: context.current_depth,
         startup_env: context.startup_env,
+        completion_policy: context.completion_policy,
     })
     .await
 }
@@ -292,6 +285,9 @@ pub(super) async fn run_command(
     context: runner::ResolvedCommandContext<'_>,
     range: &str,
 ) -> Result<i32> {
+    if context.args.execute_completion {
+        return run_clustered_completion(context, range).await;
+    }
     let project_root = context.project_root;
     let command_authority = capture_command_authority(&context).await?;
     let input = engine::ObservationInput::new(range, command_authority.clone());
@@ -364,6 +360,87 @@ pub(super) async fn run_command(
             eprintln!("{}", serde_json::to_string(error.diagnostic())?);
             Ok(1)
         }
+    }
+}
+
+/// Select an already clustered campaign without replaying discovery, verification, or clustering.
+///
+/// The execution port is intentionally constructed only after this exact ledger checkpoint has
+/// been validated. In particular, a CLI campaign string never becomes an executable batch list.
+async fn run_clustered_completion(
+    context: runner::ResolvedCommandContext<'_>,
+    range: &str,
+) -> Result<i32> {
+    let campaign_id = CampaignId::parse(
+        context
+            .args
+            .campaign
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("validated completion campaign is missing"))?,
+    )?;
+    let store = match ConvergenceLedgerStore::for_project(context.project_root) {
+        Ok(store) => store,
+        Err(error) => return emit_completion_setup_block("store_failure", &error),
+    };
+    let ledger = match store.load() {
+        Ok(ledger) => ledger,
+        Err(error) => return emit_completion_setup_block("ledger_load_failure", &error),
+    };
+    let start = match completion::CompletionStart::from_persisted_clustered_campaign(
+        &ledger,
+        campaign_id.clone(),
+    ) {
+        Ok(start) => start,
+        Err(error) => {
+            return emit_completion_setup_block(
+                "clustered_resume_invalid",
+                &anyhow::Error::msg(error.to_string()),
+            );
+        }
+    };
+    let command_authority = match capture_command_authority(&context).await {
+        Ok(authority) => authority,
+        Err(error) => return emit_completion_setup_block("command_authority_failure", &error),
+    };
+    let mut ports = match production_completion::ProductionCompletionPorts::new(
+        &context,
+        store,
+        range,
+        command_authority,
+    ) {
+        Ok(ports) => ports,
+        Err(error) => return emit_completion_setup_block("completion_port_setup_failure", &error),
+    };
+    let (max_cycles, max_provider_turns) = production_completion::completion_budget();
+    let budget = completion::CompletionBudget::new(max_cycles, max_provider_turns)
+        .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+    match completion::run_to_attestation_from_start(&mut ports, budget, start).await {
+        Ok(completion::CompletionOutcome::Attested {
+            campaign_id,
+            epoch,
+            gate_artifact,
+            review_artifact,
+            model_evidence,
+        }) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "kind": "convergence_completion_attested",
+                    "campaign": campaign_id,
+                    "epoch_id": epoch.id(),
+                    "gate_artifact": gate_artifact,
+                    "review_artifact": review_artifact,
+                    "model_evidence": model_evidence,
+                    "review_verdict": "pass",
+                    "merge_attestation": true,
+                })
+            );
+            Ok(0)
+        }
+        Err(error) => emit_completion_setup_block(
+            "completion_execution_failed",
+            &anyhow::Error::msg(error.to_string()),
+        ),
     }
 }
 

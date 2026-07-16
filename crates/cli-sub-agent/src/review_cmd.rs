@@ -35,6 +35,8 @@ mod bug_class_pipeline;
 mod check_verdict;
 #[path = "review_cmd_chunking.rs"]
 mod chunking;
+#[path = "review_cmd_completion_policy.rs"]
+mod completion_policy;
 #[path = "review_cmd_depth.rs"]
 mod depth;
 #[path = "review_cmd_diff_size.rs"]

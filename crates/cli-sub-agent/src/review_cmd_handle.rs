@@ -35,13 +35,8 @@ async fn handle_review_inner(
         ))
         .await;
     }
-    if args.execute_completion {
-        review_convergence::ensure_completion_execution_is_allowed(
-            &global_config.convergence_completion,
-            project_completion_policy.as_ref(),
-        )?;
-        return review_convergence::emit_completion_not_wired();
-    }
+    let completion_policy =
+        completion_policy::resolve(&args, &global_config, project_completion_policy.as_ref())?;
     let inherited_model_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
@@ -72,6 +67,7 @@ async fn handle_review_inner(
         &selection,
         current_depth,
         startup_env,
+        completion_policy,
     ))
     .await?
     {

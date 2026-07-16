@@ -17,13 +17,6 @@ pub(crate) struct DetachedWorkspaceLeaseStore {
 }
 
 impl DetachedWorkspaceLeaseStore {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "lease-store construction is retained for the completion-port wiring slice"
-        )
-    )]
     pub(crate) fn open(root: &Path) -> Result<Self> {
         let (canonical, metadata) = direct_directory_metadata("workspace lease store", root)?;
         Ok(Self {

@@ -1,8 +1,11 @@
 //! Host-authoritative final-gate execution and immutable evidence publication.
 
-#![expect(
-    dead_code,
-    reason = "Task 8 defines the final-gate port before Task 10 wires the aggregate completion ports"
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the production driver cannot synthesize cancellation-only outcomes used by isolated port tests"
+    )
 )]
 
 use std::fs::{self, File, OpenOptions};
