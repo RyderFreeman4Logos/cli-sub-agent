@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt;
 
+use csa_process::{ExecutionResult, ProviderTurnCompletion};
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, EpochRecord,
-    RepairBatchId, RootClusterId, Sha256Digest,
+    ProviderTurnExecutionId, ProviderTurnReservation, RepairBatchId, RootClusterId, Sha256Digest,
 };
 
 use super::discovery_contract::{CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus};
@@ -11,22 +12,38 @@ use super::discovery_contract::{CampaignSelection, CleanRoomReviewOutput, Discov
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompletionBudget {
     pub(super) max_cycles: u32,
-    pub(super) max_provider_actions: u32,
+    pub(super) max_provider_turns: u32,
 }
 
 impl CompletionBudget {
-    pub(crate) fn new(max_cycles: u32, max_provider_actions: u32) -> Result<Self, CompletionError> {
+    pub(crate) fn new(max_cycles: u32, max_provider_turns: u32) -> Result<Self, CompletionError> {
         if max_cycles == 0
-            || max_provider_actions == 0
+            || max_provider_turns == 0
             || max_cycles > 10_000
-            || max_provider_actions > 1_000
+            || max_provider_turns > 1_000
         {
             return Err(CompletionError::InvalidBudget);
         }
         Ok(Self {
             max_cycles,
-            max_provider_actions,
+            max_provider_turns,
         })
+    }
+}
+
+/// The remaining provider-turn capacity supplied to a port before it can reserve work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProviderTurnAllowance {
+    remaining_turns: u32,
+}
+
+impl ProviderTurnAllowance {
+    pub(super) fn new(remaining_turns: u32) -> Self {
+        Self { remaining_turns }
+    }
+
+    pub(crate) fn remaining_turns(self) -> u32 {
+        self.remaining_turns
     }
 }
 
@@ -40,6 +57,8 @@ pub(crate) enum CompletionPhase {
     RunFreshCleanRoom,
     PublishFinalPair,
     Attested,
+    /// Provider usage cannot be proved or safely upper-bounded after a reservation.
+    UsageIndeterminate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +97,7 @@ pub(crate) struct ClusteredCompletionClaim {
     pub(crate) root_cluster_ids: Vec<RootClusterId>,
     pub(crate) repair_batches: Vec<AuthorizedRepairBatch>,
     pub(crate) cycles: u32,
-    pub(crate) provider_actions: u32,
+    pub(crate) provider_turns: u32,
     pub(crate) ledger_generation: u64,
     pub(crate) policy_digest: Sha256Digest,
 }
@@ -92,7 +111,7 @@ pub(crate) struct ClusteredCompletionStart {
     pub(super) root_cluster_ids: Vec<RootClusterId>,
     pub(super) repair_batches: Vec<AuthorizedRepairBatch>,
     pub(super) cycles: u32,
-    pub(super) provider_actions: u32,
+    pub(super) provider_turns: u32,
     pub(super) ledger_generation: u64,
     pub(super) policy_digest: Sha256Digest,
 }
@@ -112,7 +131,8 @@ pub(crate) struct CompletionState {
     pub(super) phase: CompletionPhase,
     pub(super) budget: CompletionBudget,
     pub(super) cycles: u32,
-    pub(super) provider_actions: u32,
+    pub(super) provider_turns: u32,
+    pub(super) reconciled_execution_ids: Vec<ProviderTurnExecutionId>,
     pub(super) campaign_id: Option<CampaignId>,
     pub(super) epoch: Option<EpochRecord>,
     pub(super) discovery_focus: Option<DiscoveryFocus>,
@@ -133,7 +153,8 @@ impl CompletionState {
             phase: CompletionPhase::Start,
             budget,
             cycles: 0,
-            provider_actions: 0,
+            provider_turns: 0,
+            reconciled_execution_ids: Vec::new(),
             campaign_id: None,
             epoch: None,
             discovery_focus: None,
@@ -188,16 +209,78 @@ pub(crate) enum CompletionAction {
     },
 }
 
-impl CompletionAction {
-    pub(super) fn consumes_provider_action(&self) -> bool {
-        matches!(
-            self,
-            Self::Discover { .. }
-                | Self::VerifyAndCluster { .. }
-                | Self::RunAuthorizedRepairs { .. }
-                | Self::RunFreshCleanRoom { .. }
-        )
+/// Reservation a port acquired before it may perform the corresponding action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompletionExecutionReservation {
+    /// This action is host-only and cannot consume provider turns.
+    HostOnly,
+    /// This action may contact a provider only through this durable reservation.
+    Provider(ProviderTurnReservation),
+}
+
+/// Evidence used to reconcile a host-observed provider turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderTurnEvidence {
+    /// Transport metadata explicitly classified the provider turn.
+    Transport(ProviderTurnCompletion),
+    /// The host confirmed the execution occurred, but transport metadata was absent.
+    ConfirmedExecutionFallback,
+}
+
+/// Reconciliation of the reservation acquired before a completion port ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProviderTurnReconciliation {
+    /// A deterministic host-only action consumed no provider turns.
+    HostOnly,
+    /// The provider was not sent, so the durable reservation was released without charge.
+    ReleasedBeforeSend {
+        reservation: ProviderTurnReservation,
+    },
+    /// Provider execution was durably reconciled with host-observed usage and evidence.
+    Reconciled {
+        reservation: ProviderTurnReservation,
+        host_observed_turn_delta: u32,
+        evidence: ProviderTurnEvidence,
+    },
+    /// The host cannot safely prove or upper-bound post-reservation provider usage.
+    UsageIndeterminate {
+        reservation: Option<ProviderTurnReservation>,
+    },
+}
+
+impl ProviderTurnReconciliation {
+    /// Convert host-owned execution metadata into a bounded one-turn reconciliation.
+    ///
+    /// Reaching this adapter proves the provider execution was spawned by the host. Explicit
+    /// transport completion metadata is preserved; when it is absent, the recorded one-turn
+    /// fallback remains safe because the durable reservation already bounds this execution.
+    pub(super) fn from_execution_result(
+        reservation: ProviderTurnReservation,
+        execution: &ExecutionResult,
+    ) -> Self {
+        match execution.provider_turn_completion() {
+            ProviderTurnCompletion::Unknown => Self::Reconciled {
+                reservation,
+                host_observed_turn_delta: 1,
+                evidence: ProviderTurnEvidence::ConfirmedExecutionFallback,
+            },
+            completion => Self::Reconciled {
+                reservation,
+                host_observed_turn_delta: 1,
+                evidence: ProviderTurnEvidence::Transport(completion),
+            },
+        }
     }
+}
+
+/// Result returned by a port after it reconciles its reservation.
+///
+/// The event remains available even when a provider action fails, times out, or is incomplete,
+/// so the reducer always accounts for observed provider turns before surfacing that failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompletionPortResult {
+    pub(crate) event: Result<CompletionEvent, CompletionPortError>,
+    pub(crate) reconciliation: ProviderTurnReconciliation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +364,9 @@ pub(crate) enum CompletionError {
     ProviderUnavailable,
     IncompleteProviderOutput,
     MaxRoundsReached,
+    UsageIndeterminate,
+    DuplicateExecutionReconciliation,
+    InvalidProviderAccounting,
     Port(String),
 }
 
@@ -318,6 +404,15 @@ impl fmt::Display for CompletionError {
                 formatter.write_str("completion provider output is incomplete")
             }
             Self::MaxRoundsReached => formatter.write_str("completion maximum rounds reached"),
+            Self::UsageIndeterminate => {
+                formatter.write_str("completion provider usage is indeterminate")
+            }
+            Self::DuplicateExecutionReconciliation => {
+                formatter.write_str("completion provider execution was reconciled more than once")
+            }
+            Self::InvalidProviderAccounting => {
+                formatter.write_str("completion provider accounting does not match its reservation")
+            }
             Self::Port(message) => write!(formatter, "completion port failed: {message}"),
         }
     }

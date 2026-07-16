@@ -13,7 +13,7 @@ use super::secure_fs::{self, SecureDirectory};
 use super::{
     CampaignId, CompletionActionClaim, CompletionActionId, CompletionActionJournal,
     CompletionActionJournalError, CompletionActionJournalRead, ConvergenceLedgerStore, EpochId,
-    Sha256Digest,
+    ProviderTurnExecutionId, ProviderTurnReservation, Sha256Digest,
 };
 use crate::atomic_state_write::{self, AtomicPublishError};
 
@@ -169,6 +169,49 @@ impl ConvergenceLedgerStore {
         claim: &CompletionActionClaim,
     ) -> Result<(), CompletionActionJournalStoreError> {
         self.update_completion_action_journal(|journal| journal.finish(claim))
+    }
+
+    /// Persist a provider-turn reservation before the caller may send the provider request.
+    pub fn reserve_completion_provider_turn(
+        &self,
+        claim: &CompletionActionClaim,
+        execution_id: ProviderTurnExecutionId,
+        reserved_turns: u32,
+    ) -> Result<ProviderTurnReservation, CompletionActionJournalStoreError> {
+        self.update_completion_action_journal(|journal| {
+            journal.reserve_provider_turn(claim, execution_id, reserved_turns)
+        })
+    }
+
+    /// Reconcile a provider execution exactly once with its host-observed turn delta.
+    pub fn reconcile_completion_provider_turn(
+        &self,
+        reservation: &ProviderTurnReservation,
+        observed_turn_delta: u32,
+    ) -> Result<(), CompletionActionJournalStoreError> {
+        self.update_completion_action_journal(|journal| {
+            journal.reconcile_provider_turn(reservation, observed_turn_delta)
+        })
+    }
+
+    /// Release a reservation only after proving that the provider was never sent.
+    pub fn release_completion_provider_turn_before_send(
+        &self,
+        reservation: &ProviderTurnReservation,
+    ) -> Result<(), CompletionActionJournalStoreError> {
+        self.update_completion_action_journal(|journal| {
+            journal.release_provider_turn_before_send(reservation)
+        })
+    }
+
+    /// Mark a provider reservation indeterminate when recovery cannot safely bound its usage.
+    pub fn mark_completion_provider_turn_usage_indeterminate(
+        &self,
+        reservation: &ProviderTurnReservation,
+    ) -> Result<(), CompletionActionJournalStoreError> {
+        self.update_completion_action_journal(|journal| {
+            journal.mark_provider_turn_usage_indeterminate(reservation)
+        })
     }
 
     pub(super) fn require_completion_action_journal_attestable(

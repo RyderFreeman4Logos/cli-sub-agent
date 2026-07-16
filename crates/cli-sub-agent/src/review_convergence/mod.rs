@@ -35,6 +35,8 @@ mod clean_room_tests;
 #[cfg(test)]
 mod completion_fresh_start_tests;
 #[cfg(test)]
+mod completion_provider_turn_tests;
+#[cfg(test)]
 mod completion_resume_tests;
 #[cfg(test)]
 mod completion_tests;

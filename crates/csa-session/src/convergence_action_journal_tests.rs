@@ -8,7 +8,8 @@ use crate::convergence::{
     COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CampaignId, CompletionActionId,
     CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
     CompletionActionState, ConvergenceLedgerStore, EpochRecord, GitObjectId,
-    MAX_COMPLETION_ACTION_RECORDS, Sha256Digest, parse_legacy_completion_action_journal,
+    MAX_COMPLETION_ACTION_RECORDS, ProviderTurnExecutionId, ProviderTurnExecutionState,
+    Sha256Digest, parse_legacy_completion_action_journal,
 };
 
 fn epoch_id() -> crate::convergence::EpochId {
@@ -160,6 +161,100 @@ fn started_action_also_blocks_attestation_until_current_holder_finishes() {
     assert!(store.verify_completion_action_journal_attestable().is_err());
     store.finish_completion_action(&claim).unwrap();
     store.verify_completion_action_journal_attestable().unwrap();
+}
+
+#[test]
+fn provider_turn_reservation_is_durable_and_reconciles_exactly_once() {
+    let temp = tempdir().unwrap();
+    let store = store_at(temp.path());
+    initialize(&store);
+    let claim = store
+        .claim_completion_action(0, CompletionActionId::generate())
+        .unwrap();
+    let reservation = store
+        .reserve_completion_provider_turn(&claim, ProviderTurnExecutionId::generate(), 2)
+        .unwrap();
+
+    let CompletionActionJournalRead::Current(journal) =
+        store.load_completion_action_journal().unwrap()
+    else {
+        panic!("provider reservation must be durable");
+    };
+    assert_eq!(journal.actions()[0].provider_turns().len(), 1);
+    assert_eq!(
+        journal.actions()[0].provider_turns()[0].state(),
+        ProviderTurnExecutionState::Reserved
+    );
+    assert!(store.finish_completion_action(&claim).is_err());
+
+    store
+        .reconcile_completion_provider_turn(&reservation, 2)
+        .unwrap();
+    store
+        .reconcile_completion_provider_turn(&reservation, 2)
+        .unwrap();
+    assert!(
+        store
+            .reconcile_completion_provider_turn(&reservation, 1)
+            .is_err()
+    );
+    store.finish_completion_action(&claim).unwrap();
+    store.verify_completion_action_journal_attestable().unwrap();
+
+    let CompletionActionJournalRead::Current(journal) =
+        store.load_completion_action_journal().unwrap()
+    else {
+        panic!("provider reconciliation must remain durable");
+    };
+    assert_eq!(
+        journal.actions()[0].provider_turns()[0].state(),
+        ProviderTurnExecutionState::Reconciled {
+            observed_turn_delta: 2
+        }
+    );
+}
+
+#[test]
+fn provider_turn_crash_before_send_releases_but_crash_after_send_is_indeterminate() {
+    let temp = tempdir().unwrap();
+    let store = store_at(temp.path());
+    initialize(&store);
+    let first = store
+        .claim_completion_action(0, CompletionActionId::generate())
+        .unwrap();
+    let before_send = store
+        .reserve_completion_provider_turn(&first, ProviderTurnExecutionId::generate(), 1)
+        .unwrap();
+    store
+        .release_completion_provider_turn_before_send(&before_send)
+        .unwrap();
+    store.finish_completion_action(&first).unwrap();
+
+    let second = store
+        .claim_completion_action(1, CompletionActionId::generate())
+        .unwrap();
+    let after_send = store
+        .reserve_completion_provider_turn(&second, ProviderTurnExecutionId::generate(), 1)
+        .unwrap();
+    store
+        .mark_completion_provider_turn_usage_indeterminate(&after_send)
+        .unwrap();
+    assert!(store.finish_completion_action(&second).is_err());
+    assert!(store.verify_completion_action_journal_attestable().is_err());
+
+    let CompletionActionJournalRead::Current(journal) =
+        store.load_completion_action_journal().unwrap()
+    else {
+        panic!("indeterminate provider usage must remain durable");
+    };
+    assert_eq!(
+        journal.actions()[0].provider_turns()[0].state(),
+        ProviderTurnExecutionState::ReleasedBeforeSend
+    );
+    assert_eq!(
+        journal.actions()[1].provider_turns()[0].state(),
+        ProviderTurnExecutionState::UsageIndeterminate
+    );
 }
 
 #[test]

@@ -152,7 +152,7 @@ impl CompletionStart {
             root_cluster_ids,
             repair_batches,
             cycles: claim.cycles,
-            provider_actions: claim.provider_actions,
+            provider_turns: claim.provider_turns,
             ledger_generation,
             policy_digest: claim.policy_digest,
         }))
@@ -177,7 +177,7 @@ pub(crate) fn start_completion(
         ),
         CompletionStart::Clustered(resume) => {
             if resume.cycles > budget.max_cycles
-                || resume.provider_actions > budget.max_provider_actions
+                || resume.provider_turns >= budget.max_provider_turns
             {
                 return Err(CompletionError::BudgetExhausted);
             }
@@ -189,7 +189,8 @@ pub(crate) fn start_completion(
                 },
                 budget,
                 cycles: resume.cycles,
-                provider_actions: resume.provider_actions,
+                provider_turns: resume.provider_turns,
+                reconciled_execution_ids: Vec::new(),
                 campaign_id: Some(resume.campaign_id.clone()),
                 epoch: Some(resume.epoch.clone()),
                 discovery_focus: None,

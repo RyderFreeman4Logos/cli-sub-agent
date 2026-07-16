@@ -120,11 +120,12 @@ pub use convergence::{
     DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GATE_EVIDENCE_SCHEMA_ID,
     GateCommandResult, GateEvidenceRecord, GitObjectId,
     LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
-    MergeAttestationRecord, RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord,
-    RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
-    SessionRelativeArtifactPath, Sha256Digest, StableFindingId, authorize_consolidated_repairs,
-    compute_attestation_bindings, next_discovery_directive, parse_legacy_completion_action_journal,
-    verify_merge_attestation,
+    MergeAttestationRecord, ProviderTurnExecutionId, ProviderTurnExecutionRecord,
+    ProviderTurnExecutionState, ProviderTurnReservation, RepairBatchId, RepairBatchRecord,
+    RepairHandoffId, RepairHandoffRecord, RootClusterId, RootClusterRecord,
+    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
+    StableFindingId, authorize_consolidated_repairs, compute_attestation_bindings,
+    next_discovery_directive, parse_legacy_completion_action_journal, verify_merge_attestation,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

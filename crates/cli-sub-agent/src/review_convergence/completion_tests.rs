@@ -1,22 +1,21 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId,
     CleanRoomReviewRecord, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
-    CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent, ConvergenceLedger,
-    CsaSessionId, EpochId, EpochRecord, GitObjectId, LedgerEventId, RepairBatchId, RootClusterId,
+    CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionId, CompletionActionJournal,
+    ConvergenceEvent, ConvergenceLedger, CsaSessionId, EpochId, EpochRecord, GitObjectId,
+    LedgerEventId, ProviderTurnExecutionId, RepairBatchId, RootClusterId,
     SessionRelativeArtifactPath, Sha256Digest,
 };
 
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
-    CompletionError as Failure, CompletionEvent as Event, CompletionPhase as Phase,
-    CompletionPortError as PortFailure, CompletionPorts, CompletionState as State,
-    reduce_completion, run_targeted_discovery,
+    CompletionError as Failure, CompletionEvent as Event,
+    CompletionExecutionReservation as ExecutionReservation, CompletionPhase as Phase,
+    CompletionState as State, ProviderTurnEvidence, ProviderTurnReconciliation,
+    reconcile_provider_turns, reduce_completion,
 };
 use super::discovery_contract::{
     CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus, TargetedDiscoveryFocus,
@@ -45,6 +44,22 @@ pub(super) fn epoch(head: u8) -> EpochRecord {
 
 pub(super) fn epoch_id(head: u8) -> EpochId {
     epoch(head).id().clone()
+}
+
+pub(super) fn provider_reservation(
+    reserved_turns: u32,
+) -> csa_session::convergence::ProviderTurnReservation {
+    let mut journal = CompletionActionJournal::new(
+        CampaignId::generate(),
+        epoch_id(2),
+        Sha256Digest::compute(b"completion provider turn test"),
+    );
+    let claim = journal
+        .claim_next(0, CompletionActionId::generate())
+        .expect("action claim");
+    journal
+        .reserve_provider_turn(&claim, ProviderTurnExecutionId::generate(), reserved_turns)
+        .expect("provider reservation")
 }
 
 fn authority(model: &str) -> CommandAuthoritySnapshot {
@@ -209,7 +224,7 @@ fn reach_clean_room() -> (State, Action, CampaignId) {
     )
 }
 
-fn reach_targeted_discovery() -> (State, Action, CampaignId) {
+pub(super) fn reach_targeted_discovery() -> (State, Action, CampaignId) {
     let (state, _, campaign) = reach_clean_room();
     let targeted =
         reduce_completion(&state, clean_room_event(campaign.clone(), finding_output())).unwrap();
@@ -410,7 +425,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
 #[test]
 fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
     let (state, discovery) = start(Budget::new(8, 1).unwrap());
-    let error = reduce_completion(
+    let transition = reduce_completion(
         &state,
         discovery_event(
             &discovery,
@@ -418,8 +433,27 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
             vec![CandidateId::generate()],
         ),
     )
-    .unwrap_err();
-    assert!(matches!(error, Failure::BudgetExhausted));
+    .expect("events do not infer provider usage from action kind");
+    assert_eq!(transition.state.provider_turns, 0);
+    assert!(matches!(
+        transition.action,
+        Some(Action::VerifyAndCluster { .. })
+    ));
+    let reservation = provider_reservation(1);
+    assert_eq!(
+        reconcile_provider_turns(
+            &state,
+            &ExecutionReservation::Provider(reservation.clone()),
+            &ProviderTurnReconciliation::Reconciled {
+                reservation,
+                host_observed_turn_delta: 1,
+                evidence: ProviderTurnEvidence::Transport(
+                    csa_process::ProviderTurnCompletion::Natural
+                ),
+            },
+        ),
+        Err(Failure::BudgetExhausted)
+    );
     for (event, expected) in [
         (Event::MaxRoundsReached, Failure::MaxRoundsReached),
         (Event::DriftDetected, Failure::DriftDetected),
@@ -432,51 +466,6 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
     ] {
         assert_eq!(reduce_completion(&state, event).unwrap_err(), expected);
     }
-}
-
-pub(super) struct FakePorts {
-    events: VecDeque<Result<Event, PortFailure>>,
-    actions: Vec<Action>,
-}
-
-impl FakePorts {
-    pub(super) fn new(events: VecDeque<Result<Event, PortFailure>>) -> Self {
-        Self {
-            events,
-            actions: Vec::new(),
-        }
-    }
-
-    pub(super) fn actions(&self) -> &[Action] {
-        &self.actions
-    }
-}
-
-impl CompletionPorts for FakePorts {
-    fn execute<'a>(
-        &'a mut self,
-        action: &'a Action,
-    ) -> Pin<Box<dyn Future<Output = Result<Event, PortFailure>> + 'a>> {
-        self.actions.push(action.clone());
-        let event = self.events.pop_front().expect("fake event");
-        Box::pin(async move { event })
-    }
-}
-
-#[tokio::test]
-async fn port_error_never_advances_reducer_state() {
-    let (state, action, _) = reach_targeted_discovery();
-    let before = state.clone();
-    let mut ports = FakePorts {
-        events: VecDeque::from([Err(PortFailure::new("provider unavailable"))]),
-        actions: Vec::new(),
-    };
-    assert!(
-        run_targeted_discovery(&state, &action, &mut ports)
-            .await
-            .is_err()
-    );
-    assert_eq!(before, state);
 }
 
 #[test]

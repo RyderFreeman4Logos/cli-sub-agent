@@ -5,7 +5,7 @@
 //! format from its first write; a v1 document can be inspected only as a read-only legacy
 //! document and can never be resumed or overwritten.
 
-use std::{collections::HashSet, fmt, str::FromStr};
+use std::{fmt, str::FromStr};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
@@ -14,6 +14,14 @@ use thiserror::Error;
 use ulid::Ulid;
 
 use super::{CampaignId, EpochId, Sha256Digest};
+
+mod provider_turns;
+mod validation;
+
+pub use provider_turns::{
+    MAX_PROVIDER_TURN_EXECUTIONS_PER_ACTION, ProviderTurnExecutionId, ProviderTurnExecutionRecord,
+    ProviderTurnExecutionState, ProviderTurnReservation,
+};
 
 /// The only completion action journal schema this binary writes.
 pub const COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION: u32 = 2;
@@ -165,6 +173,8 @@ pub struct CompletionActionRecord {
     state: CompletionActionState,
     started_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    #[serde(default)]
+    provider_turns: Vec<ProviderTurnExecutionRecord>,
 }
 
 impl CompletionActionRecord {
@@ -175,6 +185,7 @@ impl CompletionActionRecord {
             state: CompletionActionState::Started,
             started_at: now,
             updated_at: now,
+            provider_turns: Vec::new(),
         }
     }
 
@@ -206,6 +217,12 @@ impl CompletionActionRecord {
     #[must_use]
     pub fn updated_at(&self) -> &DateTime<Utc> {
         &self.updated_at
+    }
+
+    /// Return the provider execution reservations owned by this action.
+    #[must_use]
+    pub fn provider_turns(&self) -> &[ProviderTurnExecutionRecord] {
+        &self.provider_turns
     }
 }
 
@@ -277,9 +294,16 @@ impl CompletionActionJournal {
     /// store separately so legacy non-completion workflows retain their existing behavior.
     #[must_use]
     pub fn permits_attestation(&self) -> bool {
-        self.actions
-            .iter()
-            .all(|record| record.state == CompletionActionState::Finished)
+        self.actions.iter().all(|record| {
+            record.state == CompletionActionState::Finished
+                && record.provider_turns.iter().all(|execution| {
+                    matches!(
+                        execution.state,
+                        ProviderTurnExecutionState::ReleasedBeforeSend
+                            | ProviderTurnExecutionState::Reconciled { .. }
+                    )
+                })
+        })
     }
 
     /// Claim the next external action with an optimistic generation compare-and-swap.
@@ -384,66 +408,18 @@ impl CompletionActionJournal {
                 to: CompletionActionState::Finished,
             });
         }
+        if record.provider_turns.iter().any(|execution| {
+            matches!(
+                execution.state,
+                ProviderTurnExecutionState::Reserved
+                    | ProviderTurnExecutionState::UsageIndeterminate
+            )
+        }) {
+            return Err(CompletionActionJournalError::ProviderTurnUnresolved);
+        }
         record.state = CompletionActionState::Finished;
         record.updated_at = Utc::now();
         self.validate()
-    }
-
-    /// Validate schema, identity, generation, policy, duplicate-ID, and collection bounds.
-    pub fn validate(&self) -> Result<(), CompletionActionJournalError> {
-        if self.schema_version != COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION {
-            return Err(CompletionActionJournalError::UnsupportedSchema(
-                self.schema_version,
-            ));
-        }
-        if self.actions.len() > MAX_COMPLETION_ACTION_RECORDS {
-            return Err(CompletionActionJournalError::TooManyRecords {
-                maximum: MAX_COMPLETION_ACTION_RECORDS,
-            });
-        }
-        if u64::try_from(self.actions.len()).ok() != Some(self.generation) {
-            return Err(CompletionActionJournalError::InvalidGenerationSequence);
-        }
-        let mut action_ids = HashSet::new();
-        for (index, record) in self.actions.iter().enumerate() {
-            if record.schema_version != COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION {
-                return Err(CompletionActionJournalError::MixedSchema);
-            }
-            let expected_generation = u64::try_from(index)
-                .ok()
-                .and_then(|value| value.checked_add(1))
-                .ok_or(CompletionActionJournalError::GenerationOverflow)?;
-            if record.claim.generation != expected_generation {
-                return Err(CompletionActionJournalError::InvalidGenerationSequence);
-            }
-            if record.claim.campaign_id != self.campaign_id
-                || record.claim.epoch_id != self.epoch_id
-                || record.claim.policy_digest != self.policy_digest
-            {
-                return Err(CompletionActionJournalError::IdentityMismatch);
-            }
-            if !action_ids.insert(record.claim.action_id.clone()) {
-                return Err(CompletionActionJournalError::DuplicateActionId(
-                    record.claim.action_id.clone(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn parse_current(bytes: &[u8]) -> anyhow::Result<Self> {
-        let value: serde_json::Value = serde_json::from_slice(bytes)
-            .map_err(|error| anyhow::anyhow!("completion action journal is not JSON: {error}"))?;
-        let schema_version = schema_version(&value)?;
-        if schema_version != COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION {
-            return Err(anyhow::anyhow!(
-                CompletionActionJournalError::UnsupportedSchema(schema_version)
-            ));
-        }
-        let journal: Self = serde_json::from_value(value)
-            .map_err(|error| anyhow::anyhow!("completion action journal v2 is invalid: {error}"))?;
-        journal.validate().map_err(anyhow::Error::from)?;
-        Ok(journal)
     }
 
     fn require_current_claim(
@@ -621,6 +597,38 @@ pub enum CompletionActionJournalError {
         /// Requested state.
         to: CompletionActionState,
     },
+    /// A provider execution reservation was zero, unbounded, or did not match its journal row.
+    #[error("provider turn reservation is invalid")]
+    InvalidProviderTurnReservation,
+    /// A provider execution ID was reused within the completion journal.
+    #[error("duplicate provider turn execution id {0}")]
+    DuplicateProviderTurnExecutionId(ProviderTurnExecutionId),
+    /// A completion action reached the bounded provider-execution protocol limit.
+    #[error("completion action exceeds its maximum of {maximum} provider turn executions")]
+    TooManyProviderTurnExecutions {
+        /// Configured hard upper bound.
+        maximum: usize,
+    },
+    /// A provider turn was reconciled with zero or more turns than were reserved.
+    #[error("provider turn reconciliation is not safely bounded by its reservation")]
+    InvalidProviderTurnReconciliation,
+    /// The reservation cannot be found under its claimed completion action.
+    #[error("provider turn reservation is not present")]
+    ProviderTurnReservationNotFound,
+    /// Provider turn mutation requires the owning completion action to remain started.
+    #[error("provider turn mutation requires a started completion action")]
+    ProviderTurnActionNotStarted,
+    /// A provider execution moved through an unsafe or conflicting recovery state.
+    #[error("provider turn cannot transition from {from:?} to {to:?}")]
+    InvalidProviderTurnStateTransition {
+        /// Persisted provider execution state.
+        from: ProviderTurnExecutionState,
+        /// Requested provider execution state.
+        to: ProviderTurnExecutionState,
+    },
+    /// A completion action was finished while a provider reservation remained unresolved.
+    #[error("completion action contains unresolved provider turns")]
+    ProviderTurnUnresolved,
     /// A v1 document is deliberately not eligible for mutation.
     #[error("legacy completion action journal schema version 1 is read-only")]
     LegacyReadOnly,

@@ -6,7 +6,8 @@ use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
     CompletionEvent as Event, CompletionOutcome, run_to_attestation,
 };
-use super::completion_tests::{FakePorts, artifact, clean_output, epoch, epoch_id};
+use super::completion_provider_turn_tests::FakePorts;
+use super::completion_tests::{artifact, clean_output, epoch, epoch_id};
 use super::discovery_contract::{CampaignSelection, DiscoveryFocus};
 
 #[tokio::test]

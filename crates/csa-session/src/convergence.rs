@@ -29,7 +29,8 @@ pub use action_journal::{
     CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
     CompletionActionRecord, CompletionActionState, LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION,
     LegacyCompletionActionJournal, MAX_COMPLETION_ACTION_RECORDS,
-    parse_legacy_completion_action_journal,
+    MAX_PROVIDER_TURN_EXECUTIONS_PER_ACTION, ProviderTurnExecutionId, ProviderTurnExecutionRecord,
+    ProviderTurnExecutionState, ProviderTurnReservation, parse_legacy_completion_action_journal,
 };
 pub use attestation::{
     AttestationArtifactReader, AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,

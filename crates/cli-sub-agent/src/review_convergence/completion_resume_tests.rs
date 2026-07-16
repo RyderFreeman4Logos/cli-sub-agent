@@ -16,10 +16,13 @@ use csa_session::convergence::{
 
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
-    CompletionError as Failure, CompletionEvent as Event, CompletionOutcome,
-    CompletionPhase as Phase, CompletionStart, run_to_attestation_from_start, start_completion,
+    CompletionError as Failure, CompletionEvent as Event,
+    CompletionExecutionReservation as ExecutionReservation, CompletionOutcome,
+    CompletionPhase as Phase, CompletionStart, ProviderTurnEvidence, ProviderTurnReconciliation,
+    reconcile_provider_turns, run_to_attestation_from_start, start_completion,
 };
-use super::completion_tests::FakePorts;
+use super::completion_provider_turn_tests::FakePorts;
+use super::completion_tests::provider_reservation;
 use super::completion_types::ClusteredCompletionClaim;
 use super::discovery_contract::{CleanRoomReviewOutput, parse_clean_room_review_output};
 
@@ -218,7 +221,7 @@ fn clustered_claim(with_repairs: bool) -> (ConvergenceLedger, ClusteredCompletio
             root_cluster_ids,
             repair_batches,
             cycles: 7,
-            provider_actions: 4,
+            provider_turns: 4,
             ledger_generation,
             policy_digest,
         },
@@ -284,10 +287,7 @@ fn clustered_start_dispatches_only_ledger_authorized_repairs_and_preserves_budge
 
     assert_eq!(transition.state.phase(), Phase::RunAuthorizedRepairs);
     assert_eq!(transition.state.cycles, claim.cycles);
-    assert_eq!(
-        transition.state.provider_actions,
-        claim.provider_actions + 1
-    );
+    assert_eq!(transition.state.provider_turns, claim.provider_turns);
     assert_eq!(transition.state.clustered_candidates, claim.candidate_ids);
     assert_eq!(transition.state.root_clusters, claim.root_cluster_ids);
     assert_eq!(transition.state.repair_batches, claim.repair_batches);
@@ -300,6 +300,26 @@ fn clustered_start_dispatches_only_ledger_authorized_repairs_and_preserves_budge
         transition.action,
         Some(Action::RunAuthorizedRepairs { batches, .. }) if batches == claim.repair_batches
     ));
+}
+
+#[test]
+fn clustered_resume_provider_turn_usage_is_monotonic_after_reconciliation() {
+    let (ledger, claim) = clustered_claim(true);
+    let start = CompletionStart::clustered(&ledger, claim.clone()).expect("validated resume");
+    let transition = start_completion(Budget::new(12, 8).unwrap(), start).expect("first action");
+    let reservation = provider_reservation(1);
+    let reconciled = reconcile_provider_turns(
+        &transition.state,
+        &ExecutionReservation::Provider(reservation.clone()),
+        &ProviderTurnReconciliation::Reconciled {
+            reservation,
+            host_observed_turn_delta: 1,
+            evidence: ProviderTurnEvidence::ConfirmedExecutionFallback,
+        },
+    )
+    .expect("provider turn reconciliation");
+
+    assert_eq!(reconciled.provider_turns, claim.provider_turns + 1);
 }
 
 #[test]
