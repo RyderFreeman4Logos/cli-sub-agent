@@ -232,7 +232,7 @@ impl ConvergenceLedgerStore {
         }
     }
 
-    fn load_completion_action_journal_from_directory(
+    pub(super) fn load_completion_action_journal_from_directory(
         &self,
         directory: &SecureDirectory,
     ) -> anyhow::Result<CompletionActionJournalRead> {

@@ -22,6 +22,7 @@ mod model_evidence;
 mod provider_bundle;
 mod repair;
 mod repair_intent;
+mod repair_intent_store;
 mod secure_fs;
 mod store;
 mod validation;
@@ -79,6 +80,7 @@ pub use repair::{
 pub use repair_intent::{
     MAX_REPAIR_INTENT_BATCHES, REPAIR_INTENT_SCHEMA_VERSION, RepairIntent, RepairIntentState,
 };
+pub use repair_intent_store::{RepairIntentRead, RepairIntentStoreError};
 
 pub use action_journal_store::CompletionActionJournalStoreError;
 #[cfg(test)]

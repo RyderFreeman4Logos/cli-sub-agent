@@ -129,10 +129,11 @@ pub use convergence::{
     ModelEvidence, ModelEvidenceConfidence, ModelEvidenceProvenance, ObservedToolEvidence,
     ProviderTurnExecutionId, ProviderTurnExecutionRecord, ProviderTurnExecutionState,
     ProviderTurnReservation, REPAIR_INTENT_SCHEMA_VERSION, RepairBatchId, RepairBatchRecord,
-    RepairHandoffId, RepairHandoffRecord, RepairIntent, RepairIntentState, RootClusterId,
-    RootClusterRecord, SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath,
-    Sha256Digest, StableFindingId, authorize_consolidated_repairs, compute_attestation_bindings,
-    next_discovery_directive, parse_legacy_completion_action_journal, verify_merge_attestation,
+    RepairHandoffId, RepairHandoffRecord, RepairIntent, RepairIntentRead, RepairIntentState,
+    RepairIntentStoreError, RootClusterId, RootClusterRecord, SemanticFindingIdentity,
+    SemanticLens, SessionRelativeArtifactPath, Sha256Digest, StableFindingId,
+    authorize_consolidated_repairs, compute_attestation_bindings, next_discovery_directive,
+    parse_legacy_completion_action_journal, verify_merge_attestation,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
