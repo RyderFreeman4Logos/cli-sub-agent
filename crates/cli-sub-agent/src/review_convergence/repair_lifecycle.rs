@@ -191,27 +191,43 @@ fn repair_intent_matches_committed_epoch(
     }) else {
         return false;
     };
-    let suffix = &entries[expected_epoch_position + 1..];
-    if suffix.len() != intent.repair_batch_ids().len() + 1 {
-        return false;
-    }
-    let Some((last, handoffs)) = suffix.split_last() else {
+    let Some((last, epoch_entries)) = entries.split_last() else {
         return false;
     };
     if !matches!(last.event(), ConvergenceEvent::EpochOpened(epoch) if epoch == observed_epoch) {
         return false;
     }
-    let mut completed = Vec::with_capacity(handoffs.len());
-    for handoff in handoffs {
-        let ConvergenceEvent::RepairHandoffRecorded(record) = handoff.event() else {
-            return false;
-        };
-        if record.epoch_id() != intent.expected_epoch().id()
-            || record.repair_batch_set_digest() != intent.repair_batch_set_digest()
-        {
-            return false;
+    let mut authorized_batches = Vec::new();
+    let mut completed = Vec::new();
+    for entry in &epoch_entries[expected_epoch_position + 1..] {
+        match entry.event() {
+            ConvergenceEvent::EpochOpened(_) => return false,
+            ConvergenceEvent::RepairBatchRecorded(record)
+                if record.epoch_id() == intent.expected_epoch().id() =>
+            {
+                authorized_batches.push(record.clone());
+            }
+            ConvergenceEvent::RepairHandoffRecorded(record) => {
+                if record.epoch_id() != intent.expected_epoch().id()
+                    || record.repair_batch_set_digest() != intent.repair_batch_set_digest()
+                {
+                    return false;
+                }
+                completed.push(record.repair_batch_id().clone());
+            }
+            _ => {}
         }
-        completed.push(record.repair_batch_id().clone());
+    }
+    if RepairBatchRecord::set_digest(&authorized_batches) != *intent.repair_batch_set_digest() {
+        return false;
+    }
+    let mut authorized = authorized_batches
+        .iter()
+        .map(|batch| batch.id().clone())
+        .collect::<Vec<_>>();
+    authorized.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    if authorized != intent.repair_batch_ids() {
+        return false;
     }
     completed.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     completed == intent.repair_batch_ids()
@@ -256,5 +272,222 @@ fn mark_repair_uncertain(
         (Err(intent_error), Err(action_error)) => Err(intent_error.context(format!(
             "completion action could not be marked uncertain: {action_error:#}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use csa_session::convergence::{
+        AdmittedModelIdentity, ArtifactEvidenceRef, CompletionActionJournalRead,
+        CompletionActionState, ConvergenceEvent, CsaSessionId, EpochRecord, GitObjectId,
+        RepairBatchId, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
+        SessionRelativeArtifactPath, Sha256Digest,
+    };
+    use tempfile::TempDir;
+
+    use super::{
+        CampaignId, CompletionActionId, ConvergenceLedgerStore, RepairIntent, RepairIntentRead,
+        RepairIntentState, capture_epoch, reconcile_incomplete_repair_intent,
+        repair_intent_matches_committed_epoch,
+    };
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run fixture git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn repository() -> TempDir {
+        let temp = TempDir::new().expect("temporary repository");
+        git(temp.path(), &["init"]);
+        git(
+            temp.path(),
+            &["config", "user.name", "repair lifecycle test"],
+        );
+        git(
+            temp.path(),
+            &["config", "user.email", "repair-lifecycle@example.invalid"],
+        );
+        fs::write(temp.path().join("repair.txt"), "initial\n").expect("fixture source");
+        git(temp.path(), &["add", "repair.txt"]);
+        git(temp.path(), &["commit", "-m", "initial"]);
+        temp
+    }
+
+    fn head(root: &Path) -> csa_session::convergence::GitObjectId {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("read fixture HEAD");
+        assert!(output.status.success(), "fixture HEAD must exist");
+        csa_session::convergence::GitObjectId::parse(
+            String::from_utf8(output.stdout)
+                .expect("UTF-8 fixture HEAD")
+                .trim(),
+        )
+        .expect("valid fixture HEAD")
+    }
+
+    #[test]
+    fn crash_before_ledger_commit_marks_repo_ledger_combination_uncertain() {
+        let repository = repository();
+        let expected = capture_epoch(repository.path(), &head(repository.path()))
+            .expect("capture immutable expected epoch")
+            .epoch;
+        let store = ConvergenceLedgerStore::for_project(repository.path())
+            .expect("open project convergence store");
+        let campaign = CampaignId::generate();
+        let policy = Sha256Digest::compute(b"repair lifecycle policy");
+        store
+            .initialize_completion_action_journal(campaign.clone(), expected.id().clone(), policy)
+            .expect("initialize action journal");
+        let claim = store
+            .claim_completion_action(0, CompletionActionId::generate())
+            .expect("claim repair action");
+        let intent = RepairIntent::new(
+            claim.clone(),
+            expected,
+            Sha256Digest::compute(b"exact repair batches"),
+            vec![RepairBatchId::generate()],
+        )
+        .expect("create durable repair intent");
+        store
+            .persist_repair_intent(intent)
+            .expect("persist repair intent before mutation");
+
+        let error = reconcile_incomplete_repair_intent(&store, repository.path(), &campaign)
+            .expect_err("unchanged source with no committed epoch must not be guessed successful");
+        assert!(
+            error
+                .to_string()
+                .contains("incomplete or drifting source/ledger combination"),
+            "unexpected reconciliation error: {error:#}"
+        );
+        assert!(matches!(
+            store.load_repair_intent(&claim).expect("read repaired intent"),
+            RepairIntentRead::Current(intent) if matches!(intent.state(), RepairIntentState::Uncertain)
+        ));
+        assert!(matches!(
+            store
+                .load_completion_action_journal()
+                .expect("read action journal"),
+            CompletionActionJournalRead::Current(journal)
+                if matches!(journal.actions().last().map(|action| action.state()), Some(CompletionActionState::Uncertain))
+        ));
+        assert!(
+            store.verify_completion_action_journal_attestable().is_err(),
+            "uncertain repair state must block final attestation"
+        );
+    }
+
+    #[test]
+    fn recovery_accepts_only_the_exact_complete_handoff_and_changed_epoch_suffix() {
+        let (mut ledger, clustered) = super::super::completion_resume_tests::clustered_claim(true);
+        let campaign = ledger
+            .entries()
+            .iter()
+            .find_map(|entry| match entry.event() {
+                ConvergenceEvent::CampaignStarted(campaign) => Some(campaign.clone()),
+                _ => None,
+            })
+            .expect("clustered fixture campaign");
+        let batches = ledger
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::RepairBatchRecorded(batch) => Some(batch.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let roots = ledger
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry.event() {
+                ConvergenceEvent::RootClusterRecorded(root) => Some(root.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let repository = repository();
+        let store = ConvergenceLedgerStore::for_project(repository.path())
+            .expect("open project convergence store");
+        store
+            .initialize_completion_action_journal(
+                campaign.id().clone(),
+                clustered.epoch.id().clone(),
+                clustered.policy_digest.clone(),
+            )
+            .expect("initialize action journal");
+        let claim = store
+            .claim_completion_action(0, CompletionActionId::generate())
+            .expect("claim repair action");
+        let intent = RepairIntent::new(
+            claim,
+            clustered.epoch.clone(),
+            RepairBatchRecord::set_digest(&batches),
+            batches.iter().map(|batch| batch.id().clone()).collect(),
+        )
+        .expect("bind exact authorized repair intent");
+        let observed = EpochRecord::new(
+            clustered.epoch.base_oid().clone(),
+            GitObjectId::parse(&"33".repeat(20)).expect("changed fixture HEAD"),
+            Sha256Digest::compute(b"changed fixture diff"),
+        );
+        assert!(
+            !repair_intent_matches_committed_epoch(&intent, &observed, &ledger),
+            "a crash before ledger publication must not be treated as completion"
+        );
+
+        let executor: AdmittedModelIdentity =
+            campaign.command_authority().ordered_admitted()[0].clone();
+        let artifact = ArtifactEvidenceRef::new(
+            CsaSessionId::generate(),
+            SessionRelativeArtifactPath::new("output/repair-recovery.json")
+                .expect("fixture artifact path"),
+            Sha256Digest::compute(b"repair recovery artifact"),
+        );
+        let cluster_set_digest = RootClusterRecord::set_digest(&roots);
+        let repair_batch_set_digest = RepairBatchRecord::set_digest(&batches);
+        let mut events = batches
+            .iter()
+            .map(|batch| {
+                ConvergenceEvent::RepairHandoffRecorded(RepairHandoffRecord::new(
+                    campaign.id().clone(),
+                    clustered.epoch.id().clone(),
+                    batch.id().clone(),
+                    batch.content_digest().clone(),
+                    campaign.command_authority_digest().clone(),
+                    batch.candidate_set_digest().clone(),
+                    batch.disposition_set_digest().clone(),
+                    cluster_set_digest.clone(),
+                    repair_batch_set_digest.clone(),
+                    executor.clone(),
+                    artifact.clone(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        events.push(ConvergenceEvent::EpochOpened(observed.clone()));
+        ledger
+            .append_batch(campaign.id().clone(), events)
+            .expect("append complete repair suffix");
+
+        assert!(
+            repair_intent_matches_committed_epoch(&intent, &observed, &ledger),
+            "recovery requires the exact handoff set followed by the observed changed epoch"
+        );
     }
 }

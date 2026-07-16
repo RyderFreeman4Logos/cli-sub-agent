@@ -185,3 +185,102 @@ fn git(project_root: &Path, args: &[&str]) -> Result<Output> {
     }
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use csa_session::convergence::GitObjectId;
+    use tempfile::TempDir;
+
+    use super::{SourceRepairOwner, capture_epoch};
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("run fixture git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn repository() -> TempDir {
+        let temp = TempDir::new().expect("temporary repository");
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.name", "repair test"]);
+        git(
+            temp.path(),
+            &["config", "user.email", "repair@example.invalid"],
+        );
+        fs::write(temp.path().join("repair.txt"), "before\n").expect("fixture source");
+        git(temp.path(), &["add", "repair.txt"]);
+        git(temp.path(), &["commit", "-m", "initial"]);
+        temp
+    }
+
+    fn head(root: &Path) -> GitObjectId {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("read fixture HEAD");
+        assert!(output.status.success(), "fixture HEAD must exist");
+        GitObjectId::parse(String::from_utf8(output.stdout).expect("UTF-8 HEAD").trim())
+            .expect("valid fixture HEAD")
+    }
+
+    #[test]
+    fn source_owner_excludes_concurrent_repair_writer_until_explicit_release() {
+        let repository = repository();
+        let expected = capture_epoch(repository.path(), &head(repository.path()))
+            .expect("capture expected epoch")
+            .epoch;
+        let owner = SourceRepairOwner::acquire(repository.path(), &expected)
+            .expect("first owner acquires source fence");
+
+        let concurrent = match SourceRepairOwner::acquire(repository.path(), &expected) {
+            Ok(_) => panic!("second writer must not acquire the source fence"),
+            Err(error) => error,
+        };
+        assert!(
+            concurrent
+                .to_string()
+                .contains("concurrent fenced repair owner"),
+            "unexpected fence error: {concurrent:#}"
+        );
+
+        owner.release().expect("first owner releases source fence");
+        SourceRepairOwner::acquire(repository.path(), &expected)
+            .expect("next writer acquires only after release")
+            .release()
+            .expect("next writer releases source fence");
+    }
+
+    #[test]
+    fn captured_epoch_requires_clean_source_and_detects_changed_head() {
+        let repository = repository();
+        let base = head(repository.path());
+        let expected = capture_epoch(repository.path(), &base).expect("capture expected epoch");
+        assert!(expected.clean, "new fixture repository must be clean");
+
+        fs::write(repository.path().join("repair.txt"), "dirty\n").expect("dirty fixture source");
+        let dirty = capture_epoch(repository.path(), &base).expect("capture dirty epoch");
+        assert!(!dirty.clean, "dirty source must be rejected before repair");
+        assert_eq!(dirty.epoch.head_oid(), expected.epoch.head_oid());
+
+        git(repository.path(), &["add", "repair.txt"]);
+        git(repository.path(), &["commit", "-m", "repair"]);
+        let changed = capture_epoch(repository.path(), &base).expect("capture changed epoch");
+        assert!(changed.clean, "committed repair source must be clean");
+        assert_ne!(changed.epoch.head_oid(), expected.epoch.head_oid());
+    }
+}

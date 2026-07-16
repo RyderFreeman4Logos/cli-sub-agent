@@ -51,7 +51,7 @@ fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
     )
 }
 
-fn clustered_claim(with_repairs: bool) -> (ConvergenceLedger, ClusteredCompletionClaim) {
+pub(super) fn clustered_claim(with_repairs: bool) -> (ConvergenceLedger, ClusteredCompletionClaim) {
     let campaign_id = CampaignId::generate();
     let epoch = epoch(2);
     let policy_digest = Sha256Digest::compute(b"clustered completion policy");
