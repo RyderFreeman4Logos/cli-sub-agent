@@ -21,6 +21,7 @@ mod ledger;
 mod model_evidence;
 mod provider_bundle;
 mod repair;
+mod repair_intent;
 mod secure_fs;
 mod store;
 mod validation;
@@ -74,6 +75,9 @@ pub use provider_bundle::ProviderEvidenceBundle;
 pub use repair::{
     RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord, RootClusterId,
     RootClusterRecord,
+};
+pub use repair_intent::{
+    MAX_REPAIR_INTENT_BATCHES, REPAIR_INTENT_SCHEMA_VERSION, RepairIntent, RepairIntentState,
 };
 
 pub use action_journal_store::CompletionActionJournalStoreError;
