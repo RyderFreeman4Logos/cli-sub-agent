@@ -75,6 +75,10 @@ mod convergence_store_review_tests;
 #[path = "convergence_attestation_tests.rs"]
 mod convergence_attestation_tests;
 
+#[cfg(test)]
+#[path = "convergence_action_journal_tests.rs"]
+mod convergence_action_journal_tests;
+
 /// Shared test-only environment lock.
 ///
 /// All tests that mutate process-wide environment variables (e.g.
@@ -102,20 +106,25 @@ pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, AttestationArtifactReader,
-    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID, CONVERGENCE_LEDGER_SCHEMA_VERSION,
-    CampaignId, CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId,
-    CandidateRecord, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
-    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource,
+    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
+    COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
+    CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
+    CleanRoomReviewRecord, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
+    CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionClaim, CompletionActionId,
+    CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
+    CompletionActionJournalStoreError, CompletionActionRecord, CompletionActionState,
     ConsolidatedRepairAuthorization, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
     ConvergenceLedgerEntry, ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord,
     CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
     CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
     DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GATE_EVIDENCE_SCHEMA_ID,
-    GateCommandResult, GateEvidenceRecord, GitObjectId, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
+    GateCommandResult, GateEvidenceRecord, GitObjectId,
+    LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
     MergeAttestationRecord, RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord,
     RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
     SessionRelativeArtifactPath, Sha256Digest, StableFindingId, authorize_consolidated_repairs,
-    compute_attestation_bindings, next_discovery_directive, verify_merge_attestation,
+    compute_attestation_bindings, next_discovery_directive, parse_legacy_completion_action_journal,
+    verify_merge_attestation,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

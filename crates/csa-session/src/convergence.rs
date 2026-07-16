@@ -6,6 +6,8 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 
+mod action_journal;
+mod action_journal_store;
 mod attestation;
 mod authority;
 mod authorization;
@@ -22,6 +24,13 @@ mod store;
 mod validation;
 mod validation_attestation;
 mod verification_evidence;
+pub use action_journal::{
+    COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CompletionActionClaim, CompletionActionId,
+    CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
+    CompletionActionRecord, CompletionActionState, LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION,
+    LegacyCompletionActionJournal, MAX_COMPLETION_ACTION_RECORDS,
+    parse_legacy_completion_action_journal,
+};
 pub use attestation::{
     AttestationArtifactReader, AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
     CleanRoomReviewRecord, GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
@@ -58,6 +67,7 @@ pub use repair::{
     RootClusterRecord,
 };
 
+pub use action_journal_store::CompletionActionJournalStoreError;
 #[cfg(test)]
 pub(crate) use store::MAX_LEDGER_BYTES;
 pub use store::{ConvergenceAppendError, ConvergenceLedgerStore};

@@ -20,7 +20,7 @@ fn ledger_name() -> &'static OsStr {
     OsStr::new("ledger.json")
 }
 
-fn lock_name() -> &'static OsStr {
+pub(super) fn lock_name() -> &'static OsStr {
     OsStr::new("ledger.lock")
 }
 
@@ -276,12 +276,23 @@ impl ConvergenceLedgerStore {
         final_review: CleanRoomReviewRecord,
         attestation: MergeAttestationRecord,
     ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
-        self.append_batch(
+        self.append_batch_transaction(
             campaign_id,
             vec![
                 ConvergenceEvent::FinalReviewRecorded(final_review),
                 ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
             ],
+            MAX_LEDGER_BYTES,
+            |directory| self.require_completion_action_journal_attestable(directory),
+            |directory, path, bytes| {
+                atomic_state_write::publish_bytes_in(
+                    directory.file(),
+                    Some(directory.parent()),
+                    ledger_name(),
+                    path,
+                    bytes,
+                )
+            },
         )
     }
 
