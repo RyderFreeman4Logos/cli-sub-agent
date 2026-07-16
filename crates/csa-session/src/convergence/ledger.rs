@@ -7,11 +7,12 @@ use ulid::Ulid;
 
 use super::{
     ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
-    CandidateDispositionRecord, CandidateRecord, CleanRoomReviewRecord, CoverageCellRecord,
-    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
-    MergeAttestationRecord, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
-    Sha256Digest, hash_fields, validation,
+    CandidateDispositionRecord, CandidateRecord, CleanRoomReviewRecord,
+    CompletionAuthorizationRecord, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, MergeAttestationRecord,
+    RepairBatchRecord, RepairHandoffRecord, RootClusterRecord, Sha256Digest, hash_fields,
+    validation,
 };
 
 /// Current on-disk schema version for convergence ledgers.
@@ -112,6 +113,8 @@ pub enum ConvergenceEvent {
     RepairBatchRecorded(RepairBatchRecord),
     /// One validated repair batch received an immutable writer handoff.
     RepairHandoffRecorded(RepairHandoffRecord),
+    /// One completion attempt was bound to an owned workspace lease before external work began.
+    CompletionAuthorizationRecorded(CompletionAuthorizationRecord),
     /// A fresh clean-room review reported an exact zero-finding terminal result.
     FinalReviewRecorded(CleanRoomReviewRecord),
     /// The authoritative terminal bindings were sealed for merge.

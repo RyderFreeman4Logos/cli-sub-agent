@@ -12,6 +12,7 @@ mod attestation;
 mod authority;
 mod authorization;
 mod campaign;
+mod completion_authorization;
 mod discovery;
 mod evidence;
 mod finalization;
@@ -42,6 +43,7 @@ pub use authority::{
     CommandAuthoritySource,
 };
 pub use authorization::{ConsolidatedRepairAuthorization, authorize_consolidated_repairs};
+pub use completion_authorization::{CompletionAuthorizationRecord, WorkspaceLeaseIdentity};
 pub use discovery::{DiscoveryDirective, DiscoveryRunIntent, next_discovery_directive};
 pub use evidence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateRecord,

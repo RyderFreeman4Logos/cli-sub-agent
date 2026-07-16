@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result};
 use csa_config::EffectiveConvergenceCompletionPolicy;
-use csa_session::convergence::{AdmittedModelIdentity, CampaignId, EpochRecord, Sha256Digest};
+use csa_session::convergence::{
+    AdmittedModelIdentity, CampaignId, CompletionAuthorizationRecord, ConvergenceEvent,
+    EpochRecord, Sha256Digest, WorkspaceLeaseIdentity,
+};
 use serde::Serialize;
 
 /// Auditable authorization binding for one future completion attempt.
@@ -12,12 +15,8 @@ use serde::Serialize;
 /// host-observed execution evidence before attestation.
 #[derive(Debug, Serialize)]
 pub(crate) struct CompletionAuthorizationEvent {
-    capability: &'static str,
-    campaign_id: CampaignId,
-    epoch_id: String,
-    repair_batch_count: u32,
-    admitted_executor: AdmittedModelIdentity,
-    policy_digest: Sha256Digest,
+    #[serde(flatten)]
+    record: CompletionAuthorizationRecord,
 }
 
 impl CompletionAuthorizationEvent {
@@ -28,18 +27,31 @@ impl CompletionAuthorizationEvent {
         repair_batch_count: usize,
         admitted_executor: AdmittedModelIdentity,
         policy: &EffectiveConvergenceCompletionPolicy,
+        workspace_lease: WorkspaceLeaseIdentity,
     ) -> Result<Self> {
         let repair_batch_count = u32::try_from(repair_batch_count)
             .context("repair batch count exceeds the authorization event limit")?;
         let policy_json = serde_json::to_vec(policy)
             .context("encode effective completion safety policy for authorization evidence")?;
         Ok(Self {
-            capability: "execute_completion",
-            campaign_id,
-            epoch_id: epoch.id().as_str().to_string(),
-            repair_batch_count,
-            admitted_executor,
-            policy_digest: Sha256Digest::compute(&policy_json),
+            record: CompletionAuthorizationRecord::new(
+                campaign_id,
+                epoch,
+                repair_batch_count,
+                admitted_executor,
+                Sha256Digest::compute(&policy_json),
+                workspace_lease,
+            )?,
         })
+    }
+
+    /// Return the immutable ledger event that must be appended before completion work starts.
+    pub(crate) fn ledger_event(&self) -> ConvergenceEvent {
+        ConvergenceEvent::CompletionAuthorizationRecorded(self.record.clone())
+    }
+
+    /// Return the recorded workspace lease identity for authorization audit.
+    pub(crate) fn workspace_lease(&self) -> &WorkspaceLeaseIdentity {
+        self.record.workspace_lease()
     }
 }

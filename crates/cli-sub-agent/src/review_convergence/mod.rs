@@ -1,7 +1,8 @@
 pub(super) mod bundle;
 mod clean_room;
+mod clean_room_provider;
 mod clustering;
-#[cfg(test)]
+#[allow(dead_code)]
 mod completion_authorization;
 mod production_clean_room_provider;
 mod provider_command_authority;
@@ -49,6 +50,9 @@ mod schema;
 pub(super) mod verification;
 mod verification_runner;
 mod verification_schema;
+mod workspace_lease_fs;
+#[cfg(test)]
+mod workspace_lease_tests;
 
 use anyhow::Result;
 use csa_session::convergence::{

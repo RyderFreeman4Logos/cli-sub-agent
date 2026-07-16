@@ -64,10 +64,14 @@ fn discovery_only_keeps_the_legacy_clustering_json_contract() {
 
 #[test]
 fn completion_authorization_binds_cluster_identity_executor_and_policy() {
+    use std::path::PathBuf;
+
     use csa_config::{ConvergenceCompletionPolicy, ProjectConvergenceCompletionPolicy};
     use csa_session::convergence::{
         AdmittedModelIdentity, CampaignId, EpochRecord, GitObjectId, Sha256Digest,
+        WorkspaceLeaseIdentity,
     };
+    use ulid::Ulid;
 
     let campaign = CampaignId::parse("01ARZ3NDEKTSV4RRFFQ69G5FB2").unwrap();
     let epoch = EpochRecord::new(
@@ -86,12 +90,23 @@ fn completion_authorization_binds_cluster_identity_executor_and_policy() {
         &global,
         Some(&ProjectConvergenceCompletionPolicy::default()),
     );
+    let workspace_lease = WorkspaceLeaseIdentity::new(
+        campaign.clone(),
+        epoch.clone(),
+        1,
+        PathBuf::from("/workspace"),
+        1,
+        2,
+        Ulid::new().to_string(),
+    )
+    .unwrap();
     let event = super::super::completion_authorization::CompletionAuthorizationEvent::new(
         campaign,
         &epoch,
         2,
         AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").unwrap(),
         &policy,
+        workspace_lease,
     )
     .unwrap();
     let event = serde_json::to_value(event).unwrap();
@@ -101,6 +116,8 @@ fn completion_authorization_binds_cluster_identity_executor_and_policy() {
     assert_eq!(event["admitted_executor"]["provider"], "openai");
     assert!(event["policy_digest"].as_str().is_some());
     assert_eq!(event["epoch_id"], epoch.id().as_str());
+    assert_eq!(event["workspace_lease"]["generation"], 1);
+    assert_eq!(event["workspace_lease"]["workspace_root"], "/workspace");
 }
 
 #[test]
