@@ -3,11 +3,12 @@ use std::fmt;
 
 use csa_process::{ExecutionResult, ProviderTurnCompletion};
 use csa_session::convergence::{
-    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, EpochRecord,
+    ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, EpochRecord, ModelEvidence,
     ProviderTurnExecutionId, ProviderTurnReservation, RepairBatchId, RootClusterId, Sha256Digest,
 };
 
-use super::discovery_contract::{CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus};
+use super::clean_room_v2::CleanRoomReviewOutput;
+use super::discovery_contract::{CampaignSelection, DiscoveryFocus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompletionBudget {
@@ -324,7 +325,7 @@ pub(crate) enum CompletionEvent {
         epoch_id: EpochId,
         gate_artifact: ArtifactEvidenceRef,
         review_artifact: ArtifactEvidenceRef,
-        model_identity: AdmittedModelIdentity,
+        model_evidence: ModelEvidence,
     },
     DriftDetected,
     CleanupUncertain,
@@ -338,6 +339,9 @@ pub(crate) enum CompletionOutcome {
     Attested {
         campaign_id: CampaignId,
         epoch: EpochRecord,
+        gate_artifact: ArtifactEvidenceRef,
+        review_artifact: ArtifactEvidenceRef,
+        model_evidence: ModelEvidence,
     },
 }
 

@@ -9,14 +9,16 @@ use tempfile::tempdir;
 use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, AttestationBindingDigests, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    CandidateVerificationEvidence, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
-    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent,
-    ConvergenceLedger, ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord,
-    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
-    GateCommandResult, GateEvidenceRecord, GitObjectId, MergeAttestationRecord, RepairBatchRecord,
-    RootClusterRecord, SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath,
-    Sha256Digest, VerificationIndependence, compute_attestation_bindings, verify_merge_attestation,
+    CandidateVerificationEvidence, CleanRoomReviewArtifactBindings, CleanRoomReviewRecord,
+    CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
+    CommandAuthoritySource, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerStore,
+    CoverageCellRecord, CoverageDispositionRecord, CoveragePlanFinalizationRecord,
+    CoverageRequirement, CoverageScope, CsaSessionId, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, GateCommandResult, GateEvidenceRecord,
+    GitObjectId, MergeAttestationRecord, ModelEvidence, ObservedToolEvidence,
+    ProviderTurnExecutionId, RepairBatchRecord, RootClusterRecord, SemanticFindingIdentity,
+    SemanticLens, SessionRelativeArtifactPath, Sha256Digest, VerificationIndependence,
+    compute_attestation_bindings, verify_merge_attestation,
 };
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
@@ -27,7 +29,7 @@ const VERIFIER_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC4";
 const GATE_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC5";
 const REVIEW_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC6";
 const GATE_SCHEMA: &str = "csa.convergence.gate-evidence/v1";
-const REVIEW_SCHEMA: &str = "csa.convergence.clean-room-review/v1";
+const REVIEW_SCHEMA: &str = "csa.convergence.clean-room-review/v2";
 
 type ArtifactKey = (String, String);
 
@@ -41,6 +43,16 @@ fn oid(fill: char) -> GitObjectId {
 
 fn model() -> AdmittedModelIdentity {
     AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").unwrap()
+}
+
+fn model_evidence() -> ModelEvidence {
+    ModelEvidence::host_observed(
+        model(),
+        ObservedToolEvidence::new("codex", "test-version").unwrap(),
+        Some("gpt-5.6"),
+        ProviderTurnExecutionId::generate(),
+    )
+    .unwrap()
 }
 
 fn authority() -> CommandAuthoritySnapshot {
@@ -233,8 +245,8 @@ impl Fixture {
         let review = CleanRoomReviewRecord::new(
             campaign_id.clone(),
             &epoch,
-            model(),
-            review_artifact.clone(),
+            model_evidence(),
+            CleanRoomReviewArtifactBindings::new(gate_artifact.clone(), review_artifact.clone()),
             0,
             0,
             0,
@@ -276,7 +288,7 @@ impl Fixture {
             .append_batch(
                 self.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(review),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(review)),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
                 ],
             )
@@ -322,7 +334,7 @@ fn attestation_hashes_bind_every_accepted_ledger_set() {
             .append_batch(
                 fixture.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(fixture.review.clone()),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review.clone())),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(changed_record)),
                 ],
             )
@@ -443,8 +455,11 @@ fn attestation_rejects_mismatched_campaign_epoch_and_catalog() {
     let wrong_epoch = CleanRoomReviewRecord::new(
         fixture.campaign_id.clone(),
         &changed_epoch,
-        model(),
-        fixture.review.artifact().clone(),
+        model_evidence(),
+        CleanRoomReviewArtifactBindings::new(
+            fixture.gate.artifact().clone(),
+            fixture.review.artifact().clone(),
+        ),
         0,
         0,
         0,
@@ -479,7 +494,7 @@ fn attestation_rejects_mismatched_campaign_epoch_and_catalog() {
             .append_batch(
                 fixture.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(fixture.review),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review)),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
                 ],
             )
@@ -617,8 +632,11 @@ fn nonzero_or_unpaired_final_review_is_rejected() {
         CleanRoomReviewRecord::new(
             fixture.campaign_id.clone(),
             &fixture.epoch,
-            model(),
-            fixture.review.artifact().clone(),
+            model_evidence(),
+            CleanRoomReviewArtifactBindings::new(
+                fixture.gate.artifact().clone(),
+                fixture.review.artifact().clone(),
+            ),
             1,
             0,
             0,
@@ -630,7 +648,7 @@ fn nonzero_or_unpaired_final_review_is_rejected() {
         ledger
             .append(
                 fixture.campaign_id,
-                ConvergenceEvent::FinalReviewRecorded(fixture.review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review)),
             )
             .is_err()
     );

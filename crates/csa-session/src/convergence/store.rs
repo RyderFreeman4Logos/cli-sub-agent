@@ -279,7 +279,7 @@ impl ConvergenceLedgerStore {
         self.append_batch_transaction(
             campaign_id,
             vec![
-                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(final_review)),
                 ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
             ],
             MAX_LEDGER_BYTES,
@@ -469,7 +469,7 @@ impl ConvergenceLedgerStore {
         self.append_batch_transaction(
             campaign_id,
             vec![
-                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(final_review)),
                 ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
             ],
             MAX_LEDGER_BYTES,

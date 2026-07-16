@@ -116,7 +116,7 @@ pub enum ConvergenceEvent {
     /// One completion attempt was bound to an owned workspace lease before external work began.
     CompletionAuthorizationRecorded(CompletionAuthorizationRecord),
     /// A fresh clean-room review reported an exact zero-finding terminal result.
-    FinalReviewRecorded(CleanRoomReviewRecord),
+    FinalReviewRecorded(Box<CleanRoomReviewRecord>),
     /// The authoritative terminal bindings were sealed for merge.
     MergeAttestationRecorded(Box<MergeAttestationRecord>),
 }

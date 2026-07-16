@@ -6,14 +6,16 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, EpochId, EpochRecord, GitObjectId,
+    ArtifactEvidenceRef, CampaignId, EpochId, EpochRecord, GitObjectId, ModelEvidence,
     Sha256Digest, hash_fields, normalize_nonblank,
 };
 
 /// Schema required from the immutable gate artifact.
 pub const GATE_EVIDENCE_SCHEMA_ID: &str = "csa.convergence.gate-evidence/v1";
 /// Schema required from the immutable final clean-room artifact.
-pub const CLEAN_ROOM_REVIEW_SCHEMA_ID: &str = "csa.convergence.clean-room-review/v1";
+pub const CLEAN_ROOM_REVIEW_SCHEMA_ID: &str = "csa.convergence.clean-room-review/v2";
+/// Historical v1 artifacts are inspection-only and cannot be used to form new terminal evidence.
+pub const LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID: &str = "csa.convergence.clean-room-review/v1";
 /// Schema identity of merge attestation records.
 pub const MERGE_ATTESTATION_SCHEMA_ID: &str = "csa.convergence.merge-attestation/v1";
 
@@ -157,7 +159,8 @@ impl GateEvidenceRecord {
 #[serde(deny_unknown_fields)]
 pub struct CleanRoomReviewRecord {
     pub(super) tuple: AttestationTuple,
-    pub(super) actual_model: AdmittedModelIdentity,
+    pub(super) model_evidence: ModelEvidence,
+    pub(super) gate_artifact: ArtifactEvidenceRef,
     artifact: ArtifactEvidenceRef,
     pub(super) findings_count: u32,
     pub(super) questions_count: u32,
@@ -165,22 +168,53 @@ pub struct CleanRoomReviewRecord {
     pub(super) content_digest: Sha256Digest,
 }
 
+/// The two host-owned artifacts that bind a v2 clean-room review.
+///
+/// Keeping this pair separate from provider content prevents callers from accidentally treating
+/// a review artifact as its prerequisite gate artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanRoomReviewArtifactBindings {
+    gate_artifact: ArtifactEvidenceRef,
+    review_artifact: ArtifactEvidenceRef,
+}
+
+impl CleanRoomReviewArtifactBindings {
+    /// Bind one authoritative gate artifact to the independently published review artifact.
+    #[must_use]
+    pub fn new(gate_artifact: ArtifactEvidenceRef, review_artifact: ArtifactEvidenceRef) -> Self {
+        Self {
+            gate_artifact,
+            review_artifact,
+        }
+    }
+}
+
 impl CleanRoomReviewRecord {
-    /// Construct attestable zero/zero/zero clean-room evidence.
+    /// Construct v2 attestable zero/zero/zero clean-room evidence.
+    ///
+    /// The model evidence and gate artifact are host-owned bindings. A provider response cannot
+    /// supply either value, and a transport report cannot become a verified actual-model claim
+    /// without the independent proof required by [`ModelEvidence`].
     pub fn new(
         campaign_id: CampaignId,
         epoch: &EpochRecord,
-        actual_model: AdmittedModelIdentity,
-        artifact: ArtifactEvidenceRef,
+        model_evidence: ModelEvidence,
+        artifacts: CleanRoomReviewArtifactBindings,
         findings_count: u32,
         questions_count: u32,
         unchecked_count: u32,
     ) -> Result<Self> {
         require_zero(findings_count, questions_count, unchecked_count)?;
         let tuple = AttestationTuple::new(campaign_id, epoch);
+        let CleanRoomReviewArtifactBindings {
+            gate_artifact,
+            review_artifact: artifact,
+        } = artifacts;
         let mut record = Self {
             tuple,
-            actual_model,
+            model_evidence,
+            gate_artifact,
             artifact,
             findings_count,
             questions_count,
@@ -195,6 +229,18 @@ impl CleanRoomReviewRecord {
     #[must_use]
     pub fn artifact(&self) -> &ArtifactEvidenceRef {
         &self.artifact
+    }
+
+    /// Return host-authoritative layered model evidence for this review execution.
+    #[must_use]
+    pub fn model_evidence(&self) -> &ModelEvidence {
+        &self.model_evidence
+    }
+
+    /// Return the gate artifact that this review explicitly verifies.
+    #[must_use]
+    pub fn gate_artifact(&self) -> &ArtifactEvidenceRef {
+        &self.gate_artifact
     }
 
     pub(super) fn validate(&self) -> Result<()> {
@@ -215,7 +261,8 @@ impl CleanRoomReviewRecord {
             REVIEW_DOMAIN,
             &(
                 &self.tuple,
-                &self.actual_model,
+                &self.model_evidence,
+                &self.gate_artifact,
                 &self.artifact,
                 self.findings_count,
                 self.questions_count,
@@ -268,6 +315,9 @@ impl MergeAttestationRecord {
         review.validate()?;
         if gate.tuple != review.tuple {
             bail!("gate and review do not bind the same campaign and exact tuple");
+        }
+        if gate.artifact != review.gate_artifact {
+            bail!("clean-room review is not bound to the exact gate artifact");
         }
         let mut record = Self {
             schema_identity: MERGE_ATTESTATION_SCHEMA_ID.to_string(),

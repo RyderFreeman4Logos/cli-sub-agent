@@ -20,7 +20,10 @@ async fn run_to_attestation_replays_a_fake_history() {
     let review = clean_output();
     let published_gate_artifact = gate_artifact.clone();
     let published_review_artifact = review.artifact().clone();
-    let published_model_identity = review.model_identity().clone();
+    let published_model_evidence = review.model_evidence().clone();
+    let expected_gate_artifact = published_gate_artifact.clone();
+    let expected_review_artifact = published_review_artifact.clone();
+    let expected_model_evidence = published_model_evidence.clone();
     let mut ports = FakePorts::new(VecDeque::from([
         Ok(Event::DiscoveryCompleted {
             focus: DiscoveryFocus::Broad,
@@ -64,7 +67,7 @@ async fn run_to_attestation_replays_a_fake_history() {
             epoch_id: epoch_id(3),
             gate_artifact: published_gate_artifact,
             review_artifact: published_review_artifact,
-            model_identity: published_model_identity,
+            model_evidence: published_model_evidence,
         }),
     ]));
     let outcome = run_to_attestation(
@@ -76,7 +79,7 @@ async fn run_to_attestation_replays_a_fake_history() {
     .await
     .unwrap();
     assert!(
-        matches!(outcome, CompletionOutcome::Attested { campaign_id, epoch: final_epoch } if campaign_id == campaign && final_epoch == epoch(3))
+        matches!(outcome, CompletionOutcome::Attested { campaign_id, epoch: final_epoch, gate_artifact, review_artifact, model_evidence } if campaign_id == campaign && final_epoch == epoch(3) && gate_artifact == expected_gate_artifact && review_artifact == expected_review_artifact && model_evidence == expected_model_evidence)
     );
     assert_eq!(ports.actions().len(), 7);
     assert!(matches!(

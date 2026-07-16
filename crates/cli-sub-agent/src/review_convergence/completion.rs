@@ -228,7 +228,7 @@ pub(crate) fn reduce_completion(
                 epoch_id,
                 gate_artifact,
                 review_artifact,
-                model_identity,
+                model_evidence,
             },
         ) => {
             require_current(state, &campaign_id, &epoch_id)?;
@@ -248,7 +248,7 @@ pub(crate) fn reduce_completion(
                     ))?;
             if expected_gate != &gate_artifact
                 || expected_review.artifact() != &review_artifact
-                || expected_review.model_identity() != &model_identity
+                || expected_review.model_evidence() != &model_evidence
             {
                 return Err(CompletionError::IdentityMismatch);
             }
@@ -554,6 +554,16 @@ pub(crate) async fn run_to_attestation_from_start<P: CompletionPorts>(
             ))?;
         transition = execute_completion_action(&transition.state, action, ports).await?;
         if transition.state.phase == CompletionPhase::Attested {
+            let gate_artifact = transition
+                .state
+                .gate_artifact
+                .clone()
+                .ok_or(CompletionError::IdentityMismatch)?;
+            let clean_room = transition
+                .state
+                .clean_room
+                .as_ref()
+                .ok_or(CompletionError::IdentityMismatch)?;
             return Ok(CompletionOutcome::Attested {
                 campaign_id: transition
                     .state
@@ -565,6 +575,9 @@ pub(crate) async fn run_to_attestation_from_start<P: CompletionPorts>(
                     .epoch
                     .clone()
                     .ok_or(CompletionError::IdentityMismatch)?,
+                gate_artifact,
+                review_artifact: clean_room.artifact().clone(),
+                model_evidence: clean_room.model_evidence().clone(),
             });
         }
     }

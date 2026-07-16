@@ -3,13 +3,15 @@ use std::time::Duration;
 
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId,
-    CleanRoomReviewRecord, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
-    CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionId, CompletionActionJournal,
-    ConvergenceEvent, ConvergenceLedger, CsaSessionId, EpochId, EpochRecord, GitObjectId,
-    LedgerEventId, ProviderTurnExecutionId, RepairBatchId, RootClusterId,
-    SessionRelativeArtifactPath, Sha256Digest,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionId,
+    CompletionActionJournal, ConvergenceEvent, ConvergenceLedger, CsaSessionId, EpochId,
+    EpochRecord, GitObjectId, LedgerEventId, ModelEvidence, ObservedToolEvidence,
+    ProviderTurnExecutionId, RepairBatchId, RootClusterId, SessionRelativeArtifactPath,
+    Sha256Digest,
 };
 
+use super::clean_room_v2::{CleanRoomReviewOutput, HostReviewArtifactStore, ReviewEnvelopeContext};
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
     CompletionError as Failure, CompletionEvent as Event,
@@ -17,10 +19,7 @@ use super::completion::{
     CompletionState as State, ProviderTurnEvidence, ProviderTurnReconciliation,
     reconcile_provider_turns, reduce_completion,
 };
-use super::discovery_contract::{
-    CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus, TargetedDiscoveryFocus,
-    parse_clean_room_review_output as parse_output,
-};
+use super::discovery_contract::{CampaignSelection, DiscoveryFocus, TargetedDiscoveryFocus};
 use super::engine::{DiscoveryRequest, FrozenWorkspace, LedgerPort, initialize_campaign};
 
 fn frozen() -> FrozenWorkspace {
@@ -82,15 +81,10 @@ pub(super) fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
 
 fn clean_room_json(findings: serde_json::Value, questions: &[&str], unchecked: &[&str]) -> String {
     serde_json::json!({
-        "schema_version": 1,
-        "kind": "convergence_clean_room_review",
-        "artifact": artifact(b"clean-room"),
-        "model_identity": {
-            "tool": "codex", "provider": "openai", "model": "gpt-5.6", "reasoning": "high"
-        },
         "findings": findings,
         "questions": questions,
         "unchecked_items": unchecked,
+        "review_text": "Clean-room review completed.",
     })
     .to_string()
 }
@@ -103,13 +97,31 @@ fn finding_json() -> serde_json::Value {
             "primary_component": "completion reducer",
             "bug_class": "duplicate publication"
         },
-        "path": "crates/cli-sub-agent/src/review_convergence/completion.rs",
-        "span": {"start_line": 10, "end_line": 12},
-        "category": "correctness",
-        "severity": "high",
-        "summary": "Terminal publication can be repeated.",
-        "evidence": "A repeated event reaches the publication action."
+        "review_text": "Terminal publication can be repeated."
     }])
+}
+
+fn parse_output(raw: &str) -> anyhow::Result<CleanRoomReviewOutput> {
+    let directory = tempfile::tempdir()?;
+    let session_id = CsaSessionId::generate();
+    let store = HostReviewArtifactStore::new(
+        directory.path(),
+        session_id,
+        SessionRelativeArtifactPath::new("output")?,
+    )?;
+    let evidence = ModelEvidence::host_observed(
+        AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high")?,
+        ObservedToolEvidence::new("codex", "test-version")?,
+        None,
+        ProviderTurnExecutionId::generate(),
+    )?;
+    let context = ReviewEnvelopeContext::new(
+        CampaignId::generate(),
+        epoch(2),
+        artifact(b"clean-room-gate"),
+        evidence,
+    );
+    store.publish(&context, raw)
 }
 
 pub(super) fn clean_output() -> CleanRoomReviewOutput {
@@ -196,7 +208,7 @@ fn publication_event(action: &Action) -> Event {
         epoch_id: epoch.id().clone(),
         gate_artifact: gate_artifact.clone(),
         review_artifact: clean_room.artifact().clone(),
-        model_identity: clean_room.model_identity().clone(),
+        model_evidence: clean_room.model_evidence().clone(),
     }
 }
 
@@ -396,7 +408,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
         campaign_id,
         epoch_id,
         review_artifact,
-        model_identity,
+        model_evidence,
         ..
     } = publication_event(action)
     else {
@@ -410,7 +422,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
                 epoch_id,
                 gate_artifact: artifact(b"wrong-gates"),
                 review_artifact,
-                model_identity,
+                model_evidence,
             },
         )
         .unwrap_err(),
@@ -471,8 +483,14 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
 #[test]
 fn targeted_prompt_contains_artifact_digest_and_semantic_identities_not_transcript() {
     let output = finding_output();
-    assert_eq!(output.artifact().digest(), artifact(b"clean-room").digest());
-    assert_eq!(output.model_identity().model(), "gpt-5.6");
+    assert!(
+        output
+            .artifact()
+            .path()
+            .as_str()
+            .starts_with("output/clean-room-review-v2-")
+    );
+    assert_eq!(output.model_evidence().admitted_model().model(), "gpt-5.6");
     let focus = TargetedDiscoveryFocus::from_review(&output).expect("targeted focus");
     let stable_id = focus.semantic_finding_ids()[0].as_str().to_string();
     let digest = focus.artifact().digest().to_string();
@@ -486,8 +504,8 @@ fn targeted_prompt_contains_artifact_digest_and_semantic_identities_not_transcri
     assert!(!prompt.contains("Terminal publication can be repeated"));
     assert!(!prompt.contains("A repeated event reaches"));
     let clean_room = super::discovery_prompt::build_clean_room_prompt(&epoch(2), output.artifact());
-    assert!(clean_room.contains("convergence_clean_room_review"));
-    assert!(clean_room.contains("\"model_identity\""));
+    assert!(clean_room.contains("\"findings\""));
+    assert!(!clean_room.contains("\"model_identity\""));
     assert!(clean_room.contains(output.artifact().digest().as_str()));
 }
 
@@ -512,12 +530,12 @@ fn clean_room_parser_rejects_unknown_fields_prose_partial_or_ambiguous_json() {
     );
     assert!(parse_output(&duplicate).is_err());
 
-    let mut malformed_path: serde_json::Value = serde_json::from_str(&valid).unwrap();
-    malformed_path["findings"][0]["path"] = serde_json::json!("src//lib.rs");
-    assert!(parse_output(&malformed_path.to_string()).is_err());
+    let mut forbidden_path: serde_json::Value = serde_json::from_str(&valid).unwrap();
+    forbidden_path["findings"][0]["path"] = serde_json::json!("src/lib.rs");
+    assert!(parse_output(&forbidden_path.to_string()).is_err());
 
     let mut control_text: serde_json::Value = serde_json::from_str(&valid).unwrap();
-    control_text["findings"][0]["title"] = serde_json::json!("line\nbreak");
+    control_text["findings"][0]["review_text"] = serde_json::json!("line\nbreak");
     assert!(parse_output(&control_text.to_string()).is_err());
 }
 
@@ -581,11 +599,18 @@ fn terminal_ledger(
     command_authority: &CommandAuthoritySnapshot,
 ) -> (ConvergenceLedger, CampaignRecord) {
     let (ledger, campaign) = matching_ledger(policy, command_authority);
+    let model_evidence = ModelEvidence::host_observed(
+        command_authority.ordered_admitted()[0].clone(),
+        ObservedToolEvidence::new("codex", "test-version").unwrap(),
+        None,
+        ProviderTurnExecutionId::generate(),
+    )
+    .unwrap();
     let review = CleanRoomReviewRecord::new(
         campaign.id().clone(),
         &epoch(2),
-        command_authority.ordered_admitted()[0].clone(),
-        artifact(b"terminal"),
+        model_evidence,
+        CleanRoomReviewArtifactBindings::new(artifact(b"terminal-gate"), artifact(b"terminal")),
         0,
         0,
         0,
@@ -595,7 +620,8 @@ fn terminal_ledger(
     let mut entry = value["entries"][0].clone();
     entry["sequence"] = serde_json::json!(2);
     entry["event_id"] = serde_json::to_value(LedgerEventId::generate()).unwrap();
-    entry["event"] = serde_json::to_value(ConvergenceEvent::FinalReviewRecorded(review)).unwrap();
+    entry["event"] =
+        serde_json::to_value(ConvergenceEvent::FinalReviewRecorded(Box::new(review))).unwrap();
     value["entries"].as_array_mut().unwrap().push(entry);
     (serde_json::from_value(value).unwrap(), campaign)
 }

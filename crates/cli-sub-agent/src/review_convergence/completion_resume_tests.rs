@@ -22,9 +22,8 @@ use super::completion::{
     reconcile_provider_turns, run_to_attestation_from_start, start_completion,
 };
 use super::completion_provider_turn_tests::FakePorts;
-use super::completion_tests::provider_reservation;
+use super::completion_tests::{clean_output, provider_reservation};
 use super::completion_types::ClusteredCompletionClaim;
-use super::discovery_contract::{CleanRoomReviewOutput, parse_clean_room_review_output};
 
 fn epoch(head: u8) -> EpochRecord {
     EpochRecord::new(
@@ -50,24 +49,6 @@ fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
         SessionRelativeArtifactPath::new("output/review.json").expect("path"),
         Sha256Digest::compute(label),
     )
-}
-
-fn clean_output() -> CleanRoomReviewOutput {
-    parse_clean_room_review_output(
-        &serde_json::json!({
-            "schema_version": 1,
-            "kind": "convergence_clean_room_review",
-            "artifact": artifact(b"clean-room"),
-            "model_identity": {
-                "tool": "codex", "provider": "openai", "model": "gpt-5.6", "reasoning": "high"
-            },
-            "findings": [],
-            "questions": [],
-            "unchecked_items": [],
-        })
-        .to_string(),
-    )
-    .expect("clean output")
 }
 
 fn clustered_claim(with_repairs: bool) -> (ConvergenceLedger, ClusteredCompletionClaim) {
@@ -236,7 +217,10 @@ async fn clustered_start_recovers_a_clean_campaign_without_rediscovery() {
     let review = clean_output();
     let published_gate = gate_artifact.clone();
     let published_review = review.artifact().clone();
-    let published_model = review.model_identity().clone();
+    let published_model = review.model_evidence().clone();
+    let expected_gate = published_gate.clone();
+    let expected_review = published_review.clone();
+    let expected_model = published_model.clone();
     let mut ports = FakePorts::new(VecDeque::from([
         Ok(Event::FinalGatesPassed {
             campaign_id: claim.campaign_id.clone(),
@@ -253,7 +237,7 @@ async fn clustered_start_recovers_a_clean_campaign_without_rediscovery() {
             epoch_id: claim.epoch.id().clone(),
             gate_artifact: published_gate,
             review_artifact: published_review,
-            model_identity: published_model,
+            model_evidence: published_model,
         }),
     ]));
 
@@ -263,7 +247,7 @@ async fn clustered_start_recovers_a_clean_campaign_without_rediscovery() {
 
     assert!(matches!(
         outcome,
-        CompletionOutcome::Attested { campaign_id, epoch } if campaign_id == claim.campaign_id && epoch == claim.epoch
+        CompletionOutcome::Attested { campaign_id, epoch, gate_artifact, review_artifact, model_evidence } if campaign_id == claim.campaign_id && epoch == claim.epoch && gate_artifact == expected_gate && review_artifact == expected_review && model_evidence == expected_model
     ));
     assert!(matches!(
         ports.actions(),

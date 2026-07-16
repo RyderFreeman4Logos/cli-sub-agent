@@ -1,6 +1,11 @@
 pub(super) mod bundle;
 mod clean_room;
 mod clean_room_provider;
+#[expect(
+    dead_code,
+    reason = "Task 6 provides audited v2 clean-room evidence before Task 10 wires production completion ports"
+)]
+mod clean_room_v2;
 mod clustering;
 #[allow(dead_code)]
 mod completion_authorization;
@@ -33,6 +38,8 @@ pub(super) use repair_authorization::{
 mod clean_room_provider_tests;
 #[cfg(test)]
 mod clean_room_tests;
+#[cfg(test)]
+mod clean_room_v2_tests;
 #[cfg(test)]
 mod completion_fresh_start_tests;
 #[cfg(test)]

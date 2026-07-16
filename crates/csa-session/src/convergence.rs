@@ -18,6 +18,7 @@ mod evidence;
 mod finalization;
 mod identity;
 mod ledger;
+mod model_evidence;
 mod provider_bundle;
 mod repair;
 mod secure_fs;
@@ -35,7 +36,8 @@ pub use action_journal::{
 };
 pub use attestation::{
     AttestationArtifactReader, AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
-    CleanRoomReviewRecord, GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, GATE_EVIDENCE_SCHEMA_ID,
+    GateCommandResult, GateEvidenceRecord, LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID,
     MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
 };
 pub use authority::{
@@ -63,6 +65,10 @@ pub use verification_evidence::{
 pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
     LedgerEventId,
+};
+pub use model_evidence::{
+    IndependentlyVerifiedModel, ModelEvidence, ModelEvidenceConfidence, ModelEvidenceProvenance,
+    ObservedToolEvidence,
 };
 pub use provider_bundle::ProviderEvidenceBundle;
 pub use repair::{

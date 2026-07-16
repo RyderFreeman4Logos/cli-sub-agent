@@ -89,6 +89,7 @@ pub(super) fn validate_terminal_pair(entries: &[ConvergenceLedgerEntry]) -> Resu
     if entries[entries.len() - 2].campaign_id() != campaign_id
         || review.tuple.campaign_id != *campaign_id
         || attestation.tuple != review.tuple
+        || attestation.gate_evidence.artifact() != review.gate_artifact()
         || attestation.clean_room_artifact != *review.artifact()
     {
         bail!("terminal pair identity, tuple, or clean-room artifact mismatch");
@@ -123,7 +124,10 @@ fn compute_from_entries(
     {
         bail!("terminal policy or command authority mismatch");
     }
-    if !campaign.command_authority().contains(&review.actual_model) {
+    if !campaign
+        .command_authority()
+        .contains(review.model_evidence.admitted_model())
+    {
         bail!("clean-room model is outside command authority");
     }
     let sets = set_digests(entries, campaign_id, epoch)?;
@@ -152,10 +156,13 @@ fn compute_from_entries(
         clean_room_model: bind(
             "clean_room_model",
             &[
-                review.actual_model.tool(),
-                review.actual_model.provider(),
-                review.actual_model.model(),
-                review.actual_model.reasoning(),
+                review.model_evidence.admitted_model().tool(),
+                review.model_evidence.admitted_model().provider(),
+                review.model_evidence.admitted_model().model(),
+                review.model_evidence.admitted_model().reasoning(),
+                review.model_evidence.observed_tool().tool(),
+                review.model_evidence.observed_tool().version(),
+                review.model_evidence.execution_id().as_str(),
             ],
         ),
     })
