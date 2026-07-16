@@ -9,18 +9,19 @@ use anyhow::{Context, anyhow, bail};
 use fd_lock::RwLock;
 use thiserror::Error;
 
+use super::action_journal_selector::{ActiveJournalSelectorRead, CompletionActionJournalSelector};
 use super::secure_fs::{self, SecureDirectory};
 use super::{
-    CampaignId, CompletionActionClaim, CompletionActionId, CompletionActionJournal,
+    CompletionActionClaim, CompletionActionId, CompletionActionJournal,
     CompletionActionJournalError, CompletionActionJournalRead, CompletionActionState,
-    ConvergenceLedgerStore, EpochId, ProviderTurnExecutionId, ProviderTurnReservation,
-    Sha256Digest, TerminalExecutionBinding,
+    ConvergenceLedgerStore, ProviderTurnExecutionId, ProviderTurnReservation,
+    TerminalExecutionBinding,
 };
 use crate::atomic_state_write::{self, AtomicPublishError};
 
 const MAX_COMPLETION_ACTION_JOURNAL_BYTES: u64 = 8 * 1024 * 1024;
 
-fn action_journal_name() -> &'static OsStr {
+pub(super) fn action_journal_name() -> &'static OsStr {
     OsStr::new("completion-actions.json")
 }
 
@@ -62,45 +63,6 @@ impl ConvergenceLedgerStore {
         directory.verify_link()?;
         let journal = self.load_completion_action_journal_from_directory(&directory)?;
         directory.verify_link()?;
-        Ok(journal)
-    }
-
-    /// Initialize the only schema this binary can write for an exact campaign, epoch, and policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when any journal already exists, including a legacy v1 journal.
-    pub fn initialize_completion_action_journal(
-        &self,
-        campaign_id: CampaignId,
-        epoch_id: EpochId,
-        policy_digest: Sha256Digest,
-    ) -> Result<CompletionActionJournal, CompletionActionJournalStoreError> {
-        let directory = self.open_completion_action_journal_directory()?;
-        let mut lock = self.open_completion_action_journal_lock(&directory)?;
-        let _guard = lock.write().map_err(|error| {
-            action_not_published(anyhow!(error).context("acquire completion action journal lock"))
-        })?;
-        directory.verify_link().map_err(action_not_published)?;
-        match self
-            .load_completion_action_journal_from_directory(&directory)
-            .map_err(action_not_published)?
-        {
-            CompletionActionJournalRead::Missing => {}
-            CompletionActionJournalRead::LegacyV1(_) => {
-                return Err(action_not_published(anyhow!(
-                    CompletionActionJournalError::LegacyReadOnly
-                )));
-            }
-            CompletionActionJournalRead::Current(_) => {
-                return Err(action_not_published(anyhow!(
-                    "completion action journal already exists"
-                )));
-            }
-        }
-        let journal = CompletionActionJournal::new(campaign_id, epoch_id, policy_digest);
-        self.publish_completion_action_journal(&directory, &journal)?;
-        directory.verify_link().map_err(action_uncertain)?;
         Ok(journal)
     }
 
@@ -269,8 +231,15 @@ impl ConvergenceLedgerStore {
         directory: &SecureDirectory,
         binding: &TerminalExecutionBinding,
     ) -> anyhow::Result<()> {
-        let CompletionActionJournalRead::Current(journal) =
-            self.load_completion_action_journal_from_directory(directory)?
+        let CompletionActionJournalRead::Current(journal) = self
+            .load_completion_action_journal_partition(
+                directory,
+                &CompletionActionJournalSelector::new(
+                    binding.campaign_id().clone(),
+                    binding.epoch_id().clone(),
+                    binding.policy_digest().clone(),
+                ),
+            )?
         else {
             bail!("terminal publication requires a current completion action journal");
         };
@@ -304,7 +273,20 @@ impl ConvergenceLedgerStore {
         &self,
         directory: &SecureDirectory,
     ) -> anyhow::Result<CompletionActionJournalRead> {
-        let path = completion_action_journal_path(self);
+        match self.load_active_journal_selector(directory)? {
+            ActiveJournalSelectorRead::Missing => Ok(CompletionActionJournalRead::Missing),
+            ActiveJournalSelectorRead::Current(selector) => {
+                self.load_completion_action_journal_partition(directory, &selector)
+            }
+            ActiveJournalSelectorRead::Legacy(journal) => Ok(journal),
+        }
+    }
+
+    pub(super) fn load_active_journal_selector(
+        &self,
+        directory: &SecureDirectory,
+    ) -> anyhow::Result<ActiveJournalSelectorRead> {
+        let path = completion_action_journal_selector_path(self);
         let Some(file) = directory
             .open_private_file(action_journal_name())
             .with_context(|| {
@@ -314,12 +296,50 @@ impl ConvergenceLedgerStore {
                 )
             })?
         else {
-            return Ok(CompletionActionJournalRead::Missing);
+            return Ok(ActiveJournalSelectorRead::Missing);
         };
-        read_completion_action_journal(file, &path)
+        let bytes = read_completion_action_journal_bytes(file, &path)?;
+        match serde_json::from_slice::<CompletionActionJournalSelector>(&bytes) {
+            Ok(selector) => {
+                selector.validate()?;
+                Ok(ActiveJournalSelectorRead::Current(selector))
+            }
+            Err(_) => Ok(ActiveJournalSelectorRead::Legacy(
+                super::action_journal::read_journal(&bytes).map_err(|error| {
+                    anyhow!(
+                        "invalid completion action journal selector {}: {error}",
+                        path.display()
+                    )
+                })?,
+            )),
+        }
     }
 
-    fn open_completion_action_journal_directory(
+    pub(super) fn load_completion_action_journal_partition(
+        &self,
+        directory: &SecureDirectory,
+        selector: &CompletionActionJournalSelector,
+    ) -> anyhow::Result<CompletionActionJournalRead> {
+        let name = selector.journal_name();
+        let path = completion_action_journal_partition_path(self, selector);
+        let Some(file) = directory.open_private_file(&name).with_context(|| {
+            format!(
+                "failed to securely open completion action journal partition {}",
+                path.display()
+            )
+        })?
+        else {
+            return Ok(CompletionActionJournalRead::Missing);
+        };
+        let journal = read_completion_action_journal(file, &path)?;
+        if let CompletionActionJournalRead::Current(current) = &journal
+            && CompletionActionJournalSelector::from_journal(current) != *selector
+        {
+            bail!("completion action journal partition identity does not match its filename scope");
+        }
+        Ok(journal)
+    }
+    pub(super) fn open_completion_action_journal_directory(
         &self,
     ) -> Result<SecureDirectory, CompletionActionJournalStoreError> {
         secure_fs::open_convergence_directory(
@@ -331,7 +351,7 @@ impl ConvergenceLedgerStore {
         .ok_or_else(|| action_not_published(anyhow!("secure convergence directory was not opened")))
     }
 
-    fn open_completion_action_journal_lock(
+    pub(super) fn open_completion_action_journal_lock(
         &self,
         directory: &SecureDirectory,
     ) -> Result<RwLock<File>, CompletionActionJournalStoreError> {
@@ -369,13 +389,30 @@ impl ConvergenceLedgerStore {
             action_not_published(anyhow!(error).context("acquire completion action journal lock"))
         })?;
         directory.verify_link().map_err(action_not_published)?;
-        let mut journal = match self
-            .load_completion_action_journal_from_directory(&directory)
+        let selector = match self
+            .load_active_journal_selector(&directory)
             .map_err(action_not_published)?
         {
+            ActiveJournalSelectorRead::Current(selector) => selector,
+            ActiveJournalSelectorRead::Legacy(_) => {
+                return Err(action_not_published(anyhow!(
+                    CompletionActionJournalError::LegacyReadOnly
+                )));
+            }
+            ActiveJournalSelectorRead::Missing => {
+                return Err(action_not_published(anyhow!(
+                    "completion action journal selector is missing"
+                )));
+            }
+        };
+        let mut journal = match self
+            .load_completion_action_journal_partition(&directory, &selector)
+            .map_err(action_not_published)?
+        {
+            CompletionActionJournalRead::Current(journal) => journal,
             CompletionActionJournalRead::Missing => {
                 return Err(action_not_published(anyhow!(
-                    "completion action journal is missing"
+                    "selected completion action journal partition is missing"
                 )));
             }
             CompletionActionJournalRead::LegacyV1(_) => {
@@ -383,7 +420,6 @@ impl ConvergenceLedgerStore {
                     CompletionActionJournalError::LegacyReadOnly
                 )));
             }
-            CompletionActionJournalRead::Current(journal) => journal,
         };
         let result = update(&mut journal).map_err(|error| action_not_published(anyhow!(error)))?;
         publish(&directory, &journal)?;
@@ -402,17 +438,19 @@ impl ConvergenceLedgerStore {
         })
     }
 
-    fn publish_completion_action_journal(
+    pub(super) fn publish_completion_action_journal(
         &self,
         directory: &SecureDirectory,
         journal: &CompletionActionJournal,
     ) -> Result<(), CompletionActionJournalStoreError> {
         let bytes = serialize_completion_action_journal(journal).map_err(action_not_published)?;
+        let selector = CompletionActionJournalSelector::from_journal(journal);
+        let name = selector.journal_name();
         atomic_state_write::publish_bytes_in(
             directory.file(),
             Some(directory.parent()),
-            action_journal_name(),
-            &completion_action_journal_path(self),
+            &name,
+            &completion_action_journal_partition_path(self, &selector),
             &bytes,
         )
         .map_err(map_action_publish_error)
@@ -426,11 +464,13 @@ impl ConvergenceLedgerStore {
         fault: crate::atomic_state_write::AtomicWriteFault,
     ) -> Result<(), CompletionActionJournalStoreError> {
         let bytes = serialize_completion_action_journal(journal).map_err(action_not_published)?;
+        let selector = CompletionActionJournalSelector::from_journal(journal);
+        let name = selector.journal_name();
         atomic_state_write::publish_bytes_in_with_fault(
             directory.file(),
             Some(directory.parent()),
-            action_journal_name(),
-            &completion_action_journal_path(self),
+            &name,
+            &completion_action_journal_partition_path(self, &selector),
             &bytes,
             fault,
         )
@@ -438,11 +478,23 @@ impl ConvergenceLedgerStore {
     }
 }
 
-fn completion_action_journal_path(store: &ConvergenceLedgerStore) -> std::path::PathBuf {
+pub(super) fn completion_action_journal_selector_path(
+    store: &ConvergenceLedgerStore,
+) -> std::path::PathBuf {
     store
         .project_state_root()
         .join("convergence")
         .join(action_journal_name())
+}
+
+fn completion_action_journal_partition_path(
+    store: &ConvergenceLedgerStore,
+    selector: &CompletionActionJournalSelector,
+) -> std::path::PathBuf {
+    store
+        .project_state_root()
+        .join("convergence")
+        .join(selector.journal_name())
 }
 
 fn completion_action_journal_lock_path(store: &ConvergenceLedgerStore) -> std::path::PathBuf {
@@ -456,6 +508,16 @@ fn read_completion_action_journal(
     file: File,
     path: &Path,
 ) -> anyhow::Result<CompletionActionJournalRead> {
+    let bytes = read_completion_action_journal_bytes(file, path)?;
+    super::action_journal::read_journal(&bytes).map_err(|error| {
+        anyhow!(
+            "invalid completion action journal {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn read_completion_action_journal_bytes(file: File, path: &Path) -> anyhow::Result<Vec<u8>> {
     let metadata = file.metadata().with_context(|| {
         format!(
             "failed to inspect completion action journal {}",
@@ -483,12 +545,7 @@ fn read_completion_action_journal(
             path.display()
         );
     }
-    super::action_journal::read_journal(&bytes).map_err(|error| {
-        anyhow!(
-            "invalid completion action journal {}: {error}",
-            path.display()
-        )
-    })
+    Ok(bytes)
 }
 
 fn serialize_completion_action_journal(
@@ -512,15 +569,17 @@ fn serialize_completion_action_journal(
     Ok(bytes)
 }
 
-fn action_not_published(error: anyhow::Error) -> CompletionActionJournalStoreError {
+pub(super) fn action_not_published(error: anyhow::Error) -> CompletionActionJournalStoreError {
     CompletionActionJournalStoreError::NotPublished(error)
 }
 
-fn action_uncertain(error: anyhow::Error) -> CompletionActionJournalStoreError {
+pub(super) fn action_uncertain(error: anyhow::Error) -> CompletionActionJournalStoreError {
     CompletionActionJournalStoreError::PublishedButDurabilityUnconfirmed(error)
 }
 
-fn map_action_publish_error(error: AtomicPublishError) -> CompletionActionJournalStoreError {
+pub(super) fn map_action_publish_error(
+    error: AtomicPublishError,
+) -> CompletionActionJournalStoreError {
     match error {
         AtomicPublishError::BeforePublish(error) => action_not_published(error),
         AtomicPublishError::PublishedButDurabilityUnconfirmed(error) => action_uncertain(error),

@@ -98,7 +98,11 @@ pub(super) fn claim_repair_action(
         .policy_digest()
         .context("repair campaign is missing its immutable completion policy digest")?
         .clone();
-    let generation = match store.load_completion_action_journal()? {
+    let generation = match store.load_completion_action_journal_for(
+        authorization.campaign().id(),
+        authorization.epoch().id(),
+        &policy_digest,
+    )? {
         CompletionActionJournalRead::Missing => store
             .initialize_completion_action_journal(
                 authorization.campaign().id().clone(),

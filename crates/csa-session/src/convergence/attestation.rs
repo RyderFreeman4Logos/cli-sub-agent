@@ -325,6 +325,7 @@ pub struct TerminalExecutionBinding {
     epoch_id: EpochId,
     action_id: CompletionActionId,
     action_generation: u64,
+    policy_digest: Sha256Digest,
     authorization_lease_generation: u64,
 }
 
@@ -338,6 +339,7 @@ impl TerminalExecutionBinding {
         epoch_id: EpochId,
         action_id: CompletionActionId,
         action_generation: u64,
+        policy_digest: Sha256Digest,
         authorization_lease_generation: u64,
     ) -> Result<Self> {
         if action_generation == 0 || authorization_lease_generation == 0 {
@@ -348,6 +350,7 @@ impl TerminalExecutionBinding {
             epoch_id,
             action_id,
             action_generation,
+            policy_digest,
             authorization_lease_generation,
         })
     }
@@ -371,6 +374,7 @@ impl TerminalExecutionBinding {
             claim.epoch_id().clone(),
             claim.action_id().clone(),
             claim.generation(),
+            claim.policy_digest().clone(),
             authorization_lease.generation(),
         )
     }
@@ -397,6 +401,12 @@ impl TerminalExecutionBinding {
     #[must_use]
     pub fn action_generation(&self) -> u64 {
         self.action_generation
+    }
+
+    /// Return the exact action-journal policy partition.
+    #[must_use]
+    pub fn policy_digest(&self) -> &Sha256Digest {
+        &self.policy_digest
     }
 
     /// Return the generation of the completion authorization lease.

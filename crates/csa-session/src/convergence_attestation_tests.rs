@@ -276,6 +276,7 @@ impl Fixture {
             epoch.id().clone(),
             terminal_action_id.clone(),
             1,
+            policy_digest.clone(),
             cleanup_lease.generation(),
         )
         .unwrap();

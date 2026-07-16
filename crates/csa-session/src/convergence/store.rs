@@ -408,7 +408,7 @@ impl ConvergenceLedgerStore {
         Ok(appended)
     }
 
-    fn load_from_directory(
+    pub(super) fn load_from_directory(
         &self,
         directory: &SecureDirectory,
     ) -> anyhow::Result<ConvergenceLedger> {

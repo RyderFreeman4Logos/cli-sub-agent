@@ -108,7 +108,11 @@ impl<'a> ProductionCompletionPorts<'a> {
             .policy_digest()
             .cloned()
             .context("clustered campaign is missing its completion policy digest")?;
-        let generation = match self.store.load_completion_action_journal()? {
+        let generation = match self.store.load_completion_action_journal_for(
+            campaign_id,
+            epoch.id(),
+            &policy_digest,
+        )? {
             CompletionActionJournalRead::Missing => self
                 .store
                 .initialize_completion_action_journal(
@@ -123,6 +127,7 @@ impl<'a> ProductionCompletionPorts<'a> {
             CompletionActionJournalRead::Current(journal) => {
                 if journal.campaign_id() != campaign_id
                     || journal.epoch_id() != epoch.id()
+                    || journal.policy_digest() != &policy_digest
                     || !journal.permits_attestation()
                 {
                     bail!("completion action journal does not permit this clean-room epoch");

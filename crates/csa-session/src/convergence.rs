@@ -7,6 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 
 mod action_journal;
+mod action_journal_partition_store;
+mod action_journal_selector;
 mod action_journal_store;
 mod attestation;
 mod authority;

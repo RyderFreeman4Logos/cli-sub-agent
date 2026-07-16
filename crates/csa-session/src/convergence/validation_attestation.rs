@@ -115,6 +115,7 @@ pub(super) fn validate_terminal_pair(entries: &[ConvergenceLedgerEntry]) -> Resu
         != attestation
             .execution_binding
             .authorization_lease_generation()
+        || authorization.policy_digest() != attestation.execution_binding.policy_digest()
         || !attestation
             .cleanup_confirmation
             .matches_lease(authorization.workspace_lease())

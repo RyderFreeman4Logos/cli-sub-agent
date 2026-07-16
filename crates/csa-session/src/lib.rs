@@ -84,6 +84,9 @@ mod convergence_attestation_tests;
 mod convergence_terminal_publication_tests;
 
 #[cfg(test)]
+#[path = "convergence_action_journal_partition_tests.rs"]
+mod convergence_action_journal_partition_tests;
+#[cfg(test)]
 #[path = "convergence_action_journal_tests.rs"]
 mod convergence_action_journal_tests;
 

@@ -522,11 +522,25 @@ fn legacy_v1_journal_is_read_only_and_new_journals_never_write_it() {
     let clean = tempdir().unwrap();
     let clean_store = store_at(clean.path());
     let journal = initialize(&clean_store);
-    let bytes = fs::read(action_journal_path(clean.path())).unwrap();
+    let selector_bytes = fs::read(action_journal_path(clean.path())).unwrap();
     assert!(
-        bytes
-            .windows(b"\"schema_version\": 2".len())
-            .any(|window| { window == b"\"schema_version\": 2" })
+        selector_bytes
+            .windows(b"\"selector_schema_version\": 1".len())
+            .any(|window| { window == b"\"selector_schema_version\": 1" })
+    );
+    let CompletionActionJournalRead::Current(reloaded) = clean_store
+        .load_completion_action_journal_for(
+            journal.campaign_id(),
+            journal.epoch_id(),
+            journal.policy_digest(),
+        )
+        .unwrap()
+    else {
+        panic!("new completion action journals must use a current v2 partition");
+    };
+    assert_eq!(
+        reloaded.schema_version(),
+        COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION
     );
     assert_eq!(
         journal.schema_version(),
