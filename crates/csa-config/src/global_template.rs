@@ -101,6 +101,16 @@ max_tokens_per_issue = 5000000
 [tier_policy]
 allow_force_bypass = false
 
+# Safety ceiling for the opt-in convergence completion path. Every field must be
+# explicitly permitted here, a project may only tighten these limits, and the
+# caller must still pass `csa review --converge --execute-completion`.
+# [convergence_completion]
+# allow_execution = false
+# allow_provider_egress = false
+# allow_shell_commands = false
+# allow_credential_inheritance = false
+# max_retention_days = 0
+
 # Experimental feature flags. Disabled by default.
 [experimental]
 enable_prompt_caching = false

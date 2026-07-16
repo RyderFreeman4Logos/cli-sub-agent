@@ -92,8 +92,11 @@ impl std::fmt::Display for ReviewChunkingMode {
         .multiple(false)
 ))]
 pub struct ReviewArgs {
-    /// Run the experimental observe-only convergence discovery engine.
-    /// Currently requires --discovery-only and an explicit --range <base>...HEAD.
+    /// Produce a read-only convergence report for an explicit range.
+    ///
+    /// Add --discovery-only for the legacy discovery JSON, or --execute-completion to request
+    /// completion execution after policy admission. This flag alone never calls a provider or
+    /// modifies source state.
     #[arg(long)]
     pub converge: bool,
 
@@ -101,6 +104,13 @@ pub struct ReviewArgs {
     /// This does not produce a review verdict or merge attestation.
     #[arg(long)]
     pub discovery_only: bool,
+
+    /// Explicitly request convergence completion execution after policy admission.
+    ///
+    /// This never defaults on, including non-interactive invocations. Requires --converge and
+    /// conflicts with --discovery-only.
+    #[arg(long)]
+    pub execute_completion: bool,
 
     /// Execute only ledger-authorized consolidated repair batches for one campaign.
     #[arg(long)]
@@ -453,7 +463,7 @@ fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap:
     if args.repair_only || args.campaign.is_some() {
         return repair_args::validate_repair_only_args(args);
     }
-    if !args.converge && !args.discovery_only {
+    if !args.converge && !args.discovery_only && !args.execute_completion {
         return Ok(());
     }
 
@@ -461,14 +471,26 @@ fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap:
         clap::Error::raw(
             kind,
             format!(
-                "experimental observe-only convergence discovery: {detail}; this walking skeleton never falls back to ordinary review"
+                "convergence report/execute capability: {detail}; this command never falls back to ordinary review"
             ),
         )
     };
-    if args.converge != args.discovery_only {
+    if !args.converge && args.discovery_only {
         return Err(error(
             clap::error::ErrorKind::MissingRequiredArgument,
-            "--converge and --discovery-only currently require each other",
+            "--discovery-only requires --converge",
+        ));
+    }
+    if !args.converge && args.execute_completion {
+        return Err(error(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "--execute-completion requires --converge",
+        ));
+    }
+    if args.discovery_only && args.execute_completion {
+        return Err(error(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--discovery-only is a legacy observation mode and conflicts with --execute-completion",
         ));
     }
     let Some(range) = args.range.as_deref() else {
@@ -532,7 +554,7 @@ fn validate_convergence_args(args: &ReviewArgs) -> std::result::Result<(), clap:
     if let Some(flag) = conflict {
         return Err(error(
             clap::error::ErrorKind::ArgumentConflict,
-            &format!("{flag} is outside this immutable discovery-only slice"),
+            &format!("{flag} is outside the convergence report/execute capability"),
         ));
     }
     Ok(())

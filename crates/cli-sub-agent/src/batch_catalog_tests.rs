@@ -64,6 +64,7 @@ model = "codex/openai/future-batch/high"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     register_batch_model_specs(
@@ -127,6 +128,7 @@ model = "{model}"
             project,
             global,
             mut model_catalog,
+            ..
         } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
         let error = register_batch_model_specs(
@@ -163,6 +165,7 @@ model = "future-provider/future-model/high"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     register_batch_model_specs(
@@ -219,6 +222,7 @@ model = "future-provider/future-model/high"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     register_batch_model_specs(
@@ -287,6 +291,7 @@ model = "future"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     register_batch_model_specs(
@@ -350,6 +355,7 @@ model = "future"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     register_batch_model_specs(
@@ -412,6 +418,7 @@ model = "a/b/c/d/e"
         project,
         global,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(root.path()).expect("effective config");
 
     let error = register_batch_model_specs(

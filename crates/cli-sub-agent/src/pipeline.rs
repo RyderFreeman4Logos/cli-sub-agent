@@ -231,24 +231,27 @@ pub(crate) fn context_load_options_with_skips(
     }
 }
 
-/// Load ProjectConfig and GlobalConfig, validate recursion depth.
+/// Immutable configuration snapshot used by command handlers after recursion-depth validation.
+pub(crate) type LoadedConfig = (
+    Option<ProjectConfig>,
+    GlobalConfig,
+    csa_config::EffectiveModelCatalog,
+    Option<csa_config::ProjectConvergenceCompletionPolicy>,
+);
+
+/// Load configuration and validate recursion depth.
 ///
-/// Returns `Some((project_config, global_config))` on success.
+/// Returns [`LoadedConfig`] on success.
 /// Returns `Ok(None)` if recursion depth exceeded (caller should exit with code 1).
 /// Returns `Err` for config loading/parsing failures (caller should propagate).
 pub(crate) fn load_and_validate(
     project_root: &Path,
     current_depth: u32,
-) -> Result<
-    Option<(
-        Option<ProjectConfig>,
-        GlobalConfig,
-        csa_config::EffectiveModelCatalog,
-    )>,
-> {
+) -> Result<Option<LoadedConfig>> {
     let effective = csa_config::EffectiveConfig::load(project_root)?;
     let config = effective.project;
     let global_config = effective.global;
+    let project_completion_policy = effective.project_convergence_completion;
 
     let max_depth = config
         .as_ref()
@@ -263,7 +266,12 @@ pub(crate) fn load_and_validate(
         return Ok(None);
     }
 
-    Ok(Some((config, global_config, effective.model_catalog)))
+    Ok(Some((
+        config,
+        global_config,
+        effective.model_catalog,
+        project_completion_policy,
+    )))
 }
 
 /// Load and merge MCP server registries from global + project config.

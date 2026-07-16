@@ -15,8 +15,8 @@ pub(super) fn validate_repair_only_args(args: &ReviewArgs) -> std::result::Resul
             "--repair-only and --campaign <CAMPAIGN_ID> require each other",
         ));
     }
-    let conflict = if args.converge || args.discovery_only {
-        Some("--converge/--discovery-only")
+    let conflict = if args.converge || args.discovery_only || args.execute_completion {
+        Some("--converge/--discovery-only/--execute-completion")
     } else if args.check_verdict {
         Some("--check-verdict")
     } else if args.fix || args.fix_finding {

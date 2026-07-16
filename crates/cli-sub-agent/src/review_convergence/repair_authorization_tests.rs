@@ -29,6 +29,12 @@ fn repair_only_cli_requires_explicit_campaign_and_rejects_review_routing() {
             "main...HEAD",
         ],
         vec!["--repair-only", "--campaign", campaign, "--fix"],
+        vec![
+            "--repair-only",
+            "--campaign",
+            campaign,
+            "--execute-completion",
+        ],
         vec!["--repair-only", "--campaign", campaign, "--tier", "quality"],
         vec![
             "--repair-only",

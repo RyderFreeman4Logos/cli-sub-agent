@@ -537,7 +537,28 @@ fn parsed_review(argv: &[&str]) -> crate::cli::ReviewArgs {
 }
 
 #[test]
-fn convergence_cli_flags_parse_validate_and_appear_in_help() {
+fn convergence_cli_modes_parse_validate_and_appear_in_help() {
+    let report = parsed_review(&["csa", "review", "--converge", "--range", "main...HEAD"]);
+    assert!(report.converge);
+    assert!(!report.discovery_only);
+    assert!(!report.execute_completion);
+    crate::cli::validate_review_args(&report).expect("read-only report invocation should validate");
+
+    let non_interactive_report = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--range",
+        "main...HEAD",
+        "--sa-mode",
+        "true",
+    ]);
+    assert!(non_interactive_report.sa_mode.is_some());
+    assert!(
+        !non_interactive_report.execute_completion,
+        "non-interactive mode must not gain completion execution by default"
+    );
+
     let args = parsed_review(&[
         "csa",
         "review",
@@ -550,6 +571,18 @@ fn convergence_cli_flags_parse_validate_and_appear_in_help() {
     assert!(args.discovery_only);
     crate::cli::validate_review_args(&args).expect("experimental invocation should validate");
 
+    let execute = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--execute-completion",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert!(execute.execute_completion);
+    crate::cli::validate_review_args(&execute)
+        .expect("explicit completion execution invocation should validate");
+
     let mut command = crate::cli::Cli::command();
     let help = command
         .find_subcommand_mut("review")
@@ -558,7 +591,9 @@ fn convergence_cli_flags_parse_validate_and_appear_in_help() {
         .to_string();
     assert!(help.contains("--converge"));
     assert!(help.contains("--discovery-only"));
-    assert!(help.contains("observation"));
+    assert!(help.contains("--execute-completion"));
+    assert!(help.contains("read-only"));
+    assert!(help.contains("execution"));
 }
 
 #[test]
@@ -569,8 +604,15 @@ fn convergence_cli_rejects_unpaired_non_range_and_unsafe_options() {
         args
     };
     let cases = [
-        vec!["--converge", "--range", "main...HEAD"],
         vec!["--discovery-only", "--range", "main...HEAD"],
+        vec!["--execute-completion", "--range", "main...HEAD"],
+        vec![
+            "--converge",
+            "--discovery-only",
+            "--execute-completion",
+            "--range",
+            "main...HEAD",
+        ],
         vec!["--converge", "--discovery-only"],
         vec!["--converge", "--discovery-only", "--range", "main..HEAD"],
         unsafe_case(&["--check-verdict"]),
@@ -599,7 +641,9 @@ fn convergence_cli_rejects_unpaired_non_range_and_unsafe_options() {
         let error = crate::cli::validate_review_args(&args)
             .expect_err("unsafe convergence combination must fail");
         assert!(
-            error.to_string().contains("experimental observe-only"),
+            error
+                .to_string()
+                .contains("convergence report/execute capability"),
             "unexpected validation error: {error}"
         );
     }
@@ -627,7 +671,7 @@ fn legacy_review_still_accepts_supplementary_read_inputs() {
 #[test]
 fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_diff() {
     let source = include_str!("../review_cmd_handle.rs");
-    let Some(dispatch) = source.find("if args.converge {") else {
+    let Some(dispatch) = source.find("maybe_run_early_command(") else {
         panic!("convergence dispatch is missing");
     };
 
@@ -649,30 +693,10 @@ fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_
     }
 }
 
-#[test]
-fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
-    let selectors = [
-        vec!["--diff"],
-        vec!["--branch", "feature"],
-        vec!["--commit", "HEAD"],
-        vec!["--files", "src/lib.rs"],
-    ];
-    for selector in selectors {
-        let mut argv = vec![
-            "csa",
-            "review",
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-        ];
-        argv.extend(selector);
-        assert!(crate::cli::Cli::try_parse_from(argv).is_err());
-    }
-}
-
 #[path = "campaign_authority_tests.rs"]
 mod campaign_authority_tests;
+#[path = "completion_capability_tests.rs"]
+mod completion_capability_tests;
 mod coverage_manifest;
 mod page_publication;
 #[path = "repair_authorization_tests.rs"]

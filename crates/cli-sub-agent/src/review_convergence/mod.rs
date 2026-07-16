@@ -1,6 +1,8 @@
 pub(super) mod bundle;
 mod clean_room;
 mod clustering;
+#[cfg(test)]
+mod completion_authorization;
 mod production_clean_room_provider;
 mod provider_command_authority;
 // Slice 3A defines the deterministic core without changing legacy production dispatch.
@@ -56,6 +58,93 @@ pub(super) struct EarlyCommandContext<'a> {
     pub(super) selection: &'a super::session_fix::SelectionToolResolution,
     pub(super) current_depth: u32,
     pub(super) startup_env: &'a crate::startup_env::StartupSubtreeEnv,
+}
+
+type EarlyCommandInputs<'a> = (
+    &'a crate::cli::ReviewArgs,
+    &'a std::path::Path,
+    Option<&'a csa_config::ProjectConfig>,
+    &'a csa_config::GlobalConfig,
+    &'a csa_config::EffectiveModelCatalog,
+    Option<&'a str>,
+    &'a super::session_fix::SelectionToolResolution,
+    u32,
+    &'a crate::startup_env::StartupSubtreeEnv,
+);
+
+/// Run the legacy discovery path only after the caller has completed its common admission checks.
+pub(super) async fn maybe_run_early_command(input: EarlyCommandInputs<'_>) -> Result<Option<i32>> {
+    let (
+        args,
+        project_root,
+        project_config,
+        global_config,
+        model_catalog,
+        effective_tier,
+        selection,
+        current_depth,
+        startup_env,
+    ) = input;
+    if !args.converge {
+        return Ok(None);
+    }
+    run_early_command(EarlyCommandContext {
+        args,
+        project_root,
+        project_config,
+        global_config,
+        model_catalog,
+        effective_tier,
+        selection,
+        current_depth,
+        startup_env,
+    })
+    .await
+    .map(Some)
+}
+
+/// Emit the default convergence report without loading configuration or invoking a provider.
+pub(super) fn emit_report_only(range: Option<&str>) -> Result<i32> {
+    let range = range.ok_or_else(|| anyhow::anyhow!("validated convergence range is missing"))?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "kind": "convergence_report_only",
+            "range": range,
+            "message": "report mode is read-only; use --converge --discovery-only for legacy discovery or --converge --execute-completion to request execution",
+            "provider_calls": 0,
+            "review_verdict": null,
+            "merge_attestation": false,
+        })
+    );
+    Ok(0)
+}
+
+/// Refuse an admitted execute request until clustered-resume ports are wired in a later slice.
+///
+/// This is deliberately before model selection, leases, provider calls, gates, or ledger writes.
+pub(super) fn emit_completion_not_wired() -> Result<i32> {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "kind": "convergence_completion_blocked",
+            "reason_code": "completion_runtime_not_wired",
+            "message": "completion execution was explicitly requested and admitted by policy, but clustered-resume execution is not wired yet",
+            "provider_calls": 0,
+            "review_verdict": null,
+            "merge_attestation": false,
+        })
+    );
+    Ok(1)
+}
+
+/// Admit the explicit capability before selecting a provider or creating execution state.
+pub(super) fn ensure_completion_execution_is_allowed(
+    global_policy: &csa_config::ConvergenceCompletionPolicy,
+    project_policy: Option<&csa_config::ProjectConvergenceCompletionPolicy>,
+) -> Result<()> {
+    csa_config::ConvergenceCompletionPolicy::effective(global_policy, project_policy)
+        .require_explicit_execution(true)
 }
 
 pub(super) async fn run_early_command(context: EarlyCommandContext<'_>) -> Result<i32> {
@@ -342,6 +431,25 @@ pub(super) fn emit_setup_block(reason_code: &'static str, error: &anyhow::Error)
             "discovery_evidence_complete": false,
             "review_verdict": null,
             "merge_attestation": false
+        })
+    );
+    Ok(1)
+}
+
+/// Emit an execute-mode setup failure without labelling it as a discovery report.
+pub(super) fn emit_completion_setup_block(
+    reason_code: &'static str,
+    error: &anyhow::Error,
+) -> Result<i32> {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "kind": "convergence_completion_blocked",
+            "reason_code": reason_code,
+            "message": format!("{error:#}"),
+            "provider_calls": 0,
+            "review_verdict": null,
+            "merge_attestation": false,
         })
     );
     Ok(1)

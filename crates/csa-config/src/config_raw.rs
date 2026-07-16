@@ -11,6 +11,8 @@ pub(crate) fn pruned_project_config_str(content: String, path: &Path) -> Result<
     prune_project_removed_refs(&mut raw, path);
     reject_project_tier_policy(&raw, &path.display().to_string())
         .with_context(|| format!("Invalid config: {}", path.display()))?;
+    crate::parse_project_convergence_completion_policy(&raw)
+        .with_context(|| format!("Invalid config: {}", path.display()))?;
     crate::validate::validate_tool_transport_overrides_in_raw_config(&raw)
         .with_context(|| format!("Invalid config: {}", path.display()))?;
     toml::to_string(&raw)

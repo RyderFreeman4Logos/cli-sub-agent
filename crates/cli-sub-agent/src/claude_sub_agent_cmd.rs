@@ -14,7 +14,7 @@ pub(crate) async fn handle_claude_sub_agent(
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
-    let Some((config, global_config, model_catalog)) =
+    let Some((config, global_config, model_catalog, _project_completion_policy)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);

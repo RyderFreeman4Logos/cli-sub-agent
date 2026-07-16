@@ -75,7 +75,7 @@ pub(crate) async fn handle_fix_finding(
     current_depth: u32,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<i32> {
-    let Some((config, global_config, model_catalog)) =
+    let Some((config, global_config, model_catalog, _project_completion_policy)) =
         crate::pipeline::load_and_validate(project_root, current_depth)?
     else {
         return Ok(1);

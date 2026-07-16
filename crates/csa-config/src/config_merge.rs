@@ -1,5 +1,7 @@
 use anyhow::{Result, bail};
 
+use crate::{ConvergenceCompletionPolicy, parse_project_convergence_completion_policy};
+
 /// Warn about deprecated config keys that serde silently ignores.
 pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
     if let Some(resources) = raw.get("resources")
@@ -34,6 +36,65 @@ pub(crate) fn reject_project_tier_policy(raw: &toml::Value, source: &str) -> Res
         bail!(
             "{source}: [tier_policy].allow_force_bypass is global-only. \
              Set it in ~/.config/cli-sub-agent/config.toml, not project .csa/config.toml."
+        );
+    }
+    Ok(())
+}
+
+/// Reject project-level completion settings that would expand the global safety ceiling.
+///
+/// Unlike normal configuration fields, completion authority composes by intersection. The
+/// project may set an already-permitted boolean to false or lower the retention cap, but cannot
+/// enable an authority denied globally or retain evidence for longer than the global cap.
+pub(crate) fn reject_project_convergence_completion_policy(
+    global: Option<&toml::Value>,
+    project: &toml::Value,
+    source: &str,
+) -> Result<()> {
+    let Some(project_policy) = parse_project_convergence_completion_policy(project)? else {
+        return Ok(());
+    };
+
+    let global_policy = global
+        .and_then(|raw| raw.get("convergence_completion"))
+        .map(|value| value.clone().try_into())
+        .transpose()?
+        .unwrap_or_else(ConvergenceCompletionPolicy::default);
+
+    for (key, requested, globally_allowed) in [
+        (
+            "allow_execution",
+            project_policy.allow_execution,
+            global_policy.allow_execution,
+        ),
+        (
+            "allow_provider_egress",
+            project_policy.allow_provider_egress,
+            global_policy.allow_provider_egress,
+        ),
+        (
+            "allow_shell_commands",
+            project_policy.allow_shell_commands,
+            global_policy.allow_shell_commands,
+        ),
+        (
+            "allow_credential_inheritance",
+            project_policy.allow_credential_inheritance,
+            global_policy.allow_credential_inheritance,
+        ),
+    ] {
+        if requested == Some(true) && !globally_allowed {
+            bail!(
+                "{source}: [convergence_completion].{key} cannot expand the global safety ceiling"
+            );
+        }
+    }
+
+    if let Some(retention_days) = project_policy.max_retention_days
+        && retention_days > global_policy.max_retention_days
+    {
+        bail!(
+            "{source}: [convergence_completion].max_retention_days cannot exceed the global safety ceiling"
         );
     }
     Ok(())
