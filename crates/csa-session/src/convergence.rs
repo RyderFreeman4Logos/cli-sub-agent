@@ -42,6 +42,7 @@ pub use attestation::{
     CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CleanupConfirmation,
     GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
     LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID, MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
+    TerminalExecutionBinding,
 };
 pub use authority::{
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,

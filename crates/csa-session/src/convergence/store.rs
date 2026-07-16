@@ -291,6 +291,7 @@ impl ConvergenceLedgerStore {
         final_review: CleanRoomReviewRecord,
         attestation: MergeAttestationRecord,
     ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
+        let execution_binding = attestation.execution_binding.clone();
         self.append_batch_transaction(
             campaign_id,
             vec![
@@ -300,7 +301,7 @@ impl ConvergenceLedgerStore {
             MAX_LEDGER_BYTES,
             |directory, prefix| {
                 require_generation(prefix, expected_generation)?;
-                self.require_completion_action_journal_attestable(directory)
+                self.require_terminal_execution_binding(directory, &execution_binding)
             },
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(

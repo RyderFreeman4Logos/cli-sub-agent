@@ -104,15 +104,22 @@ pub(super) fn validate_terminal_pair(entries: &[ConvergenceLedgerEntry]) -> Resu
     {
         bail!("terminal pair identity, tuple, or clean-room artifact mismatch");
     }
-    if !entries.iter().any(|entry| {
-        matches!(
-            entry.event(),
-            ConvergenceEvent::CompletionAuthorizationRecorded(authorization)
-                if entry.campaign_id() == campaign_id
-                    && attestation.cleanup_confirmation.matches_lease(authorization.workspace_lease())
-        )
-    }) {
-        bail!("terminal attestation lacks a matching cleanup confirmation");
+    if attestation.execution_binding.campaign_id() != campaign_id
+        || attestation.execution_binding.epoch_id() != &review.tuple.epoch_id
+    {
+        bail!("terminal execution binding does not match the terminal campaign epoch");
+    }
+    let authorization =
+        latest_completion_authorization(entries, campaign_id, &review.tuple.epoch_id)?;
+    if authorization.workspace_lease().generation()
+        != attestation
+            .execution_binding
+            .authorization_lease_generation()
+        || !attestation
+            .cleanup_confirmation
+            .matches_lease(authorization.workspace_lease())
+    {
+        bail!("terminal attestation does not bind the latest completion authorization lease");
     }
     let expected = compute_from_entries(entries, campaign_id, &attestation.gate_evidence, review)?;
     if expected != attestation.bindings {
@@ -168,10 +175,12 @@ fn compute_from_entries(
     let policy = campaign
         .policy_digest()
         .context("attestation requires a frozen policy digest")?;
+    let authorization = latest_completion_authorization(entries, campaign_id, epoch.id())?;
     if gate.policy_digest != *policy
-        || gate.command_authority_digest != *campaign.command_authority_digest()
+        || gate.provider_command_authority_digest != *campaign.command_authority_digest()
+        || gate.final_gate_authority_digest != *authorization.final_gate_authority_digest()
     {
-        bail!("terminal policy or command authority mismatch");
+        bail!("terminal policy, provider authority, or final-gate authority mismatch");
     }
     if !campaign
         .command_authority()
@@ -215,6 +224,25 @@ fn compute_from_entries(
             ],
         ),
     })
+}
+
+fn latest_completion_authorization<'a>(
+    entries: &'a [ConvergenceLedgerEntry],
+    campaign_id: &CampaignId,
+    epoch_id: &super::EpochId,
+) -> Result<&'a super::CompletionAuthorizationRecord> {
+    entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry.event() {
+            ConvergenceEvent::CompletionAuthorizationRecorded(authorization)
+                if entry.campaign_id() == campaign_id && authorization.epoch_id() == epoch_id =>
+            {
+                Some(authorization)
+            }
+            _ => None,
+        })
+        .context("terminal attestation lacks a completion authorization for its exact epoch")
 }
 
 fn campaign_epoch<'a>(

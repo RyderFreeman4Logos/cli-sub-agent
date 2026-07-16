@@ -12,8 +12,9 @@ use thiserror::Error;
 use super::secure_fs::{self, SecureDirectory};
 use super::{
     CampaignId, CompletionActionClaim, CompletionActionId, CompletionActionJournal,
-    CompletionActionJournalError, CompletionActionJournalRead, ConvergenceLedgerStore, EpochId,
-    ProviderTurnExecutionId, ProviderTurnReservation, Sha256Digest,
+    CompletionActionJournalError, CompletionActionJournalRead, CompletionActionState,
+    ConvergenceLedgerStore, EpochId, ProviderTurnExecutionId, ProviderTurnReservation,
+    Sha256Digest, TerminalExecutionBinding,
 };
 use crate::atomic_state_write::{self, AtomicPublishError};
 
@@ -259,6 +260,44 @@ impl ConvergenceLedgerStore {
                 CompletionActionJournalError::IncompleteForAttestation
             )),
         }
+    }
+
+    /// Require the current completed action and authorization generation that terminal evidence
+    /// claims, while the caller already holds the ledger transaction lock.
+    pub(super) fn require_terminal_execution_binding(
+        &self,
+        directory: &SecureDirectory,
+        binding: &TerminalExecutionBinding,
+    ) -> anyhow::Result<()> {
+        let CompletionActionJournalRead::Current(journal) =
+            self.load_completion_action_journal_from_directory(directory)?
+        else {
+            bail!("terminal publication requires a current completion action journal");
+        };
+        if journal.campaign_id() != binding.campaign_id()
+            || journal.epoch_id() != binding.epoch_id()
+            || !journal.permits_attestation()
+        {
+            bail!("terminal execution journal does not match or permit the claimed terminal epoch");
+        }
+        if journal.generation() != binding.action_generation() {
+            bail!(
+                "terminal execution binding does not name the latest completion action generation"
+            );
+        }
+        let latest = journal
+            .actions()
+            .last()
+            .context("terminal execution binding names an empty completion action journal")?;
+        if latest.state() != CompletionActionState::Finished
+            || latest.claim().action_id() != binding.action_id()
+            || latest.claim().generation() != binding.action_generation()
+        {
+            bail!(
+                "terminal execution binding does not name the latest completed completion action"
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn load_completion_action_journal_from_directory(

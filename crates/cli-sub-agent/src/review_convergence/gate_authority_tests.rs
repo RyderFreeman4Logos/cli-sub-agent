@@ -62,7 +62,7 @@ fn plan_binds_policy_authority_version_order_and_argv() {
 
     assert_eq!(plan.schema_version(), 1);
     assert_eq!(plan.authority_version(), "global-gates-v4");
-    assert_eq!(plan.command_authority_digest(), &authority.digest());
+    assert_eq!(plan.final_gate_authority_digest(), &authority.digest());
     assert_eq!(plan.commands()[0].command_id(), "format");
     assert_eq!(plan.commands()[1].argv(), &["test"]);
     assert_eq!(

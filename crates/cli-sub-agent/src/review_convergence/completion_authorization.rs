@@ -27,6 +27,7 @@ impl CompletionAuthorizationEvent {
         repair_batch_count: usize,
         admitted_executor: AdmittedModelIdentity,
         policy: &EffectiveConvergenceCompletionPolicy,
+        final_gate_authority_digest: Sha256Digest,
         workspace_lease: WorkspaceLeaseIdentity,
     ) -> Result<Self> {
         let repair_batch_count = u32::try_from(repair_batch_count)
@@ -40,6 +41,7 @@ impl CompletionAuthorizationEvent {
                 repair_batch_count,
                 admitted_executor,
                 Sha256Digest::compute(&policy_json),
+                final_gate_authority_digest,
                 workspace_lease,
             )?,
         })

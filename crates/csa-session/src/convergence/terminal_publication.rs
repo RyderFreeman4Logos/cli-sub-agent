@@ -5,7 +5,7 @@ use thiserror::Error;
 use super::store::{ConvergenceAppendError, ConvergenceLedgerStore};
 use super::{
     AttestationArtifactReader, CampaignId, CleanRoomReviewRecord, CleanupConfirmation,
-    ConvergenceLedgerEntry, GateEvidenceRecord, MergeAttestationRecord,
+    ConvergenceLedgerEntry, GateEvidenceRecord, MergeAttestationRecord, TerminalExecutionBinding,
     compute_attestation_bindings, verify_terminal_artifact_pair,
 };
 
@@ -44,6 +44,7 @@ impl ConvergenceLedgerStore {
         gate: GateEvidenceRecord,
         final_review: CleanRoomReviewRecord,
         cleanup_confirmation: CleanupConfirmation,
+        execution_binding: TerminalExecutionBinding,
         reader: &R,
     ) -> Result<Vec<ConvergenceLedgerEntry>, FinalAttestationPublicationError> {
         let ledger = self
@@ -53,9 +54,14 @@ impl ConvergenceLedgerStore {
             .map_err(FinalAttestationPublicationError::Preflight)?;
         let bindings = compute_attestation_bindings(&ledger, &campaign_id, &gate, &final_review)
             .map_err(FinalAttestationPublicationError::Preflight)?;
-        let attestation =
-            MergeAttestationRecord::new(&gate, &final_review, cleanup_confirmation, bindings)
-                .map_err(FinalAttestationPublicationError::Preflight)?;
+        let attestation = MergeAttestationRecord::new(
+            &gate,
+            &final_review,
+            cleanup_confirmation,
+            execution_binding,
+            bindings,
+        )
+        .map_err(FinalAttestationPublicationError::Preflight)?;
         self.publish_final_attestation_at_generation(
             campaign_id,
             ledger.generation(),

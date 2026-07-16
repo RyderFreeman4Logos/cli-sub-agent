@@ -250,7 +250,7 @@ struct GateArtifactEnvelope {
     campaign_id: csa_session::convergence::CampaignId,
     epoch: csa_session::convergence::EpochRecord,
     policy_digest: Sha256Digest,
-    command_authority_digest: Sha256Digest,
+    final_gate_authority_digest: Sha256Digest,
     authority_version: String,
     commands: Vec<GateArtifactCommand>,
 }
@@ -279,7 +279,7 @@ impl GateArtifactEnvelope {
             campaign_id: plan.lease().campaign_id().clone(),
             epoch: plan.lease().epoch().clone(),
             policy_digest: plan.policy_digest().clone(),
-            command_authority_digest: plan.command_authority_digest().clone(),
+            final_gate_authority_digest: plan.final_gate_authority_digest().clone(),
             authority_version: plan.authority_version().to_string(),
             commands,
         })
@@ -291,7 +291,7 @@ impl GateArtifactEnvelope {
             || self.campaign_id != *plan.lease().campaign_id()
             || self.epoch != *plan.lease().epoch()
             || self.policy_digest != *plan.policy_digest()
-            || self.command_authority_digest != *plan.command_authority_digest()
+            || self.final_gate_authority_digest != *plan.final_gate_authority_digest()
             || self.authority_version != plan.authority_version()
         {
             bail!("final-gate artifact does not match its authority-bound plan");

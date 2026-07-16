@@ -110,6 +110,7 @@ pub struct CompletionAuthorizationRecord {
     repair_batch_count: u32,
     admitted_executor: AdmittedModelIdentity,
     policy_digest: Sha256Digest,
+    final_gate_authority_digest: Sha256Digest,
     workspace_lease: WorkspaceLeaseIdentity,
 }
 
@@ -126,6 +127,7 @@ impl CompletionAuthorizationRecord {
         repair_batch_count: u32,
         admitted_executor: AdmittedModelIdentity,
         policy_digest: Sha256Digest,
+        final_gate_authority_digest: Sha256Digest,
         workspace_lease: WorkspaceLeaseIdentity,
     ) -> Result<Self> {
         if workspace_lease.campaign_id() != &campaign_id {
@@ -141,6 +143,7 @@ impl CompletionAuthorizationRecord {
             repair_batch_count,
             admitted_executor,
             policy_digest,
+            final_gate_authority_digest,
             workspace_lease,
         })
     }
@@ -191,6 +194,12 @@ impl CompletionAuthorizationRecord {
     #[must_use]
     pub fn policy_digest(&self) -> &Sha256Digest {
         &self.policy_digest
+    }
+
+    /// Return the final-gate authority frozen before external completion work began.
+    #[must_use]
+    pub fn final_gate_authority_digest(&self) -> &Sha256Digest {
+        &self.final_gate_authority_digest
     }
 
     /// Return the owned workspace lease identity.
@@ -264,6 +273,7 @@ mod tests {
             0,
             AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").expect("model"),
             Sha256Digest::compute(b"policy"),
+            Sha256Digest::compute(b"final gates"),
             lease,
         )
         .expect_err("epoch mismatch must be rejected");
@@ -291,6 +301,7 @@ mod tests {
             2,
             AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").expect("model"),
             Sha256Digest::compute(b"policy"),
+            Sha256Digest::compute(b"final gates"),
             lease.clone(),
         )
         .expect("authorization record");

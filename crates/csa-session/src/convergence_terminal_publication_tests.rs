@@ -11,10 +11,28 @@ use ulid::Ulid;
 use crate::atomic_state_write::AtomicWriteFault;
 use crate::convergence::{
     ArtifactEvidenceRef, CleanupConfirmation, CompletionActionId, ConvergenceEvent,
-    ConvergenceLedger, ConvergenceLedgerStore, ProviderTurnExecutionId, WorkspaceLeaseIdentity,
-    verify_merge_attestation,
+    ConvergenceLedger, ConvergenceLedgerStore, GateEvidenceRecord, ProviderTurnExecutionId,
+    Sha256Digest, WorkspaceLeaseIdentity, compute_attestation_bindings, verify_merge_attestation,
 };
 use crate::convergence_attestation_tests::Fixture;
+
+fn prepare_terminal_action(fixture: &Fixture, store: &ConvergenceLedgerStore) {
+    let journal = store
+        .initialize_completion_action_journal(
+            fixture.campaign_id.clone(),
+            fixture.epoch.id().clone(),
+            fixture.policy_digest.clone(),
+        )
+        .unwrap();
+    let claim = store
+        .claim_completion_action(journal.generation(), fixture.terminal_action_id.clone())
+        .unwrap();
+    assert_eq!(
+        claim.generation(),
+        fixture.terminal_execution_binding.action_generation()
+    );
+    store.finish_completion_action(&claim).unwrap();
+}
 
 #[test]
 fn pre_publish_failure_preserves_the_complete_unattested_prefix() {
@@ -24,6 +42,7 @@ fn pre_publish_failure_preserves_the_complete_unattested_prefix() {
     store
         .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
         .unwrap();
+    prepare_terminal_action(&fixture, &store);
     let before = store.load().unwrap();
     let (review, attestation) = fixture.terminal_pair();
 
@@ -48,6 +67,7 @@ fn verified_terminal_publication_reloads_artifacts_and_generation_before_commit(
     store
         .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
         .unwrap();
+    prepare_terminal_action(&fixture, &store);
     let reader = |reference: &ArtifactEvidenceRef| fixture.read_artifact(reference);
 
     let appended = store
@@ -56,12 +76,73 @@ fn verified_terminal_publication_reloads_artifacts_and_generation_before_commit(
             fixture.gate.clone(),
             fixture.review.clone(),
             CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+            fixture.terminal_execution_binding.clone(),
             &reader,
         )
         .unwrap();
     assert_eq!(appended.len(), 2);
     let ledger = store.load().unwrap();
     verify_merge_attestation(&ledger, &fixture.campaign_id, &reader).unwrap();
+}
+
+#[test]
+fn terminal_evidence_rejects_a_final_gate_authority_outside_its_authorization() {
+    let fixture = Fixture::new();
+    let ConvergenceEvent::CampaignStarted(campaign) = &fixture.prefix_events[0] else {
+        panic!("fixture must begin with a campaign");
+    };
+    let mismatched_gate = GateEvidenceRecord::new(
+        fixture.campaign_id.clone(),
+        &fixture.epoch,
+        fixture.policy_digest.clone(),
+        campaign.command_authority_digest().clone(),
+        Sha256Digest::compute(b"different final gate authority"),
+        fixture.gate.commands().to_vec(),
+        fixture.gate.artifact().clone(),
+    )
+    .unwrap();
+
+    assert!(
+        compute_attestation_bindings(
+            &fixture.ledger,
+            &fixture.campaign_id,
+            &mismatched_gate,
+            &fixture.review,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn terminal_review_and_attestation_publish_as_one_atomic_batch() {
+    let fixture = Fixture::new();
+    let temp = tempdir().unwrap();
+    let store = ConvergenceLedgerStore::for_project_state_root(temp.path()).unwrap();
+    store
+        .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
+        .unwrap();
+    prepare_terminal_action(&fixture, &store);
+    let (review, attestation) = fixture.terminal_pair();
+    let expected_generation = store.load().unwrap().generation();
+
+    let appended = store
+        .publish_final_attestation_at_generation(
+            fixture.campaign_id.clone(),
+            expected_generation,
+            review,
+            attestation,
+        )
+        .unwrap();
+    assert_eq!(appended.len(), 2);
+    let ledger = store.load().unwrap();
+    assert!(matches!(
+        ledger.entries()[ledger.entries().len() - 2].event(),
+        ConvergenceEvent::FinalReviewRecorded(_)
+    ));
+    assert!(matches!(
+        ledger.entries().last().unwrap().event(),
+        ConvergenceEvent::MergeAttestationRecorded(_)
+    ));
 }
 
 #[test]
@@ -87,6 +168,7 @@ fn terminal_publication_rejects_readback_digest_and_schema_mismatches() {
                 fixture.gate.clone(),
                 fixture.review.clone(),
                 CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+                fixture.terminal_execution_binding.clone(),
                 &tampered_reader,
             )
             .is_err()
@@ -108,6 +190,7 @@ fn terminal_publication_rejects_readback_digest_and_schema_mismatches() {
                 invalid.gate.clone(),
                 invalid.review.clone(),
                 CleanupConfirmation::after_successful_cleanup(&invalid.cleanup_lease),
+                invalid.terminal_execution_binding.clone(),
                 &reader,
             )
             .is_err()
@@ -142,6 +225,7 @@ fn terminal_publication_rejects_unconfirmed_cleanup_and_unresolved_actions() {
                 fixture.gate.clone(),
                 fixture.review.clone(),
                 CleanupConfirmation::after_successful_cleanup(&unconfirmed_lease),
+                fixture.terminal_execution_binding.clone(),
                 &reader,
             )
             .is_err()
@@ -165,6 +249,7 @@ fn terminal_publication_rejects_unconfirmed_cleanup_and_unresolved_actions() {
                 fixture.gate.clone(),
                 fixture.review.clone(),
                 CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+                fixture.terminal_execution_binding.clone(),
                 &reader,
             )
             .is_err()
@@ -182,6 +267,7 @@ fn terminal_publication_rejects_unconfirmed_cleanup_and_unresolved_actions() {
                 fixture.gate.clone(),
                 fixture.review.clone(),
                 CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+                fixture.terminal_execution_binding.clone(),
                 &reader,
             )
             .is_err()
@@ -197,6 +283,7 @@ fn terminal_publication_generation_cas_allows_one_concurrent_publisher() {
     store
         .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
         .unwrap();
+    prepare_terminal_action(&fixture, &store);
     let expected_generation = store.load().unwrap().generation();
     let (review_one, attestation_one) = fixture.terminal_pair();
     let (review_two, attestation_two) = fixture.terminal_pair();
@@ -236,6 +323,38 @@ fn terminal_publication_generation_cas_allows_one_concurrent_publisher() {
         &|reference: &ArtifactEvidenceRef| fixture.read_artifact(reference),
     )
     .unwrap();
+}
+
+#[test]
+fn terminal_publication_rejects_a_stale_completed_action_binding() {
+    let fixture = Fixture::new();
+    let temp = tempdir().unwrap();
+    let store = ConvergenceLedgerStore::for_project_state_root(temp.path()).unwrap();
+    store
+        .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
+        .unwrap();
+    prepare_terminal_action(&fixture, &store);
+    let newer = store
+        .claim_completion_action(
+            fixture.terminal_execution_binding.action_generation(),
+            CompletionActionId::generate(),
+        )
+        .unwrap();
+    store.finish_completion_action(&newer).unwrap();
+    let reader = |reference: &ArtifactEvidenceRef| fixture.read_artifact(reference);
+
+    assert!(
+        store
+            .publish_verified_final_attestation(
+                fixture.campaign_id.clone(),
+                fixture.gate.clone(),
+                fixture.review.clone(),
+                CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+                fixture.terminal_execution_binding.clone(),
+                &reader,
+            )
+            .is_err()
+    );
 }
 
 #[test]

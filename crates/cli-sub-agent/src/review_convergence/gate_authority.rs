@@ -24,6 +24,8 @@ const MAX_COMMAND_ID_BYTES: usize = 128;
 const MAX_PROGRAM_BYTES: usize = 1_024;
 const MAX_ARG_BYTES: usize = 4 * 1_024;
 const MAX_AUTHORITY_VERSION_BYTES: usize = 128;
+const PRODUCTION_FINAL_GATE_AUTHORITY_VERSION: &str = "linux-x86_64-v1";
+const PRODUCTION_FINAL_GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The network boundary the host driver must enforce for a gate command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,12 +164,53 @@ impl FinalGateAuthority {
     }
 }
 
+/// Capture the immutable Linux final-gate authority used by production completion.
+pub(crate) fn production_final_gate_authority() -> Result<FinalGateAuthority> {
+    FinalGateAuthority::new(
+        PRODUCTION_FINAL_GATE_AUTHORITY_VERSION,
+        vec![
+            network_denied_cargo_gate("fmt", ["fmt", "--all", "--", "--check"])?,
+            network_denied_cargo_gate(
+                "clippy",
+                [
+                    "clippy",
+                    "--workspace",
+                    "--all-features",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            )?,
+            network_denied_cargo_gate("test", ["test", "--workspace"])?,
+        ],
+    )
+}
+
+/// Keep final gates offline even when Cargo itself would otherwise attempt registry access.
+///
+/// `unshare --net -- cargo …` is direct argv, not a shell. If this Linux isolation primitive is
+/// unavailable, the command fails closed and no gate artifact is published.
+fn network_denied_cargo_gate<const N: usize>(
+    command_id: &str,
+    cargo_args: [&str; N],
+) -> Result<GateCommandAuthority> {
+    let mut argv = vec!["--net".to_string(), "--".to_string(), "cargo".to_string()];
+    argv.extend(cargo_args.into_iter().map(str::to_string));
+    GateCommandAuthority::new(
+        command_id,
+        "unshare",
+        argv,
+        GateNetworkPolicy::Denied,
+        PRODUCTION_FINAL_GATE_TIMEOUT,
+    )
+}
+
 /// An exact, host-authorized plan for one leased campaign epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FinalGatePlan {
     schema_version: u32,
     policy_digest: Sha256Digest,
-    command_authority_digest: Sha256Digest,
+    final_gate_authority_digest: Sha256Digest,
     authority_version: String,
     lease: WorkspaceLeaseIdentity,
     commands: Vec<GateCommandAuthority>,
@@ -191,7 +234,7 @@ impl FinalGatePlan {
         Ok(Self {
             schema_version: FINAL_GATE_PLAN_SCHEMA_VERSION,
             policy_digest,
-            command_authority_digest: authority.digest(),
+            final_gate_authority_digest: authority.digest(),
             authority_version: authority.version.clone(),
             lease,
             commands: authority.commands.clone(),
@@ -203,8 +246,8 @@ impl FinalGatePlan {
         &self.policy_digest
     }
 
-    pub(crate) fn command_authority_digest(&self) -> &Sha256Digest {
-        &self.command_authority_digest
+    pub(crate) fn final_gate_authority_digest(&self) -> &Sha256Digest {
+        &self.final_gate_authority_digest
     }
 
     pub(crate) fn authority_version(&self) -> &str {

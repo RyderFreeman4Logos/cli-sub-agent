@@ -262,6 +262,7 @@ fn completion_authorization_binds_cluster_identity_executor_and_policy() {
         2,
         AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").unwrap(),
         &policy,
+        Sha256Digest::compute(b"final gates"),
         workspace_lease,
     )
     .unwrap();

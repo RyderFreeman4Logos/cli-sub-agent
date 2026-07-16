@@ -15,7 +15,7 @@ use csa_session::convergence::{
     CommandAuthoritySnapshot, CompletionActionId, CompletionActionJournalRead,
     ConvergenceLedgerStore, CsaSessionId, GateCommandResult, GateEvidenceRecord, ModelEvidence,
     ObservedToolEvidence, ProviderTurnExecutionId, ProviderTurnReservation,
-    SessionRelativeArtifactPath,
+    SessionRelativeArtifactPath, TerminalExecutionBinding,
 };
 
 use super::bundle;
@@ -34,9 +34,7 @@ use super::completion_types::{
     CompletionPortResult, ProviderTurnReconciliation,
 };
 use super::discovery_prompt::build_clean_room_prompt;
-use super::gate_authority::{
-    FinalGateAuthority, FinalGatePlan, GateCommandAuthority, GateNetworkPolicy,
-};
+use super::gate_authority::{FinalGateAuthority, FinalGatePlan, production_final_gate_authority};
 use super::gate_evidence::{HostFinalGatePort, HostGateArtifactStore};
 use super::production_clean_room_provider::ProductionCleanRoomProvider;
 use super::production_completion_gate::BlockingDirectFinalGateDriver;
@@ -48,8 +46,6 @@ use super::provider_command_authority::{
 };
 use super::runner::ResolvedCommandContext;
 
-const COMPLETION_GATE_AUTHORITY_VERSION: &str = "linux-x86_64-v1";
-const COMPLETION_GATE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const COMPLETION_LEASE_TIMEOUT: Duration = Duration::from_secs(30);
 const COMPLETION_MAX_CYCLES: u32 = 32;
 const COMPLETION_MAX_PROVIDER_TURNS: u32 = 16;
@@ -64,6 +60,8 @@ pub(crate) struct ProductionCompletionPorts<'a> {
     command_authority: CommandAuthoritySnapshot,
     failure_ledger: CleanupFailureLedger,
     lease: Option<DetachedWorkspaceLease<CurrentCheckoutCleanup>>,
+    final_gate_authority: Option<FinalGateAuthority>,
+    terminal_execution_binding: Option<TerminalExecutionBinding>,
 }
 
 impl<'a> ProductionCompletionPorts<'a> {
@@ -92,6 +90,8 @@ impl<'a> ProductionCompletionPorts<'a> {
             command_authority,
             failure_ledger: CleanupFailureLedger::default(),
             lease: None,
+            final_gate_authority: None,
+            terminal_execution_binding: None,
         })
     }
 
@@ -150,6 +150,7 @@ impl<'a> ProductionCompletionPorts<'a> {
             }
             bail!("completion attempted to reuse a lease for a different campaign epoch");
         }
+        let final_gate_authority = production_final_gate_authority()?;
         let exact_evidence =
             bundle::build_exact_oid_evidence(self.context.project_root, &self.range)?;
         if exact_evidence.base_oid() != epoch.base_oid().as_str()
@@ -186,11 +187,14 @@ impl<'a> ProductionCompletionPorts<'a> {
             0,
             admitted,
             &self.context.completion_policy,
+            final_gate_authority.digest(),
             lease.identity().clone(),
         )?;
         self.store
             .append(campaign_id.clone(), authorization.ledger_event())?;
         self.lease = Some(lease);
+        self.final_gate_authority = Some(final_gate_authority);
+        self.terminal_execution_binding = None;
         Ok(())
     }
 
@@ -204,7 +208,10 @@ impl<'a> ProductionCompletionPorts<'a> {
             .lease
             .as_ref()
             .context("completion lease disappeared before final gates")?;
-        let authority = completion_gate_authority()?;
+        let authority = self
+            .final_gate_authority
+            .as_ref()
+            .context("completion final-gate authority disappeared before final gates")?;
         let policy_digest = campaign_record(&self.store.load()?, campaign_id)?
             .policy_digest()
             .cloned()
@@ -212,7 +219,7 @@ impl<'a> ProductionCompletionPorts<'a> {
         let plan = FinalGatePlan::from_authority(
             policy_digest,
             lease.identity().clone(),
-            &authority,
+            authority,
             authority.commands().to_vec(),
         )?;
         let session = csa_session::create_session_fresh(
@@ -290,6 +297,10 @@ impl<'a> ProductionCompletionPorts<'a> {
         self.store
             .reconcile_completion_provider_turn(reservation, observed_turn_delta)?;
         self.store.finish_completion_action(reservation.claim())?;
+        self.terminal_execution_binding = Some(TerminalExecutionBinding::from_claim(
+            reservation.claim(),
+            lease.identity(),
+        )?);
         let session_id = CsaSessionId::parse(outcome.session_id())?;
         let session_dir =
             csa_session::get_session_dir(self.context.project_root, session_id.as_str())?;
@@ -364,6 +375,14 @@ impl<'a> ProductionCompletionPorts<'a> {
         gate_artifact: &ArtifactEvidenceRef,
         clean_room: &super::clean_room_v2::CleanRoomReviewOutput,
     ) -> Result<()> {
+        let final_gate_authority = self
+            .final_gate_authority
+            .as_ref()
+            .context("terminal publication requires the frozen final-gate authority")?;
+        let terminal_execution_binding = self
+            .terminal_execution_binding
+            .clone()
+            .context("terminal publication requires a completed clean-room action binding")?;
         let lease = self
             .lease
             .take()
@@ -375,12 +394,11 @@ impl<'a> ProductionCompletionPorts<'a> {
         if !self.failure_ledger.failures().is_empty() {
             bail!("completion lease cleanup fallback reported a failure");
         }
-        let authority = completion_gate_authority()?;
         let policy_digest = campaign_record(&self.store.load()?, campaign_id)?
             .policy_digest()
             .cloned()
             .context("clustered campaign is missing its completion policy digest")?;
-        let commands = authority
+        let commands = final_gate_authority
             .commands()
             .iter()
             .map(|command| GateCommandResult::new(command.command_id(), 0))
@@ -389,7 +407,8 @@ impl<'a> ProductionCompletionPorts<'a> {
             campaign_id.clone(),
             epoch,
             policy_digest,
-            authority.digest(),
+            self.command_authority.digest(),
+            final_gate_authority.digest(),
             commands,
             gate_artifact.clone(),
         )?;
@@ -424,6 +443,7 @@ impl<'a> ProductionCompletionPorts<'a> {
             gate,
             final_review,
             cleanup_confirmation,
+            terminal_execution_binding,
             &reader,
         )?;
         Ok(())
@@ -548,46 +568,6 @@ impl CompletionPorts for ProductionCompletionPorts<'_> {
 struct CompletedCleanRoom {
     output: super::clean_room_v2::CleanRoomReviewOutput,
     reconciliation: ProviderTurnReconciliation,
-}
-
-fn completion_gate_authority() -> Result<FinalGateAuthority> {
-    FinalGateAuthority::new(
-        COMPLETION_GATE_AUTHORITY_VERSION,
-        vec![
-            network_denied_cargo_gate("fmt", ["fmt", "--all", "--", "--check"])?,
-            network_denied_cargo_gate(
-                "clippy",
-                [
-                    "clippy",
-                    "--workspace",
-                    "--all-features",
-                    "--",
-                    "-D",
-                    "warnings",
-                ],
-            )?,
-            network_denied_cargo_gate("test", ["test", "--workspace"])?,
-        ],
-    )
-}
-
-/// Keep final gates offline even when Cargo itself would otherwise attempt registry access.
-///
-/// `unshare --net -- cargo …` is direct argv, not a shell. If this Linux isolation primitive is
-/// unavailable, the command fails closed and no gate artifact is published.
-fn network_denied_cargo_gate<const N: usize>(
-    command_id: &str,
-    cargo_args: [&str; N],
-) -> Result<GateCommandAuthority> {
-    let mut argv = vec!["--net".to_string(), "--".to_string(), "cargo".to_string()];
-    argv.extend(cargo_args.into_iter().map(str::to_string));
-    GateCommandAuthority::new(
-        command_id,
-        "unshare",
-        argv,
-        GateNetworkPolicy::Denied,
-        COMPLETION_GATE_TIMEOUT,
-    )
 }
 
 fn port_error(error: impl std::fmt::Display) -> CompletionPortError {
