@@ -14,9 +14,9 @@ use csa_session::convergence::{
 
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
-    CompletionError as Failure, CompletionEvent as Event, CompletionOutcome,
-    CompletionPhase as Phase, CompletionPortError as PortFailure, CompletionPorts,
-    CompletionState as State, reduce_completion, run_targeted_discovery, run_to_attestation,
+    CompletionError as Failure, CompletionEvent as Event, CompletionPhase as Phase,
+    CompletionPortError as PortFailure, CompletionPorts, CompletionState as State,
+    reduce_completion, run_targeted_discovery,
 };
 use super::discovery_contract::{
     CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus, TargetedDiscoveryFocus,
@@ -35,7 +35,7 @@ fn frozen() -> FrozenWorkspace {
     .expect("frozen fixture")
 }
 
-fn epoch(head: u8) -> EpochRecord {
+pub(super) fn epoch(head: u8) -> EpochRecord {
     EpochRecord::new(
         GitObjectId::parse(&"11".repeat(20)).expect("base"),
         GitObjectId::parse(&format!("{head:02x}").repeat(20)).expect("head"),
@@ -43,7 +43,7 @@ fn epoch(head: u8) -> EpochRecord {
     )
 }
 
-fn epoch_id(head: u8) -> EpochId {
+pub(super) fn epoch_id(head: u8) -> EpochId {
     epoch(head).id().clone()
 }
 
@@ -57,7 +57,7 @@ fn authority(model: &str) -> CommandAuthoritySnapshot {
     .expect("authority")
 }
 
-fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
+pub(super) fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
     ArtifactEvidenceRef::new(
         CsaSessionId::generate(),
         SessionRelativeArtifactPath::new("output/review.json").expect("path"),
@@ -97,7 +97,7 @@ fn finding_json() -> serde_json::Value {
     }])
 }
 
-fn clean_output() -> CleanRoomReviewOutput {
+pub(super) fn clean_output() -> CleanRoomReviewOutput {
     parse_output(&clean_room_json(serde_json::json!([]), &[], &[])).expect("clean output")
 }
 
@@ -434,9 +434,22 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
     }
 }
 
-struct FakePorts {
+pub(super) struct FakePorts {
     events: VecDeque<Result<Event, PortFailure>>,
     actions: Vec<Action>,
+}
+
+impl FakePorts {
+    pub(super) fn new(events: VecDeque<Result<Event, PortFailure>>) -> Self {
+        Self {
+            events,
+            actions: Vec::new(),
+        }
+    }
+
+    pub(super) fn actions(&self) -> &[Action] {
+        &self.actions
+    }
 }
 
 impl CompletionPorts for FakePorts {
@@ -464,80 +477,6 @@ async fn port_error_never_advances_reducer_state() {
             .is_err()
     );
     assert_eq!(before, state);
-}
-
-#[tokio::test]
-async fn run_to_attestation_replays_a_fake_history() {
-    let campaign = CampaignId::generate();
-    let candidate = CandidateId::generate();
-    let root = RootClusterId::generate();
-    let batch = AuthorizedRepairBatch::new(root.clone(), RepairBatchId::generate());
-    let gate_artifact = artifact(b"gates");
-    let review = clean_output();
-    let published_gate_artifact = gate_artifact.clone();
-    let published_review_artifact = review.artifact().clone();
-    let published_model_identity = review.model_identity().clone();
-    let mut ports = FakePorts {
-        events: VecDeque::from([
-            Ok(Event::DiscoveryCompleted {
-                focus: DiscoveryFocus::Broad,
-                selection: CampaignSelection::Fresh,
-                campaign_id: campaign.clone(),
-                epoch: epoch(2),
-                candidates: vec![candidate.clone()],
-            }),
-            Ok(Event::ClustersReady {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(2),
-                verified_candidates: vec![candidate],
-                root_clusters: vec![root],
-                repair_batches: vec![batch.clone()],
-            }),
-            Ok(Event::RepairsCompleted {
-                campaign_id: campaign.clone(),
-                previous_epoch_id: epoch_id(2),
-                completed_batches: vec![batch.repair_batch_id().clone()],
-                new_epoch: epoch(3),
-            }),
-            Ok(Event::DiscoveryCompleted {
-                focus: DiscoveryFocus::Broad,
-                selection: CampaignSelection::Continue(campaign.clone()),
-                campaign_id: campaign.clone(),
-                epoch: epoch(3),
-                candidates: Vec::new(),
-            }),
-            Ok(Event::FinalGatesPassed {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                artifact: gate_artifact,
-            }),
-            Ok(Event::CleanRoomCompleted {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                output: review,
-            }),
-            Ok(Event::FinalPairPublished {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                gate_artifact: published_gate_artifact,
-                review_artifact: published_review_artifact,
-                model_identity: published_model_identity,
-            }),
-        ]),
-        actions: Vec::new(),
-    };
-    let outcome = run_to_attestation(
-        &mut ports,
-        Budget::new(16, 8).unwrap(),
-        epoch(2),
-        CampaignSelection::Fresh,
-    )
-    .await
-    .unwrap();
-    assert!(
-        matches!(outcome, CompletionOutcome::Attested { campaign_id, epoch: final_epoch } if campaign_id == campaign && final_epoch == epoch(3))
-    );
-    assert_eq!(ports.actions.len(), 7);
 }
 
 #[test]

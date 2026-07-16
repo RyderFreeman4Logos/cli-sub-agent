@@ -4,11 +4,15 @@ use std::pin::Pin;
 
 use csa_session::convergence::{CampaignId, CandidateId, EpochId, EpochRecord, RootClusterId};
 
+pub(crate) use super::completion_resume::start_completion;
 pub(crate) use super::completion_types::{
     AuthorizedRepairBatch, CompletionAction, CompletionBudget, CompletionError, CompletionEvent,
-    CompletionOutcome, CompletionPhase, CompletionPortError, CompletionState, CompletionTransition,
+    CompletionOutcome, CompletionPhase, CompletionPortError, CompletionStart, CompletionState,
+    CompletionTransition,
 };
 use super::discovery_contract::{CampaignSelection, DiscoveryFocus, TargetedDiscoveryFocus};
+
+pub(super) const MAX_CLUSTERED_RESUME_SET_MEMBERS: usize = 1_000;
 
 pub(crate) fn reduce_completion(
     state: &CompletionState,
@@ -98,11 +102,15 @@ pub(crate) fn reduce_completion(
             if verified_candidates != state.pending_candidates {
                 return Err(CompletionError::CardinalityMismatch);
             }
+            require_bounded_set(verified_candidates.len())?;
             validate_cluster_batches(&root_clusters, &repair_batches)?;
             next.pending_candidates.clear();
+            next.clustered_candidates.clone_from(&verified_candidates);
+            next.root_clusters.clone_from(&root_clusters);
             if repair_batches.is_empty() {
                 let epoch = current_epoch(state)?.clone();
                 next.phase = CompletionPhase::RunFinalGates;
+                next.repair_batches.clear();
                 CompletionAction::RunFinalGates { campaign_id, epoch }
             } else {
                 let epoch = current_epoch(state)?.clone();
@@ -139,6 +147,8 @@ pub(crate) fn reduce_completion(
             }
             next.phase = CompletionPhase::Discover;
             next.epoch = Some(new_epoch.clone());
+            next.clustered_candidates.clear();
+            next.root_clusters.clear();
             next.repair_batches.clear();
             next.discovery_focus = Some(DiscoveryFocus::Broad);
             next.campaign_selection = Some(CampaignSelection::Continue(campaign_id.clone()));
@@ -253,7 +263,7 @@ pub(crate) fn reduce_completion(
     issue(next, action)
 }
 
-fn issue(
+pub(super) fn issue(
     mut state: CompletionState,
     action: CompletionAction,
 ) -> Result<CompletionTransition, CompletionError> {
@@ -319,7 +329,9 @@ fn current_epoch(state: &CompletionState) -> Result<&EpochRecord, CompletionErro
         .ok_or(CompletionError::InvalidTransition("missing exact epoch"))
 }
 
-fn require_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), CompletionError> {
+pub(super) fn require_unique<'a>(
+    values: impl Iterator<Item = &'a str>,
+) -> Result<(), CompletionError> {
     let mut seen = HashSet::new();
     if values.into_iter().all(|value| seen.insert(value)) {
         Ok(())
@@ -328,10 +340,20 @@ fn require_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), Compl
     }
 }
 
-fn validate_cluster_batches(
+pub(super) fn require_bounded_set(length: usize) -> Result<(), CompletionError> {
+    if length > MAX_CLUSTERED_RESUME_SET_MEMBERS {
+        Err(CompletionError::CardinalityMismatch)
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn validate_cluster_batches(
     root_clusters: &[RootClusterId],
     repair_batches: &[AuthorizedRepairBatch],
 ) -> Result<(), CompletionError> {
+    require_bounded_set(root_clusters.len())?;
+    require_bounded_set(repair_batches.len())?;
     if root_clusters.len() != repair_batches.len() {
         return Err(CompletionError::CardinalityMismatch);
     }
@@ -389,13 +411,24 @@ pub(crate) async fn run_to_attestation<P: CompletionPorts>(
     initial_epoch: EpochRecord,
     selection: CampaignSelection,
 ) -> Result<CompletionOutcome, CompletionError> {
-    let mut transition = reduce_completion(
-        &CompletionState::new(budget),
-        CompletionEvent::Started {
-            epoch: initial_epoch,
+    run_to_attestation_from_start(
+        ports,
+        budget,
+        CompletionStart::Fresh {
+            initial_epoch,
             selection,
         },
-    )?;
+    )
+    .await
+}
+
+/// Drive either a fresh campaign or a ledger-validated clustered campaign to attestation.
+pub(crate) async fn run_to_attestation_from_start<P: CompletionPorts>(
+    ports: &mut P,
+    budget: CompletionBudget,
+    start: CompletionStart,
+) -> Result<CompletionOutcome, CompletionError> {
+    let mut transition = start_completion(budget, start)?;
     loop {
         let action = transition
             .action

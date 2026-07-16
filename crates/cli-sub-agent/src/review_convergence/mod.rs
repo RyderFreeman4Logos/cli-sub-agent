@@ -9,6 +9,8 @@ mod provider_command_authority;
 #[allow(dead_code)]
 mod completion;
 #[allow(dead_code)]
+mod completion_resume;
+#[allow(dead_code)]
 mod completion_types;
 mod continuation;
 mod coverage;
@@ -30,6 +32,10 @@ pub(super) use repair_authorization::{
 mod clean_room_provider_tests;
 #[cfg(test)]
 mod clean_room_tests;
+#[cfg(test)]
+mod completion_fresh_start_tests;
+#[cfg(test)]
+mod completion_resume_tests;
 #[cfg(test)]
 mod completion_tests;
 #[cfg(test)]

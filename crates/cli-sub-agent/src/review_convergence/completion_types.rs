@@ -3,7 +3,7 @@ use std::fmt;
 
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CandidateId, EpochId, EpochRecord,
-    RepairBatchId, RootClusterId,
+    RepairBatchId, RootClusterId, Sha256Digest,
 };
 
 use super::discovery_contract::{CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus};
@@ -65,6 +65,48 @@ impl AuthorizedRepairBatch {
     }
 }
 
+/// Raw persisted checkpoint asserted by a caller resuming a clustered campaign.
+///
+/// `CompletionStart::clustered` validates every field against the immutable ledger before it can
+/// become an executable completion start. Keeping the untrusted assertion distinct from the
+/// validated start prevents callers from selecting batches that the ledger did not authorize.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClusteredCompletionClaim {
+    pub(crate) campaign_id: CampaignId,
+    pub(crate) epoch: EpochRecord,
+    pub(crate) candidate_ids: Vec<CandidateId>,
+    pub(crate) root_cluster_ids: Vec<RootClusterId>,
+    pub(crate) repair_batches: Vec<AuthorizedRepairBatch>,
+    pub(crate) cycles: u32,
+    pub(crate) provider_actions: u32,
+    pub(crate) ledger_generation: u64,
+    pub(crate) policy_digest: Sha256Digest,
+}
+
+/// Ledger-validated clustered state that can issue its first completion action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClusteredCompletionStart {
+    pub(super) campaign_id: CampaignId,
+    pub(super) epoch: EpochRecord,
+    pub(super) candidate_ids: Vec<CandidateId>,
+    pub(super) root_cluster_ids: Vec<RootClusterId>,
+    pub(super) repair_batches: Vec<AuthorizedRepairBatch>,
+    pub(super) cycles: u32,
+    pub(super) provider_actions: u32,
+    pub(super) ledger_generation: u64,
+    pub(super) policy_digest: Sha256Digest,
+}
+
+/// Explicit entry point for either a fresh campaign or a validated clustered resume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompletionStart {
+    Fresh {
+        initial_epoch: EpochRecord,
+        selection: CampaignSelection,
+    },
+    Clustered(ClusteredCompletionStart),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompletionState {
     pub(super) phase: CompletionPhase,
@@ -76,7 +118,11 @@ pub(crate) struct CompletionState {
     pub(super) discovery_focus: Option<DiscoveryFocus>,
     pub(super) campaign_selection: Option<CampaignSelection>,
     pub(super) pending_candidates: Vec<CandidateId>,
+    pub(super) clustered_candidates: Vec<CandidateId>,
+    pub(super) root_clusters: Vec<RootClusterId>,
     pub(super) repair_batches: Vec<AuthorizedRepairBatch>,
+    pub(super) ledger_generation: Option<u64>,
+    pub(super) policy_digest: Option<Sha256Digest>,
     pub(super) gate_artifact: Option<ArtifactEvidenceRef>,
     pub(super) clean_room: Option<CleanRoomReviewOutput>,
 }
@@ -93,7 +139,11 @@ impl CompletionState {
             discovery_focus: None,
             campaign_selection: None,
             pending_candidates: Vec::new(),
+            clustered_candidates: Vec::new(),
+            root_clusters: Vec::new(),
             repair_batches: Vec::new(),
+            ledger_generation: None,
+            policy_digest: None,
             gate_artifact: None,
             clean_room: None,
         }
@@ -219,6 +269,8 @@ pub(crate) enum CompletionError {
     InvalidBudget,
     InvalidTransition(&'static str),
     IdentityMismatch,
+    PolicyDigestMismatch,
+    StaleLedgerGeneration,
     DuplicateIdentity,
     CardinalityMismatch,
     EpochDidNotChange,
@@ -240,6 +292,12 @@ impl fmt::Display for CompletionError {
                 write!(formatter, "invalid completion transition: {message}")
             }
             Self::IdentityMismatch => formatter.write_str("completion event identity mismatch"),
+            Self::PolicyDigestMismatch => {
+                formatter.write_str("completion policy digest does not match the campaign")
+            }
+            Self::StaleLedgerGeneration => {
+                formatter.write_str("completion checkpoint ledger generation is stale")
+            }
             Self::DuplicateIdentity => {
                 formatter.write_str("completion event contains a duplicate identity")
             }
