@@ -6,12 +6,13 @@ use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
     CandidateDispositionRecord, CandidateId, CandidateRecord, CandidateVerificationEvidence,
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
-    CommandAuthoritySource, ConvergenceEvent, ConvergenceLedger, CoverageCellRecord,
+    CommandAuthoritySource, CompletionActionId, CompletionActionJournal,
+    CompletionActionJournalRead, ConvergenceEvent, ConvergenceLedger, CoverageCellRecord,
     CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
     CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
-    EpochRecord, GitObjectId, RepairBatchId, RepairBatchRecord, RootClusterId, RootClusterRecord,
-    SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath, Sha256Digest,
-    VerificationIndependence,
+    EpochRecord, GitObjectId, ProviderTurnExecutionId, RepairBatchId, RepairBatchRecord,
+    RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
+    SessionRelativeArtifactPath, Sha256Digest, VerificationIndependence,
 };
 
 use super::completion::{
@@ -289,9 +290,12 @@ fn clustered_start_dispatches_only_ledger_authorized_repairs_and_preserves_budge
 #[test]
 fn persisted_clustered_campaign_rebuilds_the_same_strict_start_without_cli_identifiers() {
     let (ledger, claim) = clustered_claim(true);
-    let start =
-        CompletionStart::from_persisted_clustered_campaign(&ledger, claim.campaign_id.clone())
-            .expect("persisted clustered campaign");
+    let start = CompletionStart::from_persisted_clustered_campaign(
+        &ledger,
+        &CompletionActionJournalRead::Missing,
+        claim.campaign_id.clone(),
+    )
+    .expect("persisted clustered campaign");
     let transition = start_completion(Budget::new(12, 8).unwrap(), start).expect("first action");
 
     assert!(matches!(
@@ -302,6 +306,71 @@ fn persisted_clustered_campaign_rebuilds_the_same_strict_start_without_cli_ident
         transition.action,
         Some(Action::RunAuthorizedRepairs { .. } | Action::RunFinalGates { .. })
     ));
+}
+
+#[test]
+fn persisted_clustered_campaign_restores_all_reconciled_journal_usage() {
+    let (ledger, claim) = clustered_claim(true);
+    let mut journal = CompletionActionJournal::new(
+        claim.campaign_id.clone(),
+        claim.epoch.id().clone(),
+        claim.policy_digest.clone(),
+    );
+    for observed_turn_delta in [1, 2] {
+        let action = journal
+            .claim_next(journal.generation(), CompletionActionId::generate())
+            .expect("claim durable action");
+        let reservation = journal
+            .reserve_provider_turn(
+                &action,
+                ProviderTurnExecutionId::generate(),
+                observed_turn_delta,
+            )
+            .expect("reserve provider turn");
+        journal
+            .reconcile_provider_turn(&reservation, observed_turn_delta)
+            .expect("reconcile provider turns");
+        journal.finish(&action).expect("finish durable action");
+    }
+
+    let start = CompletionStart::from_persisted_clustered_campaign(
+        &ledger,
+        &CompletionActionJournalRead::Current(journal),
+        claim.campaign_id.clone(),
+    )
+    .expect("persisted clustered campaign");
+    let transition = start_completion(Budget::new(12, 8).unwrap(), start).expect("first action");
+
+    assert_eq!(transition.state.cycles, 2);
+    assert_eq!(transition.state.provider_turns, 3);
+}
+
+#[test]
+fn persisted_clustered_campaign_rejects_indeterminate_journal_usage() {
+    let (ledger, claim) = clustered_claim(true);
+    let mut journal = CompletionActionJournal::new(
+        claim.campaign_id.clone(),
+        claim.epoch.id().clone(),
+        claim.policy_digest.clone(),
+    );
+    let action = journal
+        .claim_next(0, CompletionActionId::generate())
+        .expect("claim durable action");
+    let reservation = journal
+        .reserve_provider_turn(&action, ProviderTurnExecutionId::generate(), 1)
+        .expect("reserve provider turn");
+    journal
+        .mark_provider_turn_usage_indeterminate(&reservation)
+        .expect("mark indeterminate usage");
+
+    assert_eq!(
+        CompletionStart::from_persisted_clustered_campaign(
+            &ledger,
+            &CompletionActionJournalRead::Current(journal),
+            claim.campaign_id,
+        ),
+        Err(Failure::UsageIndeterminate)
+    );
 }
 
 #[test]

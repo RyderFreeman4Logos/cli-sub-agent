@@ -386,8 +386,13 @@ async fn run_clustered_completion(
         Ok(ledger) => ledger,
         Err(error) => return emit_completion_setup_block("ledger_load_failure", &error),
     };
+    let action_journal = match store.load_completion_action_journal() {
+        Ok(journal) => journal,
+        Err(error) => return emit_completion_setup_block("action_journal_load_failure", &error),
+    };
     let start = match completion::CompletionStart::from_persisted_clustered_campaign(
         &ledger,
+        &action_journal,
         campaign_id.clone(),
     ) {
         Ok(start) => start,

@@ -143,6 +143,31 @@ pub(super) fn capture_epoch(project_root: &Path, base_oid: &GitObjectId) -> Resu
     })
 }
 
+/// Reject a repair result unless it advances the authorized commit history and frozen diff.
+///
+/// A new object ID alone is not evidence of a repair: an empty commit preserves the exact tree,
+/// while a reset can move HEAD outside the authorized history. Both must fail before handoff
+/// publication can make the resulting epoch executable evidence.
+pub(super) fn validate_repair_advance(
+    project_root: &Path,
+    expected: &EpochRecord,
+    changed: &CapturedEpoch,
+) -> Result<()> {
+    if !changed.clean {
+        bail!("authorized repair must leave an exactly clean index and worktree");
+    }
+    if changed.epoch.head_oid() == expected.head_oid() {
+        bail!("authorized repair must create a new HEAD before handoff publication");
+    }
+    if changed.epoch.diff_digest() == expected.diff_digest() {
+        bail!("authorized repair must change the frozen tree diff before handoff publication");
+    }
+    if !is_descendant(project_root, expected.head_oid(), changed.epoch.head_oid())? {
+        bail!("authorized repair HEAD must descend from the expected authorized HEAD");
+    }
+    Ok(())
+}
+
 fn source_git_directory(project_root: &Path) -> Result<PathBuf> {
     let output = Command::new("git")
         .arg("-C")
@@ -186,6 +211,33 @@ fn git(project_root: &Path, args: &[&str]) -> Result<Output> {
     Ok(output)
 }
 
+fn is_descendant(
+    project_root: &Path,
+    expected_ancestor: &GitObjectId,
+    observed_descendant: &GitObjectId,
+) -> Result<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            expected_ancestor.as_str(),
+            observed_descendant.as_str(),
+        ])
+        .output()
+        .context("verify authorized repair commit ancestry")?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "verify authorized repair commit ancestry failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -195,7 +247,7 @@ mod tests {
     use csa_session::convergence::GitObjectId;
     use tempfile::TempDir;
 
-    use super::{SourceRepairOwner, capture_epoch};
+    use super::{SourceRepairOwner, capture_epoch, validate_repair_advance};
 
     fn git(root: &Path, args: &[&str]) {
         let output = Command::new("git")
@@ -282,5 +334,41 @@ mod tests {
         let changed = capture_epoch(repository.path(), &base).expect("capture changed epoch");
         assert!(changed.clean, "committed repair source must be clean");
         assert_ne!(changed.epoch.head_oid(), expected.epoch.head_oid());
+    }
+
+    #[test]
+    fn repair_advance_requires_a_descendant_with_a_changed_tree_diff() {
+        let repository = repository();
+        let base = head(repository.path());
+        let expected = capture_epoch(repository.path(), &base).expect("capture expected epoch");
+
+        git(
+            repository.path(),
+            &["commit", "--allow-empty", "-m", "empty repair"],
+        );
+        let empty = capture_epoch(repository.path(), &base).expect("capture empty repair");
+        let error = validate_repair_advance(repository.path(), &expected.epoch, &empty)
+            .expect_err("empty commit must not authorize a repair handoff");
+        assert!(error.to_string().contains("frozen tree diff"));
+
+        git(
+            repository.path(),
+            &["reset", "--hard", expected.epoch.head_oid().as_str()],
+        );
+        fs::write(repository.path().join("repair.txt"), "after\n").expect("repair source");
+        git(repository.path(), &["add", "repair.txt"]);
+        git(repository.path(), &["commit", "-m", "real repair"]);
+        let advanced = capture_epoch(repository.path(), &base).expect("capture advanced repair");
+        validate_repair_advance(repository.path(), &expected.epoch, &advanced)
+            .expect("descendant commit with changed tree must pass");
+
+        git(
+            repository.path(),
+            &["reset", "--hard", expected.epoch.head_oid().as_str()],
+        );
+        let reset = capture_epoch(repository.path(), &base).expect("capture reset repair");
+        let error = validate_repair_advance(repository.path(), &advanced.epoch, &reset)
+            .expect_err("reset must not authorize a repair handoff");
+        assert!(error.to_string().contains("must descend"));
     }
 }

@@ -21,7 +21,7 @@ use super::repair_lifecycle::{
     claim_repair_action, finish_failed_repair, reconcile_incomplete_repair_intent, repair_intent,
     validate_exact_repair_batches,
 };
-use super::repair_source::{SourceRepairOwner, capture_epoch};
+use super::repair_source::{SourceRepairOwner, capture_epoch, validate_repair_advance};
 use super::runner::finalize_frozen_identity;
 
 const REPAIR_ARTIFACT_FILE: &str = "consolidated-repair-handoff.json";
@@ -244,9 +244,7 @@ async fn execute_and_publish(
     }
 
     let changed = capture_epoch(context.project_root, authorization.epoch().base_oid())?;
-    if !changed.clean || changed.epoch.head_oid() == authorization.epoch().head_oid() {
-        bail!("authorized repair must create a changed clean HEAD before handoff publication");
-    }
+    validate_repair_advance(context.project_root, authorization.epoch(), &changed)?;
     let session_id = CsaSessionId::parse(&outcome.execution.meta_session_id)?;
     let artifact_bytes = encode_receipt(authorization, &actual_executor, &changed.epoch)?;
     let artifact_digest = Sha256Digest::compute(&artifact_bytes);

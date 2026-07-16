@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use csa_session::convergence::{
-    CampaignId, CandidateId, ConvergenceEvent, ConvergenceLedger, RootClusterId,
+    CampaignId, CandidateId, CompletionActionJournalRead, ConvergenceEvent, ConvergenceLedger,
+    EpochId, ProviderTurnExecutionState, RootClusterId, Sha256Digest,
 };
 
 use super::completion::{
@@ -19,6 +20,7 @@ impl CompletionStart {
     /// same strict validator used by recovery and unit tests.
     pub(crate) fn from_persisted_clustered_campaign(
         ledger: &ConvergenceLedger,
+        action_journal: &CompletionActionJournalRead,
         campaign_id: CampaignId,
     ) -> Result<Self, CompletionError> {
         ledger
@@ -105,6 +107,8 @@ impl CompletionStart {
             0,
             csa_session::convergence::ConvergenceLedgerEntry::sequence,
         );
+        let (cycles, provider_turns) =
+            durable_resume_usage(action_journal, &campaign_id, epoch.id(), &policy_digest)?;
         Self::clustered(
             ledger,
             super::completion_types::ClusteredCompletionClaim {
@@ -113,8 +117,8 @@ impl CompletionStart {
                 candidate_ids,
                 root_cluster_ids,
                 repair_batches,
-                cycles: 0,
-                provider_turns: 0,
+                cycles,
+                provider_turns,
                 ledger_generation,
                 policy_digest,
             },
@@ -268,6 +272,55 @@ impl CompletionStart {
             policy_digest: claim.policy_digest,
         }))
     }
+}
+
+/// Reconstruct the completion budget already consumed by one exact durable journal.
+///
+/// A completed action consumes one reducer cycle. Provider budget consumption is only the sum
+/// of host-observed reconciliations; reservations with uncertain usage cannot be resumed.
+fn durable_resume_usage(
+    action_journal: &CompletionActionJournalRead,
+    campaign_id: &CampaignId,
+    epoch_id: &EpochId,
+    policy_digest: &Sha256Digest,
+) -> Result<(u32, u32), CompletionError> {
+    let CompletionActionJournalRead::Current(journal) = action_journal else {
+        return match action_journal {
+            CompletionActionJournalRead::Missing => Ok((0, 0)),
+            CompletionActionJournalRead::LegacyV1(_) => Err(CompletionError::UsageIndeterminate),
+            CompletionActionJournalRead::Current(_) => unreachable!("matched current journal"),
+        };
+    };
+    if journal.campaign_id() != campaign_id || journal.epoch_id() != epoch_id {
+        return Err(CompletionError::IdentityMismatch);
+    }
+    if journal.policy_digest() != policy_digest {
+        return Err(CompletionError::PolicyDigestMismatch);
+    }
+    let cycles =
+        u32::try_from(journal.actions().len()).map_err(|_| CompletionError::BudgetExhausted)?;
+    let provider_turns = journal
+        .actions()
+        .iter()
+        .flat_map(|action| action.provider_turns())
+        .try_fold(0_u32, |total, execution| match execution.state() {
+            ProviderTurnExecutionState::Reconciled {
+                observed_turn_delta,
+            } => total
+                .checked_add(observed_turn_delta)
+                .ok_or(CompletionError::BudgetExhausted),
+            ProviderTurnExecutionState::ReleasedBeforeSend => Ok(total),
+            ProviderTurnExecutionState::Reserved
+            | ProviderTurnExecutionState::UsageIndeterminate => {
+                Err(CompletionError::UsageIndeterminate)
+            }
+        })?;
+    if !journal.permits_attestation() {
+        return Err(CompletionError::InvalidTransition(
+            "completion action journal has an unfinished action",
+        ));
+    }
+    Ok((cycles, provider_turns))
 }
 
 /// Create the first completion action without replaying discovery or clustering for a resume.
