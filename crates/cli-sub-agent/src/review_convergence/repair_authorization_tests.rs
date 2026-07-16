@@ -9,6 +9,20 @@ fn repair_only_cli_requires_explicit_campaign_and_rejects_review_routing() {
     assert!(args.repair_only);
     assert_eq!(args.campaign.as_deref(), Some(campaign));
     crate::cli::validate_review_args(&args).expect("explicit repair authorization should validate");
+
+    let completion_args = parsed_review(&[
+        "csa",
+        "review",
+        "--converge",
+        "--execute-completion",
+        "--campaign",
+        campaign,
+        "--range",
+        "main...HEAD",
+    ]);
+    crate::cli::validate_review_args(&completion_args)
+        .expect("explicit completion execution authorization should validate");
+
     let mut command = crate::cli::Cli::command();
     let help = command
         .find_subcommand_mut("review")

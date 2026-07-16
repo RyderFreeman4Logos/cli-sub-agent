@@ -4,7 +4,8 @@ pub(super) fn validate(args: &ReviewArgs) -> std::result::Result<(), clap::Error
     if args.repair_only {
         return repair_args::validate_repair_only_args(args);
     }
-    if !args.converge && !args.discovery_only && !args.execute_completion {
+    if !args.converge && !args.discovery_only && !args.execute_completion && args.campaign.is_none()
+    {
         return Ok(());
     }
 
