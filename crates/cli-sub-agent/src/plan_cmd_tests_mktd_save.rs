@@ -46,16 +46,14 @@ fn mktd_save_step_persists_issue_quoted_content_without_shell_parse_break() -> a
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(project_dir.path(), &["checkout", "-b", "fix/2041-test"])?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env("STEP_8_OUTPUT", spec_toml())
@@ -124,16 +122,14 @@ fn mktd_save_step_normalizes_wrapped_spec_toml_before_persist() -> anyhow::Resul
         let csa_stub = bin_dir.path().join("csa");
         std::fs::write(&csa_stub, csa_stub_script())?;
         make_executable(&csa_stub)?;
-        install_save_script_path_tools(bin_dir.path())?;
 
         run_git(project_dir.path(), &["init"])?;
         run_git(project_dir.path(), &["checkout", "-b", "fix/2375-test"])?;
 
-        let output = std::process::Command::new("bash")
+        let output = save_script_command(bin_dir.path())?
             .arg("-c")
             .arg(&save_script)
             .current_dir(project_dir.path())
-            .env("PATH", bin_dir.path())
             .env("CSA_SESSION_DIR", session_dir.path())
             .env("STEP_12_OUTPUT", tricky_todo())
             .env("STEP_8_OUTPUT", step_8_output)
@@ -181,7 +177,6 @@ fn mktd_save_step_accepts_parser_valid_noncanonical_spec_toml() -> anyhow::Resul
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(
@@ -189,11 +184,10 @@ fn mktd_save_step_accepts_parser_valid_noncanonical_spec_toml() -> anyhow::Resul
         &["checkout", "-b", "fix/2439-noncanonical"],
     )?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env("STEP_8_OUTPUT", noncanonical_spec_toml())
@@ -231,16 +225,14 @@ fn mktd_save_step_rejects_unrecoverable_prose_spec_before_persist() -> anyhow::R
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(project_dir.path(), &["checkout", "-b", "fix/2375-bad-spec"])?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env(
@@ -294,7 +286,6 @@ fn mktd_save_step_rejects_truncated_spec_with_parser_root_cause() -> anyhow::Res
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(
@@ -302,11 +293,10 @@ fn mktd_save_step_rejects_truncated_spec_with_parser_root_cause() -> anyhow::Res
         &["checkout", "-b", "fix/2439-truncated"],
     )?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env(
@@ -352,7 +342,6 @@ fn mktd_save_step_rejects_command_stderr_contaminated_spec() -> anyhow::Result<(
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(
@@ -360,11 +349,10 @@ fn mktd_save_step_rejects_command_stderr_contaminated_spec() -> anyhow::Result<(
         &["checkout", "-b", "fix/2439-contaminated"],
     )?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env(
@@ -424,7 +412,6 @@ fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<
     let csa_stub = bin_dir.path().join("csa");
     std::fs::write(&csa_stub, csa_failing_persist_stub_script())?;
     make_executable(&csa_stub)?;
-    install_save_script_path_tools(bin_dir.path())?;
 
     run_git(project_dir.path(), &["init"])?;
     run_git(
@@ -432,11 +419,10 @@ fn mktd_save_step_reports_persist_stderr_context_on_failure() -> anyhow::Result<
         &["checkout", "-b", "fix/persist-detail-test"],
     )?;
 
-    let output = std::process::Command::new("bash")
+    let output = save_script_command(bin_dir.path())?
         .arg("-c")
         .arg(save_script)
         .current_dir(project_dir.path())
-        .env("PATH", bin_dir.path())
         .env("CSA_SESSION_DIR", session_dir.path())
         .env("STEP_12_OUTPUT", tricky_todo())
         .env("STEP_8_OUTPUT", spec_toml())
@@ -508,37 +494,41 @@ fn make_executable(path: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(unix)]
-fn install_save_script_path_tools(bin_dir: &Path) -> anyhow::Result<()> {
-    for tool in [
-        "awk", "bash", "git", "grep", "head", "mkdir", "sed", "tail", "tr", "wc", "perl",
-    ] {
-        let source = resolve_path_tool(tool)?;
-        std::os::unix::fs::symlink(&source, bin_dir.join(tool))?;
-    }
-    Ok(())
+fn save_script_command(bin_dir: &Path) -> anyhow::Result<std::process::Command> {
+    let mut command = std::process::Command::new(system_test_tool("bash")?);
+    command.env_clear().env("PATH", save_script_path(bin_dir)?);
+    Ok(command)
 }
 
 #[cfg(unix)]
-fn resolve_path_tool(tool: &str) -> anyhow::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
+fn save_script_path(bin_dir: &Path) -> anyhow::Result<std::ffi::OsString> {
+    std::env::join_paths([bin_dir, Path::new("/usr/bin"), Path::new("/bin")])
+        .map_err(anyhow::Error::from)
+}
 
-    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let candidate = dir.join(tool);
-        let Ok(metadata) = std::fs::metadata(&candidate) else {
-            continue;
-        };
-        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+#[cfg(unix)]
+fn system_test_path() -> anyhow::Result<std::ffi::OsString> {
+    std::env::join_paths([Path::new("/usr/bin"), Path::new("/bin")]).map_err(anyhow::Error::from)
+}
+
+#[cfg(unix)]
+fn system_test_tool(tool: &str) -> anyhow::Result<PathBuf> {
+    for directory in [Path::new("/usr/bin"), Path::new("/bin")] {
+        let candidate = directory.join(tool);
+        if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    anyhow::bail!("required test tool not found on PATH: {tool}")
+    anyhow::bail!("required test tool not found in /usr/bin or /bin: {tool}")
 }
 
 #[cfg(unix)]
 fn run_git(project_dir: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(system_test_tool("git")?)
         .args(args)
         .current_dir(project_dir)
+        .env_clear()
+        .env("PATH", system_test_path()?)
         .output()?;
     anyhow::ensure!(
         output.status.success(),
