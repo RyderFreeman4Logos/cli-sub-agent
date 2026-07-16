@@ -25,6 +25,7 @@ mod repair_intent;
 mod repair_intent_store;
 mod secure_fs;
 mod store;
+mod terminal_publication;
 mod validation;
 mod validation_attestation;
 mod verification_evidence;
@@ -38,9 +39,9 @@ pub use action_journal::{
 };
 pub use attestation::{
     AttestationArtifactReader, AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
-    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, GATE_EVIDENCE_SCHEMA_ID,
-    GateCommandResult, GateEvidenceRecord, LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID,
-    MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CleanupConfirmation,
+    GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
+    LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID, MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
 };
 pub use authority::{
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
@@ -59,7 +60,9 @@ pub use identity::{
     CampaignId, CampaignRecord, CandidateId, CsaSessionId, DiscoveryAttemptId, EpochId,
     EpochRecord, GitObjectId, Sha256Digest,
 };
-pub use validation_attestation::{compute_attestation_bindings, verify_merge_attestation};
+pub use validation_attestation::{
+    compute_attestation_bindings, verify_merge_attestation, verify_terminal_artifact_pair,
+};
 pub use verification_evidence::{
     CandidateDispositionRecord, CandidateVerificationEvidence, VerificationIndependence,
 };
@@ -86,6 +89,7 @@ pub use action_journal_store::CompletionActionJournalStoreError;
 #[cfg(test)]
 pub(crate) use store::MAX_LEDGER_BYTES;
 pub use store::{ConvergenceAppendError, ConvergenceLedgerStore};
+pub use terminal_publication::FinalAttestationPublicationError;
 
 const COVERAGE_CELL_DOMAIN: &[u8] = b"csa-convergence-coverage-cell-v1\0";
 const STABLE_FINDING_DOMAIN: &[u8] = b"csa-convergence-stable-finding-v1\0";

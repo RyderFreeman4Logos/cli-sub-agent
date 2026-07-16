@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use csa_session::convergence::{CampaignId, EpochRecord, GitObjectId, Sha256Digest};
+use csa_session::convergence::{
+    CampaignId, CleanupConfirmation, EpochRecord, GitObjectId, Sha256Digest,
+};
 
 use super::clean_room::{
     CleanRoomWorkspaceFactory, CleanupFailureLedger, DetachedWorkspaceDriver,
@@ -229,6 +231,32 @@ fn explicit_close_surfaces_cleanup_failure_and_drop_records_it() {
     drop(_dropped);
     assert_eq!(cleanup_calls.lock().expect("cleanup").len(), 2);
     assert_eq!(ledger.failures().len(), 2);
+}
+
+#[test]
+fn close_and_confirm_returns_a_receipt_only_after_successful_cleanup() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frozen = epoch();
+    let lease_context = lease_context(temp.path());
+    let (mut factory, _plans, cleanup_calls, _ledger) =
+        factory(frozen.head_oid().as_str().to_string(), false);
+    let guard = factory
+        .create(
+            &temp.path().join("source"),
+            &temp.path().join("room"),
+            &temp.path().join("bundle"),
+            frozen,
+            &lease_context,
+        )
+        .expect("guard");
+    let identity = guard.identity().clone();
+
+    let confirmation = guard.close_and_confirm().expect("confirmed cleanup");
+    assert_eq!(
+        confirmation,
+        CleanupConfirmation::after_successful_cleanup(&identity)
+    );
+    assert_eq!(cleanup_calls.lock().expect("cleanup").len(), 1);
 }
 
 #[test]

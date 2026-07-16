@@ -216,6 +216,15 @@ impl ConvergenceLedger {
         &self.entries
     }
 
+    /// Return the append generation represented by this immutable ledger snapshot.
+    ///
+    /// Linux x86_64 is the supported platform, so the in-memory vector length fits `u64`; every
+    /// persisted entry sequence is checked against this generation during ledger validation.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.entries.len() as u64
+    }
+
     /// Append one event using a generated event ID, current timestamp, and next sequence.
     ///
     /// The append is transactional: a protocol-invalid event is removed before the error

@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use csa_session::convergence::{CampaignId, EpochRecord, WorkspaceLeaseIdentity};
+use csa_session::convergence::{
+    CampaignId, CleanupConfirmation, EpochRecord, WorkspaceLeaseIdentity,
+};
 use ulid::Ulid;
 
 pub(super) use super::clean_room_provider::admitted_identity;
@@ -396,6 +398,16 @@ impl<C: WorkspaceCleanup> DetachedWorkspaceLease<C> {
     /// Compatibility spelling for callers that use close as their explicit release boundary.
     pub(crate) fn close(self) -> Result<()> {
         self.release()
+    }
+
+    /// Release the workspace and return the only cleanup receipt suitable for terminal evidence.
+    ///
+    /// No receipt is returned when identity validation, process cleanup, or lease-file removal
+    /// fails, so a completion port cannot publish a terminal pair from uncertain cleanup.
+    pub(crate) fn close_and_confirm(self) -> Result<CleanupConfirmation> {
+        let identity = self.identity.clone();
+        self.release()?;
+        Ok(CleanupConfirmation::after_successful_cleanup(&identity))
     }
 
     fn release_with(&self, cleanup: &mut C) -> Result<()> {

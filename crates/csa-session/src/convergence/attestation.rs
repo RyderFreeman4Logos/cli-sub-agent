@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ArtifactEvidenceRef, CampaignId, EpochId, EpochRecord, GitObjectId, ModelEvidence,
-    Sha256Digest, hash_fields, normalize_nonblank,
+    Sha256Digest, WorkspaceLeaseIdentity, hash_fields, normalize_nonblank,
 };
 
 /// Schema required from the immutable gate artifact.
@@ -22,6 +22,7 @@ pub const MERGE_ATTESTATION_SCHEMA_ID: &str = "csa.convergence.merge-attestation
 const GATE_DOMAIN: &[u8] = b"csa-convergence-gate-evidence-v1\0";
 const REVIEW_DOMAIN: &[u8] = b"csa-convergence-clean-review-v1\0";
 const ATTESTATION_DOMAIN: &[u8] = b"csa-convergence-merge-attestation-v1\0";
+const CLEANUP_CONFIRMATION_DOMAIN: &[u8] = b"csa-convergence-cleanup-confirmation-v1\0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,6 +293,56 @@ pub struct AttestationBindingDigests {
     pub(super) clean_room_model: Sha256Digest,
 }
 
+/// Host confirmation that the exact detached workspace used for terminal evidence was released.
+///
+/// The receipt deliberately contains a domain-separated digest of the full lease identity rather
+/// than the workspace path or nonce. A terminal reader matches that digest to the immutable
+/// completion authorization record already present in the ledger. Callers may construct this
+/// receipt only after the owned lease's explicit cleanup has returned successfully.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupConfirmation {
+    campaign_id: CampaignId,
+    epoch_id: EpochId,
+    lease_generation: u64,
+    lease_identity_digest: Sha256Digest,
+}
+
+impl CleanupConfirmation {
+    /// Create the receipt to persist after successful explicit cleanup of `lease`.
+    #[must_use]
+    pub fn after_successful_cleanup(lease: &WorkspaceLeaseIdentity) -> Self {
+        let encoded = serde_json::to_vec(lease).expect("workspace lease identity serializes");
+        Self {
+            campaign_id: lease.campaign_id().clone(),
+            epoch_id: lease.epoch().id().clone(),
+            lease_generation: lease.generation(),
+            lease_identity_digest: hash_fields(
+                CLEANUP_CONFIRMATION_DOMAIN,
+                &[Sha256Digest::compute(&encoded).as_str()],
+            ),
+        }
+    }
+
+    fn validate_for_tuple(&self, tuple: &AttestationTuple) -> Result<()> {
+        if self.campaign_id != tuple.campaign_id
+            || self.epoch_id != tuple.epoch_id
+            || self.lease_generation == 0
+        {
+            bail!("cleanup confirmation does not match the terminal attestation tuple");
+        }
+        Ok(())
+    }
+
+    pub(super) fn matches_lease(&self, lease: &WorkspaceLeaseIdentity) -> bool {
+        self.campaign_id == *lease.campaign_id()
+            && self.epoch_id == *lease.epoch().id()
+            && self.lease_generation == lease.generation()
+            && self.lease_identity_digest
+                == Self::after_successful_cleanup(lease).lease_identity_digest
+    }
+}
+
 /// Immutable terminal merge attestation and all artifact/binding evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -300,6 +351,7 @@ pub struct MergeAttestationRecord {
     pub(super) tuple: AttestationTuple,
     pub(super) gate_evidence: GateEvidenceRecord,
     pub(super) clean_room_artifact: ArtifactEvidenceRef,
+    pub(super) cleanup_confirmation: CleanupConfirmation,
     pub(super) bindings: AttestationBindingDigests,
     content_digest: Sha256Digest,
 }
@@ -309,6 +361,7 @@ impl MergeAttestationRecord {
     pub fn new(
         gate: &GateEvidenceRecord,
         review: &CleanRoomReviewRecord,
+        cleanup_confirmation: CleanupConfirmation,
         bindings: AttestationBindingDigests,
     ) -> Result<Self> {
         gate.validate()?;
@@ -319,11 +372,13 @@ impl MergeAttestationRecord {
         if gate.artifact != review.gate_artifact {
             bail!("clean-room review is not bound to the exact gate artifact");
         }
+        cleanup_confirmation.validate_for_tuple(&review.tuple)?;
         let mut record = Self {
             schema_identity: MERGE_ATTESTATION_SCHEMA_ID.to_string(),
             tuple: review.tuple.clone(),
             gate_evidence: gate.clone(),
             clean_room_artifact: review.artifact.clone(),
+            cleanup_confirmation,
             bindings,
             content_digest: Sha256Digest::compute(&[]),
         };
@@ -337,6 +392,7 @@ impl MergeAttestationRecord {
         }
         self.tuple.validate()?;
         self.gate_evidence.validate()?;
+        self.cleanup_confirmation.validate_for_tuple(&self.tuple)?;
         if self.gate_evidence.tuple != self.tuple || self.digest() != self.content_digest {
             bail!("merge attestation identity or content digest mismatch");
         }
@@ -352,6 +408,7 @@ impl MergeAttestationRecord {
                 &self.gate_evidence.content_digest,
                 &self.gate_evidence.artifact,
                 &self.clean_room_artifact,
+                &self.cleanup_confirmation,
                 &self.bindings,
             ),
         )
