@@ -1,13 +1,17 @@
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use csa_session::convergence::{EpochRecord, GitObjectId, Sha256Digest};
+use csa_session::convergence::{
+    CampaignId, CleanupConfirmation, EpochRecord, GitObjectId, Sha256Digest,
+};
 
 use super::clean_room::{
     CleanRoomWorkspaceFactory, CleanupFailureLedger, DetachedWorkspaceDriver,
-    DetachedWorkspacePlan, ExactOidWorkspaceFactory, MaterializedWorkspace, WorkspaceCleanup,
+    DetachedWorkspaceLeaseContext, DetachedWorkspaceLeaseStore, DetachedWorkspacePlan,
+    ExactOidWorkspaceFactory, MaterializedWorkspace, WorkspaceCleanup,
 };
 
 pub(super) fn epoch() -> EpochRecord {
@@ -49,6 +53,12 @@ impl DetachedWorkspaceDriver for RecordingWorkspaceDriver {
         plan: &DetachedWorkspacePlan,
     ) -> Result<MaterializedWorkspace<Self::Cleanup>> {
         self.plans.lock().expect("plans").push(plan.clone());
+        let root = plan
+            .create()
+            .args()
+            .get(7)
+            .expect("detached worktree root argument");
+        fs::create_dir_all(root).expect("materialize detached workspace root");
         Ok(MaterializedWorkspace::new(
             self.observed_head.clone(),
             FakeCleanup {
@@ -57,6 +67,11 @@ impl DetachedWorkspaceDriver for RecordingWorkspaceDriver {
             },
         ))
     }
+}
+
+pub(super) fn lease_context(root: &Path) -> DetachedWorkspaceLeaseContext {
+    let store = DetachedWorkspaceLeaseStore::open(root).expect("lease store");
+    DetachedWorkspaceLeaseContext::new(CampaignId::generate(), 1, store).expect("lease context")
 }
 
 pub(super) type WorkspaceFactoryFixture = (
@@ -94,11 +109,12 @@ fn exact_oid_factory_builds_detached_non_interactive_git_plan_without_executing_
     let root = temp.path().join("clean-room");
     let bundle = temp.path().join("provider-evidence.tar");
     let frozen = epoch();
+    let lease_context = lease_context(temp.path());
     let (mut factory, plans, cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
 
     let guard = factory
-        .create(&source, &root, &bundle, frozen.clone())
+        .create(&source, &root, &bundle, frozen.clone(), &lease_context)
         .expect("create through recording driver");
 
     let plans = plans.lock().expect("plans");
@@ -161,6 +177,7 @@ fn exact_oid_factory_builds_detached_non_interactive_git_plan_without_executing_
 fn workspace_guard_requests_bounded_cleanup_on_drop() {
     let temp = tempfile::tempdir().expect("tempdir");
     let frozen = epoch();
+    let lease_context = lease_context(temp.path());
     let (mut factory, _plans, cleanup_calls, ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     {
@@ -170,6 +187,7 @@ fn workspace_guard_requests_bounded_cleanup_on_drop() {
                 &temp.path().join("room"),
                 &temp.path().join("bundle"),
                 frozen,
+                &lease_context,
             )
             .expect("guard");
     }
@@ -181,6 +199,7 @@ fn workspace_guard_requests_bounded_cleanup_on_drop() {
 fn explicit_close_surfaces_cleanup_failure_and_drop_records_it() {
     let temp = tempfile::tempdir().expect("tempdir");
     let frozen = epoch();
+    let lease_context = lease_context(temp.path());
     let (mut factory, _plans, cleanup_calls, ledger) =
         factory(frozen.head_oid().as_str().to_string(), true);
     let guard = factory
@@ -189,6 +208,7 @@ fn explicit_close_surfaces_cleanup_failure_and_drop_records_it() {
             &temp.path().join("room"),
             &temp.path().join("bundle"),
             frozen.clone(),
+            &lease_context,
         )
         .expect("guard");
     let error = guard
@@ -205,17 +225,45 @@ fn explicit_close_surfaces_cleanup_failure_and_drop_records_it() {
             &temp.path().join("room-2"),
             &temp.path().join("bundle-2"),
             frozen,
+            &lease_context,
         )
         .expect("second guard");
     drop(_dropped);
     assert_eq!(cleanup_calls.lock().expect("cleanup").len(), 2);
-    assert_eq!(ledger.failures().len(), 1);
+    assert_eq!(ledger.failures().len(), 2);
+}
+
+#[test]
+fn close_and_confirm_returns_a_receipt_only_after_successful_cleanup() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frozen = epoch();
+    let lease_context = lease_context(temp.path());
+    let (mut factory, _plans, cleanup_calls, _ledger) =
+        factory(frozen.head_oid().as_str().to_string(), false);
+    let guard = factory
+        .create(
+            &temp.path().join("source"),
+            &temp.path().join("room"),
+            &temp.path().join("bundle"),
+            frozen,
+            &lease_context,
+        )
+        .expect("guard");
+    let identity = guard.identity().clone();
+
+    let confirmation = guard.close_and_confirm().expect("confirmed cleanup");
+    assert_eq!(
+        confirmation,
+        CleanupConfirmation::after_successful_cleanup(&identity)
+    );
+    assert_eq!(cleanup_calls.lock().expect("cleanup").len(), 1);
 }
 
 #[test]
 fn observed_head_mismatch_fails_closed_and_cleans_partial_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let frozen = epoch();
+    let lease_context = lease_context(temp.path());
     let (mut factory, _plans, cleanup_calls, _ledger) = factory("c".repeat(40), false);
     let error = factory
         .create(
@@ -223,6 +271,7 @@ fn observed_head_mismatch_fails_closed_and_cleans_partial_workspace() {
             &temp.path().join("room"),
             &temp.path().join("bundle"),
             frozen,
+            &lease_context,
         )
         .expect_err("mismatched materialization must fail");
     assert!(error.to_string().contains("exact frozen head"));
@@ -231,7 +280,9 @@ fn observed_head_mismatch_fails_closed_and_cleans_partial_workspace() {
 
 #[test]
 fn workspace_factory_rejects_relative_boundaries_before_driver_invocation() {
+    let temp = tempfile::tempdir().expect("tempdir");
     let frozen = epoch();
+    let lease_context = lease_context(temp.path());
     let (mut factory, plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     let error = factory
@@ -240,6 +291,7 @@ fn workspace_factory_rejects_relative_boundaries_before_driver_invocation() {
             Path::new("relative-room"),
             Path::new("relative-bundle"),
             frozen,
+            &lease_context,
         )
         .expect_err("relative boundaries must fail closed");
     assert!(error.to_string().contains("absolute"));

@@ -6,8 +6,8 @@ use super::{
     CampaignState, RepairBatchState, RootClusterState, campaign_state, require_finalized_attempt,
 };
 use crate::convergence::{
-    CampaignId, CandidateDisposition, CandidateDispositionRecord, ConvergenceLedgerEntry,
-    RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
+    CampaignId, CandidateDisposition, CandidateDispositionRecord, CandidateId,
+    ConvergenceLedgerEntry, EpochId, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
 };
 
 pub(super) fn validate_complete_clustering(
@@ -86,31 +86,14 @@ pub(super) fn record_root_cluster(
     }
     let mut dispositions = Vec::with_capacity(record.candidate_ids().len());
     for candidate_id in record.candidate_ids() {
-        let candidate = state.candidates.get(candidate_id).with_context(|| {
-            format!(
-                "root cluster {} references unknown candidate {} in campaign {}",
-                record.id(),
-                candidate_id,
-                entry.campaign_id()
-            )
-        })?;
-        require_finalized_attempt(state, candidate_id, candidate, entry.campaign_id())?;
-        if !state.disposed_candidates.contains(candidate_id) {
-            bail!(
-                "root cluster {} references candidate {} without a terminal disposition in campaign {}",
-                record.id(),
-                candidate_id,
-                entry.campaign_id()
-            );
-        }
-        let disposition = state.dispositions.get(candidate_id).with_context(|| {
-            format!(
-                "root cluster {} lost terminal disposition for candidate {} in campaign {}",
-                record.id(),
-                candidate_id,
-                entry.campaign_id()
-            )
-        })?;
+        let disposition = require_candidate_epoch_binding(
+            state,
+            candidate_id,
+            record.epoch_id(),
+            entry.campaign_id(),
+            "root cluster",
+            record.id().as_str(),
+        )?;
         if !matches!(
             disposition.disposition(),
             CandidateDisposition::Verified | CandidateDisposition::NeedsContractOrDocumentation
@@ -122,7 +105,7 @@ pub(super) fn record_root_cluster(
                 entry.campaign_id()
             );
         }
-        dispositions.push(disposition.clone());
+        dispositions.push(disposition);
     }
     if record
         .candidate_ids()
@@ -205,6 +188,16 @@ pub(super) fn record_repair_batch(
             entry.campaign_id()
         );
     }
+    for candidate_id in record.candidate_ids() {
+        require_candidate_epoch_binding(
+            state,
+            candidate_id,
+            record.epoch_id(),
+            entry.campaign_id(),
+            "repair batch",
+            record.id().as_str(),
+        )?;
+    }
     if state
         .repair_batches_by_cluster
         .contains_key(record.root_cluster_id())
@@ -239,6 +232,56 @@ pub(super) fn record_repair_batch(
         .insert(record.root_cluster_id().clone(), record.id().clone());
     state.repair_batch_records.push(record.clone());
     Ok(())
+}
+
+/// Recheck that one repair-stage candidate is evidence from the exact repair epoch.
+///
+/// Root clusters establish the invariant first. Repair batches deliberately repeat it so a
+/// future change to clustering cannot turn the immutable root-to-batch relation into an
+/// epoch-splicing authorization boundary.
+fn require_candidate_epoch_binding(
+    state: &CampaignState,
+    candidate_id: &CandidateId,
+    expected_epoch: &EpochId,
+    campaign_id: &CampaignId,
+    record_kind: &str,
+    record_id: &str,
+) -> Result<CandidateDispositionRecord> {
+    let candidate = state.candidates.get(candidate_id).with_context(|| {
+        format!(
+            "{record_kind} {record_id} references unknown candidate {candidate_id} in campaign {campaign_id}"
+        )
+    })?;
+    require_finalized_attempt(state, candidate_id, candidate, campaign_id)?;
+    let attempt = state
+        .attempts
+        .get(&candidate.discovery_attempt_id)
+        .context("candidate source attempt disappeared during repair epoch validation")?;
+    if &attempt.epoch_id != expected_epoch {
+        bail!(
+            "{record_kind} {record_id} references candidate {candidate_id} whose discovery attempt belongs to epoch {} rather than {} in campaign {campaign_id}",
+            attempt.epoch_id,
+            expected_epoch,
+        );
+    }
+    if !state.disposed_candidates.contains(candidate_id) {
+        bail!(
+            "{record_kind} {record_id} references candidate {candidate_id} without a terminal disposition in campaign {campaign_id}"
+        );
+    }
+    let disposition = state.dispositions.get(candidate_id).with_context(|| {
+        format!(
+            "{record_kind} {record_id} lost terminal disposition for candidate {candidate_id} in campaign {campaign_id}"
+        )
+    })?;
+    if disposition.epoch_id() != expected_epoch {
+        bail!(
+            "{record_kind} {record_id} references candidate {candidate_id} whose disposition belongs to epoch {} rather than {} in campaign {campaign_id}",
+            disposition.epoch_id(),
+            expected_epoch,
+        );
+    }
+    Ok(disposition.clone())
 }
 
 pub(super) fn record_repair_handoff(

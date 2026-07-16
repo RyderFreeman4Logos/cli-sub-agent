@@ -122,12 +122,12 @@ impl WorkspaceProbe for GitWorkspaceProbe {
             .strip_suffix("...HEAD")
             .filter(|base| !base.is_empty() && !base.contains(".."))
             .context("range must be the exact form <base>...HEAD")?;
-        let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}"])?;
+        let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}", "--end-of-options"])?;
         let head_oid = String::from_utf8(head.stdout)
             .context("HEAD was not UTF-8")?
             .trim()
             .to_string();
-        let merge_base = self.git(&["merge-base", base_ref, &head_oid])?;
+        let merge_base = self.git(&["merge-base", "--end-of-options", base_ref, &head_oid])?;
         let base_oid = String::from_utf8(merge_base.stdout)
             .context("merge-base was not UTF-8")?
             .trim()
@@ -227,6 +227,7 @@ pub(crate) struct ResolvedCommandContext<'a> {
     pub(crate) no_failover: bool,
     pub(crate) current_depth: u32,
     pub(crate) startup_env: &'a StartupSubtreeEnv,
+    pub(crate) completion_policy: csa_config::EffectiveConvergenceCompletionPolicy,
 }
 
 impl ResolvedCommandContext<'_> {

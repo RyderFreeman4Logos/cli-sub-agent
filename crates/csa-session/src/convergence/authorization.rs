@@ -132,6 +132,7 @@ pub fn authorize_consolidated_repairs(
     if clusters.len() != batches.len() {
         bail!("current epoch does not have exactly one consolidated repair batch per root cluster");
     }
+    require_authorized_batch_epoch_bindings(ledger, campaign_id, &epoch, &batches)?;
     if batches
         .iter()
         .any(|batch| handed_off_batches.contains(batch.id()))
@@ -150,6 +151,71 @@ pub fn authorize_consolidated_repairs(
         repair_batch_set_digest: RepairBatchRecord::set_digest(&batches),
         batches,
     })
+}
+
+/// Recheck repair candidates at the execution-authorization boundary.
+///
+/// Ledger replay validates each root and batch as it is recorded. This independent lookup keeps
+/// authorization closed if a future replay path becomes more permissive: every executable batch
+/// must bind candidates through discovery attempts and dispositions from the selected epoch.
+fn require_authorized_batch_epoch_bindings(
+    ledger: &ConvergenceLedger,
+    campaign_id: &CampaignId,
+    epoch: &EpochRecord,
+    batches: &[RepairBatchRecord],
+) -> Result<()> {
+    let discovery_attempts = ledger
+        .entries()
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign_id)
+        .filter_map(|entry| match entry.event() {
+            ConvergenceEvent::DiscoveryAttemptRecorded(record)
+                if record.epoch_id() == epoch.id() =>
+            {
+                Some(record.id().clone())
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let candidates = ledger
+        .entries()
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign_id)
+        .filter_map(|entry| match entry.event() {
+            ConvergenceEvent::CandidateRecorded(record)
+                if discovery_attempts.contains(record.discovery_attempt_id()) =>
+            {
+                Some(record.id().clone())
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let dispositions = ledger
+        .entries()
+        .iter()
+        .filter(|entry| entry.campaign_id() == campaign_id)
+        .filter_map(|entry| match entry.event() {
+            ConvergenceEvent::CandidateDispositionRecorded(record)
+                if record.epoch_id() == epoch.id() =>
+            {
+                Some(record.candidate_id().clone())
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    for batch in batches {
+        for candidate_id in batch.candidate_ids() {
+            if !candidates.contains(candidate_id) || !dispositions.contains(candidate_id) {
+                bail!(
+                    "repair batch {} contains candidate {} without discovery and disposition evidence in authorized epoch {}",
+                    batch.id(),
+                    candidate_id,
+                    epoch.id(),
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn selected_campaign(

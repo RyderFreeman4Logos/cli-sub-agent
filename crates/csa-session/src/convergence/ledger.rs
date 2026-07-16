@@ -7,11 +7,12 @@ use ulid::Ulid;
 
 use super::{
     ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateDisposition,
-    CandidateDispositionRecord, CandidateRecord, CleanRoomReviewRecord, CoverageCellRecord,
-    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
-    MergeAttestationRecord, RepairBatchRecord, RepairHandoffRecord, RootClusterRecord,
-    Sha256Digest, hash_fields, validation,
+    CandidateDispositionRecord, CandidateRecord, CleanRoomReviewRecord,
+    CompletionAuthorizationRecord, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, DiscoveryAttemptFinalizationRecord,
+    DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord, MergeAttestationRecord,
+    RepairBatchRecord, RepairHandoffRecord, RootClusterRecord, Sha256Digest, hash_fields,
+    validation,
 };
 
 /// Current on-disk schema version for convergence ledgers.
@@ -112,8 +113,10 @@ pub enum ConvergenceEvent {
     RepairBatchRecorded(RepairBatchRecord),
     /// One validated repair batch received an immutable writer handoff.
     RepairHandoffRecorded(RepairHandoffRecord),
+    /// One completion attempt was bound to an owned workspace lease before external work began.
+    CompletionAuthorizationRecorded(CompletionAuthorizationRecord),
     /// A fresh clean-room review reported an exact zero-finding terminal result.
-    FinalReviewRecorded(CleanRoomReviewRecord),
+    FinalReviewRecorded(Box<CleanRoomReviewRecord>),
     /// The authoritative terminal bindings were sealed for merge.
     MergeAttestationRecorded(Box<MergeAttestationRecord>),
 }
@@ -211,6 +214,15 @@ impl ConvergenceLedger {
     #[must_use]
     pub fn entries(&self) -> &[ConvergenceLedgerEntry] {
         &self.entries
+    }
+
+    /// Return the append generation represented by this immutable ledger snapshot.
+    ///
+    /// Linux x86_64 is the supported platform, so the in-memory vector length fits `u64`; every
+    /// persisted entry sequence is checked against this generation during ledger validation.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.entries.len() as u64
     }
 
     /// Append one event using a generated event ID, current timestamp, and next sequence.

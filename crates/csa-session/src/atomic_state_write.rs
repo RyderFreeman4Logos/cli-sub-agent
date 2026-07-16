@@ -23,6 +23,8 @@ pub(crate) enum AtomicPublishError {
 pub(crate) enum AtomicWriteFault {
     BeforeRename,
     AfterRename,
+    BeforeContainingDirectoryFsync,
+    BeforeParentDirectoryFsync,
 }
 
 pub(crate) fn publish_bytes(
@@ -151,6 +153,13 @@ fn publish_bytes_in_impl(
         )));
     }
 
+    #[cfg(test)]
+    if fault == Some(AtomicWriteFault::BeforeContainingDirectoryFsync) {
+        return Err(after(anyhow!(
+            "injected failure before containing directory fsync"
+        )));
+    }
+
     containing_dir
         .sync_all()
         .with_context(|| {
@@ -161,6 +170,12 @@ fn publish_bytes_in_impl(
         })
         .map_err(after)?;
     if let Some(parent) = immediate_parent {
+        #[cfg(test)]
+        if fault == Some(AtomicWriteFault::BeforeParentDirectoryFsync) {
+            return Err(after(anyhow!(
+                "injected failure before parent directory fsync"
+            )));
+        }
         parent
             .sync_all()
             .with_context(|| {

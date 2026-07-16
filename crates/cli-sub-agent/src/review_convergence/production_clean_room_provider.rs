@@ -75,9 +75,10 @@ impl ProviderSessionFactory for ProductionCleanRoomProvider<'_> {
                     outcome.execution.exit_code
                 );
             }
-            Ok(ProviderSessionOutcome::new(
+            Ok(ProviderSessionOutcome::with_provider_turn_completion(
                 &outcome.meta_session_id,
                 outcome.execution.output.as_bytes(),
+                outcome.execution.provider_turn_completion(),
             ))
         })
     }

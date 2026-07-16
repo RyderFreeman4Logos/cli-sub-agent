@@ -137,8 +137,11 @@ pub(super) fn build_exact_oid_evidence(
         .strip_suffix("...HEAD")
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("convergence range must be <base>...HEAD"))?;
-    let head_oid = git_text(project_root, &["rev-parse", "--verify", "HEAD^{commit}"])
-        .context("resolve exact convergence HEAD OID")?;
+    let head_oid = git_text(
+        project_root,
+        &["rev-parse", "--verify", "HEAD^{commit}", "--end-of-options"],
+    )
+    .context("resolve exact convergence HEAD OID")?;
     build_exact_oid_evidence_for_head(project_root, base, &head_oid)
 }
 
@@ -148,8 +151,11 @@ pub(super) fn build_exact_oid_evidence_for_head(
     head_oid: &str,
 ) -> Result<ExactOidEvidence> {
     let head_oid = GitObjectId::parse(head_oid).context("validate exact convergence HEAD OID")?;
-    let base_oid = git_text(project_root, &["merge-base", base, head_oid.as_str()])
-        .context("resolve exact convergence merge-base OID")?;
+    let base_oid = git_text(
+        project_root,
+        &["merge-base", "--end-of-options", base, head_oid.as_str()],
+    )
+    .context("resolve exact convergence merge-base OID")?;
     let base_oid = GitObjectId::parse(&base_oid).context("validate convergence merge-base OID")?;
     let diff = git_bytes(
         project_root,
@@ -166,7 +172,12 @@ pub(super) fn build_exact_oid_evidence_for_head(
     .context("capture exact-OID convergence diff")?;
     let source_archive = git_bytes(
         project_root,
-        &["archive", "--format=tar", head_oid.as_str()],
+        &[
+            "archive",
+            "--format=tar",
+            "--end-of-options",
+            head_oid.as_str(),
+        ],
     )
     .context("capture exact-OID convergence source archive")?;
     let diff_digest = Sha256Digest::compute(&diff);

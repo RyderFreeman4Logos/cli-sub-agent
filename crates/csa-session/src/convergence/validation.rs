@@ -433,6 +433,29 @@ fn apply_event(
         ConvergenceEvent::RepairHandoffRecorded(record) => {
             repair_validation::record_repair_handoff(campaigns, entry, record)?;
         }
+        ConvergenceEvent::CompletionAuthorizationRecorded(record) => {
+            let state = campaign_state(campaigns, entry, "completion authorization")?;
+            record.validate().with_context(|| {
+                format!(
+                    "invalid completion authorization for campaign {}",
+                    entry.campaign_id()
+                )
+            })?;
+            if record.campaign_id() != entry.campaign_id() {
+                bail!(
+                    "completion authorization campaign {} does not match entry campaign {}",
+                    record.campaign_id(),
+                    entry.campaign_id()
+                );
+            }
+            if !state.epochs.contains(record.epoch_id()) {
+                bail!(
+                    "completion authorization references unopened epoch {} in campaign {}",
+                    record.epoch_id(),
+                    entry.campaign_id()
+                );
+            }
+        }
         ConvergenceEvent::FinalReviewRecorded(_)
         | ConvergenceEvent::MergeAttestationRecorded(_) => {}
     }

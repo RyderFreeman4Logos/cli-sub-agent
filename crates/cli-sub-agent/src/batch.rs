@@ -38,6 +38,7 @@ pub(crate) async fn handle_batch(
         project: config,
         global: global_config,
         mut model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(&project_root)?;
 
     // 3. Check recursion depth

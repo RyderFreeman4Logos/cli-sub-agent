@@ -1,7 +1,8 @@
 use super::{
     ProjectConfig, enforce_global_tool_disables, merge_toml_values, prune_project_removed_refs,
-    pruned_project_config_str, reject_project_tier_policy, reject_removed_refs,
-    strip_review_project_only_from_global, warn_deprecated_keys,
+    pruned_project_config_str, reject_project_convergence_completion_policy,
+    reject_project_tier_policy, reject_removed_refs, strip_review_project_only_from_global,
+    warn_deprecated_keys,
 };
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -39,6 +40,10 @@ impl ProjectConfig {
 
     pub(super) fn parse_project_contents(path: &Path, content: &str) -> Result<Option<Self>> {
         let config_str = pruned_project_config_str(content.to_string(), path)?;
+        let raw: toml::Value = toml::from_str(&config_str)
+            .with_context(|| format!("Failed to parse config: {}", path.display()))?;
+        reject_project_convergence_completion_policy(None, &raw, &path.display().to_string())
+            .with_context(|| format!("Invalid project config: {}", path.display()))?;
         let mut config: Self = toml::from_str(&config_str)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
         config.sanitize_filesystem_sandbox();
@@ -64,6 +69,12 @@ impl ProjectConfig {
         prune_project_removed_refs(&mut overlay_val, overlay_path);
         reject_project_tier_policy(&overlay_val, &overlay_path.display().to_string())
             .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
+        reject_project_convergence_completion_policy(
+            Some(&base_val),
+            &overlay_val,
+            &overlay_path.display().to_string(),
+        )
+        .with_context(|| format!("Invalid project config: {}", overlay_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&base_val)
             .with_context(|| format!("Invalid user config: {}", base_path.display()))?;
         crate::validate::validate_tool_transport_overrides_in_raw_config(&overlay_val)

@@ -124,7 +124,7 @@ pub(crate) async fn handle_run(
         is_fork = true;
     }
 
-    let Some((mut config, mut global_config, model_catalog)) =
+    let Some((mut config, mut global_config, model_catalog, _project_completion_policy)) =
         pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);

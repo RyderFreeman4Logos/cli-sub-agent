@@ -1,4 +1,7 @@
-use crate::{EffectiveModelCatalog, GlobalConfig, ProjectConfig};
+use crate::{
+    EffectiveModelCatalog, GlobalConfig, ProjectConfig, ProjectConvergenceCompletionPolicy,
+    parse_project_convergence_completion_policy,
+};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -7,6 +10,8 @@ use std::path::Path;
 pub struct EffectiveConfig {
     pub project: Option<ProjectConfig>,
     pub global: GlobalConfig,
+    /// Raw project-only restrictions kept separate from the normal merged project view.
+    pub project_convergence_completion: Option<ProjectConvergenceCompletionPolicy>,
     pub model_catalog: EffectiveModelCatalog,
 }
 
@@ -49,6 +54,12 @@ impl EffectiveConfig {
         let project_raw = project_content
             .as_deref()
             .and_then(|contents| toml::from_str(contents).ok());
+        let project_convergence_completion = project_raw
+            .as_ref()
+            .map(parse_project_convergence_completion_policy)
+            .transpose()
+            .context("Invalid project convergence completion policy")?
+            .flatten();
         if let Some(config) = project.as_ref() {
             crate::configured_models::register_configured_specs(
                 &mut model_catalog,
@@ -61,6 +72,7 @@ impl EffectiveConfig {
         Ok(Self {
             project,
             global,
+            project_convergence_completion,
             model_catalog,
         })
     }
@@ -84,6 +96,44 @@ mod tests {
 
     fn write(path: &Path, contents: &str) {
         fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn snapshot_keeps_project_completion_restrictions_below_global_safety_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let global_path = dir.path().join("global.toml");
+        let project_path = dir.path().join("project.toml");
+        write(
+            &global_path,
+            r#"
+[convergence_completion]
+allow_execution = true
+allow_provider_egress = true
+allow_shell_commands = true
+allow_credential_inheritance = true
+max_retention_days = 30
+"#,
+        );
+        write(
+            &project_path,
+            r#"
+[convergence_completion]
+allow_provider_egress = false
+max_retention_days = 7
+"#,
+        );
+
+        let snapshot = EffectiveConfig::load_with_paths(Some(&global_path), &project_path)
+            .expect("project policy should be allowed to tighten the global ceiling");
+        let effective = crate::ConvergenceCompletionPolicy::effective(
+            &snapshot.global.convergence_completion,
+            snapshot.project_convergence_completion.as_ref(),
+        );
+        let error = effective
+            .require_explicit_execution(true)
+            .expect_err("project egress restriction must remain effective");
+        assert!(error.to_string().contains("allow_provider_egress"));
+        assert_eq!(effective.max_retention_days(), 7);
     }
 
     #[test]

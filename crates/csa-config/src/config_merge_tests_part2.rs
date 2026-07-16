@@ -217,6 +217,60 @@ name = "test"
 }
 
 #[test]
+fn project_convergence_completion_policy_cannot_expand_global_safety_ceiling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let global_path = tmp.path().join("global.toml");
+    let project_path = tmp.path().join("project.toml");
+    std::fs::write(
+        &global_path,
+        r#"
+[convergence_completion]
+allow_execution = false
+allow_provider_egress = false
+allow_shell_commands = false
+allow_credential_inheritance = false
+max_retention_days = 7
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        "[convergence_completion]\nallow_execution = true\n",
+    )
+    .unwrap();
+    let error = format!(
+        "{:#}",
+        ProjectConfig::load_with_paths(Some(&global_path), &project_path).unwrap_err()
+    );
+    assert!(
+        error.contains("allow_execution") && error.contains("global safety ceiling"),
+        "unexpected execution-expansion error: {error}"
+    );
+
+    for (key, value) in [
+        ("allow_provider_egress", "true"),
+        ("allow_shell_commands", "true"),
+        ("allow_credential_inheritance", "true"),
+        ("max_retention_days", "8"),
+    ] {
+        std::fs::write(
+            &project_path,
+            format!("[convergence_completion]\n{key} = {value}\n"),
+        )
+        .unwrap();
+        let error = format!(
+            "{:#}",
+            ProjectConfig::load_with_paths(Some(&global_path), &project_path).unwrap_err()
+        );
+        assert!(
+            error.contains("cannot") && error.contains("global safety ceiling"),
+            "unexpected error for {key}: {error}"
+        );
+    }
+}
+
+#[test]
 fn test_global_enable_can_be_overridden_by_project_disable() {
     // Global enables a tool, project disables it. Project wins (standard merge).
     let tmp = tempfile::tempdir().unwrap();

@@ -52,6 +52,10 @@ mod convergence_ledger_tests;
 mod convergence_evidence_tests;
 
 #[cfg(test)]
+#[path = "convergence_model_evidence_tests.rs"]
+mod convergence_model_evidence_tests;
+
+#[cfg(test)]
 #[path = "convergence_protocol_tests.rs"]
 mod convergence_protocol_tests;
 
@@ -74,6 +78,17 @@ mod convergence_store_review_tests;
 #[cfg(test)]
 #[path = "convergence_attestation_tests.rs"]
 mod convergence_attestation_tests;
+
+#[cfg(test)]
+#[path = "convergence_terminal_publication_tests.rs"]
+mod convergence_terminal_publication_tests;
+
+#[cfg(test)]
+#[path = "convergence_action_journal_partition_tests.rs"]
+mod convergence_action_journal_partition_tests;
+#[cfg(test)]
+#[path = "convergence_action_journal_tests.rs"]
+mod convergence_action_journal_tests;
 
 /// Shared test-only environment lock.
 ///
@@ -102,20 +117,31 @@ pub use caller_detect::{CallerSessionInfo, detect_caller_session};
 pub use checklist_store::ChecklistStore;
 pub use convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, AttestationArtifactReader,
-    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID, CONVERGENCE_LEDGER_SCHEMA_VERSION,
-    CampaignId, CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId,
-    CandidateRecord, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
-    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource,
-    ConsolidatedRepairAuthorization, ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger,
-    ConvergenceLedgerEntry, ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord,
-    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
-    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
-    DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, GATE_EVIDENCE_SCHEMA_ID,
-    GateCommandResult, GateEvidenceRecord, GitObjectId, LedgerEventId, MERGE_ATTESTATION_SCHEMA_ID,
-    MergeAttestationRecord, RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord,
+    AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
+    COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CONVERGENCE_LEDGER_SCHEMA_VERSION, CampaignId,
+    CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CleanupConfirmation,
+    CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
+    CommandAuthoritySource, CompletionActionClaim, CompletionActionId, CompletionActionJournal,
+    CompletionActionJournalError, CompletionActionJournalRead, CompletionActionJournalStoreError,
+    CompletionActionRecord, CompletionActionState, ConsolidatedRepairAuthorization,
+    ConvergenceAppendError, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
+    ConvergenceLedgerStore, CoverageCellId, CoverageCellRecord, CoverageDispositionRecord,
+    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
+    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    DiscoveryDirective, DiscoveryRunIntent, EpochId, EpochRecord, FinalAttestationPublicationError,
+    GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord, GitObjectId,
+    IndependentlyVerifiedModel, LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID,
+    LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, LedgerEventId, MAX_REPAIR_INTENT_BATCHES,
+    MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord, ModelEvidence, ModelEvidenceConfidence,
+    ModelEvidenceProvenance, ObservedToolEvidence, ProviderTurnExecutionId,
+    ProviderTurnExecutionRecord, ProviderTurnExecutionState, ProviderTurnReservation,
+    REPAIR_INTENT_SCHEMA_VERSION, RepairBatchId, RepairBatchRecord, RepairHandoffId,
+    RepairHandoffRecord, RepairIntent, RepairIntentRead, RepairIntentState, RepairIntentStoreError,
     RootClusterId, RootClusterRecord, SemanticFindingIdentity, SemanticLens,
     SessionRelativeArtifactPath, Sha256Digest, StableFindingId, authorize_consolidated_repairs,
-    compute_attestation_bindings, next_discovery_directive, verify_merge_attestation,
+    compute_attestation_bindings, next_discovery_directive, parse_legacy_completion_action_journal,
+    verify_merge_attestation, verify_terminal_artifact_pair,
 };
 pub use state::{
     ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,

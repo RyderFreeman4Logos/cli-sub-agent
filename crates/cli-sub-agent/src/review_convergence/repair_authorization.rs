@@ -1,15 +1,14 @@
 //! Explicit repair-only orchestration for ledger-authorized consolidated handoffs.
 
 use std::path::Path;
-use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 use csa_config::{EffectiveModelCatalog, GlobalConfig, ProjectConfig};
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, ConsolidatedRepairAuthorization,
-    ConvergenceEvent, ConvergenceLedgerStore, CsaSessionId, EpochRecord, GitObjectId,
-    SessionRelativeArtifactPath, Sha256Digest,
+    ConvergenceEvent, ConvergenceLedgerStore, CsaSessionId, EpochRecord, RepairBatchId,
+    RepairIntent, SessionRelativeArtifactPath, Sha256Digest,
 };
 use csa_session::{get_session_dir, publish_session_output_artifact};
 
@@ -18,6 +17,11 @@ use crate::pipeline::SessionCreationMode;
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
+use super::repair_lifecycle::{
+    claim_repair_action, finish_failed_repair, reconcile_incomplete_repair_intent, repair_intent,
+    validate_exact_repair_batches,
+};
+use super::repair_source::{SourceRepairOwner, capture_epoch, validate_repair_advance};
 use super::runner::finalize_frozen_identity;
 
 const REPAIR_ARTIFACT_FILE: &str = "consolidated-repair-handoff.json";
@@ -64,28 +68,85 @@ pub(crate) async fn run_repair_only_command(context: RepairOnlyContext<'_>) -> R
             .context("--repair-only requires --campaign")?,
     )?;
     let store = ConvergenceLedgerStore::for_project(context.project_root)?;
+    reconcile_incomplete_repair_intent(&store, context.project_root, &campaign_id)?;
     let authorization = store.authorize_consolidated_repairs_locked(&campaign_id)?;
-    let observed = capture_epoch(context.project_root, authorization.epoch().base_oid())?;
+    validate_clean_authorized_source(context.project_root, &authorization)?;
+
+    let mut owner = SourceRepairOwner::acquire(context.project_root, authorization.epoch())?;
+    validate_clean_authorized_source(context.project_root, &authorization)?;
+    let claim = claim_repair_action(&store, &authorization)?;
+    if let Err(error) = owner.bind_claim(&claim) {
+        let release = owner.release();
+        let error = match release {
+            Ok(()) => error,
+            Err(release_error) => error.context(format!(
+                "source repair owner release also failed: {release_error:#}"
+            )),
+        };
+        return finish_failed_repair(&store, &claim, error);
+    }
+    let intent = repair_intent(&authorization, claim.clone())?;
+    if let Err(error) = store.persist_repair_intent(intent.clone()) {
+        let release = owner.release();
+        let error = match release {
+            Ok(()) => anyhow::Error::from(error),
+            Err(release_error) => anyhow::Error::from(error).context(format!(
+                "source repair owner release also failed: {release_error:#}"
+            )),
+        };
+        return finish_failed_repair(&store, &claim, error);
+    }
+
+    let result = execute_and_publish(&context, &store, &authorization, &intent).await;
+    let release = owner.release();
+    match (result, release) {
+        (Ok(completion), Ok(())) => {
+            if completion.completed_batches != intent.repair_batch_ids() {
+                return finish_failed_repair(
+                    &store,
+                    &claim,
+                    anyhow::anyhow!(
+                        "repair completion did not contain the exact authorized batch IDs"
+                    ),
+                );
+            }
+            store
+                .mark_repair_intent_committed(&claim, completion.new_epoch.clone())
+                .map_err(anyhow::Error::from)?;
+            store
+                .finish_completion_action(&claim)
+                .map_err(anyhow::Error::from)?;
+            Ok(0)
+        }
+        (Ok(_), Err(error)) | (Err(error), Ok(())) => finish_failed_repair(&store, &claim, error),
+        (Err(error), Err(release_error)) => finish_failed_repair(
+            &store,
+            &claim,
+            error.context(format!(
+                "source repair owner release also failed: {release_error:#}"
+            )),
+        ),
+    }
+}
+
+fn validate_clean_authorized_source(
+    project_root: &Path,
+    authorization: &ConsolidatedRepairAuthorization,
+) -> Result<()> {
+    let observed = capture_epoch(project_root, authorization.epoch().base_oid())?;
     if !observed.clean {
         bail!("repair authorization requires an exactly clean index and worktree");
     }
-    authorization.validate_observed_epoch(&observed.epoch)?;
-
-    let original_head = authorization.epoch().head_oid().clone();
-    let result = execute_and_publish(&context, &store, authorization).await;
-    if let Err(error) = result {
-        rollback_source(context.project_root, &original_head)
-            .context("repair failed and source rollback also failed")?;
-        return Err(error);
-    }
-    result
+    authorization.validate_observed_epoch(&observed.epoch)
 }
 
 async fn execute_and_publish(
     context: &RepairOnlyContext<'_>,
     store: &ConvergenceLedgerStore,
-    authorization: ConsolidatedRepairAuthorization,
-) -> Result<i32> {
+    authorization: &ConsolidatedRepairAuthorization,
+    intent: &RepairIntent,
+) -> Result<RepairCompletion> {
+    validate_exact_repair_batches(authorization, intent)?;
     let selected = authorization
         .campaign()
         .command_authority()
@@ -95,7 +156,7 @@ async fn execute_and_publish(
         .clone();
     let tool = tool_for_identity(&selected)?;
     let model_spec = model_spec_for_identity(&selected);
-    let prompt = build_repair_prompt(&authorization)?;
+    let prompt = build_repair_prompt(authorization)?;
     let review_routing = crate::review_routing::detect_review_routing_metadata(
         context.project_root,
         context.project_config,
@@ -183,11 +244,9 @@ async fn execute_and_publish(
     }
 
     let changed = capture_epoch(context.project_root, authorization.epoch().base_oid())?;
-    if !changed.clean || changed.epoch.head_oid() == authorization.epoch().head_oid() {
-        bail!("authorized repair must create a changed clean HEAD before handoff publication");
-    }
+    validate_repair_advance(context.project_root, authorization.epoch(), &changed)?;
     let session_id = CsaSessionId::parse(&outcome.execution.meta_session_id)?;
-    let artifact_bytes = encode_receipt(&authorization, &actual_executor, &changed.epoch)?;
+    let artifact_bytes = encode_receipt(authorization, &actual_executor, &changed.epoch)?;
     let artifact_digest = Sha256Digest::compute(&artifact_bytes);
     let session_dir = get_session_dir(context.project_root, session_id.as_str())?;
     publish_session_output_artifact(&session_dir, REPAIR_ARTIFACT_FILE, &artifact_bytes)?;
@@ -196,85 +255,30 @@ async fn execute_and_publish(
         SessionRelativeArtifactPath::new(REPAIR_ARTIFACT_PATH)?,
         artifact_digest,
     );
-    let mut events = authorization
-        .batches()
+    let mut events = intent
+        .repair_batch_ids()
         .iter()
-        .map(|batch| {
+        .map(|batch_id| {
             authorization
-                .handoff_for(batch.id(), actual_executor.clone(), artifact.clone())
+                .handoff_for(batch_id, actual_executor.clone(), artifact.clone())
                 .map(ConvergenceEvent::RepairHandoffRecorded)
         })
         .collect::<Result<Vec<_>>>()?;
-    events.push(ConvergenceEvent::EpochOpened(changed.epoch));
+    let new_epoch = changed.epoch;
+    events.push(ConvergenceEvent::EpochOpened(new_epoch.clone()));
     store
         .append_batch(authorization.campaign().id().clone(), events)
         .map_err(anyhow::Error::new)
         .context("publish repair handoffs and changed-HEAD epoch")?;
-    Ok(0)
-}
-
-struct CapturedEpoch {
-    epoch: EpochRecord,
-    clean: bool,
-}
-
-fn capture_epoch(project_root: &Path, base_oid: &GitObjectId) -> Result<CapturedEpoch> {
-    let head = git(project_root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let head_oid = String::from_utf8(head.stdout)
-        .context("repair HEAD was not UTF-8")?
-        .trim()
-        .to_owned();
-    let diff = git(
-        project_root,
-        &[
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            base_oid.as_str(),
-            &head_oid,
-            "--",
-        ],
-    )?;
-    let status = git(
-        project_root,
-        &["status", "--porcelain=v1", "--untracked-files=normal"],
-    )?;
-    Ok(CapturedEpoch {
-        epoch: EpochRecord::new(
-            base_oid.clone(),
-            GitObjectId::parse(&head_oid)?,
-            Sha256Digest::compute(&diff.stdout),
-        ),
-        clean: status.stdout.is_empty(),
+    Ok(RepairCompletion {
+        completed_batches: intent.repair_batch_ids().to_vec(),
+        new_epoch,
     })
 }
 
-fn git(project_root: &Path, args: &[&str]) -> Result<Output> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(args)
-        .output()
-        .with_context(|| format!("run git {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(output)
-}
-
-fn rollback_source(project_root: &Path, original_head: &GitObjectId) -> Result<()> {
-    git(project_root, &["reset", "--hard", original_head.as_str()])?;
-    git(project_root, &["clean", "-fd"])?;
-    let captured = capture_epoch(project_root, original_head)?;
-    if !captured.clean || captured.epoch.head_oid() != original_head {
-        bail!("repair source rollback did not restore the original clean HEAD");
-    }
-    Ok(())
+struct RepairCompletion {
+    completed_batches: Vec<RepairBatchId>,
+    new_epoch: EpochRecord,
 }
 
 fn build_repair_prompt(authorization: &ConsolidatedRepairAuthorization) -> Result<String> {

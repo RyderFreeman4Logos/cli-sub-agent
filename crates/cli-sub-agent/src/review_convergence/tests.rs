@@ -6,7 +6,7 @@ use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use clap::{CommandFactory, Parser};
+use clap::Parser;
 use csa_process::ProviderTurnCompletion;
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CommandAuthorityCatalogIdentity,
@@ -537,75 +537,6 @@ fn parsed_review(argv: &[&str]) -> crate::cli::ReviewArgs {
 }
 
 #[test]
-fn convergence_cli_flags_parse_validate_and_appear_in_help() {
-    let args = parsed_review(&[
-        "csa",
-        "review",
-        "--converge",
-        "--discovery-only",
-        "--range",
-        "main...HEAD",
-    ]);
-    assert!(args.converge);
-    assert!(args.discovery_only);
-    crate::cli::validate_review_args(&args).expect("experimental invocation should validate");
-
-    let mut command = crate::cli::Cli::command();
-    let help = command
-        .find_subcommand_mut("review")
-        .expect("review subcommand")
-        .render_long_help()
-        .to_string();
-    assert!(help.contains("--converge"));
-    assert!(help.contains("--discovery-only"));
-    assert!(help.contains("observation"));
-}
-
-#[test]
-fn convergence_cli_rejects_unpaired_non_range_and_unsafe_options() {
-    let unsafe_case = |tail: &[&'static str]| {
-        let mut args = vec!["--converge", "--discovery-only", "--range", "main...HEAD"];
-        args.extend_from_slice(tail);
-        args
-    };
-    let cases = [
-        vec!["--converge", "--range", "main...HEAD"],
-        vec!["--discovery-only", "--range", "main...HEAD"],
-        vec!["--converge", "--discovery-only"],
-        vec!["--converge", "--discovery-only", "--range", "main..HEAD"],
-        unsafe_case(&["--check-verdict"]),
-        unsafe_case(&["--fix"]),
-        unsafe_case(&["--fix-finding", "--session", SESSION]),
-        unsafe_case(&["--session", SESSION]),
-        unsafe_case(&["--reviewers", "2"]),
-        unsafe_case(&["--no-fs-sandbox"]),
-        unsafe_case(&["--extra-readable", "/tmp/provider-input"]),
-        unsafe_case(&["--context", "context.md"]),
-        unsafe_case(&["--prompt-file", "prompt.md"]),
-        unsafe_case(&["--spec", "contract.spec"]),
-        unsafe_case(&["--extra-writable", "/tmp"]),
-        unsafe_case(&["--prior-rounds-summary", "old.toml"]),
-    ];
-
-    for mut tail in cases {
-        let spec = tail.iter().position(|arg| *arg == "--spec").map(|index| {
-            tail.remove(index);
-            tail.remove(index).to_owned()
-        });
-        let mut argv = vec!["csa", "review"];
-        argv.extend(tail);
-        let mut args = parsed_review(&argv);
-        args.spec = spec;
-        let error = crate::cli::validate_review_args(&args)
-            .expect_err("unsafe convergence combination must fail");
-        assert!(
-            error.to_string().contains("experimental observe-only"),
-            "unexpected validation error: {error}"
-        );
-    }
-}
-
-#[test]
 fn legacy_review_still_accepts_supplementary_read_inputs() {
     let mut args = parsed_review(&[
         "csa",
@@ -627,7 +558,7 @@ fn legacy_review_still_accepts_supplementary_read_inputs() {
 #[test]
 fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_diff() {
     let source = include_str!("../review_cmd_handle.rs");
-    let Some(dispatch) = source.find("if args.converge {") else {
+    let Some(dispatch) = source.find("maybe_run_early_command(") else {
         panic!("convergence dispatch is missing");
     };
 
@@ -649,30 +580,10 @@ fn convergence_dispatch_precedes_ordinary_quality_gate_prompt_context_depth_and_
     }
 }
 
-#[test]
-fn convergence_cli_rejects_non_range_scope_selectors_at_parse_time() {
-    let selectors = [
-        vec!["--diff"],
-        vec!["--branch", "feature"],
-        vec!["--commit", "HEAD"],
-        vec!["--files", "src/lib.rs"],
-    ];
-    for selector in selectors {
-        let mut argv = vec![
-            "csa",
-            "review",
-            "--converge",
-            "--discovery-only",
-            "--range",
-            "main...HEAD",
-        ];
-        argv.extend(selector);
-        assert!(crate::cli::Cli::try_parse_from(argv).is_err());
-    }
-}
-
 #[path = "campaign_authority_tests.rs"]
 mod campaign_authority_tests;
+#[path = "completion_capability_tests.rs"]
+mod completion_capability_tests;
 mod coverage_manifest;
 mod page_publication;
 #[path = "repair_authorization_tests.rs"]

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::acp::AcpConfig;
 use crate::config_filesystem_sandbox::FilesystemSandboxConfig;
 use crate::config_merge::{
-    enforce_global_tool_disables, merge_toml_values, reject_project_tier_policy,
-    strip_review_project_only_from_global, warn_deprecated_keys,
+    enforce_global_tool_disables, merge_toml_values, reject_project_convergence_completion_policy,
+    reject_project_tier_policy, strip_review_project_only_from_global, warn_deprecated_keys,
 };
 use crate::config_raw::{
     prune_project_removed_refs, pruned_project_config_str, reject_removed_refs,

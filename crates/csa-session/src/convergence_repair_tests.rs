@@ -330,6 +330,60 @@ fn clustering_requires_exactly_one_consolidated_batch_per_root() {
 }
 
 #[test]
+fn clustering_rejects_candidates_from_a_prior_epoch() {
+    let mut fixture = RepairFixture::new();
+    let later_epoch = EpochRecord::new(
+        GitObjectId::parse(&"a".repeat(40)).expect("test base oid"),
+        GitObjectId::parse(&"d".repeat(40)).expect("test head oid"),
+        digest('e'),
+    );
+    let candidates = fixture
+        .dispositions
+        .iter()
+        .map(|disposition| disposition.candidate_id().clone())
+        .collect::<Vec<_>>();
+    let disposition_set_digest = CandidateDispositionRecord::set_digest(&fixture.dispositions);
+    let cluster = RootClusterRecord::new(
+        later_epoch.id().clone(),
+        "must not splice old candidate evidence into a new repair epoch",
+        candidates.clone(),
+        disposition_set_digest.clone(),
+    )
+    .expect("well-formed but cross-epoch root cluster");
+    let batch = RepairBatchRecord::new(
+        cluster.id().clone(),
+        cluster.content_digest().clone(),
+        later_epoch.id().clone(),
+        candidates,
+        disposition_set_digest,
+        vec!["reject cross-epoch repair evidence".to_string()],
+        vec!["regress epoch splicing".to_string()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("well-formed but cross-epoch repair batch");
+
+    let error = fixture
+        .ledger
+        .append_batch(
+            fixture.campaign_id.clone(),
+            vec![
+                ConvergenceEvent::EpochOpened(later_epoch),
+                ConvergenceEvent::RootClusterRecorded(cluster),
+                ConvergenceEvent::RepairBatchRecorded(batch),
+            ],
+        )
+        .expect_err("cross-epoch root evidence must not become durable");
+
+    assert!(
+        error
+            .to_string()
+            .contains("discovery attempt belongs to epoch")
+    );
+}
+
+#[test]
 fn disposition_set_digest_is_order_stable_and_evidence_sensitive() {
     let fixture = RepairFixture::new();
     let reversed = fixture

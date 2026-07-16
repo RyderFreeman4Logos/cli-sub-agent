@@ -4,11 +4,16 @@ use std::pin::Pin;
 
 use csa_session::convergence::{CampaignId, CandidateId, EpochId, EpochRecord, RootClusterId};
 
+pub(crate) use super::completion_resume::start_completion;
 pub(crate) use super::completion_types::{
     AuthorizedRepairBatch, CompletionAction, CompletionBudget, CompletionError, CompletionEvent,
-    CompletionOutcome, CompletionPhase, CompletionPortError, CompletionState, CompletionTransition,
+    CompletionExecutionReservation, CompletionOutcome, CompletionPhase, CompletionPortError,
+    CompletionPortResult, CompletionStart, CompletionState, CompletionTransition,
+    ProviderTurnAllowance, ProviderTurnEvidence, ProviderTurnReconciliation,
 };
 use super::discovery_contract::{CampaignSelection, DiscoveryFocus, TargetedDiscoveryFocus};
+
+pub(super) const MAX_CLUSTERED_RESUME_SET_MEMBERS: usize = 1_000;
 
 pub(crate) fn reduce_completion(
     state: &CompletionState,
@@ -18,6 +23,9 @@ pub(crate) fn reduce_completion(
         return Err(CompletionError::InvalidTransition(
             "attestation is terminal",
         ));
+    }
+    if state.phase == CompletionPhase::UsageIndeterminate {
+        return Err(CompletionError::UsageIndeterminate);
     }
     match event {
         CompletionEvent::DriftDetected => return Err(CompletionError::DriftDetected),
@@ -98,11 +106,15 @@ pub(crate) fn reduce_completion(
             if verified_candidates != state.pending_candidates {
                 return Err(CompletionError::CardinalityMismatch);
             }
+            require_bounded_set(verified_candidates.len())?;
             validate_cluster_batches(&root_clusters, &repair_batches)?;
             next.pending_candidates.clear();
+            next.clustered_candidates.clone_from(&verified_candidates);
+            next.root_clusters.clone_from(&root_clusters);
             if repair_batches.is_empty() {
                 let epoch = current_epoch(state)?.clone();
                 next.phase = CompletionPhase::RunFinalGates;
+                next.repair_batches.clear();
                 CompletionAction::RunFinalGates { campaign_id, epoch }
             } else {
                 let epoch = current_epoch(state)?.clone();
@@ -139,6 +151,8 @@ pub(crate) fn reduce_completion(
             }
             next.phase = CompletionPhase::Discover;
             next.epoch = Some(new_epoch.clone());
+            next.clustered_candidates.clear();
+            next.root_clusters.clear();
             next.repair_batches.clear();
             next.discovery_focus = Some(DiscoveryFocus::Broad);
             next.campaign_selection = Some(CampaignSelection::Continue(campaign_id.clone()));
@@ -214,7 +228,7 @@ pub(crate) fn reduce_completion(
                 epoch_id,
                 gate_artifact,
                 review_artifact,
-                model_identity,
+                model_evidence,
             },
         ) => {
             require_current(state, &campaign_id, &epoch_id)?;
@@ -234,7 +248,7 @@ pub(crate) fn reduce_completion(
                     ))?;
             if expected_gate != &gate_artifact
                 || expected_review.artifact() != &review_artifact
-                || expected_review.model_identity() != &model_identity
+                || expected_review.model_evidence() != &model_evidence
             {
                 return Err(CompletionError::IdentityMismatch);
             }
@@ -253,19 +267,10 @@ pub(crate) fn reduce_completion(
     issue(next, action)
 }
 
-fn issue(
-    mut state: CompletionState,
+pub(super) fn issue(
+    state: CompletionState,
     action: CompletionAction,
 ) -> Result<CompletionTransition, CompletionError> {
-    if action.consumes_provider_action() {
-        state.provider_actions = state
-            .provider_actions
-            .checked_add(1)
-            .ok_or(CompletionError::BudgetExhausted)?;
-        if state.provider_actions > state.budget.max_provider_actions {
-            return Err(CompletionError::BudgetExhausted);
-        }
-    }
     Ok(CompletionTransition {
         state,
         action: Some(action),
@@ -319,7 +324,9 @@ fn current_epoch(state: &CompletionState) -> Result<&EpochRecord, CompletionErro
         .ok_or(CompletionError::InvalidTransition("missing exact epoch"))
 }
 
-fn require_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), CompletionError> {
+pub(super) fn require_unique<'a>(
+    values: impl Iterator<Item = &'a str>,
+) -> Result<(), CompletionError> {
     let mut seen = HashSet::new();
     if values.into_iter().all(|value| seen.insert(value)) {
         Ok(())
@@ -328,10 +335,20 @@ fn require_unique<'a>(values: impl Iterator<Item = &'a str>) -> Result<(), Compl
     }
 }
 
-fn validate_cluster_batches(
+pub(super) fn require_bounded_set(length: usize) -> Result<(), CompletionError> {
+    if length > MAX_CLUSTERED_RESUME_SET_MEMBERS {
+        Err(CompletionError::CardinalityMismatch)
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn validate_cluster_batches(
     root_clusters: &[RootClusterId],
     repair_batches: &[AuthorizedRepairBatch],
 ) -> Result<(), CompletionError> {
+    require_bounded_set(root_clusters.len())?;
+    require_bounded_set(repair_batches.len())?;
     if root_clusters.len() != repair_batches.len() {
         return Err(CompletionError::CardinalityMismatch);
     }
@@ -353,10 +370,135 @@ fn validate_cluster_batches(
 }
 
 pub(crate) trait CompletionPorts {
+    /// Durably reserve any provider turns before this action can send a provider request.
+    ///
+    /// The port decides whether the concrete operation is host-only or provider-backed. It must
+    /// persist every returned provider reservation before `execute` begins external work.
+    fn reserve_execution<'a>(
+        &'a mut self,
+        action: &'a CompletionAction,
+        allowance: ProviderTurnAllowance,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<CompletionExecutionReservation, CompletionPortError>> + 'a>,
+    >;
+
+    /// Execute an action after its reservation was durably recorded.
+    ///
+    /// The result always carries reconciliation evidence. A provider error, timeout, cancel, or
+    /// incomplete result belongs in `CompletionPortResult::event`, never in an outer error that
+    /// could discard already-incurred provider turns.
     fn execute<'a>(
         &'a mut self,
         action: &'a CompletionAction,
-    ) -> Pin<Box<dyn Future<Output = Result<CompletionEvent, CompletionPortError>> + 'a>>;
+        reservation: &'a CompletionExecutionReservation,
+    ) -> Pin<Box<dyn Future<Output = CompletionPortResult> + 'a>>;
+}
+
+fn remaining_provider_turns(
+    state: &CompletionState,
+) -> Result<ProviderTurnAllowance, CompletionError> {
+    state
+        .budget
+        .max_provider_turns
+        .checked_sub(state.provider_turns)
+        .map(ProviderTurnAllowance::new)
+        .ok_or(CompletionError::BudgetExhausted)
+}
+
+fn validate_reservation(
+    reservation: &CompletionExecutionReservation,
+    allowance: ProviderTurnAllowance,
+) -> Result<(), CompletionError> {
+    let CompletionExecutionReservation::Provider(reservation) = reservation else {
+        return Ok(());
+    };
+    if reservation.reserved_turns() > allowance.remaining_turns() {
+        return Err(CompletionError::BudgetExhausted);
+    }
+    Ok(())
+}
+
+pub(super) fn reconcile_provider_turns(
+    state: &CompletionState,
+    reservation: &CompletionExecutionReservation,
+    reconciliation: &ProviderTurnReconciliation,
+) -> Result<CompletionState, CompletionError> {
+    let mut next = state.clone();
+    match (reservation, reconciliation) {
+        (CompletionExecutionReservation::HostOnly, ProviderTurnReconciliation::HostOnly) => {}
+        (
+            CompletionExecutionReservation::Provider(expected),
+            ProviderTurnReconciliation::ReleasedBeforeSend { reservation },
+        ) if expected == reservation => {}
+        (
+            CompletionExecutionReservation::Provider(expected),
+            ProviderTurnReconciliation::Reconciled {
+                reservation,
+                host_observed_turn_delta,
+                evidence,
+            },
+        ) if expected == reservation => {
+            if *host_observed_turn_delta == 0
+                || *host_observed_turn_delta > reservation.reserved_turns()
+                || matches!(
+                    evidence,
+                    ProviderTurnEvidence::Transport(csa_process::ProviderTurnCompletion::Unknown)
+                )
+                || matches!(evidence, ProviderTurnEvidence::ConfirmedExecutionFallback)
+                    && *host_observed_turn_delta != 1
+            {
+                return Err(CompletionError::InvalidProviderAccounting);
+            }
+            if next
+                .reconciled_execution_ids
+                .iter()
+                .any(|execution_id| execution_id == reservation.execution_id())
+            {
+                return Err(CompletionError::DuplicateExecutionReconciliation);
+            }
+            next.provider_turns = next
+                .provider_turns
+                .checked_add(*host_observed_turn_delta)
+                .ok_or(CompletionError::BudgetExhausted)?;
+            next.reconciled_execution_ids
+                .push(reservation.execution_id().clone());
+            if next.provider_turns >= next.budget.max_provider_turns {
+                return Err(CompletionError::BudgetExhausted);
+            }
+        }
+        (
+            CompletionExecutionReservation::Provider(expected),
+            ProviderTurnReconciliation::UsageIndeterminate {
+                reservation: Some(actual),
+            },
+        ) if expected == actual => {
+            next.phase = CompletionPhase::UsageIndeterminate;
+        }
+        _ => return Err(CompletionError::InvalidProviderAccounting),
+    }
+    Ok(next)
+}
+
+async fn execute_completion_action<P: CompletionPorts>(
+    state: &CompletionState,
+    action: &CompletionAction,
+    ports: &mut P,
+) -> Result<CompletionTransition, CompletionError> {
+    let allowance = remaining_provider_turns(state)?;
+    let reservation = ports
+        .reserve_execution(action, allowance)
+        .await
+        .map_err(|error| CompletionError::Port(error.to_string()))?;
+    validate_reservation(&reservation, allowance)?;
+    let result = ports.execute(action, &reservation).await;
+    let accounted = reconcile_provider_turns(state, &reservation, &result.reconciliation)?;
+    if accounted.phase == CompletionPhase::UsageIndeterminate {
+        return Err(CompletionError::UsageIndeterminate);
+    }
+    let event = result
+        .event
+        .map_err(|error| CompletionError::Port(error.to_string()))?;
+    reduce_completion(&accounted, event)
 }
 
 pub(crate) async fn run_targeted_discovery<P: CompletionPorts>(
@@ -376,11 +518,7 @@ pub(crate) async fn run_targeted_discovery<P: CompletionPorts>(
             "targeted discovery must use a fresh campaign",
         ));
     }
-    let event = ports
-        .execute(action)
-        .await
-        .map_err(|error| CompletionError::Port(error.to_string()))?;
-    reduce_completion(state, event)
+    execute_completion_action(state, action, ports).await
 }
 
 pub(crate) async fn run_to_attestation<P: CompletionPorts>(
@@ -389,13 +527,24 @@ pub(crate) async fn run_to_attestation<P: CompletionPorts>(
     initial_epoch: EpochRecord,
     selection: CampaignSelection,
 ) -> Result<CompletionOutcome, CompletionError> {
-    let mut transition = reduce_completion(
-        &CompletionState::new(budget),
-        CompletionEvent::Started {
-            epoch: initial_epoch,
+    run_to_attestation_from_start(
+        ports,
+        budget,
+        CompletionStart::Fresh {
+            initial_epoch,
             selection,
         },
-    )?;
+    )
+    .await
+}
+
+/// Drive either a fresh campaign or a ledger-validated clustered campaign to attestation.
+pub(crate) async fn run_to_attestation_from_start<P: CompletionPorts>(
+    ports: &mut P,
+    budget: CompletionBudget,
+    start: CompletionStart,
+) -> Result<CompletionOutcome, CompletionError> {
+    let mut transition = start_completion(budget, start)?;
     loop {
         let action = transition
             .action
@@ -403,22 +552,18 @@ pub(crate) async fn run_to_attestation<P: CompletionPorts>(
             .ok_or(CompletionError::InvalidTransition(
                 "nonterminal action is missing",
             ))?;
-        transition = if matches!(
-            action,
-            CompletionAction::Discover {
-                focus: DiscoveryFocus::Targeted(_),
-                ..
-            }
-        ) {
-            run_targeted_discovery(&transition.state, action, ports).await?
-        } else {
-            let event = ports
-                .execute(action)
-                .await
-                .map_err(|error| CompletionError::Port(error.to_string()))?;
-            reduce_completion(&transition.state, event)?
-        };
+        transition = execute_completion_action(&transition.state, action, ports).await?;
         if transition.state.phase == CompletionPhase::Attested {
+            let gate_artifact = transition
+                .state
+                .gate_artifact
+                .clone()
+                .ok_or(CompletionError::IdentityMismatch)?;
+            let clean_room = transition
+                .state
+                .clean_room
+                .as_ref()
+                .ok_or(CompletionError::IdentityMismatch)?;
             return Ok(CompletionOutcome::Attested {
                 campaign_id: transition
                     .state
@@ -430,6 +575,9 @@ pub(crate) async fn run_to_attestation<P: CompletionPorts>(
                     .epoch
                     .clone()
                     .ok_or(CompletionError::IdentityMismatch)?,
+                gate_artifact,
+                review_artifact: clean_room.artifact().clone(),
+                model_evidence: clean_room.model_evidence().clone(),
             });
         }
     }

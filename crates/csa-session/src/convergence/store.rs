@@ -20,8 +20,22 @@ fn ledger_name() -> &'static OsStr {
     OsStr::new("ledger.json")
 }
 
-fn lock_name() -> &'static OsStr {
+pub(super) fn lock_name() -> &'static OsStr {
     OsStr::new("ledger.lock")
+}
+
+fn require_generation(
+    prefix: &[ConvergenceLedgerEntry],
+    expected_generation: u64,
+) -> anyhow::Result<()> {
+    let actual_generation = u64::try_from(prefix.len())
+        .context("convergence ledger generation cannot be represented")?;
+    if actual_generation != expected_generation {
+        bail!(
+            "convergence ledger generation changed before terminal publication: expected {expected_generation}, actual {actual_generation}"
+        );
+    }
+    Ok(())
 }
 
 /// A project-scoped convergence ledger with locked append-only publication.
@@ -220,7 +234,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             event,
             MAX_LEDGER_BYTES,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(
                     directory.file(),
@@ -253,7 +267,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             events,
             MAX_LEDGER_BYTES,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(
                     directory.file(),
@@ -266,22 +280,38 @@ impl ConvergenceLedgerStore {
         )
     }
 
-    /// Atomically publish the terminal clean-room review and matching merge attestation.
+    /// Atomically publish a terminal pair only if the locked ledger still has `expected_generation`.
     ///
-    /// # Errors
-    /// Returns a classified error when the complete pair cannot be durably published.
-    pub fn publish_final_attestation(
+    /// The caller must derive the generation from a just-reloaded ledger and validate both
+    /// immutable artifacts before invoking this lower-level compare-and-swap operation.
+    pub(crate) fn publish_final_attestation_at_generation(
         &self,
         campaign_id: CampaignId,
+        expected_generation: u64,
         final_review: CleanRoomReviewRecord,
         attestation: MergeAttestationRecord,
     ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError> {
-        self.append_batch(
+        let execution_binding = attestation.execution_binding.clone();
+        self.append_batch_transaction(
             campaign_id,
             vec![
-                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(final_review)),
                 ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
             ],
+            MAX_LEDGER_BYTES,
+            |directory, prefix| {
+                require_generation(prefix, expected_generation)?;
+                self.require_terminal_execution_binding(directory, &execution_binding)
+            },
+            |directory, path, bytes| {
+                atomic_state_write::publish_bytes_in(
+                    directory.file(),
+                    Some(directory.parent()),
+                    ledger_name(),
+                    path,
+                    bytes,
+                )
+            },
         )
     }
 
@@ -294,7 +324,7 @@ impl ConvergenceLedgerStore {
         publisher: P,
     ) -> Result<ConvergenceLedgerEntry, ConvergenceAppendError>
     where
-        B: FnOnce(&SecureDirectory) -> anyhow::Result<()>,
+        B: FnOnce(&SecureDirectory, &[ConvergenceLedgerEntry]) -> anyhow::Result<()>,
         P: FnOnce(&SecureDirectory, &Path, &[u8]) -> Result<(), AtomicPublishError>,
     {
         let mut appended = self.append_batch_transaction(
@@ -318,7 +348,7 @@ impl ConvergenceLedgerStore {
         publisher: P,
     ) -> Result<Vec<ConvergenceLedgerEntry>, ConvergenceAppendError>
     where
-        B: FnOnce(&SecureDirectory) -> anyhow::Result<()>,
+        B: FnOnce(&SecureDirectory, &[ConvergenceLedgerEntry]) -> anyhow::Result<()>,
         P: FnOnce(&SecureDirectory, &Path, &[u8]) -> Result<(), AtomicPublishError>,
     {
         let directory = secure_fs::open_convergence_directory(
@@ -368,7 +398,7 @@ impl ConvergenceLedgerStore {
         }
         let bytes = serialize_ledger(&ledger, &prefix, max_bytes).map_err(not_published)?;
 
-        before_publish(&directory).map_err(not_published)?;
+        before_publish(&directory, &prefix).map_err(not_published)?;
         directory.verify_link().map_err(not_published)?;
         publisher(&directory, &self.ledger_path, &bytes)
             .map_err(|error| map_publish_error(error, &appended))?;
@@ -378,7 +408,7 @@ impl ConvergenceLedgerStore {
         Ok(appended)
     }
 
-    fn load_from_directory(
+    pub(super) fn load_from_directory(
         &self,
         directory: &SecureDirectory,
     ) -> anyhow::Result<ConvergenceLedger> {
@@ -405,7 +435,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             event,
             MAX_LEDGER_BYTES,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in_with_fault(
                     directory.file(),
@@ -430,7 +460,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             events,
             MAX_LEDGER_BYTES,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in_with_fault(
                     directory.file(),
@@ -458,11 +488,11 @@ impl ConvergenceLedgerStore {
         self.append_batch_transaction(
             campaign_id,
             vec![
-                ConvergenceEvent::FinalReviewRecorded(final_review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(final_review)),
                 ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
             ],
             MAX_LEDGER_BYTES,
-            |_| probe(&self.lock_path),
+            |_, _| probe(&self.lock_path),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(
                     directory.file(),
@@ -489,7 +519,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             event,
             MAX_LEDGER_BYTES,
-            |_| probe(&self.lock_path),
+            |_, _| probe(&self.lock_path),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(
                     directory.file(),
@@ -513,7 +543,7 @@ impl ConvergenceLedgerStore {
             campaign_id,
             event,
             max_bytes,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |directory, path, bytes| {
                 atomic_state_write::publish_bytes_in(
                     directory.file(),

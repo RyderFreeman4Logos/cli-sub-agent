@@ -12,11 +12,13 @@ use csa_session::convergence::{
 };
 
 use super::clean_room::{
-    AdmittedProviderSessionFactory, CleanRoomWorkspaceFactory, ExactProviderPrompt,
-    ProductionCleanRoomProvider, ProviderSessionDriver, ProviderSessionFactory,
+    CleanRoomWorkspaceFactory, ProductionCleanRoomProvider, ProviderSessionFactory,
     ProviderSessionFuture, ProviderSessionOutcome, ProviderSessionRequest,
 };
-use super::clean_room_tests::{epoch, factory};
+use super::clean_room_provider::{
+    AdmittedProviderSessionFactory, ExactProviderPrompt, ProviderSessionDriver,
+};
+use super::clean_room_tests::{epoch, factory, lease_context};
 use super::provider_command_authority::{
     ProviderCommandAuthority, ProviderEnvironmentInputs, SystemProviderProgramResolver,
 };
@@ -85,6 +87,7 @@ fn write_executable(path: &std::path::Path, body: &str) {
 #[test]
 fn provider_request_preserves_exact_prompt_and_evidence_bundle() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let lease_context = lease_context(temp.path());
     let frozen = epoch();
     let (mut factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
@@ -94,6 +97,7 @@ fn provider_request_preserves_exact_prompt_and_evidence_bundle() {
             &temp.path().join("room"),
             &temp.path().join("bundle"),
             frozen,
+            &lease_context,
         )
         .expect("guard");
 
@@ -134,6 +138,7 @@ fn provider_request_preserves_exact_prompt_and_evidence_bundle() {
 #[test]
 fn provider_request_rejects_non_xhigh_strongest_identity() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let lease_context = lease_context(temp.path());
     let frozen = epoch();
     let (mut factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
@@ -143,6 +148,7 @@ fn provider_request_rejects_non_xhigh_strongest_identity() {
             &temp.path().join("room"),
             &temp.path().join("bundle"),
             frozen,
+            &lease_context,
         )
         .expect("guard");
     let error = ProviderSessionRequest::from_authority(
@@ -203,6 +209,7 @@ impl ProviderSessionFactory for RecordingProviderFactory {
 #[tokio::test]
 async fn async_provider_port_propagates_success_and_error_with_a_fake_only() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let lease_context = lease_context(temp.path());
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
@@ -212,6 +219,7 @@ async fn async_provider_port_propagates_success_and_error_with_a_fake_only() {
             &temp.path().join("room"),
             &temp.path().join("bundle"),
             frozen,
+            &lease_context,
         )
         .expect("guard");
     let request = ProviderSessionRequest::from_authority(
@@ -248,6 +256,7 @@ async fn async_provider_port_propagates_success_and_error_with_a_fake_only() {
 #[tokio::test]
 async fn production_adapter_executes_only_fingerprinted_fake_with_exact_contract() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let lease_context = lease_context(temp.path());
     let mut sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&temp).await;
     sandbox.track_env("CSA_CLEAN_ROOM_PARENT_SENTINEL");
     unsafe {
@@ -260,7 +269,13 @@ async fn production_adapter_executes_only_fingerprinted_fake_with_exact_contract
     let root = temp.path().join("clean-room");
     let bundle = temp.path().join("evidence.md");
     let guard = workspace_factory
-        .create(&temp.path().join("source"), &root, &bundle, frozen)
+        .create(
+            &temp.path().join("source"),
+            &root,
+            &bundle,
+            frozen,
+            &lease_context,
+        )
         .expect("guard");
     fs::create_dir_all(&root).expect("clean-room root");
     fs::write(&bundle, "frozen-evidence-marker\n").expect("evidence");
@@ -349,13 +364,20 @@ printf '%s' "$last"
 #[tokio::test]
 async fn production_adapter_rejects_stale_executor_request_and_program_before_execution() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let lease_context = lease_context(temp.path());
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     let root = temp.path().join("clean-room");
     let bundle = temp.path().join("evidence.md");
     let guard = workspace_factory
-        .create(&temp.path().join("source"), &root, &bundle, frozen)
+        .create(
+            &temp.path().join("source"),
+            &root,
+            &bundle,
+            frozen,
+            &lease_context,
+        )
         .expect("guard");
     fs::create_dir_all(&root).expect("clean-room root");
     fs::write(&bundle, "evidence\n").expect("evidence");

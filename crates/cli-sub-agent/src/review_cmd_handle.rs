@@ -1,18 +1,5 @@
 use super::*;
 
-pub(crate) async fn handle_review(
-    args: ReviewArgs,
-    current_depth: u32,
-    startup_env: &StartupSubtreeEnv,
-) -> Result<i32> {
-    let convergence = args.converge;
-    match handle_review_inner(args, current_depth, startup_env).await {
-        Ok(exit_code) => Ok(exit_code),
-        Err(error) if convergence => review_convergence::emit_setup_block("setup_failure", &error),
-        Err(error) => Err(error),
-    }
-}
-
 async fn handle_review_inner(
     mut args: ReviewArgs,
     current_depth: u32,
@@ -26,9 +13,12 @@ async fn handle_review_inner(
         return fix_finding::handle_fix_finding(args, &project_root, current_depth, startup_env)
             .await;
     }
+    if args.converge && !args.discovery_only && !args.execute_completion {
+        return review_convergence::emit_report_only(args.range.as_deref());
+    }
     validate_review_prompt_file(args.prompt_file.as_deref())?;
     let project_root_for_hooks = project_root.display().to_string();
-    let Some((config, global_config, model_catalog)) =
+    let Some((config, global_config, model_catalog, project_completion_policy)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?
     else {
         return Ok(1);
@@ -45,6 +35,8 @@ async fn handle_review_inner(
         ))
         .await;
     }
+    let completion_policy =
+        completion_policy::resolve(&args, &global_config, project_completion_policy.as_ref())?;
     let inherited_model_pin =
         crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
     let inherited_trusted_pin = subtree_pin::apply_subtree_pin(&mut args, inherited_model_pin);
@@ -65,19 +57,21 @@ async fn handle_review_inner(
         effective_tier.as_deref(),
         selection.direct_tool_requested,
     )?;
-    if args.converge {
-        return review_convergence::run_early_command(review_convergence::EarlyCommandContext {
-            args: &args,
-            project_root: &project_root,
-            project_config: config.as_ref(),
-            global_config: &global_config,
-            model_catalog: &model_catalog,
-            effective_tier: effective_tier.as_deref(),
-            selection: &selection,
-            current_depth,
-            startup_env,
-        })
-        .await;
+    if let Some(exit_code) = review_convergence::maybe_run_early_command((
+        &args,
+        &project_root,
+        config.as_ref(),
+        &global_config,
+        &model_catalog,
+        effective_tier.as_deref(),
+        &selection,
+        current_depth,
+        startup_env,
+        completion_policy,
+    ))
+    .await?
+    {
+        return Ok(exit_code);
     }
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let review_pattern = verify_review_skill_available(&project_root, args.allow_fallback)?;
@@ -613,3 +607,7 @@ async fn handle_review_inner(
     })
     .await
 }
+
+#[path = "review_cmd_handle_outer.rs"]
+mod outer;
+pub(crate) use outer::handle_review;

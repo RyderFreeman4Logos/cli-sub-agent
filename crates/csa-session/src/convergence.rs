@@ -6,32 +6,52 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 
+mod action_journal;
+mod action_journal_partition_store;
+mod action_journal_selector;
+mod action_journal_store;
 mod attestation;
 mod authority;
 mod authorization;
 mod campaign;
+mod completion_authorization;
 mod discovery;
 mod evidence;
 mod finalization;
 mod identity;
 mod ledger;
+mod model_evidence;
 mod provider_bundle;
 mod repair;
+mod repair_intent;
+mod repair_intent_store;
 mod secure_fs;
 mod store;
+mod terminal_publication;
 mod validation;
 mod validation_attestation;
 mod verification_evidence;
+pub use action_journal::{
+    COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CompletionActionClaim, CompletionActionId,
+    CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
+    CompletionActionRecord, CompletionActionState, LEGACY_COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION,
+    LegacyCompletionActionJournal, MAX_COMPLETION_ACTION_RECORDS,
+    MAX_PROVIDER_TURN_EXECUTIONS_PER_ACTION, ProviderTurnExecutionId, ProviderTurnExecutionRecord,
+    ProviderTurnExecutionState, ProviderTurnReservation, parse_legacy_completion_action_journal,
+};
 pub use attestation::{
     AttestationArtifactReader, AttestationBindingDigests, CLEAN_ROOM_REVIEW_SCHEMA_ID,
-    CleanRoomReviewRecord, GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
-    MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CleanupConfirmation,
+    GATE_EVIDENCE_SCHEMA_ID, GateCommandResult, GateEvidenceRecord,
+    LEGACY_CLEAN_ROOM_REVIEW_SCHEMA_ID, MERGE_ATTESTATION_SCHEMA_ID, MergeAttestationRecord,
+    TerminalExecutionBinding,
 };
 pub use authority::{
     CommandAuthorityCatalogIdentity, CommandAuthorityPolicy, CommandAuthoritySnapshot,
     CommandAuthoritySource,
 };
 pub use authorization::{ConsolidatedRepairAuthorization, authorize_consolidated_repairs};
+pub use completion_authorization::{CompletionAuthorizationRecord, WorkspaceLeaseIdentity};
 pub use discovery::{DiscoveryDirective, DiscoveryRunIntent, next_discovery_directive};
 pub use evidence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CandidateDisposition, CandidateRecord,
@@ -43,7 +63,9 @@ pub use identity::{
     CampaignId, CampaignRecord, CandidateId, CsaSessionId, DiscoveryAttemptId, EpochId,
     EpochRecord, GitObjectId, Sha256Digest,
 };
-pub use validation_attestation::{compute_attestation_bindings, verify_merge_attestation};
+pub use validation_attestation::{
+    compute_attestation_bindings, verify_merge_attestation, verify_terminal_artifact_pair,
+};
 pub use verification_evidence::{
     CandidateDispositionRecord, CandidateVerificationEvidence, VerificationIndependence,
 };
@@ -52,15 +74,25 @@ pub use ledger::{
     CONVERGENCE_LEDGER_SCHEMA_VERSION, ConvergenceEvent, ConvergenceLedger, ConvergenceLedgerEntry,
     LedgerEventId,
 };
+pub use model_evidence::{
+    IndependentlyVerifiedModel, ModelEvidence, ModelEvidenceConfidence, ModelEvidenceProvenance,
+    ObservedToolEvidence,
+};
 pub use provider_bundle::ProviderEvidenceBundle;
 pub use repair::{
     RepairBatchId, RepairBatchRecord, RepairHandoffId, RepairHandoffRecord, RootClusterId,
     RootClusterRecord,
 };
+pub use repair_intent::{
+    MAX_REPAIR_INTENT_BATCHES, REPAIR_INTENT_SCHEMA_VERSION, RepairIntent, RepairIntentState,
+};
+pub use repair_intent_store::{RepairIntentRead, RepairIntentStoreError};
 
+pub use action_journal_store::CompletionActionJournalStoreError;
 #[cfg(test)]
 pub(crate) use store::MAX_LEDGER_BYTES;
 pub use store::{ConvergenceAppendError, ConvergenceLedgerStore};
+pub use terminal_publication::FinalAttestationPublicationError;
 
 const COVERAGE_CELL_DOMAIN: &[u8] = b"csa-convergence-coverage-cell-v1\0";
 const STABLE_FINDING_DOMAIN: &[u8] = b"csa-convergence-stable-finding-v1\0";

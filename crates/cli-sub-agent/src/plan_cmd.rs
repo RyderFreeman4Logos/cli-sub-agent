@@ -207,6 +207,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         project: config,
         global: global_config,
         model_catalog,
+        ..
     } = csa_config::EffectiveConfig::load(&project_root)?;
 
     // 3. Check recursion depth

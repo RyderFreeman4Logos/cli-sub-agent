@@ -5,26 +5,37 @@
 //! AI provider. The repository's Rust 1.88 MSRV cannot adopt ADK-Rust 1.0 (Rust 1.94 MSRV), so the
 //! provider boundary continues to use CSA's existing catalog-admitted executor.
 
-#![expect(
-    dead_code,
-    reason = "B5 Slice 3B1 exposes audited clean-room provider authority before orchestration dispatch"
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "B5 Slice 3B1 exposes audited clean-room provider authority before orchestration dispatch"
+    )
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt;
-use std::future::Future;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use csa_session::convergence::{
-    AdmittedModelIdentity, CommandAuthoritySnapshot, EpochRecord, Sha256Digest,
+    CampaignId, CleanupConfirmation, EpochRecord, WorkspaceLeaseIdentity,
 };
+use ulid::Ulid;
 
-use crate::pipeline::{AdmittedExecutor, ParentSessionSource, SessionCreationMode};
-use crate::startup_env::StartupSubtreeEnv;
+pub(super) use super::clean_room_provider::admitted_identity;
+pub(crate) use super::clean_room_provider::{
+    ProviderSessionFactory, ProviderSessionFuture, ProviderSessionOutcome, ProviderSessionRequest,
+};
+pub(crate) use super::workspace_lease_fs::DetachedWorkspaceLeaseStore;
+use super::workspace_lease_fs::{direct_directory_metadata, lease_file_name, read_lease_identity};
 
 #[allow(unused_imports)]
 pub(crate) use super::production_clean_room_provider::ProductionCleanRoomProvider;
@@ -160,7 +171,150 @@ pub(crate) struct CleanRoomWorkspace {
     epoch: EpochRecord,
 }
 
+/// Campaign-scoped inputs required to acquire one owned workspace lease.
+#[derive(Debug, Clone)]
+pub(crate) struct DetachedWorkspaceLeaseContext {
+    campaign_id: CampaignId,
+    generation: u64,
+    store: DetachedWorkspaceLeaseStore,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeaseAcquireFault {
+    BeforeCreate,
+    AfterCreate,
+    BeforeFileSync,
+    AfterFileSync,
+}
+
+impl DetachedWorkspaceLeaseContext {
+    /// Bind an existing lease store to one nonzero completion generation.
+    pub(crate) fn new(
+        campaign_id: CampaignId,
+        generation: u64,
+        store: DetachedWorkspaceLeaseStore,
+    ) -> Result<Self> {
+        if generation == 0 {
+            bail!("workspace lease generation must be nonzero");
+        }
+        Ok(Self {
+            campaign_id,
+            generation,
+            store,
+        })
+    }
+
+    pub(super) fn acquire(&self, workspace: &CleanRoomWorkspace) -> Result<AcquiredWorkspaceLease> {
+        self.acquire_with_fault_impl(
+            workspace,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn acquire_with_fault(
+        &self,
+        workspace: &CleanRoomWorkspace,
+        fault: LeaseAcquireFault,
+    ) -> Result<AcquiredWorkspaceLease> {
+        self.acquire_with_fault_impl(workspace, Some(fault))
+    }
+
+    fn acquire_with_fault_impl(
+        &self,
+        workspace: &CleanRoomWorkspace,
+        #[cfg(test)] fault: Option<LeaseAcquireFault>,
+    ) -> Result<AcquiredWorkspaceLease> {
+        let store_metadata = self.store.validate_current()?;
+        let (root, workspace_metadata) =
+            direct_directory_metadata("detached workspace root", workspace.root())?;
+        if workspace_metadata.dev() != store_metadata.dev() {
+            bail!(
+                "detached workspace root {} is not on the workspace lease store filesystem",
+                root.display()
+            );
+        }
+        let identity = WorkspaceLeaseIdentity::new(
+            self.campaign_id.clone(),
+            workspace.epoch().clone(),
+            self.generation,
+            root,
+            workspace_metadata.dev(),
+            workspace_metadata.ino(),
+            Ulid::new().to_string(),
+        )?;
+        let file_path = self.store.root().join(lease_file_name(&identity));
+        let serialized =
+            serde_json::to_vec(&identity).context("serialize detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::BeforeCreate) {
+            bail!("fault injection before detached workspace lease create");
+        }
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&file_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                bail!(
+                    "detached workspace root {} is already leased",
+                    identity.workspace_root().display()
+                );
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "atomically acquire detached workspace lease {}",
+                        file_path.display()
+                    )
+                });
+            }
+        };
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::AfterCreate) {
+            bail!("fault injection after detached workspace lease create");
+        }
+        file.write_all(&serialized)
+            .context("write detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::BeforeFileSync) {
+            bail!("fault injection before detached workspace lease sync");
+        }
+        file.sync_all()
+            .context("sync detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::AfterFileSync) {
+            bail!("fault injection after detached workspace lease sync");
+        }
+        Ok(AcquiredWorkspaceLease {
+            identity,
+            store: self.store.clone(),
+            file_path,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct AcquiredWorkspaceLease {
+    identity: WorkspaceLeaseIdentity,
+    store: DetachedWorkspaceLeaseStore,
+    file_path: PathBuf,
+}
+
 impl CleanRoomWorkspace {
+    #[cfg(test)]
+    pub(super) fn for_lease_test(root: PathBuf, epoch: EpochRecord) -> Self {
+        Self {
+            bundle_path: root.join("bundle.json"),
+            root,
+            epoch,
+        }
+    }
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -172,6 +326,77 @@ impl CleanRoomWorkspace {
     pub(crate) fn epoch(&self) -> &EpochRecord {
         &self.epoch
     }
+}
+
+/// Cleanup capability for the current checkout. Completion leases the checkout's identity; it
+/// must never remove or otherwise mutate the caller's working directory on release.
+#[derive(Debug, Default)]
+pub(crate) struct CurrentCheckoutCleanup;
+
+impl WorkspaceCleanup for CurrentCheckoutCleanup {
+    fn cleanup(&mut self, _timeout: Duration) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Acquire an owned lease for the current repository checkout without materializing a worktree.
+///
+/// The lease records the actual current-directory device, inode, nonce, campaign, and frozen
+/// epoch. A direct `.git` directory is deliberately required as the same-filesystem durable
+/// lease store; linked worktrees are rejected rather than silently creating another checkout.
+pub(crate) fn acquire_current_checkout_lease(
+    project_root: &Path,
+    bundle_path: &Path,
+    campaign_id: CampaignId,
+    generation: u64,
+    epoch: EpochRecord,
+    cleanup_timeout: Duration,
+    failure_ledger: CleanupFailureLedger,
+) -> Result<DetachedWorkspaceLease<CurrentCheckoutCleanup>> {
+    let (root, _) = direct_directory_metadata("current repository checkout", project_root)?;
+    let bundle_path = bundle_path.canonicalize().with_context(|| {
+        format!(
+            "canonicalize provider evidence bundle {}",
+            bundle_path.display()
+        )
+    })?;
+    if !bundle_path.is_absolute() || !bundle_path.is_file() {
+        bail!("provider evidence bundle must be an absolute regular file");
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-parse", "--verify", "HEAD^{commit}", "--end-of-options"])
+        .output()
+        .context("resolve current checkout HEAD with direct git argv")?;
+    if !output.status.success() {
+        bail!(
+            "current checkout HEAD validation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let observed_head = String::from_utf8(output.stdout)
+        .context("current checkout HEAD was not UTF-8")?
+        .trim()
+        .to_string();
+    if observed_head != epoch.head_oid().as_str() {
+        bail!("current checkout HEAD differs from the clustered completion epoch");
+    }
+    let store = DetachedWorkspaceLeaseStore::open(&root.join(".git"))?;
+    let context = DetachedWorkspaceLeaseContext::new(campaign_id, generation, store)?;
+    let workspace = CleanRoomWorkspace {
+        root,
+        bundle_path,
+        epoch,
+    };
+    let acquired = context.acquire(&workspace)?;
+    Ok(DetachedWorkspaceLease::from_acquired(
+        workspace,
+        acquired,
+        CurrentCheckoutCleanup,
+        cleanup_timeout,
+        failure_ledger,
+    ))
 }
 
 /// Shared audit channel for failures that can only be observed from `Drop`.
@@ -196,49 +421,136 @@ impl CleanupFailureLedger {
     }
 }
 
-/// RAII lease that requests bounded cleanup on every normal, error, and unwind drop path.
-pub(crate) struct CleanRoomWorkspaceGuard<C: WorkspaceCleanup> {
+/// Owned RAII lease for one detached workspace execution.
+///
+/// The lease remains owned by a completion port across asynchronous calls. Every explicit use
+/// validates the direct directory's device, inode, and persisted nonce before work continues.
+pub(crate) struct DetachedWorkspaceLease<C: WorkspaceCleanup> {
     workspace: CleanRoomWorkspace,
+    identity: WorkspaceLeaseIdentity,
+    store: DetachedWorkspaceLeaseStore,
+    file_path: PathBuf,
     cleanup: Option<C>,
     cleanup_timeout: Duration,
     failure_ledger: CleanupFailureLedger,
 }
 
-impl<C: WorkspaceCleanup> fmt::Debug for CleanRoomWorkspaceGuard<C> {
+impl<C: WorkspaceCleanup> fmt::Debug for DetachedWorkspaceLease<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("CleanRoomWorkspaceGuard")
+            .debug_struct("DetachedWorkspaceLease")
             .field("workspace", &self.workspace)
+            .field("identity", &self.identity)
             .field("cleanup_armed", &self.cleanup.is_some())
             .field("cleanup_timeout", &self.cleanup_timeout)
             .finish_non_exhaustive()
     }
 }
 
-impl<C: WorkspaceCleanup> CleanRoomWorkspaceGuard<C> {
+impl<C: WorkspaceCleanup> DetachedWorkspaceLease<C> {
+    pub(super) fn from_acquired(
+        workspace: CleanRoomWorkspace,
+        acquired: AcquiredWorkspaceLease,
+        cleanup: C,
+        cleanup_timeout: Duration,
+        failure_ledger: CleanupFailureLedger,
+    ) -> Self {
+        Self {
+            workspace,
+            identity: acquired.identity,
+            store: acquired.store,
+            file_path: acquired.file_path,
+            cleanup: Some(cleanup),
+            cleanup_timeout,
+            failure_ledger,
+        }
+    }
+
     pub(crate) fn workspace(&self) -> &CleanRoomWorkspace {
         &self.workspace
     }
 
-    /// Perform cleanup now so callers can surface a cleanup failure synchronously.
-    pub(crate) fn close(mut self) -> Result<()> {
+    /// Return the immutable identity recorded for this workspace lease.
+    pub(crate) fn identity(&self) -> &WorkspaceLeaseIdentity {
+        &self.identity
+    }
+
+    #[cfg(test)]
+    pub(super) fn lease_file_path(&self) -> &Path {
+        &self.file_path
+    }
+
+    /// Reject a replaced directory, changed lease store, cross-mount workspace, or nonce change.
+    pub(crate) fn validate_current(&self) -> Result<()> {
+        let store_metadata = self.store.validate_current()?;
+        let (root, workspace_metadata) =
+            direct_directory_metadata("detached workspace root", self.workspace.root())?;
+        if root != self.identity.workspace_root()
+            || workspace_metadata.dev() != self.identity.device()
+            || workspace_metadata.ino() != self.identity.inode()
+        {
+            bail!("detached workspace identity changed after lease acquisition");
+        }
+        if workspace_metadata.dev() != store_metadata.dev() {
+            bail!("detached workspace moved to a different filesystem after lease acquisition");
+        }
+        let persisted = read_lease_identity(&self.file_path)?;
+        if persisted != self.identity {
+            bail!("detached workspace lease nonce or identity changed after acquisition");
+        }
+        Ok(())
+    }
+
+    /// Perform cleanup and lease release now so callers can surface every failure synchronously.
+    pub(crate) fn release(mut self) -> Result<()> {
         let Some(mut cleanup) = self.cleanup.take() else {
             return Ok(());
         };
+        let result = self.release_with(&mut cleanup);
+        if let Err(error) = &result {
+            self.failure_ledger.record(error);
+        }
+        result
+    }
+
+    /// Compatibility spelling for callers that use close as their explicit release boundary.
+    pub(crate) fn close(self) -> Result<()> {
+        self.release()
+    }
+
+    /// Release the workspace and return the only cleanup receipt suitable for terminal evidence.
+    ///
+    /// No receipt is returned when identity validation, process cleanup, or lease-file removal
+    /// fails, so a completion port cannot publish a terminal pair from uncertain cleanup.
+    pub(crate) fn close_and_confirm(self) -> Result<CleanupConfirmation> {
+        let identity = self.identity.clone();
+        self.release()?;
+        Ok(CleanupConfirmation::after_successful_cleanup(&identity))
+    }
+
+    fn release_with(&self, cleanup: &mut C) -> Result<()> {
+        self.validate_current()
+            .context("validate detached workspace lease before cleanup")?;
         cleanup
             .cleanup(self.cleanup_timeout)
-            .context("clean-room workspace cleanup failed")
+            .context("clean-room workspace cleanup failed")?;
+        fs::remove_file(&self.file_path).with_context(|| {
+            format!(
+                "release detached workspace lease {}",
+                self.file_path.display()
+            )
+        })
     }
 }
 
-impl<C: WorkspaceCleanup> Drop for CleanRoomWorkspaceGuard<C> {
+impl<C: WorkspaceCleanup> Drop for DetachedWorkspaceLease<C> {
     fn drop(&mut self) {
         let Some(mut cleanup) = self.cleanup.take() else {
             return;
         };
-        if let Err(error) = cleanup
-            .cleanup(self.cleanup_timeout)
-            .context("clean-room workspace cleanup failed during drop")
+        if let Err(error) = self
+            .release_with(&mut cleanup)
+            .context("detached workspace lease cleanup fallback failed during drop")
         {
             self.failure_ledger.record(&error);
         }
@@ -254,7 +566,8 @@ pub(crate) trait CleanRoomWorkspaceFactory {
         root: &Path,
         bundle_path: &Path,
         epoch: EpochRecord,
-    ) -> Result<CleanRoomWorkspaceGuard<Self::Cleanup>>;
+        lease_context: &DetachedWorkspaceLeaseContext,
+    ) -> Result<DetachedWorkspaceLease<Self::Cleanup>>;
 }
 
 /// Production plan adapter. The injected driver owns any eventual process execution.
@@ -287,7 +600,8 @@ impl<D: DetachedWorkspaceDriver> CleanRoomWorkspaceFactory for ExactOidWorkspace
         root: &Path,
         bundle_path: &Path,
         epoch: EpochRecord,
-    ) -> Result<CleanRoomWorkspaceGuard<Self::Cleanup>> {
+        lease_context: &DetachedWorkspaceLeaseContext,
+    ) -> Result<DetachedWorkspaceLease<Self::Cleanup>> {
         absolute_utf8_path("source repository", source_repo)?;
         absolute_utf8_path("clean-room root", root)?;
         absolute_utf8_path("provider evidence bundle", bundle_path)?;
@@ -296,273 +610,49 @@ impl<D: DetachedWorkspaceDriver> CleanRoomWorkspaceFactory for ExactOidWorkspace
             .context("validate frozen clean-room epoch")?;
         let expected_head = epoch.head_oid().as_str().to_string();
         let plan = DetachedWorkspacePlan::exact_oid(source_repo, root, &expected_head)?;
-        let materialized = self
+        let mut materialized = self
             .driver
             .materialize(&plan)
             .context("materialize detached exact-OID clean-room workspace")?;
-        let guard = CleanRoomWorkspaceGuard {
-            workspace: CleanRoomWorkspace {
-                root: root.to_path_buf(),
-                bundle_path: bundle_path.to_path_buf(),
-                epoch,
-            },
-            cleanup: Some(materialized.cleanup),
-            cleanup_timeout: self.cleanup_timeout,
-            failure_ledger: self.failure_ledger.clone(),
+        let workspace = CleanRoomWorkspace {
+            root: root.to_path_buf(),
+            bundle_path: bundle_path.to_path_buf(),
+            epoch,
         };
         if materialized.observed_head != expected_head {
             let mismatch = anyhow!(
                 "clean-room workspace did not materialize the exact frozen head: expected {expected_head}, observed {}",
                 materialized.observed_head
             );
-            return match guard.close() {
+            return match materialized.cleanup.cleanup(self.cleanup_timeout) {
                 Ok(()) => Err(mismatch),
                 Err(cleanup_error) => Err(mismatch.context(format!(
                     "cleanup after exact-OID mismatch also failed: {cleanup_error:#}"
                 ))),
             };
         }
-        Ok(guard)
-    }
-}
-
-/// Exact provider prompt bytes. This type deliberately exposes no transformation API.
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct ExactProviderPrompt(String);
-
-impl ExactProviderPrompt {
-    pub(crate) fn new(prompt: impl Into<String>) -> Self {
-        Self(prompt.into())
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl fmt::Debug for ExactProviderPrompt {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ExactProviderPrompt")
-            .field("byte_len", &self.0.len())
-            .finish_non_exhaustive()
-    }
-}
-
-/// Fully resolved provider invocation contract for a fresh read-only clean-room session.
-#[derive(Debug, Clone)]
-pub(crate) struct ProviderSessionRequest {
-    cwd: PathBuf,
-    selected_model: AdmittedModelIdentity,
-    authority_digest: Sha256Digest,
-    exact_prompt: ExactProviderPrompt,
-    evidence_bundle: PathBuf,
-    readonly_project_root: bool,
-    extra_writable: Vec<PathBuf>,
-    extra_readable: Vec<PathBuf>,
-    parent_session_source: ParentSessionSource,
-    session_creation_mode: SessionCreationMode,
-    parent: Option<String>,
-    resume_session: Option<String>,
-    epoch: EpochRecord,
-    startup_env: StartupSubtreeEnv,
-}
-
-impl ProviderSessionRequest {
-    pub(crate) fn from_authority(
-        workspace: &CleanRoomWorkspace,
-        authority: &CommandAuthoritySnapshot,
-        exact_prompt: ExactProviderPrompt,
-    ) -> Result<Self> {
-        let strongest = authority
-            .ordered_admitted()
-            .first()
-            .context("clean-room provider authority has no admitted model")?;
-        if strongest.reasoning() != "xhigh" {
-            bail!(
-                "clean-room review requires the strongest admitted model at xhigh reasoning; got {}/{}/{}/{}",
-                strongest.tool(),
-                strongest.provider(),
-                strongest.model(),
-                strongest.reasoning()
-            );
-        }
-        Ok(Self {
-            cwd: workspace.root.clone(),
-            selected_model: strongest.clone(),
-            authority_digest: authority.digest().clone(),
-            exact_prompt,
-            evidence_bundle: workspace.bundle_path.clone(),
-            readonly_project_root: true,
-            extra_writable: Vec::new(),
-            extra_readable: vec![workspace.bundle_path.clone()],
-            parent_session_source: ParentSessionSource::ExplicitOnly,
-            session_creation_mode: SessionCreationMode::FreshChild,
-            parent: None,
-            resume_session: None,
-            epoch: workspace.epoch.clone(),
-            startup_env: StartupSubtreeEnv::from_values(HashMap::new()),
-        })
-    }
-
-    pub(crate) fn startup_env(&self) -> &StartupSubtreeEnv {
-        &self.startup_env
-    }
-
-    pub(crate) fn cwd(&self) -> &Path {
-        &self.cwd
-    }
-
-    pub(crate) fn authority_digest(&self) -> &Sha256Digest {
-        &self.authority_digest
-    }
-
-    pub(crate) fn exact_prompt(&self) -> &str {
-        self.exact_prompt.as_str()
-    }
-
-    pub(crate) fn evidence_bundle(&self) -> &Path {
-        &self.evidence_bundle
-    }
-
-    pub(crate) fn selected_model(&self) -> &AdmittedModelIdentity {
-        &self.selected_model
-    }
-
-    pub(crate) fn readonly_project_root(&self) -> bool {
-        self.readonly_project_root
-    }
-
-    pub(crate) fn extra_writable(&self) -> &[PathBuf] {
-        &self.extra_writable
-    }
-
-    pub(crate) fn extra_readable(&self) -> &[PathBuf] {
-        &self.extra_readable
-    }
-
-    pub(crate) fn parent_session_source(&self) -> ParentSessionSource {
-        self.parent_session_source
-    }
-
-    pub(crate) fn session_creation_mode(&self) -> SessionCreationMode {
-        self.session_creation_mode
-    }
-
-    pub(crate) fn parent(&self) -> Option<&str> {
-        self.parent.as_deref()
-    }
-
-    pub(crate) fn resume_session(&self) -> Option<&str> {
-        self.resume_session.as_deref()
-    }
-
-    pub(crate) fn epoch(&self) -> &EpochRecord {
-        &self.epoch
-    }
-}
-
-/// Provider output retained by the caller before it can become review evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderSessionOutcome {
-    session_id: String,
-    artifact: Vec<u8>,
-    artifact_digest: Sha256Digest,
-}
-
-impl ProviderSessionOutcome {
-    pub(crate) fn new(session_id: &str, artifact: &[u8]) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            artifact: artifact.to_vec(),
-            artifact_digest: Sha256Digest::compute(artifact),
-        }
-    }
-
-    pub(crate) fn session_id(&self) -> &str {
-        &self.session_id
-    }
-
-    pub(crate) fn artifact(&self) -> &[u8] {
-        &self.artifact
-    }
-
-    pub(crate) fn artifact_digest(&self) -> &Sha256Digest {
-        &self.artifact_digest
-    }
-}
-
-pub(crate) type ProviderSessionFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<ProviderSessionOutcome>> + 'a>>;
-
-pub(crate) trait ProviderSessionFactory {
-    fn run<'a>(&'a mut self, request: &'a ProviderSessionRequest) -> ProviderSessionFuture<'a>;
-}
-
-/// Injected provider boundary that receives CSA's existing admitted executor.
-pub(crate) trait ProviderSessionDriver {
-    fn run<'a>(
-        &'a mut self,
-        admitted: &'a AdmittedExecutor,
-        request: &'a ProviderSessionRequest,
-    ) -> ProviderSessionFuture<'a>;
-}
-
-/// Production adapter that cannot bypass catalog admission or replace the selected identity.
-pub(crate) struct AdmittedProviderSessionFactory<'a, D> {
-    admitted: &'a AdmittedExecutor,
-    driver: D,
-}
-
-impl<'a, D> AdmittedProviderSessionFactory<'a, D> {
-    pub(crate) fn new(admitted: &'a AdmittedExecutor, driver: D) -> Self {
-        Self { admitted, driver }
-    }
-}
-
-impl<D: ProviderSessionDriver> ProviderSessionFactory for AdmittedProviderSessionFactory<'_, D> {
-    fn run<'a>(&'a mut self, request: &'a ProviderSessionRequest) -> ProviderSessionFuture<'a> {
-        Box::pin(async move {
-            validate_admitted_identity(self.admitted, request.selected_model())?;
-            self.driver.run(self.admitted, request).await
-        })
-    }
-}
-
-fn validate_admitted_identity(
-    admitted: &AdmittedExecutor,
-    expected: &AdmittedModelIdentity,
-) -> Result<()> {
-    let actual = admitted_identity(admitted)?;
-    if &actual != expected {
-        bail!("clean-room provider request differs from the catalog-admitted executor identity");
-    }
-    Ok(())
-}
-
-pub(super) fn admitted_identity(admitted: &AdmittedExecutor) -> Result<AdmittedModelIdentity> {
-    let spec = admitted.resolved_model_spec();
-    AdmittedModelIdentity::new(
-        &spec.tool,
-        &spec.provider,
-        &spec.model,
-        &reasoning_label(&spec.thinking_budget),
-    )
-}
-
-fn reasoning_label(budget: &csa_executor::ThinkingBudget) -> String {
-    match budget {
-        csa_executor::ThinkingBudget::DefaultBudget => "default".to_string(),
-        csa_executor::ThinkingBudget::Low => "low".to_string(),
-        csa_executor::ThinkingBudget::Medium => "medium".to_string(),
-        csa_executor::ThinkingBudget::High => "high".to_string(),
-        csa_executor::ThinkingBudget::Xhigh => "xhigh".to_string(),
-        csa_executor::ThinkingBudget::Max => "max".to_string(),
-        csa_executor::ThinkingBudget::Custom(value) => value.to_string(),
+        let acquired = match lease_context.acquire(&workspace) {
+            Ok(acquired) => acquired,
+            Err(acquisition_error) => {
+                let cleanup_result = materialized.cleanup.cleanup(self.cleanup_timeout);
+                if let Err(cleanup_error) = &cleanup_result {
+                    self.failure_ledger.record(cleanup_error);
+                }
+                return match cleanup_result {
+                    Ok(()) => Err(acquisition_error.context("acquire detached workspace lease")),
+                    Err(cleanup_error) => Err(acquisition_error.context(format!(
+                        "acquire detached workspace lease; cleanup after acquisition failure also failed: {cleanup_error:#}"
+                    ))),
+                };
+            }
+        };
+        Ok(DetachedWorkspaceLease::from_acquired(
+            workspace,
+            acquired,
+            materialized.cleanup,
+            self.cleanup_timeout,
+            self.failure_ledger.clone(),
+        ))
     }
 }
 

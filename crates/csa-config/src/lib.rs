@@ -13,6 +13,7 @@ mod config_tier_helpers;
 mod config_tiers;
 pub mod config_tool;
 mod configured_models;
+mod convergence_completion_policy;
 mod effective_config;
 pub mod gc;
 pub mod global;
@@ -50,6 +51,10 @@ pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use config_tool::{TransportKind, default_transport_for_tool};
+pub use convergence_completion_policy::{
+    ConvergenceCompletionPolicy, EffectiveConvergenceCompletionPolicy,
+    ProjectConvergenceCompletionPolicy, parse_project_convergence_completion_policy,
+};
 pub use csa_core::model_catalog::{
     CatalogAdmission, CatalogErrorKind, CatalogLegalityError, CatalogLoadError, CatalogProvenance,
     CatalogWarning, CatalogWarningKind, ConfiguredSpecError, EffectiveModelCatalog,

@@ -1,22 +1,25 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{TimeZone, Utc};
 use csa_process::ProviderTurnCompletion;
 use serde_json::{Value, json};
-use tempfile::tempdir;
+use ulid::Ulid;
 
 use crate::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, AttestationBindingDigests, CampaignId,
     CampaignRecord, CandidateDisposition, CandidateDispositionRecord, CandidateId, CandidateRecord,
-    CandidateVerificationEvidence, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
-    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent,
-    ConvergenceLedger, ConvergenceLedgerStore, CoverageCellRecord, CoverageDispositionRecord,
-    CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope, CsaSessionId,
-    DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord, EpochRecord,
-    GateCommandResult, GateEvidenceRecord, GitObjectId, MergeAttestationRecord, RepairBatchRecord,
+    CandidateVerificationEvidence, CleanRoomReviewArtifactBindings, CleanRoomReviewRecord,
+    CleanupConfirmation, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
+    CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionId,
+    CompletionAuthorizationRecord, ConvergenceEvent, ConvergenceLedger, CoverageCellRecord,
+    CoverageDispositionRecord, CoveragePlanFinalizationRecord, CoverageRequirement, CoverageScope,
+    CsaSessionId, DiscoveryAttemptFinalizationRecord, DiscoveryAttemptId, DiscoveryAttemptRecord,
+    EpochRecord, GateCommandResult, GateEvidenceRecord, GitObjectId, MergeAttestationRecord,
+    ModelEvidence, ObservedToolEvidence, ProviderTurnExecutionId, RepairBatchRecord,
     RootClusterRecord, SemanticFindingIdentity, SemanticLens, SessionRelativeArtifactPath,
-    Sha256Digest, VerificationIndependence, compute_attestation_bindings, verify_merge_attestation,
+    Sha256Digest, TerminalExecutionBinding, VerificationIndependence, WorkspaceLeaseIdentity,
+    compute_attestation_bindings, verify_merge_attestation,
 };
 
 const CAMPAIGN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
@@ -26,8 +29,8 @@ const CANDIDATE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 const VERIFIER_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC4";
 const GATE_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC5";
 const REVIEW_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC6";
-const GATE_SCHEMA: &str = "csa.convergence.gate-evidence/v1";
-const REVIEW_SCHEMA: &str = "csa.convergence.clean-room-review/v1";
+const GATE_SCHEMA: &str = "csa.convergence.gate-evidence/v2";
+const REVIEW_SCHEMA: &str = "csa.convergence.clean-room-review/v2";
 
 type ArtifactKey = (String, String);
 
@@ -41,6 +44,16 @@ fn oid(fill: char) -> GitObjectId {
 
 fn model() -> AdmittedModelIdentity {
     AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "xhigh").unwrap()
+}
+
+fn model_evidence() -> ModelEvidence {
+    ModelEvidence::host_observed(
+        model(),
+        ObservedToolEvidence::new("codex", "test-version").unwrap(),
+        Some("gpt-5.6"),
+        ProviderTurnExecutionId::generate(),
+    )
+    .unwrap()
 }
 
 fn authority() -> CommandAuthoritySnapshot {
@@ -69,24 +82,28 @@ fn artifact_key(reference: &ArtifactEvidenceRef) -> ArtifactKey {
 }
 
 #[derive(Clone)]
-struct Fixture {
-    campaign_id: CampaignId,
-    epoch: EpochRecord,
-    prefix_events: Vec<ConvergenceEvent>,
-    ledger: ConvergenceLedger,
-    gate: GateEvidenceRecord,
-    review: CleanRoomReviewRecord,
+pub(crate) struct Fixture {
+    pub(crate) campaign_id: CampaignId,
+    pub(crate) epoch: EpochRecord,
+    pub(crate) prefix_events: Vec<ConvergenceEvent>,
+    pub(crate) ledger: ConvergenceLedger,
+    pub(crate) gate: GateEvidenceRecord,
+    pub(crate) review: CleanRoomReviewRecord,
+    pub(crate) cleanup_lease: WorkspaceLeaseIdentity,
+    pub(crate) policy_digest: Sha256Digest,
+    pub(crate) terminal_execution_binding: TerminalExecutionBinding,
+    pub(crate) terminal_action_id: CompletionActionId,
     artifacts: BTreeMap<ArtifactKey, Vec<u8>>,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_review_bytes(
             format!(r#"{{"schema":"{REVIEW_SCHEMA}","result":"clean"}}"#).into_bytes(),
         )
     }
 
-    fn with_review_bytes(review_bytes: Vec<u8>) -> Self {
+    pub(crate) fn with_review_bytes(review_bytes: Vec<u8>) -> Self {
         let campaign_id = CampaignId::parse(CAMPAIGN).unwrap();
         let epoch = EpochRecord::new(oid('a'), oid('b'), digest('c'));
         let command_authority = authority();
@@ -96,6 +113,7 @@ impl Fixture {
             Some(digest('d')),
             command_authority.clone(),
         );
+        let policy_digest = campaign.policy_digest().unwrap().clone();
         let cell = CoverageCellRecord::new(
             epoch.id().clone(),
             CoverageScope::new("crate", "csa-session").unwrap(),
@@ -181,6 +199,27 @@ impl Fixture {
             Vec::new(),
         )
         .unwrap();
+        let cleanup_lease = WorkspaceLeaseIdentity::new(
+            campaign_id.clone(),
+            epoch.clone(),
+            1,
+            PathBuf::from("/attestation-fixture-lease"),
+            1,
+            2,
+            Ulid::new().to_string(),
+        )
+        .unwrap();
+        let final_gate_authority_digest = digest('e');
+        let completion_authorization = CompletionAuthorizationRecord::new(
+            campaign_id.clone(),
+            &epoch,
+            1,
+            model(),
+            policy_digest.clone(),
+            final_gate_authority_digest.clone(),
+            cleanup_lease.clone(),
+        )
+        .unwrap();
         let prefix_events = vec![
             ConvergenceEvent::CampaignStarted(campaign.clone()),
             ConvergenceEvent::EpochOpened(epoch.clone()),
@@ -205,6 +244,7 @@ impl Fixture {
             ConvergenceEvent::CandidateDispositionRecorded(disposition),
             ConvergenceEvent::RootClusterRecorded(cluster),
             ConvergenceEvent::RepairBatchRecorded(batch),
+            ConvergenceEvent::CompletionAuthorizationRecorded(completion_authorization),
         ];
         let mut ledger = ConvergenceLedger::empty();
         ledger
@@ -216,8 +256,9 @@ impl Fixture {
         let gate = GateEvidenceRecord::new(
             campaign_id.clone(),
             &epoch,
-            campaign.policy_digest().unwrap().clone(),
+            policy_digest.clone(),
             command_authority.digest(),
+            final_gate_authority_digest,
             vec![
                 GateCommandResult::new("cargo test -p csa-session convergence_", 0).unwrap(),
                 GateCommandResult::new(
@@ -229,12 +270,22 @@ impl Fixture {
             gate_artifact.clone(),
         )
         .unwrap();
+        let terminal_action_id = CompletionActionId::generate();
+        let terminal_execution_binding = TerminalExecutionBinding::new(
+            campaign_id.clone(),
+            epoch.id().clone(),
+            terminal_action_id.clone(),
+            1,
+            policy_digest.clone(),
+            cleanup_lease.generation(),
+        )
+        .unwrap();
         let review_artifact = artifact(REVIEW_SESSION, "review/final.json", &review_bytes);
         let review = CleanRoomReviewRecord::new(
             campaign_id.clone(),
             &epoch,
-            model(),
-            review_artifact.clone(),
+            model_evidence(),
+            CleanRoomReviewArtifactBindings::new(gate_artifact.clone(), review_artifact.clone()),
             0,
             0,
             0,
@@ -257,26 +308,37 @@ impl Fixture {
             ledger,
             gate,
             review,
+            cleanup_lease,
+            policy_digest,
+            terminal_execution_binding,
+            terminal_action_id,
             artifacts,
         }
     }
 
-    fn terminal_pair(&self) -> (CleanRoomReviewRecord, MergeAttestationRecord) {
+    pub(crate) fn terminal_pair(&self) -> (CleanRoomReviewRecord, MergeAttestationRecord) {
         let bindings =
             compute_attestation_bindings(&self.ledger, &self.campaign_id, &self.gate, &self.review)
                 .unwrap();
-        let attestation = MergeAttestationRecord::new(&self.gate, &self.review, bindings).unwrap();
+        let attestation = MergeAttestationRecord::new(
+            &self.gate,
+            &self.review,
+            CleanupConfirmation::after_successful_cleanup(&self.cleanup_lease),
+            self.terminal_execution_binding.clone(),
+            bindings,
+        )
+        .unwrap();
         (self.review.clone(), attestation)
     }
 
-    fn terminal_ledger(&self) -> ConvergenceLedger {
+    pub(crate) fn terminal_ledger(&self) -> ConvergenceLedger {
         let (review, attestation) = self.terminal_pair();
         let mut ledger = self.ledger.clone();
         ledger
             .append_batch(
                 self.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(review),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(review)),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
                 ],
             )
@@ -284,7 +346,7 @@ impl Fixture {
         ledger
     }
 
-    fn read_artifact(&self, reference: &ArtifactEvidenceRef) -> Result<Vec<u8>> {
+    pub(crate) fn read_artifact(&self, reference: &ArtifactEvidenceRef) -> Result<Vec<u8>> {
         self.artifacts
             .get(&artifact_key(reference))
             .cloned()
@@ -315,14 +377,20 @@ fn attestation_hashes_bind_every_accepted_ledger_set() {
         let mut changed = value.clone();
         changed[&field] = json!(digest('f'));
         let changed: AttestationBindingDigests = serde_json::from_value(changed).unwrap();
-        let changed_record =
-            MergeAttestationRecord::new(&fixture.gate, &fixture.review, changed).unwrap();
+        let changed_record = MergeAttestationRecord::new(
+            &fixture.gate,
+            &fixture.review,
+            CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+            fixture.terminal_execution_binding.clone(),
+            changed,
+        )
+        .unwrap();
         let mut ledger = fixture.ledger.clone();
         let error = ledger
             .append_batch(
                 fixture.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(fixture.review.clone()),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review.clone())),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(changed_record)),
                 ],
             )
@@ -335,6 +403,7 @@ fn attestation_hashes_bind_every_accepted_ledger_set() {
         &fixture.epoch,
         digest('d'),
         authority().digest(),
+        digest('e'),
         fixture.gate.commands().iter().cloned().rev().collect(),
         fixture.gate.artifact().clone(),
     )
@@ -409,6 +478,7 @@ fn incomplete_authoritative_sets_and_gate_evidence_are_rejected() {
             &fixture.epoch,
             digest('b'),
             authority().digest(),
+            digest('e'),
             Vec::new(),
             fixture.gate.artifact().clone(),
         )
@@ -425,6 +495,7 @@ fn attestation_rejects_mismatched_campaign_epoch_and_catalog() {
         &fixture.epoch,
         digest('d'),
         authority().digest(),
+        digest('e'),
         fixture.gate.commands().to_vec(),
         fixture.gate.artifact().clone(),
     )
@@ -443,8 +514,11 @@ fn attestation_rejects_mismatched_campaign_epoch_and_catalog() {
     let wrong_epoch = CleanRoomReviewRecord::new(
         fixture.campaign_id.clone(),
         &changed_epoch,
-        model(),
-        fixture.review.artifact().clone(),
+        model_evidence(),
+        CleanRoomReviewArtifactBindings::new(
+            fixture.gate.artifact().clone(),
+            fixture.review.artifact().clone(),
+        ),
         0,
         0,
         0,
@@ -472,14 +546,21 @@ fn attestation_rejects_mismatched_campaign_epoch_and_catalog() {
     .unwrap();
     value["command_catalog"] = json!(digest('e'));
     let changed: AttestationBindingDigests = serde_json::from_value(value).unwrap();
-    let attestation = MergeAttestationRecord::new(&fixture.gate, &fixture.review, changed).unwrap();
+    let attestation = MergeAttestationRecord::new(
+        &fixture.gate,
+        &fixture.review,
+        CleanupConfirmation::after_successful_cleanup(&fixture.cleanup_lease),
+        fixture.terminal_execution_binding.clone(),
+        changed,
+    )
+    .unwrap();
     let mut ledger = fixture.ledger.clone();
     assert!(
         ledger
             .append_batch(
                 fixture.campaign_id.clone(),
                 vec![
-                    ConvergenceEvent::FinalReviewRecorded(fixture.review),
+                    ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review)),
                     ConvergenceEvent::MergeAttestationRecorded(Box::new(attestation)),
                 ],
             )
@@ -532,55 +613,6 @@ fn attestation_reader_rejects_missing_tampered_or_invalid_schema_artifacts() {
 }
 
 #[test]
-fn terminal_review_and_attestation_publish_as_one_atomic_batch() {
-    let fixture = Fixture::new();
-    let temp = tempdir().unwrap();
-    let store = ConvergenceLedgerStore::for_project_state_root(temp.path()).unwrap();
-    store
-        .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
-        .unwrap();
-    let (review, attestation) = fixture.terminal_pair();
-
-    let appended = store
-        .publish_final_attestation(fixture.campaign_id.clone(), review, attestation)
-        .unwrap();
-    assert_eq!(appended.len(), 2);
-    let ledger = store.load().unwrap();
-    assert!(matches!(
-        ledger.entries()[ledger.entries().len() - 2].event(),
-        ConvergenceEvent::FinalReviewRecorded(_)
-    ));
-    assert!(matches!(
-        ledger.entries().last().unwrap().event(),
-        ConvergenceEvent::MergeAttestationRecorded(_)
-    ));
-}
-
-#[test]
-fn pre_publish_failure_preserves_the_complete_unattested_prefix() {
-    let fixture = Fixture::new();
-    let temp = tempdir().unwrap();
-    let store = ConvergenceLedgerStore::for_project_state_root(temp.path()).unwrap();
-    store
-        .append_batch(fixture.campaign_id.clone(), fixture.prefix_events.clone())
-        .unwrap();
-    let before = store.load().unwrap();
-    let (review, attestation) = fixture.terminal_pair();
-
-    assert!(
-        store
-            .publish_final_attestation_with_before_publish(
-                fixture.campaign_id.clone(),
-                review,
-                attestation,
-                |_| Err(anyhow!("injected before-publication failure")),
-            )
-            .is_err()
-    );
-    assert_eq!(store.load().unwrap(), before);
-}
-
-#[test]
 fn events_after_merge_attestation_are_rejected() {
     let fixture = Fixture::new();
     let mut ledger = fixture.terminal_ledger();
@@ -617,8 +649,11 @@ fn nonzero_or_unpaired_final_review_is_rejected() {
         CleanRoomReviewRecord::new(
             fixture.campaign_id.clone(),
             &fixture.epoch,
-            model(),
-            fixture.review.artifact().clone(),
+            model_evidence(),
+            CleanRoomReviewArtifactBindings::new(
+                fixture.gate.artifact().clone(),
+                fixture.review.artifact().clone(),
+            ),
             1,
             0,
             0,
@@ -630,7 +665,7 @@ fn nonzero_or_unpaired_final_review_is_rejected() {
         ledger
             .append(
                 fixture.campaign_id,
-                ConvergenceEvent::FinalReviewRecorded(fixture.review),
+                ConvergenceEvent::FinalReviewRecorded(Box::new(fixture.review)),
             )
             .is_err()
     );

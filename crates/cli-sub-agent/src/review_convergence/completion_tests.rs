@@ -1,27 +1,25 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CampaignRecord, CandidateId,
-    CleanRoomReviewRecord, CommandAuthorityCatalogIdentity, CommandAuthorityPolicy,
-    CommandAuthoritySnapshot, CommandAuthoritySource, ConvergenceEvent, ConvergenceLedger,
-    CsaSessionId, EpochId, EpochRecord, GitObjectId, LedgerEventId, RepairBatchId, RootClusterId,
-    SessionRelativeArtifactPath, Sha256Digest,
+    CleanRoomReviewArtifactBindings, CleanRoomReviewRecord, CommandAuthorityCatalogIdentity,
+    CommandAuthorityPolicy, CommandAuthoritySnapshot, CommandAuthoritySource, CompletionActionId,
+    CompletionActionJournal, ConvergenceEvent, ConvergenceLedger, CsaSessionId, EpochId,
+    EpochRecord, GitObjectId, LedgerEventId, ModelEvidence, ObservedToolEvidence,
+    ProviderTurnExecutionId, RepairBatchId, RootClusterId, SessionRelativeArtifactPath,
+    Sha256Digest,
 };
 
+use super::clean_room_v2::{CleanRoomReviewOutput, HostReviewArtifactStore, ReviewEnvelopeContext};
 use super::completion::{
     AuthorizedRepairBatch, CompletionAction as Action, CompletionBudget as Budget,
-    CompletionError as Failure, CompletionEvent as Event, CompletionOutcome,
-    CompletionPhase as Phase, CompletionPortError as PortFailure, CompletionPorts,
-    CompletionState as State, reduce_completion, run_targeted_discovery, run_to_attestation,
+    CompletionError as Failure, CompletionEvent as Event,
+    CompletionExecutionReservation as ExecutionReservation, CompletionPhase as Phase,
+    CompletionState as State, ProviderTurnEvidence, ProviderTurnReconciliation,
+    reconcile_provider_turns, reduce_completion,
 };
-use super::discovery_contract::{
-    CampaignSelection, CleanRoomReviewOutput, DiscoveryFocus, TargetedDiscoveryFocus,
-    parse_clean_room_review_output as parse_output,
-};
+use super::discovery_contract::{CampaignSelection, DiscoveryFocus, TargetedDiscoveryFocus};
 use super::engine::{DiscoveryRequest, FrozenWorkspace, LedgerPort, initialize_campaign};
 
 fn frozen() -> FrozenWorkspace {
@@ -35,7 +33,7 @@ fn frozen() -> FrozenWorkspace {
     .expect("frozen fixture")
 }
 
-fn epoch(head: u8) -> EpochRecord {
+pub(super) fn epoch(head: u8) -> EpochRecord {
     EpochRecord::new(
         GitObjectId::parse(&"11".repeat(20)).expect("base"),
         GitObjectId::parse(&format!("{head:02x}").repeat(20)).expect("head"),
@@ -43,8 +41,24 @@ fn epoch(head: u8) -> EpochRecord {
     )
 }
 
-fn epoch_id(head: u8) -> EpochId {
+pub(super) fn epoch_id(head: u8) -> EpochId {
     epoch(head).id().clone()
+}
+
+pub(super) fn provider_reservation(
+    reserved_turns: u32,
+) -> csa_session::convergence::ProviderTurnReservation {
+    let mut journal = CompletionActionJournal::new(
+        CampaignId::generate(),
+        epoch_id(2),
+        Sha256Digest::compute(b"completion provider turn test"),
+    );
+    let claim = journal
+        .claim_next(0, CompletionActionId::generate())
+        .expect("action claim");
+    journal
+        .reserve_provider_turn(&claim, ProviderTurnExecutionId::generate(), reserved_turns)
+        .expect("provider reservation")
 }
 
 fn authority(model: &str) -> CommandAuthoritySnapshot {
@@ -57,7 +71,7 @@ fn authority(model: &str) -> CommandAuthoritySnapshot {
     .expect("authority")
 }
 
-fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
+pub(super) fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
     ArtifactEvidenceRef::new(
         CsaSessionId::generate(),
         SessionRelativeArtifactPath::new("output/review.json").expect("path"),
@@ -67,15 +81,10 @@ fn artifact(label: &[u8]) -> ArtifactEvidenceRef {
 
 fn clean_room_json(findings: serde_json::Value, questions: &[&str], unchecked: &[&str]) -> String {
     serde_json::json!({
-        "schema_version": 1,
-        "kind": "convergence_clean_room_review",
-        "artifact": artifact(b"clean-room"),
-        "model_identity": {
-            "tool": "codex", "provider": "openai", "model": "gpt-5.6", "reasoning": "high"
-        },
         "findings": findings,
         "questions": questions,
         "unchecked_items": unchecked,
+        "review_text": "Clean-room review completed.",
     })
     .to_string()
 }
@@ -88,16 +97,34 @@ fn finding_json() -> serde_json::Value {
             "primary_component": "completion reducer",
             "bug_class": "duplicate publication"
         },
-        "path": "crates/cli-sub-agent/src/review_convergence/completion.rs",
-        "span": {"start_line": 10, "end_line": 12},
-        "category": "correctness",
-        "severity": "high",
-        "summary": "Terminal publication can be repeated.",
-        "evidence": "A repeated event reaches the publication action."
+        "review_text": "Terminal publication can be repeated."
     }])
 }
 
-fn clean_output() -> CleanRoomReviewOutput {
+fn parse_output(raw: &str) -> anyhow::Result<CleanRoomReviewOutput> {
+    let directory = tempfile::tempdir()?;
+    let session_id = CsaSessionId::generate();
+    let store = HostReviewArtifactStore::new(
+        directory.path(),
+        session_id,
+        SessionRelativeArtifactPath::new("output")?,
+    )?;
+    let evidence = ModelEvidence::host_observed(
+        AdmittedModelIdentity::new("codex", "openai", "gpt-5.6", "high")?,
+        ObservedToolEvidence::new("codex", "test-version")?,
+        None,
+        ProviderTurnExecutionId::generate(),
+    )?;
+    let context = ReviewEnvelopeContext::new(
+        CampaignId::generate(),
+        epoch(2),
+        artifact(b"clean-room-gate"),
+        evidence,
+    );
+    store.publish(&context, raw)
+}
+
+pub(super) fn clean_output() -> CleanRoomReviewOutput {
     parse_output(&clean_room_json(serde_json::json!([]), &[], &[])).expect("clean output")
 }
 
@@ -181,7 +208,7 @@ fn publication_event(action: &Action) -> Event {
         epoch_id: epoch.id().clone(),
         gate_artifact: gate_artifact.clone(),
         review_artifact: clean_room.artifact().clone(),
-        model_identity: clean_room.model_identity().clone(),
+        model_evidence: clean_room.model_evidence().clone(),
     }
 }
 
@@ -209,7 +236,7 @@ fn reach_clean_room() -> (State, Action, CampaignId) {
     )
 }
 
-fn reach_targeted_discovery() -> (State, Action, CampaignId) {
+pub(super) fn reach_targeted_discovery() -> (State, Action, CampaignId) {
     let (state, _, campaign) = reach_clean_room();
     let targeted =
         reduce_completion(&state, clean_room_event(campaign.clone(), finding_output())).unwrap();
@@ -381,7 +408,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
         campaign_id,
         epoch_id,
         review_artifact,
-        model_identity,
+        model_evidence,
         ..
     } = publication_event(action)
     else {
@@ -395,7 +422,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
                 epoch_id,
                 gate_artifact: artifact(b"wrong-gates"),
                 review_artifact,
-                model_identity,
+                model_evidence,
             },
         )
         .unwrap_err(),
@@ -410,7 +437,7 @@ fn completion_publishes_only_one_atomic_terminal_action() {
 #[test]
 fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
     let (state, discovery) = start(Budget::new(8, 1).unwrap());
-    let error = reduce_completion(
+    let transition = reduce_completion(
         &state,
         discovery_event(
             &discovery,
@@ -418,8 +445,27 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
             vec![CandidateId::generate()],
         ),
     )
-    .unwrap_err();
-    assert!(matches!(error, Failure::BudgetExhausted));
+    .expect("events do not infer provider usage from action kind");
+    assert_eq!(transition.state.provider_turns, 0);
+    assert!(matches!(
+        transition.action,
+        Some(Action::VerifyAndCluster { .. })
+    ));
+    let reservation = provider_reservation(1);
+    assert_eq!(
+        reconcile_provider_turns(
+            &state,
+            &ExecutionReservation::Provider(reservation.clone()),
+            &ProviderTurnReconciliation::Reconciled {
+                reservation,
+                host_observed_turn_delta: 1,
+                evidence: ProviderTurnEvidence::Transport(
+                    csa_process::ProviderTurnCompletion::Natural
+                ),
+            },
+        ),
+        Err(Failure::BudgetExhausted)
+    );
     for (event, expected) in [
         (Event::MaxRoundsReached, Failure::MaxRoundsReached),
         (Event::DriftDetected, Failure::DriftDetected),
@@ -434,117 +480,17 @@ fn completion_never_maps_budget_exhaustion_or_max_rounds_to_attested() {
     }
 }
 
-struct FakePorts {
-    events: VecDeque<Result<Event, PortFailure>>,
-    actions: Vec<Action>,
-}
-
-impl CompletionPorts for FakePorts {
-    fn execute<'a>(
-        &'a mut self,
-        action: &'a Action,
-    ) -> Pin<Box<dyn Future<Output = Result<Event, PortFailure>> + 'a>> {
-        self.actions.push(action.clone());
-        let event = self.events.pop_front().expect("fake event");
-        Box::pin(async move { event })
-    }
-}
-
-#[tokio::test]
-async fn port_error_never_advances_reducer_state() {
-    let (state, action, _) = reach_targeted_discovery();
-    let before = state.clone();
-    let mut ports = FakePorts {
-        events: VecDeque::from([Err(PortFailure::new("provider unavailable"))]),
-        actions: Vec::new(),
-    };
-    assert!(
-        run_targeted_discovery(&state, &action, &mut ports)
-            .await
-            .is_err()
-    );
-    assert_eq!(before, state);
-}
-
-#[tokio::test]
-async fn run_to_attestation_replays_a_fake_history() {
-    let campaign = CampaignId::generate();
-    let candidate = CandidateId::generate();
-    let root = RootClusterId::generate();
-    let batch = AuthorizedRepairBatch::new(root.clone(), RepairBatchId::generate());
-    let gate_artifact = artifact(b"gates");
-    let review = clean_output();
-    let published_gate_artifact = gate_artifact.clone();
-    let published_review_artifact = review.artifact().clone();
-    let published_model_identity = review.model_identity().clone();
-    let mut ports = FakePorts {
-        events: VecDeque::from([
-            Ok(Event::DiscoveryCompleted {
-                focus: DiscoveryFocus::Broad,
-                selection: CampaignSelection::Fresh,
-                campaign_id: campaign.clone(),
-                epoch: epoch(2),
-                candidates: vec![candidate.clone()],
-            }),
-            Ok(Event::ClustersReady {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(2),
-                verified_candidates: vec![candidate],
-                root_clusters: vec![root],
-                repair_batches: vec![batch.clone()],
-            }),
-            Ok(Event::RepairsCompleted {
-                campaign_id: campaign.clone(),
-                previous_epoch_id: epoch_id(2),
-                completed_batches: vec![batch.repair_batch_id().clone()],
-                new_epoch: epoch(3),
-            }),
-            Ok(Event::DiscoveryCompleted {
-                focus: DiscoveryFocus::Broad,
-                selection: CampaignSelection::Continue(campaign.clone()),
-                campaign_id: campaign.clone(),
-                epoch: epoch(3),
-                candidates: Vec::new(),
-            }),
-            Ok(Event::FinalGatesPassed {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                artifact: gate_artifact,
-            }),
-            Ok(Event::CleanRoomCompleted {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                output: review,
-            }),
-            Ok(Event::FinalPairPublished {
-                campaign_id: campaign.clone(),
-                epoch_id: epoch_id(3),
-                gate_artifact: published_gate_artifact,
-                review_artifact: published_review_artifact,
-                model_identity: published_model_identity,
-            }),
-        ]),
-        actions: Vec::new(),
-    };
-    let outcome = run_to_attestation(
-        &mut ports,
-        Budget::new(16, 8).unwrap(),
-        epoch(2),
-        CampaignSelection::Fresh,
-    )
-    .await
-    .unwrap();
-    assert!(
-        matches!(outcome, CompletionOutcome::Attested { campaign_id, epoch: final_epoch } if campaign_id == campaign && final_epoch == epoch(3))
-    );
-    assert_eq!(ports.actions.len(), 7);
-}
-
 #[test]
 fn targeted_prompt_contains_artifact_digest_and_semantic_identities_not_transcript() {
     let output = finding_output();
-    assert_eq!(output.artifact().digest(), artifact(b"clean-room").digest());
-    assert_eq!(output.model_identity().model(), "gpt-5.6");
+    assert!(
+        output
+            .artifact()
+            .path()
+            .as_str()
+            .starts_with("output/clean-room-review-v2-")
+    );
+    assert_eq!(output.model_evidence().admitted_model().model(), "gpt-5.6");
     let focus = TargetedDiscoveryFocus::from_review(&output).expect("targeted focus");
     let stable_id = focus.semantic_finding_ids()[0].as_str().to_string();
     let digest = focus.artifact().digest().to_string();
@@ -558,8 +504,8 @@ fn targeted_prompt_contains_artifact_digest_and_semantic_identities_not_transcri
     assert!(!prompt.contains("Terminal publication can be repeated"));
     assert!(!prompt.contains("A repeated event reaches"));
     let clean_room = super::discovery_prompt::build_clean_room_prompt(&epoch(2), output.artifact());
-    assert!(clean_room.contains("convergence_clean_room_review"));
-    assert!(clean_room.contains("\"model_identity\""));
+    assert!(clean_room.contains("\"findings\""));
+    assert!(!clean_room.contains("\"model_identity\""));
     assert!(clean_room.contains(output.artifact().digest().as_str()));
 }
 
@@ -584,12 +530,12 @@ fn clean_room_parser_rejects_unknown_fields_prose_partial_or_ambiguous_json() {
     );
     assert!(parse_output(&duplicate).is_err());
 
-    let mut malformed_path: serde_json::Value = serde_json::from_str(&valid).unwrap();
-    malformed_path["findings"][0]["path"] = serde_json::json!("src//lib.rs");
-    assert!(parse_output(&malformed_path.to_string()).is_err());
+    let mut forbidden_path: serde_json::Value = serde_json::from_str(&valid).unwrap();
+    forbidden_path["findings"][0]["path"] = serde_json::json!("src/lib.rs");
+    assert!(parse_output(&forbidden_path.to_string()).is_err());
 
     let mut control_text: serde_json::Value = serde_json::from_str(&valid).unwrap();
-    control_text["findings"][0]["title"] = serde_json::json!("line\nbreak");
+    control_text["findings"][0]["review_text"] = serde_json::json!("line\nbreak");
     assert!(parse_output(&control_text.to_string()).is_err());
 }
 
@@ -653,11 +599,18 @@ fn terminal_ledger(
     command_authority: &CommandAuthoritySnapshot,
 ) -> (ConvergenceLedger, CampaignRecord) {
     let (ledger, campaign) = matching_ledger(policy, command_authority);
+    let model_evidence = ModelEvidence::host_observed(
+        command_authority.ordered_admitted()[0].clone(),
+        ObservedToolEvidence::new("codex", "test-version").unwrap(),
+        None,
+        ProviderTurnExecutionId::generate(),
+    )
+    .unwrap();
     let review = CleanRoomReviewRecord::new(
         campaign.id().clone(),
         &epoch(2),
-        command_authority.ordered_admitted()[0].clone(),
-        artifact(b"terminal"),
+        model_evidence,
+        CleanRoomReviewArtifactBindings::new(artifact(b"terminal-gate"), artifact(b"terminal")),
         0,
         0,
         0,
@@ -667,7 +620,8 @@ fn terminal_ledger(
     let mut entry = value["entries"][0].clone();
     entry["sequence"] = serde_json::json!(2);
     entry["event_id"] = serde_json::to_value(LedgerEventId::generate()).unwrap();
-    entry["event"] = serde_json::to_value(ConvergenceEvent::FinalReviewRecorded(review)).unwrap();
+    entry["event"] =
+        serde_json::to_value(ConvergenceEvent::FinalReviewRecorded(Box::new(review))).unwrap();
     value["entries"].as_array_mut().unwrap().push(entry);
     (serde_json::from_value(value).unwrap(), campaign)
 }

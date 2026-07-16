@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::ConvergenceCompletionPolicy;
 pub use crate::global_env::ExecutionEnvOptions;
 pub use crate::global_kv_cache::{
     DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig,
@@ -43,6 +44,12 @@ pub struct GlobalConfig {
     /// Global-only tier bypass policy.
     #[serde(default)]
     pub tier_policy: TierPolicyConfig,
+    /// Safety ceiling for opt-in convergence completion execution.
+    #[serde(
+        default,
+        skip_serializing_if = "ConvergenceCompletionPolicy::is_default"
+    )]
+    pub convergence_completion: ConvergenceCompletionPolicy,
     #[serde(default)]
     pub todo: TodoDisplayConfig,
     /// Memory system configuration.
@@ -108,6 +115,7 @@ impl Default for GlobalConfig {
             retry: RetryConfig::default(),
             budget: BudgetConfig::default(),
             tier_policy: TierPolicyConfig::default(),
+            convergence_completion: ConvergenceCompletionPolicy::default(),
             todo: TodoDisplayConfig::default(),
             memory: MemoryConfig::default(),
             tool_state_dirs: default_tool_state_dirs(),
