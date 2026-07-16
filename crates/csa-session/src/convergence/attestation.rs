@@ -11,7 +11,7 @@ use super::{
 };
 
 /// Schema required from the immutable gate artifact.
-pub const GATE_EVIDENCE_SCHEMA_ID: &str = "csa.convergence.gate-evidence/v1";
+pub const GATE_EVIDENCE_SCHEMA_ID: &str = "csa.convergence.gate-evidence/v2";
 /// Schema required from the immutable final clean-room artifact.
 pub const CLEAN_ROOM_REVIEW_SCHEMA_ID: &str = "csa.convergence.clean-room-review/v2";
 /// Historical v1 artifacts are inspection-only and cannot be used to form new terminal evidence.

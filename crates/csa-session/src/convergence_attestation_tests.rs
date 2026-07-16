@@ -28,7 +28,7 @@ const CANDIDATE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 const VERIFIER_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC4";
 const GATE_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC5";
 const REVIEW_SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC6";
-const GATE_SCHEMA: &str = "csa.convergence.gate-evidence/v1";
+const GATE_SCHEMA: &str = "csa.convergence.gate-evidence/v2";
 const REVIEW_SCHEMA: &str = "csa.convergence.clean-room-review/v2";
 
 type ArtifactKey = (String, String);

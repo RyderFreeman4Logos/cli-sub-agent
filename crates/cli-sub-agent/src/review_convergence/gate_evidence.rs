@@ -1,303 +1,605 @@
-//! Final-gate execution port and fail-closed evidence aggregation.
-//!
-//! This module never spawns a subprocess itself. A production caller supplies a driver; tests use
-//! deterministic recording drivers so each required command, outcome, and log is mechanically
-//! retained without touching a live workspace.
+//! Host-authoritative final-gate execution and immutable evidence publication.
 
 #![expect(
     dead_code,
-    reason = "B5 Slice 2 defines isolated ports; production orchestration is wired in a later slice"
+    reason = "Task 8 defines the final-gate port before Task 10 wires the aggregate completion ports"
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use csa_session::convergence::EpochRecord;
+use csa_session::convergence::{
+    ArtifactEvidenceRef, CsaSessionId, GATE_EVIDENCE_SCHEMA_ID, SessionRelativeArtifactPath,
+    Sha256Digest, WorkspaceLeaseIdentity,
+};
+use serde::{Deserialize, Serialize};
+use ulid::Ulid;
 
-/// Exact bounded command contract for one required final gate.
+use super::gate_authority::{
+    FinalGatePlan, GateCommandAuthority, GateCredentialPolicy, GateNetworkPolicy,
+};
+
+const GATE_ARTIFACT_SCHEMA_VERSION: u32 = 2;
+const GATE_ARTIFACT_FILE_PREFIX: &str = "final-gate-v2-";
+const MAX_GATE_ARTIFACT_BYTES: usize = 160 * 1024;
+const MAX_GATE_OUTPUT_BYTES: usize = 4 * 1024;
+const MAX_GATE_ARTIFACTS: usize = 32;
+
+/// An invocation whose argv, environment, and process isolation are controlled by the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GateCommandSpec {
-    name: String,
-    program: String,
-    args: Vec<String>,
+pub(crate) struct GateInvocation {
+    command: GateCommandAuthority,
     cwd: PathBuf,
-    env: BTreeMap<String, String>,
-    timeout: Duration,
+    env: Vec<(String, String)>,
+    independent_process_group: bool,
 }
 
-impl GateCommandSpec {
-    pub(crate) fn new(
-        name: &str,
-        program: &str,
-        args: Vec<String>,
-        cwd: impl AsRef<Path>,
-    ) -> Result<Self> {
-        validate_component("gate name", name)?;
-        validate_component("gate program", program)?;
-        for argument in &args {
-            validate_component("gate argument", argument)?;
+impl GateInvocation {
+    fn from_plan(plan: &FinalGatePlan, command: &GateCommandAuthority) -> Self {
+        Self {
+            command: command.clone(),
+            cwd: plan.lease().workspace_root().to_path_buf(),
+            env: plan
+                .minimal_env()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            independent_process_group: true,
         }
-        let cwd = cwd.as_ref();
-        if !cwd.is_absolute() {
-            bail!("gate cwd must be an absolute path: {}", cwd.display());
-        }
-        let cwd_text = cwd
-            .to_str()
-            .with_context(|| format!("gate cwd must be valid UTF-8: {}", cwd.display()))?;
-        validate_component("gate cwd", cwd_text)?;
-        Ok(Self {
-            name: name.to_string(),
-            program: program.to_string(),
-            args,
-            cwd: cwd.to_path_buf(),
-            env: BTreeMap::from([
-                ("CI".to_string(), "1".to_string()),
-                ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
-            ]),
-            timeout: Duration::from_secs(900),
-        })
     }
 
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub(crate) fn program(&self) -> &str {
-        &self.program
-    }
-
-    pub(crate) fn args(&self) -> &[String] {
-        &self.args
+    pub(crate) fn command(&self) -> &GateCommandAuthority {
+        &self.command
     }
 
     pub(crate) fn cwd(&self) -> &Path {
         &self.cwd
     }
 
-    pub(crate) fn env(&self) -> &BTreeMap<String, String> {
+    pub(crate) fn env(&self) -> &[(String, String)] {
         &self.env
     }
 
-    pub(crate) fn timeout(&self) -> Duration {
-        self.timeout
+    pub(crate) fn independent_process_group(&self) -> bool {
+        self.independent_process_group
     }
 }
 
-/// Required gates bound to one immutable exact-OID epoch and one clean-room root.
+/// Host-observed process completion. Only `Exited(0)` with a reaped group can pass a gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateProcessTermination {
+    Exited(i32),
+    TimedOut,
+    Cancelled,
+    ChildSurvivor,
+    ReapFailed,
+}
+
+/// Raw process output supplied by a driver. The port immediately bounds and redacts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FinalGatePlan {
-    epoch: EpochRecord,
-    clean_room_root: PathBuf,
-    commands: Vec<GateCommandSpec>,
-}
-
-impl FinalGatePlan {
-    pub(crate) fn new(
-        epoch: EpochRecord,
-        clean_room_root: impl AsRef<Path>,
-        commands: Vec<GateCommandSpec>,
-    ) -> Result<Self> {
-        epoch.validate().context("validate final-gate epoch")?;
-        let clean_room_root = clean_room_root.as_ref();
-        if !clean_room_root.is_absolute() {
-            bail!(
-                "final-gate clean-room root must be absolute: {}",
-                clean_room_root.display()
-            );
-        }
-        if commands.is_empty() {
-            bail!("final-gate plan requires at least one gate command");
-        }
-        let mut names = HashSet::new();
-        for command in &commands {
-            if command.cwd != clean_room_root {
-                bail!(
-                    "final gate '{}' cwd {} differs from clean-room root {}",
-                    command.name,
-                    command.cwd.display(),
-                    clean_room_root.display()
-                );
-            }
-            if !names.insert(command.name.clone()) {
-                bail!(
-                    "final-gate plan contains duplicate gate '{}': command identities must be unique",
-                    command.name
-                );
-            }
-        }
-        Ok(Self {
-            epoch,
-            clean_room_root: clean_room_root.to_path_buf(),
-            commands,
-        })
-    }
-
-    pub(crate) fn epoch(&self) -> &EpochRecord {
-        &self.epoch
-    }
-
-    pub(crate) fn commands(&self) -> &[GateCommandSpec] {
-        &self.commands
-    }
-
-    pub(crate) fn clean_room_root(&self) -> &Path {
-        &self.clean_room_root
-    }
-}
-
-/// Complete process outcome, including the logs required to explain a failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GateCommandOutcome {
-    exit_code: i32,
+pub(crate) struct GateProcessOutcome {
+    termination: GateProcessTermination,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
 }
 
-impl GateCommandOutcome {
-    pub(crate) fn new(exit_code: i32, stdout: &[u8], stderr: &[u8]) -> Self {
+impl GateProcessOutcome {
+    pub(crate) fn new(
+        termination: GateProcessTermination,
+        stdout: impl Into<Vec<u8>>,
+        stderr: impl Into<Vec<u8>>,
+    ) -> Self {
         Self {
+            termination,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+}
+
+/// Side-effect boundary for direct-argv process execution.
+///
+/// Implementations must clear inherited environment, enforce the declared network and credential
+/// policies, create an independent process group, and kill then reap that group on cancellation
+/// or timeout. They must report any uncertain cleanup as `ReapFailed` or `ChildSurvivor`.
+pub(crate) trait FinalGateDriver {
+    fn run(&mut self, invocation: &GateInvocation) -> Result<GateProcessOutcome>;
+}
+
+/// Current owned lease boundary. A failure means the gate result cannot be trusted.
+pub(crate) trait FinalGateLease {
+    fn identity(&self) -> &WorkspaceLeaseIdentity;
+    fn validate_current(&self) -> Result<()>;
+}
+
+impl<C: super::clean_room::WorkspaceCleanup> FinalGateLease
+    for super::clean_room::DetachedWorkspaceLease<C>
+{
+    fn identity(&self) -> &WorkspaceLeaseIdentity {
+        self.identity()
+    }
+
+    fn validate_current(&self) -> Result<()> {
+        self.validate_current()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GateOutputSummary {
+    observed_bytes: u64,
+    truncated: bool,
+    text: String,
+}
+
+impl GateOutputSummary {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let observed_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let mut truncated = bytes.len() > MAX_GATE_OUTPUT_BYTES;
+        let retained = if truncated {
+            &bytes[bytes.len() - MAX_GATE_OUTPUT_BYTES..]
+        } else {
+            bytes
+        };
+        let mut text = redact_secret_like_text(&escape_control_characters(
+            &String::from_utf8_lossy(retained),
+        ));
+        if text.len() > MAX_GATE_OUTPUT_BYTES {
+            text = truncate_utf8_tail(&text, MAX_GATE_OUTPUT_BYTES);
+            truncated = true;
+        }
+        if truncated {
+            let marker = format!("[csa: output truncated after {observed_bytes} bytes]\n");
+            let body_limit = MAX_GATE_OUTPUT_BYTES.saturating_sub(marker.len());
+            text = format!("{marker}{}", truncate_utf8_tail(&text, body_limit));
+        }
+        Self {
+            observed_bytes,
+            truncated,
+            text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GateArtifactCommand {
+    order: u32,
+    command_id: String,
+    program: String,
+    argv: Vec<String>,
+    network: GateNetworkPolicy,
+    credentials: GateCredentialPolicy,
+    timeout_seconds: u64,
+    exit_code: i32,
+    stdout: GateOutputSummary,
+    stderr: GateOutputSummary,
+}
+
+impl GateArtifactCommand {
+    fn from_outcome(
+        order: u32,
+        command: &GateCommandAuthority,
+        outcome: GateProcessOutcome,
+    ) -> Result<Self> {
+        let GateProcessOutcome {
+            termination,
+            stdout,
+            stderr,
+        } = outcome;
+        let exit_code = match termination {
+            GateProcessTermination::Exited(0) => 0,
+            GateProcessTermination::Exited(code) => bail!(
+                "required final gate '{}' exited with status {code}",
+                command.command_id()
+            ),
+            GateProcessTermination::TimedOut => {
+                bail!("required final gate '{}' timed out", command.command_id())
+            }
+            GateProcessTermination::Cancelled => {
+                bail!(
+                    "required final gate '{}' was cancelled",
+                    command.command_id()
+                )
+            }
+            GateProcessTermination::ChildSurvivor => bail!(
+                "required final gate '{}' left a child process survivor",
+                command.command_id()
+            ),
+            GateProcessTermination::ReapFailed => bail!(
+                "required final gate '{}' could not be reaped",
+                command.command_id()
+            ),
+        };
+        Ok(Self {
+            order,
+            command_id: command.command_id().to_string(),
+            program: command.program().to_string(),
+            argv: command.argv().to_vec(),
+            network: command.network(),
+            credentials: command.credentials(),
+            timeout_seconds: command.timeout().as_secs(),
             exit_code,
-            stdout: stdout.to_vec(),
-            stderr: stderr.to_vec(),
+            stdout: GateOutputSummary::from_bytes(&stdout),
+            stderr: GateOutputSummary::from_bytes(&stderr),
+        })
+    }
+}
+
+/// The host artifact deliberately has no artifact reference or digest field, avoiding a
+/// self-referential digest. The reference is computed only after bytes are durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GateArtifactEnvelope {
+    schema_version: u32,
+    schema: String,
+    campaign_id: csa_session::convergence::CampaignId,
+    epoch: csa_session::convergence::EpochRecord,
+    policy_digest: Sha256Digest,
+    command_authority_digest: Sha256Digest,
+    authority_version: String,
+    commands: Vec<GateArtifactCommand>,
+}
+
+impl GateArtifactEnvelope {
+    fn new(plan: &FinalGatePlan, commands: Vec<GateArtifactCommand>) -> Result<Self> {
+        if commands.len() != plan.commands().len() {
+            bail!("final-gate artifact is missing a required command result");
         }
-    }
-
-    pub(crate) fn exit_code(&self) -> i32 {
-        self.exit_code
-    }
-
-    pub(crate) fn stdout(&self) -> &[u8] {
-        &self.stdout
-    }
-
-    pub(crate) fn stderr(&self) -> &[u8] {
-        &self.stderr
-    }
-}
-
-/// One immutable command/outcome/log pair.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GateEvidenceRecord {
-    command: GateCommandSpec,
-    outcome: GateCommandOutcome,
-}
-
-impl GateEvidenceRecord {
-    pub(crate) fn command(&self) -> &GateCommandSpec {
-        &self.command
-    }
-
-    pub(crate) fn outcome(&self) -> &GateCommandOutcome {
-        &self.outcome
-    }
-}
-
-/// Complete evidence for every gate required by a plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FinalGateEvidence {
-    epoch: EpochRecord,
-    required_gate_count: usize,
-    records: Vec<GateEvidenceRecord>,
-}
-
-impl FinalGateEvidence {
-    fn complete(plan: &FinalGatePlan, records: Vec<GateEvidenceRecord>) -> Result<Self> {
-        if records.len() != plan.commands.len() {
-            bail!(
-                "final-gate evidence is incomplete: expected {} outcomes, retained {}",
-                plan.commands.len(),
-                records.len()
-            );
-        }
-        for (expected, actual) in plan.commands.iter().zip(&records) {
-            if expected != &actual.command {
-                bail!("final-gate evidence command order or identity changed");
+        for (order, (actual, expected)) in commands.iter().zip(plan.commands()).enumerate() {
+            if actual.order != u32::try_from(order).context("final-gate command order overflow")?
+                || actual.command_id != expected.command_id()
+                || actual.program != expected.program()
+                || actual.argv != expected.argv()
+                || actual.network != expected.network()
+                || actual.credentials != expected.credentials()
+                || actual.timeout_seconds != expected.timeout().as_secs()
+                || actual.exit_code != 0
+            {
+                bail!("final-gate artifact command order or authority binding changed");
             }
         }
         Ok(Self {
-            epoch: plan.epoch.clone(),
-            required_gate_count: plan.commands.len(),
-            records,
+            schema_version: GATE_ARTIFACT_SCHEMA_VERSION,
+            schema: GATE_EVIDENCE_SCHEMA_ID.to_string(),
+            campaign_id: plan.lease().campaign_id().clone(),
+            epoch: plan.lease().epoch().clone(),
+            policy_digest: plan.policy_digest().clone(),
+            command_authority_digest: plan.command_authority_digest().clone(),
+            authority_version: plan.authority_version().to_string(),
+            commands,
         })
     }
 
-    pub(crate) fn epoch(&self) -> &EpochRecord {
-        &self.epoch
-    }
-
-    pub(crate) fn records(&self) -> &[GateEvidenceRecord] {
-        &self.records
-    }
-
-    pub(crate) fn passed(&self) -> bool {
-        self.records.len() == self.required_gate_count
-            && self
-                .records
-                .iter()
-                .all(|record| record.outcome.exit_code == 0)
-    }
-
-    pub(crate) fn require_success(&self) -> Result<()> {
-        if self.records.len() != self.required_gate_count {
-            bail!("final-gate evidence is incomplete");
+    fn validate_plan(&self, plan: &FinalGatePlan) -> Result<()> {
+        if self.schema_version != GATE_ARTIFACT_SCHEMA_VERSION
+            || self.schema != GATE_EVIDENCE_SCHEMA_ID
+            || self.campaign_id != *plan.lease().campaign_id()
+            || self.epoch != *plan.lease().epoch()
+            || self.policy_digest != *plan.policy_digest()
+            || self.command_authority_digest != *plan.command_authority_digest()
+            || self.authority_version != plan.authority_version()
+        {
+            bail!("final-gate artifact does not match its authority-bound plan");
         }
-        let failures = self
-            .records
-            .iter()
-            .filter(|record| record.outcome.exit_code != 0)
-            .map(|record| format!("{}={}", record.command.name, record.outcome.exit_code))
-            .collect::<Vec<_>>();
-        if !failures.is_empty() {
-            bail!("required final gates failed: {}", failures.join(", "));
+        Self::new(plan, self.commands.clone()).map(|_| ())
+    }
+}
+
+/// A successful readback of immutable final-gate evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FinalGateEvidence {
+    artifact: ArtifactEvidenceRef,
+    commands: Vec<String>,
+}
+
+impl FinalGateEvidence {
+    pub(crate) fn artifact(&self) -> &ArtifactEvidenceRef {
+        &self.artifact
+    }
+
+    pub(crate) fn commands(&self) -> &[String] {
+        &self.commands
+    }
+}
+
+/// Host-owned content-addressed output directory for final-gate evidence.
+#[derive(Debug, Clone)]
+pub(crate) struct HostGateArtifactStore {
+    directory: PathBuf,
+    session_id: CsaSessionId,
+    relative_directory: SessionRelativeArtifactPath,
+}
+
+impl HostGateArtifactStore {
+    pub(crate) fn new(
+        directory: &Path,
+        session_id: CsaSessionId,
+        relative_directory: SessionRelativeArtifactPath,
+    ) -> Result<Self> {
+        let metadata = fs::symlink_metadata(directory).with_context(|| {
+            format!("inspect host final-gate directory {}", directory.display())
+        })?;
+        if !directory.is_absolute() || !metadata.is_dir() || metadata.file_type().is_symlink() {
+            bail!("host final-gate artifact directory must be an absolute direct directory");
+        }
+        let canonical = fs::canonicalize(directory).with_context(|| {
+            format!(
+                "canonicalize host final-gate directory {}",
+                directory.display()
+            )
+        })?;
+        if canonical != directory {
+            bail!("host final-gate artifact directory must not resolve through a symlink");
+        }
+        Ok(Self {
+            directory: canonical,
+            session_id,
+            relative_directory,
+        })
+    }
+
+    fn publish(
+        &self,
+        plan: &FinalGatePlan,
+        commands: Vec<GateArtifactCommand>,
+    ) -> Result<ArtifactEvidenceRef> {
+        let envelope = GateArtifactEnvelope::new(plan, commands)?;
+        let bytes = serde_json::to_vec(&envelope).context("serialize final-gate artifact")?;
+        if bytes.len() > MAX_GATE_ARTIFACT_BYTES {
+            bail!("final-gate artifact exceeds its byte quota");
+        }
+        let digest = Sha256Digest::compute(&bytes);
+        let file_name = artifact_file_name(&digest)?;
+        let destination = self.directory.join(&file_name);
+        self.enforce_retention(&destination)?;
+        publish_bytes_once(&self.directory, &destination, &bytes)?;
+        Ok(ArtifactEvidenceRef::new(
+            self.session_id.clone(),
+            SessionRelativeArtifactPath::new(&format!(
+                "{}/{}",
+                self.relative_directory.as_str(),
+                file_name
+            ))?,
+            digest,
+        ))
+    }
+
+    pub(crate) fn readback(
+        &self,
+        plan: &FinalGatePlan,
+        artifact: &ArtifactEvidenceRef,
+    ) -> Result<FinalGateEvidence> {
+        if artifact.csa_session_id() != &self.session_id {
+            bail!("final-gate artifact session identity does not match its host store");
+        }
+        let prefix = format!("{}/", self.relative_directory.as_str());
+        let name = artifact
+            .path()
+            .as_str()
+            .strip_prefix(&prefix)
+            .context("final-gate artifact path is outside its host directory")?;
+        if Path::new(name).components().count() != 1 || !name.starts_with(GATE_ARTIFACT_FILE_PREFIX)
+        {
+            bail!("final-gate artifact path is invalid");
+        }
+        let bytes = read_private_bounded(&self.directory.join(name))?;
+        if Sha256Digest::compute(&bytes) != *artifact.digest() {
+            bail!("final-gate artifact digest mismatch");
+        }
+        let envelope: GateArtifactEnvelope =
+            serde_json::from_slice(&bytes).context("parse final-gate artifact")?;
+        envelope.validate_plan(plan)?;
+        Ok(FinalGateEvidence {
+            artifact: artifact.clone(),
+            commands: envelope
+                .commands
+                .into_iter()
+                .map(|command| command.command_id)
+                .collect(),
+        })
+    }
+
+    fn enforce_retention(&self, destination: &Path) -> Result<()> {
+        if destination.exists() {
+            return Ok(());
+        }
+        let retained = fs::read_dir(&self.directory)
+            .with_context(|| format!("list final-gate artifacts in {}", self.directory.display()))?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(GATE_ARTIFACT_FILE_PREFIX)
+            })
+            .count();
+        if retained >= MAX_GATE_ARTIFACTS {
+            bail!("final-gate artifact retention quota is exhausted");
         }
         Ok(())
     }
 }
 
-/// Injected command execution boundary.
-pub(crate) trait FinalGateDriver {
-    fn run(&mut self, command: &GateCommandSpec) -> Result<GateCommandOutcome>;
+/// Executes one authority-bound plan serially under a verified owned workspace lease.
+pub(crate) struct HostFinalGatePort<D> {
+    pub(super) driver: D,
+    artifacts: HostGateArtifactStore,
 }
 
-pub(crate) trait FinalGateRunner {
-    fn run(&mut self, plan: &FinalGatePlan) -> Result<FinalGateEvidence>;
-}
+impl<D> HostFinalGatePort<D> {
+    pub(crate) fn new(driver: D, artifacts: HostGateArtifactStore) -> Self {
+        Self { driver, artifacts }
+    }
 
-/// Production evidence adapter; only its injected driver can execute commands.
-pub(crate) struct ProductionFinalGateRunner<D> {
-    driver: D,
-}
-
-impl<D> ProductionFinalGateRunner<D> {
-    pub(crate) fn new(driver: D) -> Self {
-        Self { driver }
+    pub(crate) fn readback(
+        &self,
+        plan: &FinalGatePlan,
+        artifact: &ArtifactEvidenceRef,
+    ) -> Result<FinalGateEvidence> {
+        self.artifacts.readback(plan, artifact)
     }
 }
 
-impl<D: FinalGateDriver> FinalGateRunner for ProductionFinalGateRunner<D> {
-    fn run(&mut self, plan: &FinalGatePlan) -> Result<FinalGateEvidence> {
-        let mut records = Vec::with_capacity(plan.commands.len());
-        for command in &plan.commands {
-            let outcome = self.driver.run(command).with_context(|| {
-                format!("final gate '{}' did not produce an outcome", command.name)
-            })?;
-            records.push(GateEvidenceRecord {
-                command: command.clone(),
+impl<D: FinalGateDriver> HostFinalGatePort<D> {
+    pub(crate) fn run<L: FinalGateLease>(
+        &mut self,
+        plan: &FinalGatePlan,
+        lease: &L,
+    ) -> Result<FinalGateEvidence> {
+        validate_lease(plan, lease)?;
+        let mut commands = Vec::with_capacity(plan.commands().len());
+        for (order, command) in plan.commands().iter().enumerate() {
+            validate_lease(plan, lease)?;
+            let outcome = self
+                .driver
+                .run(&GateInvocation::from_plan(plan, command))
+                .with_context(|| {
+                    format!("execute required final gate '{}'", command.command_id())
+                })?;
+            commands.push(GateArtifactCommand::from_outcome(
+                u32::try_from(order).context("final-gate command order overflow")?,
+                command,
                 outcome,
-            });
+            )?);
         }
-        FinalGateEvidence::complete(plan, records)
+        validate_lease(plan, lease)?;
+        let artifact = self.artifacts.publish(plan, commands)?;
+        validate_lease(plan, lease)?;
+        let evidence = self.artifacts.readback(plan, &artifact)?;
+        validate_lease(plan, lease)?;
+        Ok(evidence)
     }
 }
 
-fn validate_component(label: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        bail!("{label} must not be empty");
+fn validate_lease<L: FinalGateLease>(plan: &FinalGatePlan, lease: &L) -> Result<()> {
+    if lease.identity() != plan.lease() {
+        bail!("final-gate lease identity does not match the authority-bound plan");
     }
-    if value.contains('\0') {
-        bail!("{label} must not contain NUL");
+    lease
+        .validate_current()
+        .context("final-gate epoch lease drift")
+}
+
+fn artifact_file_name(digest: &Sha256Digest) -> Result<String> {
+    let suffix = digest
+        .as_str()
+        .strip_prefix("sha256:")
+        .context("final-gate artifact digest lacks its sha256 prefix")?;
+    Ok(format!("{GATE_ARTIFACT_FILE_PREFIX}{suffix}.json"))
+}
+
+fn publish_bytes_once(directory: &Path, destination: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = directory.join(format!(".final-gate-{}.tmp", Ulid::new()));
+    let result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&temporary)
+            .with_context(|| format!("create final-gate artifact {}", temporary.display()))?;
+        file.write_all(bytes).context("write final-gate artifact")?;
+        file.sync_all().context("sync final-gate artifact")?;
+        match fs::hard_link(&temporary, destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if read_private_bounded(destination)? != bytes {
+                    bail!("final-gate artifact name exists with different bytes");
+                }
+            }
+            Err(error) => return Err(error).context("publish final-gate artifact"),
+        }
+        File::open(directory)
+            .context("open final-gate artifact directory")?
+            .sync_all()
+            .context("sync final-gate artifact directory")?;
+        Ok(())
+    })();
+    let cleanup = fs::remove_file(&temporary);
+    result?;
+    match cleanup {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("remove final-gate artifact temporary file"),
     }
-    Ok(())
+}
+
+fn read_private_bounded(path: &Path) -> Result<Vec<u8>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| format!("open final-gate artifact {}", path.display()))?;
+    let mode = file.metadata()?.permissions().mode();
+    if mode & 0o077 != 0 {
+        bail!("final-gate artifact is not private (0600)");
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_GATE_ARTIFACT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_GATE_ARTIFACT_BYTES {
+        bail!("final-gate artifact exceeds its byte quota");
+    }
+    Ok(bytes)
+}
+
+fn escape_control_characters(value: &str) -> String {
+    value.chars().fold(String::new(), |mut safe, character| {
+        match character {
+            '\n' | '\t' => safe.push(character),
+            character if character.is_control() => {
+                safe.push_str(&format!("\\u{{{:04X}}}", character as u32))
+            }
+            character => safe.push(character),
+        }
+        safe
+    })
+}
+
+fn redact_secret_like_text(value: &str) -> String {
+    let mut redact_next = false;
+    value
+        .split_whitespace()
+        .map(|token| {
+            if redact_next {
+                redact_next = false;
+                return "[REDACTED]".to_string();
+            }
+            let lower = token.to_ascii_lowercase();
+            if token.starts_with("sk-") && token.len() > 10
+                || token.starts_with("AKIA") && token.len() >= 16
+            {
+                "[REDACTED]".to_string()
+            } else if let Some((key, _)) = token.split_once('=') {
+                if matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "api_key" | "apikey" | "token" | "secret" | "password"
+                ) {
+                    format!("{key}=[REDACTED]")
+                } else {
+                    token.to_string()
+                }
+            } else if lower == "bearer" {
+                redact_next = true;
+                "Bearer".to_string()
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_utf8_tail(value: &str, maximum: usize) -> String {
+    if value.len() <= maximum {
+        return value.to_string();
+    }
+    let mut start = value.len().saturating_sub(maximum);
+    while !value.is_char_boundary(start) {
+        start += 1;
+    }
+    value[start..].to_string()
 }

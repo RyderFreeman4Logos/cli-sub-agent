@@ -1,173 +1,307 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use csa_session::convergence::{EpochRecord, GitObjectId, Sha256Digest};
+use csa_session::convergence::{
+    CampaignId, CsaSessionId, EpochRecord, GitObjectId, SessionRelativeArtifactPath, Sha256Digest,
+    WorkspaceLeaseIdentity,
+};
+use ulid::Ulid;
 
+use super::gate_authority::{
+    FinalGateAuthority, FinalGatePlan, GateCommandAuthority, GateNetworkPolicy,
+};
 use super::gate_evidence::{
-    FinalGateDriver, FinalGatePlan, FinalGateRunner, GateCommandOutcome, GateCommandSpec,
-    ProductionFinalGateRunner,
+    FinalGateDriver, FinalGateLease, GateInvocation, GateProcessOutcome, GateProcessTermination,
+    HostFinalGatePort, HostGateArtifactStore,
 };
 
 fn epoch() -> EpochRecord {
     EpochRecord::new(
-        GitObjectId::parse(&"a".repeat(40)).expect("base oid"),
-        GitObjectId::parse(&"b".repeat(40)).expect("head oid"),
-        Sha256Digest::compute(b"immutable diff"),
+        GitObjectId::parse(&"a".repeat(40)).unwrap(),
+        GitObjectId::parse(&"b".repeat(40)).unwrap(),
+        Sha256Digest::compute(b"diff"),
     )
 }
 
-fn command(root: &std::path::Path, name: &str, args: &[&str]) -> GateCommandSpec {
-    GateCommandSpec::new(
-        name,
-        "just",
-        args.iter().map(|arg| (*arg).to_string()).collect(),
-        root,
-    )
-    .expect("gate command")
+#[derive(Clone)]
+struct Lease {
+    identity: WorkspaceLeaseIdentity,
+    valid: bool,
 }
-
-struct RecordingGateDriver {
-    calls: Arc<Mutex<Vec<String>>>,
-    outcomes: Vec<Result<GateCommandOutcome>>,
-}
-
-impl FinalGateDriver for RecordingGateDriver {
-    fn run(&mut self, command: &GateCommandSpec) -> Result<GateCommandOutcome> {
-        self.calls
-            .lock()
-            .expect("calls")
-            .push(command.name().to_string());
-        if self.outcomes.is_empty() {
-            return Err(anyhow!("missing scripted outcome"));
+impl FinalGateLease for Lease {
+    fn identity(&self) -> &WorkspaceLeaseIdentity {
+        &self.identity
+    }
+    fn validate_current(&self) -> Result<()> {
+        if self.valid {
+            Ok(())
+        } else {
+            Err(anyhow!("inode changed"))
         }
-        self.outcomes.remove(0)
+    }
+}
+
+fn lease(root: &std::path::Path) -> Lease {
+    Lease {
+        identity: WorkspaceLeaseIdentity::new(
+            CampaignId::generate(),
+            epoch(),
+            1,
+            root.to_path_buf(),
+            1,
+            1,
+            Ulid::new().to_string(),
+        )
+        .unwrap(),
+        valid: true,
+    }
+}
+
+fn command(id: &str, args: &[&str]) -> GateCommandAuthority {
+    GateCommandAuthority::new(
+        id,
+        "just",
+        args.iter().map(|item| (*item).to_string()).collect(),
+        GateNetworkPolicy::Denied,
+        Duration::from_secs(30),
+    )
+    .unwrap()
+}
+
+fn plan(lease: &Lease) -> FinalGatePlan {
+    let authority = FinalGateAuthority::new(
+        "global-gates-v2",
+        vec![
+            command("format", &["fmt-check"]),
+            command("test", &["test"]),
+        ],
+    )
+    .unwrap();
+    FinalGatePlan::from_authority(
+        Sha256Digest::compute(b"policy"),
+        lease.identity.clone(),
+        &authority,
+        authority.commands().to_vec(),
+    )
+    .unwrap()
+}
+
+struct Driver {
+    calls: Vec<GateInvocation>,
+    outcomes: VecDeque<Result<GateProcessOutcome>>,
+}
+impl FinalGateDriver for Driver {
+    fn run(&mut self, invocation: &GateInvocation) -> Result<GateProcessOutcome> {
+        self.calls.push(invocation.clone());
+        self.outcomes
+            .pop_front()
+            .unwrap_or_else(|| Err(anyhow!("unexpected gate")))
+    }
+}
+
+fn store(root: &std::path::Path) -> HostGateArtifactStore {
+    HostGateArtifactStore::new(
+        root,
+        CsaSessionId::parse("01ARZ3NDEKTSV4RRFFQ69G5FC5").unwrap(),
+        SessionRelativeArtifactPath::new("gates").unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn success_is_ordered_minimal_and_authority_bound() {
+    let temp = tempfile::tempdir().unwrap();
+    let lease = lease(temp.path());
+    let mut port = HostFinalGatePort::new(
+        Driver {
+            calls: Vec::new(),
+            outcomes: VecDeque::from([
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    b"fmt ok",
+                    b"",
+                )),
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    b"test ok",
+                    b"",
+                )),
+            ]),
+        },
+        store(temp.path()),
+    );
+    let evidence = port.run(&plan(&lease), &lease).unwrap();
+    assert_eq!(evidence.commands(), &["format", "test"]);
+    assert!(
+        evidence
+            .artifact()
+            .path()
+            .as_str()
+            .starts_with("gates/final-gate-v2-")
+    );
+    assert_eq!(
+        port.driver
+            .calls
+            .iter()
+            .map(|call| call.command().command_id())
+            .collect::<Vec<_>>(),
+        vec!["format", "test"]
+    );
+    assert!(
+        port.driver
+            .calls
+            .iter()
+            .all(GateInvocation::independent_process_group)
+    );
+    assert!(port.driver.calls.iter().all(|call| {
+        call.env()
+            .iter()
+            .all(|(key, _)| key != "HOME" && key != "AWS_SECRET_ACCESS_KEY")
+    }));
+    assert!(
+        port.driver
+            .calls
+            .iter()
+            .all(|call| call.command().network() == GateNetworkPolicy::Denied)
+    );
+    let bytes = std::fs::read(
+        temp.path().join(
+            evidence
+                .artifact()
+                .path()
+                .as_str()
+                .strip_prefix("gates/")
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    let rendered = String::from_utf8(bytes).unwrap();
+    assert!(!rendered.contains("\"artifact\""));
+    assert!(!rendered.contains("\"content_digest\""));
+}
+
+#[test]
+fn nonzero_timeout_cancel_and_survivor_never_publish_success() {
+    for termination in [
+        GateProcessTermination::Exited(4),
+        GateProcessTermination::TimedOut,
+        GateProcessTermination::Cancelled,
+        GateProcessTermination::ChildSurvivor,
+        GateProcessTermination::ReapFailed,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let lease = lease(temp.path());
+        let mut port = HostFinalGatePort::new(
+            Driver {
+                calls: Vec::new(),
+                outcomes: VecDeque::from([Ok(GateProcessOutcome::new(
+                    termination,
+                    b"",
+                    b"failure",
+                ))]),
+            },
+            store(temp.path()),
+        );
+        assert!(port.run(&plan(&lease), &lease).is_err());
+        assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("final-gate-v2-")
+        }));
     }
 }
 
 #[test]
-fn final_gate_evidence_retains_every_command_outcome_and_log() {
-    let root = PathBuf::from("/tmp/csa-clean-room-tests/gates");
-    let plan = FinalGatePlan::new(
-        epoch(),
-        &root,
-        vec![
-            command(&root, "format", &["fmt-check"]),
-            command(&root, "test", &["test", "cli-sub-agent"]),
-        ],
-    )
-    .expect("plan");
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let mut runner = ProductionFinalGateRunner::new(RecordingGateDriver {
-        calls: Arc::clone(&calls),
-        outcomes: vec![
-            Ok(GateCommandOutcome::new(0, b"fmt ok", b"")),
-            Ok(GateCommandOutcome::new(0, b"tests ok", b"warning log")),
-        ],
-    });
-
-    let evidence = runner.run(&plan).expect("gate evidence");
-
-    let format = &plan.commands()[0];
-    assert_eq!(format.program(), "just");
-    assert_eq!(format.args(), &["fmt-check"]);
-    assert_eq!(format.cwd(), root);
-    assert_eq!(format.env().get("CI").map(String::as_str), Some("1"));
-    assert_eq!(
-        format.env().get("GIT_TERMINAL_PROMPT").map(String::as_str),
-        Some("0")
+fn output_is_bounded_redacted_and_control_safe() {
+    let temp = tempfile::tempdir().unwrap();
+    let lease = lease(temp.path());
+    let mut noisy = vec![b'x'; 20 * 1024];
+    noisy.extend_from_slice(b" token=secret-value keep\x01TAIL");
+    let mut port = HostFinalGatePort::new(
+        Driver {
+            calls: Vec::new(),
+            outcomes: VecDeque::from([
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    noisy,
+                    b"",
+                )),
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    b"",
+                    b"",
+                )),
+            ]),
+        },
+        store(temp.path()),
     );
-    assert_eq!(format.timeout(), Duration::from_secs(900));
-    assert_eq!(calls.lock().expect("calls").as_slice(), &["format", "test"]);
-    assert_eq!(evidence.epoch(), plan.epoch());
-    assert_eq!(evidence.records().len(), 2);
-    assert_eq!(evidence.records()[0].command(), &plan.commands()[0]);
-    assert_eq!(evidence.records()[0].outcome().stdout(), b"fmt ok");
-    assert_eq!(evidence.records()[1].outcome().stderr(), b"warning log");
-    assert!(evidence.passed());
-    evidence.require_success().expect("all gates passed");
-}
-
-#[test]
-fn one_failed_required_gate_never_claims_success_but_retains_all_evidence() {
-    let root = PathBuf::from("/tmp/csa-clean-room-tests/failure");
-    let plan = FinalGatePlan::new(
-        epoch(),
-        &root,
-        vec![
-            command(&root, "test", &["test", "cli-sub-agent"]),
-            command(&root, "lint", &["clippy-check"]),
-        ],
+    let evidence = port.run(&plan(&lease), &lease).unwrap();
+    let bytes = std::fs::read(
+        temp.path().join(
+            evidence
+                .artifact()
+                .path()
+                .as_str()
+                .strip_prefix("gates/")
+                .unwrap(),
+        ),
     )
-    .expect("plan");
-    let mut runner = ProductionFinalGateRunner::new(RecordingGateDriver {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        outcomes: vec![
-            Ok(GateCommandOutcome::new(1, b"", b"test failed")),
-            Ok(GateCommandOutcome::new(0, b"lint ok", b"")),
-        ],
-    });
-
-    let evidence = runner.run(&plan).expect("completed evidence");
-
-    assert_eq!(evidence.records().len(), 2);
-    assert_eq!(evidence.records()[0].outcome().exit_code(), 1);
-    assert!(!evidence.passed());
-    let error = evidence
-        .require_success()
-        .expect_err("failure must remain fail-closed");
-    assert!(error.to_string().contains("test"));
-    assert_eq!(evidence.records()[0].outcome().stderr(), b"test failed");
+    .unwrap();
+    let rendered = String::from_utf8(bytes).unwrap();
+    assert!(rendered.len() < 160 * 1024);
+    assert!(rendered.contains("[REDACTED]"));
+    assert!(!rendered.contains("secret-value"));
+    assert!(rendered.contains("\\\\u{0001}"));
 }
 
 #[test]
-fn driver_error_rejects_incomplete_evidence_instead_of_claiming_pass() {
-    let root = PathBuf::from("/tmp/csa-clean-room-tests/incomplete");
-    let plan = FinalGatePlan::new(
-        epoch(),
-        &root,
-        vec![command(&root, "test", &["test", "cli-sub-agent"])],
-    )
-    .expect("plan");
-    let mut runner = ProductionFinalGateRunner::new(RecordingGateDriver {
-        calls: Arc::new(Mutex::new(Vec::new())),
-        outcomes: vec![Err(anyhow!("driver unavailable"))],
-    });
-
-    let error = runner
-        .run(&plan)
-        .expect_err("incomplete evidence must be rejected");
-    assert!(format!("{error:#}").contains("driver unavailable"));
-}
-
-#[test]
-fn final_gate_plan_rejects_empty_duplicate_or_out_of_room_commands() {
-    let root = PathBuf::from("/tmp/csa-clean-room-tests/validation");
-    let duplicate = command(&root, "test", &["test"]);
-    let error = FinalGatePlan::new(epoch(), &root, vec![duplicate.clone(), duplicate])
-        .expect_err("duplicate gates must fail");
-    assert!(error.to_string().contains("duplicate"));
-
-    let outside = command(
-        std::path::Path::new("/tmp/outside"),
-        "lint",
-        &["clippy-check"],
+fn tamper_and_epoch_drift_fail_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let lease = lease(temp.path());
+    let plan = plan(&lease);
+    let mut port = HostFinalGatePort::new(
+        Driver {
+            calls: Vec::new(),
+            outcomes: VecDeque::from([
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    b"",
+                    b"",
+                )),
+                Ok(GateProcessOutcome::new(
+                    GateProcessTermination::Exited(0),
+                    b"",
+                    b"",
+                )),
+            ]),
+        },
+        store(temp.path()),
     );
-    let error =
-        FinalGatePlan::new(epoch(), &root, vec![outside]).expect_err("outside cwd must fail");
-    assert!(error.to_string().contains("clean-room root"));
+    let evidence = port.run(&plan, &lease).unwrap();
+    let path = temp.path().join(
+        evidence
+            .artifact()
+            .path()
+            .as_str()
+            .strip_prefix("gates/")
+            .unwrap(),
+    );
+    std::fs::write(&path, b"tampered").unwrap();
+    assert!(port.readback(&plan, evidence.artifact()).is_err());
 
-    let error =
-        FinalGatePlan::new(epoch(), &root, Vec::new()).expect_err("empty required gates must fail");
-    assert!(error.to_string().contains("at least one"));
-}
-
-#[test]
-fn gate_command_rejects_ambiguous_or_unbounded_process_contracts() {
-    let root = PathBuf::from("/tmp/csa-clean-room-tests/command");
-    assert!(GateCommandSpec::new("", "just", vec![], &root).is_err());
-    assert!(GateCommandSpec::new("test", "", vec![], &root).is_err());
-    assert!(GateCommandSpec::new("test", "just", vec!["bad\0arg".to_string()], &root).is_err());
-    assert!(GateCommandSpec::new("test", "just", vec![], "relative/root").is_err());
+    let drifted = Lease {
+        valid: false,
+        ..lease
+    };
+    let mut second = HostFinalGatePort::new(
+        Driver {
+            calls: Vec::new(),
+            outcomes: VecDeque::new(),
+        },
+        store(temp.path()),
+    );
+    assert!(second.run(&plan, &drifted).is_err());
 }
