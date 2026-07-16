@@ -26,6 +26,7 @@ mod discovery_contract;
 #[allow(dead_code)]
 mod discovery_prompt;
 pub(super) mod engine;
+mod gate_authority;
 mod gate_evidence;
 mod output;
 mod persistence;
@@ -50,6 +51,8 @@ mod completion_provider_turn_tests;
 mod completion_resume_tests;
 #[cfg(test)]
 mod completion_tests;
+#[cfg(test)]
+mod gate_authority_tests;
 #[cfg(test)]
 mod gate_evidence_tests;
 #[cfg(test)]
