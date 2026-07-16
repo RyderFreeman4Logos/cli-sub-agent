@@ -31,6 +31,8 @@ mod output;
 mod persistence;
 mod recovery;
 pub(super) mod repair_authorization;
+mod repair_lifecycle;
+mod repair_source;
 pub(super) use repair_authorization::{
     RepairOnlyContext as RepairContext, run_repair_only_command as run_repair,
 };
