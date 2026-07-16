@@ -1,6 +1,8 @@
 use super::*;
 
-use std::io::Write;
+use std::ffi::CString;
+use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -36,6 +38,123 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
     predicate()
+}
+
+#[cfg(target_os = "linux")]
+struct FixtureFifo(std::fs::File);
+
+#[cfg(target_os = "linux")]
+impl FixtureFifo {
+    fn create(path: &Path) -> Self {
+        let path_c = CString::new(path.as_os_str().as_bytes()).expect("FIFO path contains NUL");
+        // SAFETY: path_c is a valid NUL-terminated path and mode contains only
+        // permission bits. The temporary directory owns the resulting FIFO.
+        let rc = unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "create fixture FIFO {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .expect("open fixture FIFO");
+        Self(file)
+    }
+
+    fn read_markers(&mut self, count: usize, timeout: Duration) -> anyhow::Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
+        let mut markers = Vec::with_capacity(count);
+        while markers.len() < count {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            anyhow::ensure!(!remaining.is_zero(), "fixture FIFO handshake timed out");
+            let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+            let mut pollfd = libc::pollfd {
+                fd: std::os::fd::AsRawFd::as_raw_fd(&self.0),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: pollfd points to one initialized descriptor for the
+            // duration of this bounded poll call.
+            let poll_rc = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+            if poll_rc == -1 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(anyhow::anyhow!("fixture FIFO poll failed: {error}"));
+            }
+            anyhow::ensure!(poll_rc != 0, "fixture FIFO handshake timed out");
+            anyhow::ensure!(
+                pollfd.revents & libc::POLLIN != 0,
+                "fixture FIFO returned unexpected poll events: {}",
+                pollfd.revents,
+            );
+
+            let mut buffer = [0_u8; 3];
+            let remaining_count = count - markers.len();
+            let read_length = remaining_count.min(buffer.len());
+            match self.0.read(&mut buffer[..read_length]) {
+                Ok(0) => anyhow::bail!("fixture FIFO closed before handshake completed"),
+                Ok(read) => markers.extend_from_slice(&buffer[..read]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(error) => return Err(anyhow::anyhow!("fixture FIFO read failed: {error}")),
+            }
+        }
+        Ok(markers)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_unreaped_child_exit(pid: u32, timeout: Duration) -> anyhow::Result<()> {
+    anyhow::ensure!(pid > 1, "invalid fixture leader PID {pid}");
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: zero is the portable no-state-change sentinel for waitid
+        // with WNOHANG, and info remains valid for the duration of the call.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: P_PID selects the owned fixture child. WNOWAIT proves exit
+        // without reaping it, preserving its PID as the process-group anchor.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == -1 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(anyhow::anyhow!(
+                "waitid(WNOWAIT) failed for fixture leader {pid}: {error}"
+            ));
+        }
+        // SAFETY: waitid initialized info; si_pid == 0 means no state change.
+        let exited_pid = unsafe { info.si_pid() };
+        if exited_pid != 0 {
+            anyhow::ensure!(
+                exited_pid == pid as libc::pid_t,
+                "waitid returned unexpected fixture PID {exited_pid}, expected {pid}"
+            );
+            return Ok(());
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "fixture leader {pid} did not exit before the bounded deadline"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 struct ProcessGuard(Option<libc::pid_t>);
@@ -228,10 +347,14 @@ fn early_exited_direct_leader_remains_anchor_until_descendants_are_killed() {
     let _guard = force_direct_daemon_spawn_for_test();
     let tmp = tempfile::tempdir().expect("tempdir");
     let descendant_pid_file = tmp.path().join("descendant.pid");
+    let readiness_fifo_path = tmp.path().join("descendant-ready.fifo");
+    let mut readiness_fifo = FixtureFifo::create(&readiness_fifo_path);
     let session_dir = tmp.path().join("session-descendant-cleanup");
     let command = format!(
-        "(trap '' TERM; while :; do sleep 1; done) & echo $! > '{}'; exit 0",
-        descendant_pid_file.display()
+        "sh -c 'trap \"\" TERM; printf \"%s\" \"$$\" > \"{}\"; printf D > \"{}\"; \
+         while :; do sleep 1; done' & exit 0",
+        descendant_pid_file.display(),
+        readiness_fifo_path.display()
     );
     let config = DaemonSpawnConfig {
         session_id: "TEST_EARLY_EXIT_DESCENDANT".to_string(),
@@ -242,12 +365,12 @@ fn early_exited_direct_leader_remains_anchor_until_descendants_are_killed() {
         env: HashMap::new(),
     };
 
-    let err = spawn_daemon_verified(config, |_| {
+    let err = spawn_daemon_verified(config, |result| {
         anyhow::ensure!(
-            wait_until(Duration::from_secs(1), || descendant_pid_file.exists()),
-            "descendant fixture did not start"
+            readiness_fifo.read_markers(1, Duration::from_secs(1))? == b"D",
+            "descendant fixture sent an invalid readiness marker"
         );
-        std::thread::sleep(Duration::from_millis(50));
+        wait_for_unreaped_child_exit(result.pid, Duration::from_secs(1))?;
         Ok(())
     })
     .err()
@@ -278,21 +401,18 @@ fn early_exited_direct_leader_remains_anchor_until_descendants_are_killed() {
 fn term_fast_exit_keeps_leader_anchored_until_descendants_are_killed() {
     let _guard = force_direct_daemon_spawn_for_test();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let ready_file = tmp.path().join("leader.ready");
     let descendant_pid_file = tmp.path().join("term-resistant-descendant.pid");
-    let monitor_ready_file = tmp.path().join("anchor-monitor.ready");
-    let anchor_observation_file = tmp.path().join("leader-anchor.state");
+    let lifecycle_fifo_path = tmp.path().join("lifecycle.fifo");
+    let mut lifecycle_fifo = FixtureFifo::create(&lifecycle_fifo_path);
     let session_dir = tmp.path().join("session-term-fast-exit");
     let command = format!(
-        "leader=$$; (trap '' TERM; printf ready > '{}'; while read -r stat < \
-         /proc/$leader/stat; do case \"$stat\" in *\") Z \"*) printf zombie > '{}' ;; esac; \
-         done; printf missing > '{}') & echo $! > '{}'; trap 'exit 0' TERM; printf ready > \
-         '{}'; while :; do sleep 1; done",
-        monitor_ready_file.display(),
-        anchor_observation_file.display(),
-        anchor_observation_file.display(),
+        "sh -c 'trap \"\" TERM; printf \"%s\" \"$$\" > \"{}\"; printf D > \"{}\"; \
+         while :; do sleep 1; done' & descendant=$!; \
+         trap \"printf E > '{}'; exit 0\" TERM; printf L > '{}'; wait \"$descendant\"",
         descendant_pid_file.display(),
-        ready_file.display()
+        lifecycle_fifo_path.display(),
+        lifecycle_fifo_path.display(),
+        lifecycle_fifo_path.display()
     );
     let config = DaemonSpawnConfig {
         session_id: "TEST_TERM_FAST_EXIT".to_string(),
@@ -303,23 +423,49 @@ fn term_fast_exit_keeps_leader_anchored_until_descendants_are_killed() {
         env: HashMap::new(),
     };
 
-    spawn_daemon_verified(config, |_| {
+    let mut leader_exit_proven = false;
+    let cleanup_error = spawn_daemon_verified(config, |result| {
+        let mut readiness = lifecycle_fifo.read_markers(2, Duration::from_secs(1))?;
+        readiness.sort_unstable();
         anyhow::ensure!(
-            wait_until(Duration::from_secs(1), || {
-                ready_file.exists() && monitor_ready_file.exists()
-            }),
-            "TERM-fast fixture and anchor monitor did not become ready"
+            readiness == b"DL",
+            "leader and descendant sent invalid readiness markers: {readiness:?}"
         );
+        // SAFETY: getpgid only inspects the positive PID returned for the
+        // child owned by spawn_daemon_verified.
+        let process_group = unsafe { libc::getpgid(result.pid as libc::pid_t) };
+        anyhow::ensure!(
+            process_group == result.pid as libc::pid_t,
+            "fixture leader {} did not anchor its own process group: {process_group}",
+            result.pid
+        );
+        // Signal only the leader so the descendant remains available to prove
+        // that the subsequent anchored process-group cleanup reaches it.
+        // SAFETY: result.pid identifies the child owned by spawn_daemon_verified.
+        let signal_rc = unsafe { libc::kill(result.pid as libc::pid_t, libc::SIGTERM) };
+        anyhow::ensure!(
+            signal_rc == 0,
+            "failed to signal fixture leader {}: {}",
+            result.pid,
+            std::io::Error::last_os_error()
+        );
+        anyhow::ensure!(
+            lifecycle_fifo.read_markers(1, Duration::from_secs(1))? == b"E",
+            "leader sent an invalid exit marker"
+        );
+        wait_for_unreaped_child_exit(result.pid, Duration::from_secs(1))?;
+        leader_exit_proven = true;
         anyhow::bail!("force anchored cleanup")
     })
     .err()
     .expect("verification failure must clean the anchored group");
 
-    assert_eq!(
-        std::fs::read_to_string(&anchor_observation_file)
-            .expect("TERM-resistant descendant should observe leader state"),
-        "zombie",
-        "the leader must remain an unreaped zombie until the final group signal"
+    assert!(
+        leader_exit_proven,
+        "the leader must be waitable but unreaped before process-group cleanup: {cleanup_error:#}; \
+         stderr: {}",
+        std::fs::read_to_string(session_dir.join("stderr.log"))
+            .unwrap_or_else(|error| format!("<unavailable: {error}>"))
     );
     let descendant_pid = std::fs::read_to_string(descendant_pid_file)
         .expect("read descendant pid")
@@ -343,6 +489,8 @@ fn exited_scoped_launcher_stops_unit_and_anchored_process_group() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let session_dir = tmp.path().join("session-reaped-scope");
     let descendant_pid_file = tmp.path().join("scope-descendant.pid");
+    let readiness_fifo_path = tmp.path().join("scope-descendant-ready.fifo");
+    let mut readiness_fifo = FixtureFifo::create(&readiness_fifo_path);
     let fake_systemd_run = tmp.path().join("systemd-run");
     write_executable_script(
         &fake_systemd_run,
@@ -358,8 +506,10 @@ fn exited_scoped_launcher_stops_unit_and_anchored_process_group() {
         ),
     );
     let command = format!(
-        "(trap '' TERM; while :; do sleep 1; done) & echo $! > '{}'; exit 0",
-        descendant_pid_file.display()
+        "sh -c 'trap \"\" TERM; printf \"%s\" \"$$\" > \"{}\"; printf D > \"{}\"; \
+         while :; do sleep 1; done' & exit 0",
+        descendant_pid_file.display(),
+        readiness_fifo_path.display()
     );
     let config = DaemonSpawnConfig {
         session_id: "TEST_REAPED_SCOPE".to_string(),
@@ -371,12 +521,12 @@ fn exited_scoped_launcher_stops_unit_and_anchored_process_group() {
     };
 
     let err =
-        spawn_daemon_verified_with_commands(config, &fake_systemd_run, &fake_systemctl, |_| {
+        spawn_daemon_verified_with_commands(config, &fake_systemd_run, &fake_systemctl, |result| {
             anyhow::ensure!(
-                wait_until(Duration::from_secs(1), || descendant_pid_file.exists()),
-                "scoped descendant fixture did not start"
+                readiness_fifo.read_markers(1, Duration::from_secs(1))? == b"D",
+                "scoped descendant sent an invalid readiness marker"
             );
-            std::thread::sleep(Duration::from_millis(50));
+            wait_for_unreaped_child_exit(result.pid, Duration::from_secs(1))?;
             Ok(())
         })
         .err()
