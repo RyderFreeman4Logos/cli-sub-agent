@@ -1,10 +1,14 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 fn write_executable_script(path: &Path, contents: &str) {
@@ -423,6 +427,14 @@ fn term_fast_exit_keeps_leader_anchored_until_descendants_are_killed() {
         env: HashMap::new(),
     };
 
+    let final_signal_anchor_observation = Rc::new(RefCell::new(None));
+    let observer_result = Rc::clone(&final_signal_anchor_observation);
+    let _observer_guard = observe_before_final_group_signal_for_test(move |leader_pid| {
+        *observer_result.borrow_mut() = Some(wait_for_unreaped_child_exit(
+            leader_pid,
+            Duration::from_secs(1),
+        ));
+    });
     let mut leader_exit_proven = false;
     let cleanup_error = spawn_daemon_verified(config, |result| {
         let mut readiness = lifecycle_fifo.read_markers(2, Duration::from_secs(1))?;
@@ -466,6 +478,17 @@ fn term_fast_exit_keeps_leader_anchored_until_descendants_are_killed() {
          stderr: {}",
         std::fs::read_to_string(session_dir.join("stderr.log"))
             .unwrap_or_else(|error| format!("<unavailable: {error}>"))
+    );
+    let final_signal_anchor_observation = final_signal_anchor_observation
+        .borrow_mut()
+        .take()
+        .expect("cleanup must run the final group signal observer");
+    assert!(
+        final_signal_anchor_observation.is_ok(),
+        "the leader must remain waitable and unreaped through the final group signal: {:#}",
+        final_signal_anchor_observation
+            .as_ref()
+            .expect_err("failed observation must retain its error")
     );
     let descendant_pid = std::fs::read_to_string(descendant_pid_file)
         .expect("read descendant pid")

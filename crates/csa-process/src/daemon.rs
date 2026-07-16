@@ -15,12 +15,12 @@ use anyhow::{Context, Result};
 
 #[path = "daemon_cleanup.rs"]
 mod cleanup;
-#[cfg(test)]
-use cleanup::stop_systemd_scope_with_timeout;
 use cleanup::{
     SpawnedProcessCleanup, SpawnedProcessLiveness, inspect_spawned_process_without_reaping,
     terminate_and_reap_spawned_daemon,
 };
+#[cfg(test)]
+use cleanup::{observe_before_final_group_signal_for_test, stop_systemd_scope_with_timeout};
 
 const DAEMON_INDEPENDENT_SCOPE_ENV: &str = "CSA_DAEMON_INDEPENDENT_SCOPE";
 
