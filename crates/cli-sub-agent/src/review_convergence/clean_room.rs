@@ -179,6 +179,15 @@ pub(crate) struct DetachedWorkspaceLeaseContext {
     store: DetachedWorkspaceLeaseStore,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeaseAcquireFault {
+    BeforeCreate,
+    AfterCreate,
+    BeforeFileSync,
+    AfterFileSync,
+}
+
 impl DetachedWorkspaceLeaseContext {
     /// Bind an existing lease store to one nonzero completion generation.
     pub(crate) fn new(
@@ -197,6 +206,27 @@ impl DetachedWorkspaceLeaseContext {
     }
 
     pub(super) fn acquire(&self, workspace: &CleanRoomWorkspace) -> Result<AcquiredWorkspaceLease> {
+        self.acquire_with_fault_impl(
+            workspace,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn acquire_with_fault(
+        &self,
+        workspace: &CleanRoomWorkspace,
+        fault: LeaseAcquireFault,
+    ) -> Result<AcquiredWorkspaceLease> {
+        self.acquire_with_fault_impl(workspace, Some(fault))
+    }
+
+    fn acquire_with_fault_impl(
+        &self,
+        workspace: &CleanRoomWorkspace,
+        #[cfg(test)] fault: Option<LeaseAcquireFault>,
+    ) -> Result<AcquiredWorkspaceLease> {
         let store_metadata = self.store.validate_current()?;
         let (root, workspace_metadata) =
             direct_directory_metadata("detached workspace root", workspace.root())?;
@@ -218,6 +248,10 @@ impl DetachedWorkspaceLeaseContext {
         let file_path = self.store.root().join(lease_file_name(&identity));
         let serialized =
             serde_json::to_vec(&identity).context("serialize detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::BeforeCreate) {
+            bail!("fault injection before detached workspace lease create");
+        }
         let mut file = match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -241,10 +275,22 @@ impl DetachedWorkspaceLeaseContext {
                 });
             }
         };
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::AfterCreate) {
+            bail!("fault injection after detached workspace lease create");
+        }
         file.write_all(&serialized)
             .context("write detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::BeforeFileSync) {
+            bail!("fault injection before detached workspace lease sync");
+        }
         file.sync_all()
             .context("sync detached workspace lease identity")?;
+        #[cfg(test)]
+        if fault == Some(LeaseAcquireFault::AfterFileSync) {
+            bail!("fault injection after detached workspace lease sync");
+        }
         Ok(AcquiredWorkspaceLease {
             identity,
             store: self.store.clone(),

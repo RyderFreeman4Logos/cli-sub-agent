@@ -4,22 +4,26 @@ use std::sync::{Arc, Barrier};
 
 use tempfile::tempdir;
 
+use crate::atomic_state_write::AtomicWriteFault;
 use crate::convergence::{
     COMPLETION_ACTION_JOURNAL_SCHEMA_VERSION, CampaignId, CompletionActionId,
     CompletionActionJournal, CompletionActionJournalError, CompletionActionJournalRead,
     CompletionActionState, ConvergenceLedgerStore, EpochRecord, GitObjectId,
     MAX_COMPLETION_ACTION_RECORDS, ProviderTurnExecutionId, ProviderTurnExecutionState,
-    Sha256Digest, parse_legacy_completion_action_journal,
+    RepairBatchId, RepairIntent, RepairIntentRead, RepairIntentState, Sha256Digest,
+    parse_legacy_completion_action_journal,
 };
 
-fn epoch_id() -> crate::convergence::EpochId {
+fn epoch() -> EpochRecord {
     EpochRecord::new(
         GitObjectId::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
         GitObjectId::parse("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
         Sha256Digest::compute(b"completion action journal epoch"),
     )
-    .id()
-    .clone()
+}
+
+fn epoch_id() -> crate::convergence::EpochId {
+    epoch().id().clone()
 }
 
 fn journal() -> CompletionActionJournal {
@@ -47,6 +51,30 @@ fn initialize(store: &ConvergenceLedgerStore) -> CompletionActionJournal {
             journal.policy_digest().clone(),
         )
         .unwrap()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryState {
+    Continue,
+    Reconcile,
+}
+
+fn recovery_state(fault: AtomicWriteFault) -> RecoveryState {
+    match fault {
+        AtomicWriteFault::BeforeRename => RecoveryState::Continue,
+        AtomicWriteFault::AfterRename
+        | AtomicWriteFault::BeforeContainingDirectoryFsync
+        | AtomicWriteFault::BeforeParentDirectoryFsync => RecoveryState::Reconcile,
+    }
+}
+
+fn atomic_faults() -> [AtomicWriteFault; 4] {
+    [
+        AtomicWriteFault::BeforeRename,
+        AtomicWriteFault::AfterRename,
+        AtomicWriteFault::BeforeContainingDirectoryFsync,
+        AtomicWriteFault::BeforeParentDirectoryFsync,
+    ]
 }
 
 #[test]
@@ -255,6 +283,159 @@ fn provider_turn_crash_before_send_releases_but_crash_after_send_is_indeterminat
         journal.actions()[1].provider_turns()[0].state(),
         ProviderTurnExecutionState::UsageIndeterminate
     );
+}
+
+#[test]
+fn fault_matrix_action_claim_allows_only_continue_or_non_attested_reconciliation() {
+    for fault in atomic_faults() {
+        let temp = tempdir().unwrap();
+        let store = store_at(temp.path());
+        initialize(&store);
+
+        assert!(
+            store
+                .claim_completion_action_with_fault(0, CompletionActionId::generate(), fault)
+                .is_err(),
+            "fault injection must interrupt the action claim at {fault:?}"
+        );
+        let CompletionActionJournalRead::Current(journal) =
+            store.load_completion_action_journal().unwrap()
+        else {
+            panic!("initialized action journal must remain readable after {fault:?}");
+        };
+
+        match recovery_state(fault) {
+            RecoveryState::Continue => {
+                assert!(journal.actions().is_empty());
+                let claim = store
+                    .claim_completion_action(0, CompletionActionId::generate())
+                    .expect("pre-rename claim failure permits a new fenced claim");
+                store.finish_completion_action(&claim).unwrap();
+                store.verify_completion_action_journal_attestable().unwrap();
+            }
+            RecoveryState::Reconcile => {
+                let [record] = journal.actions() else {
+                    panic!("post-rename action claim must leave exactly one started record");
+                };
+                let claim = record.claim().clone();
+                assert_eq!(journal.actions()[0].state(), CompletionActionState::Started);
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+                store.mark_completion_action_uncertain(&claim).unwrap();
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn fault_matrix_provider_reservation_never_discards_possible_usage() {
+    for fault in atomic_faults() {
+        let temp = tempdir().unwrap();
+        let store = store_at(temp.path());
+        initialize(&store);
+        let claim = store
+            .claim_completion_action(0, CompletionActionId::generate())
+            .unwrap();
+
+        assert!(
+            store
+                .reserve_completion_provider_turn_with_fault(
+                    &claim,
+                    ProviderTurnExecutionId::generate(),
+                    1,
+                    fault,
+                )
+                .is_err(),
+            "fault injection must interrupt the provider reservation at {fault:?}"
+        );
+        let CompletionActionJournalRead::Current(journal) =
+            store.load_completion_action_journal().unwrap()
+        else {
+            panic!("action journal must remain readable after {fault:?}");
+        };
+
+        match recovery_state(fault) {
+            RecoveryState::Continue => {
+                assert!(journal.actions()[0].provider_turns().is_empty());
+                let reservation = store
+                    .reserve_completion_provider_turn(
+                        &claim,
+                        ProviderTurnExecutionId::generate(),
+                        1,
+                    )
+                    .expect("pre-rename reservation failure permits a fresh reservation");
+                store
+                    .release_completion_provider_turn_before_send(&reservation)
+                    .unwrap();
+                store.finish_completion_action(&claim).unwrap();
+                store.verify_completion_action_journal_attestable().unwrap();
+            }
+            RecoveryState::Reconcile => {
+                assert_eq!(
+                    journal.actions()[0].provider_turns()[0].state(),
+                    ProviderTurnExecutionState::Reserved
+                );
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+                store.mark_completion_action_uncertain(&claim).unwrap();
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn fault_matrix_repair_intent_never_retries_or_attests_an_ambiguous_mutation() {
+    for fault in atomic_faults() {
+        let temp = tempdir().unwrap();
+        let store = store_at(temp.path());
+        initialize(&store);
+        let claim = store
+            .claim_completion_action(0, CompletionActionId::generate())
+            .unwrap();
+        let intent = RepairIntent::new(
+            claim.clone(),
+            epoch(),
+            Sha256Digest::compute(b"fault-matrix repair batch set"),
+            vec![RepairBatchId::generate()],
+        )
+        .unwrap();
+
+        assert!(
+            store
+                .persist_repair_intent_with_fault(intent.clone(), fault)
+                .is_err(),
+            "fault injection must interrupt the repair intent at {fault:?}"
+        );
+        match (
+            recovery_state(fault),
+            store.load_repair_intent(&claim).unwrap(),
+        ) {
+            (RecoveryState::Continue, RepairIntentRead::Missing) => {
+                store
+                    .persist_repair_intent(intent)
+                    .expect("pre-rename repair intent failure permits a new intent");
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+            }
+            (RecoveryState::Reconcile, RepairIntentRead::Current(current)) => {
+                assert_eq!(current.state(), &RepairIntentState::Started);
+                assert!(
+                    store.persist_repair_intent(intent).is_err(),
+                    "a visible repair intent must fence duplicate repair execution"
+                );
+                store.mark_repair_intent_uncertain(&claim).unwrap();
+                store.mark_completion_action_uncertain(&claim).unwrap();
+                assert!(matches!(
+                    store.load_repair_intent(&claim).unwrap(),
+                    RepairIntentRead::Current(intent)
+                        if intent.state() == &RepairIntentState::Uncertain
+                ));
+                assert!(store.verify_completion_action_journal_attestable().is_err());
+            }
+            (expected, actual) => panic!(
+                "fault {fault:?} expected recovery {expected:?}, found repair intent {actual:?}"
+            ),
+        }
+    }
 }
 
 #[test]

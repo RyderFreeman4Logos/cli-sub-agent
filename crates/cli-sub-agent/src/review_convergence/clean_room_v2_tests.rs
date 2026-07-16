@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
 use csa_session::convergence::{
     AdmittedModelIdentity, ArtifactEvidenceRef, CampaignId, CsaSessionId, EpochRecord, GitObjectId,
@@ -173,6 +173,35 @@ fn envelope_rejects_epoch_gate_and_digest_substitution() {
             .expect("output-relative artifact"),
     );
     fs::write(path, b"tampered").expect("tamper artifact fixture");
+    assert!(store.readback(&context, output.artifact()).is_err());
+}
+
+#[test]
+fn readback_rejects_inode_replacement_and_never_reuses_old_review_evidence() {
+    let directory = tempfile::tempdir().expect("temporary output directory");
+    let store = HostReviewArtifactStore::new(
+        directory.path(),
+        CsaSessionId::generate(),
+        SessionRelativeArtifactPath::new("output").expect("relative output"),
+    )
+    .expect("host store");
+    let context = context(artifact(b"gate"));
+    let output = store
+        .publish(&context, &provider_review())
+        .expect("published review artifact");
+    let path = directory.path().join(
+        output
+            .artifact()
+            .path()
+            .as_str()
+            .strip_prefix("output/")
+            .expect("output-relative artifact"),
+    );
+    let replacement = directory.path().join("replacement-review.json");
+    fs::write(&replacement, b"old evidence").expect("replacement fixture");
+    fs::remove_file(&path).expect("remove original artifact");
+    symlink(&replacement, &path).expect("replace artifact path with symlink");
+
     assert!(store.readback(&context, output.artifact()).is_err());
 }
 

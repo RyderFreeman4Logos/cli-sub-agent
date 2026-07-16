@@ -114,6 +114,20 @@ impl ConvergenceLedgerStore {
         })
     }
 
+    /// Test-only crash injection for the durable action claim publication boundary.
+    #[cfg(test)]
+    pub(crate) fn claim_completion_action_with_fault(
+        &self,
+        expected_generation: u64,
+        action_id: CompletionActionId,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<CompletionActionClaim, CompletionActionJournalStoreError> {
+        self.update_completion_action_journal_with_fault(
+            |journal| journal.claim_next(expected_generation, action_id),
+            fault,
+        )
+    }
+
     /// Atomically mark a started claim uncertain and issue a newer fenced replacement claim.
     pub fn recover_completion_action(
         &self,
@@ -181,6 +195,21 @@ impl ConvergenceLedgerStore {
         self.update_completion_action_journal(|journal| {
             journal.reserve_provider_turn(claim, execution_id, reserved_turns)
         })
+    }
+
+    /// Test-only crash injection for the durable provider reservation boundary.
+    #[cfg(test)]
+    pub(crate) fn reserve_completion_provider_turn_with_fault(
+        &self,
+        claim: &CompletionActionClaim,
+        execution_id: ProviderTurnExecutionId,
+        reserved_turns: u32,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<ProviderTurnReservation, CompletionActionJournalStoreError> {
+        self.update_completion_action_journal_with_fault(
+            |journal| journal.reserve_provider_turn(claim, execution_id, reserved_turns),
+            fault,
+        )
     }
 
     /// Reconcile a provider execution exactly once with its host-observed turn delta.
@@ -282,6 +311,19 @@ impl ConvergenceLedgerStore {
         &self,
         update: impl FnOnce(&mut CompletionActionJournal) -> Result<T, CompletionActionJournalError>,
     ) -> Result<T, CompletionActionJournalStoreError> {
+        self.update_completion_action_journal_with_publisher(update, |directory, journal| {
+            self.publish_completion_action_journal(directory, journal)
+        })
+    }
+
+    fn update_completion_action_journal_with_publisher<T>(
+        &self,
+        update: impl FnOnce(&mut CompletionActionJournal) -> Result<T, CompletionActionJournalError>,
+        publish: impl FnOnce(
+            &SecureDirectory,
+            &CompletionActionJournal,
+        ) -> Result<(), CompletionActionJournalStoreError>,
+    ) -> Result<T, CompletionActionJournalStoreError> {
         let directory = self.open_completion_action_journal_directory()?;
         let mut lock = self.open_completion_action_journal_lock(&directory)?;
         let _guard = lock.write().map_err(|error| {
@@ -305,9 +347,20 @@ impl ConvergenceLedgerStore {
             CompletionActionJournalRead::Current(journal) => journal,
         };
         let result = update(&mut journal).map_err(|error| action_not_published(anyhow!(error)))?;
-        self.publish_completion_action_journal(&directory, &journal)?;
+        publish(&directory, &journal)?;
         directory.verify_link().map_err(action_uncertain)?;
         Ok(result)
+    }
+
+    #[cfg(test)]
+    fn update_completion_action_journal_with_fault<T>(
+        &self,
+        update: impl FnOnce(&mut CompletionActionJournal) -> Result<T, CompletionActionJournalError>,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<T, CompletionActionJournalStoreError> {
+        self.update_completion_action_journal_with_publisher(update, |directory, journal| {
+            self.publish_completion_action_journal_with_fault(directory, journal, fault)
+        })
     }
 
     fn publish_completion_action_journal(
@@ -322,6 +375,25 @@ impl ConvergenceLedgerStore {
             action_journal_name(),
             &completion_action_journal_path(self),
             &bytes,
+        )
+        .map_err(map_action_publish_error)
+    }
+
+    #[cfg(test)]
+    fn publish_completion_action_journal_with_fault(
+        &self,
+        directory: &SecureDirectory,
+        journal: &CompletionActionJournal,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<(), CompletionActionJournalStoreError> {
+        let bytes = serialize_completion_action_journal(journal).map_err(action_not_published)?;
+        atomic_state_write::publish_bytes_in_with_fault(
+            directory.file(),
+            Some(directory.parent()),
+            action_journal_name(),
+            &completion_action_journal_path(self),
+            &bytes,
+            fault,
         )
         .map_err(map_action_publish_error)
     }

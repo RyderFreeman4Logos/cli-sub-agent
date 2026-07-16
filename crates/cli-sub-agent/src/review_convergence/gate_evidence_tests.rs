@@ -12,8 +12,9 @@ use super::gate_authority::{
     FinalGateAuthority, FinalGatePlan, GateCommandAuthority, GateNetworkPolicy,
 };
 use super::gate_evidence::{
-    FinalGateDriver, FinalGateLease, GateInvocation, GateProcessOutcome, GateProcessTermination,
-    HostFinalGatePort, HostGateArtifactStore,
+    FinalGateDriver, FinalGateLease, GateArtifactWriteFault, GateInvocation, GateProcessOutcome,
+    GateProcessTermination, HostFinalGatePort, HostGateArtifactStore,
+    publish_bytes_once_with_fault,
 };
 
 fn epoch() -> EpochRecord {
@@ -211,6 +212,32 @@ fn nonzero_timeout_cancel_and_survivor_never_publish_success() {
                 .to_string_lossy()
                 .starts_with("final-gate-v2-")
         }));
+    }
+}
+
+#[test]
+fn gate_artifact_write_fault_matrix_allows_only_continue_or_content_reconciliation() {
+    for fault in [
+        GateArtifactWriteFault::BeforeLink,
+        GateArtifactWriteFault::AfterLink,
+        GateArtifactWriteFault::BeforeDirectorySync,
+        GateArtifactWriteFault::AfterDirectorySync,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("gates.json");
+        let bytes = b"immutable gate evidence";
+
+        assert!(
+            publish_bytes_once_with_fault(directory.path(), &destination, bytes, fault).is_err()
+        );
+        match fault {
+            GateArtifactWriteFault::BeforeLink => assert!(!destination.exists()),
+            GateArtifactWriteFault::AfterLink
+            | GateArtifactWriteFault::BeforeDirectorySync
+            | GateArtifactWriteFault::AfterDirectorySync => {
+                assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+            }
+        }
     }
 }
 

@@ -76,6 +76,28 @@ impl ConvergenceLedgerStore {
         &self,
         intent: RepairIntent,
     ) -> Result<(), RepairIntentStoreError> {
+        self.persist_repair_intent_with_publisher(intent, |directory, intent| {
+            self.publish_repair_intent(directory, intent)
+        })
+    }
+
+    /// Test-only crash injection for the durable repair-intent publication boundary.
+    #[cfg(test)]
+    pub(crate) fn persist_repair_intent_with_fault(
+        &self,
+        intent: RepairIntent,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<(), RepairIntentStoreError> {
+        self.persist_repair_intent_with_publisher(intent, |directory, intent| {
+            self.publish_repair_intent_with_fault(directory, intent, fault)
+        })
+    }
+
+    fn persist_repair_intent_with_publisher(
+        &self,
+        intent: RepairIntent,
+        publish: impl FnOnce(&SecureDirectory, &RepairIntent) -> Result<(), RepairIntentStoreError>,
+    ) -> Result<(), RepairIntentStoreError> {
         let claim = intent.claim().clone();
         self.with_repair_intent_lock(&claim, |directory| {
             intent.validate().map_err(intent_not_published)?;
@@ -83,7 +105,7 @@ impl ConvergenceLedgerStore {
                 .load_repair_intent_from_directory(directory, &claim)
                 .map_err(intent_not_published)?
             {
-                RepairIntentRead::Missing => self.publish_repair_intent(directory, &intent),
+                RepairIntentRead::Missing => publish(directory, &intent),
                 RepairIntentRead::Current(_) => Err(intent_not_published(anyhow!(
                     "repair intent already exists for completion action {}",
                     claim.action_id()
@@ -225,6 +247,27 @@ impl ConvergenceLedgerStore {
             OsStr::new(&name),
             &path,
             &bytes,
+        )
+        .map_err(map_intent_publish_error)
+    }
+
+    #[cfg(test)]
+    fn publish_repair_intent_with_fault(
+        &self,
+        directory: &SecureDirectory,
+        intent: &RepairIntent,
+        fault: crate::atomic_state_write::AtomicWriteFault,
+    ) -> Result<(), RepairIntentStoreError> {
+        let name = repair_intent_name(intent.claim());
+        let path = repair_intent_path(self, &name);
+        let bytes = serialize_repair_intent(intent).map_err(intent_not_published)?;
+        atomic_state_write::publish_bytes_in_with_fault(
+            directory.file(),
+            Some(directory.parent()),
+            OsStr::new(&name),
+            &path,
+            &bytes,
+            fault,
         )
         .map_err(map_intent_publish_error)
     }

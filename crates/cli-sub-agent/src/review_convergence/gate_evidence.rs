@@ -31,6 +31,15 @@ const MAX_GATE_ARTIFACT_BYTES: usize = 160 * 1024;
 const MAX_GATE_OUTPUT_BYTES: usize = 4 * 1024;
 const MAX_GATE_ARTIFACTS: usize = 32;
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GateArtifactWriteFault {
+    BeforeLink,
+    AfterLink,
+    BeforeDirectorySync,
+    AfterDirectorySync,
+}
+
 /// An invocation whose argv, environment, and process isolation are controlled by the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GateInvocation {
@@ -495,6 +504,31 @@ fn artifact_file_name(digest: &Sha256Digest) -> Result<String> {
 }
 
 fn publish_bytes_once(directory: &Path, destination: &Path, bytes: &[u8]) -> Result<()> {
+    publish_bytes_once_impl(
+        directory,
+        destination,
+        bytes,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn publish_bytes_once_with_fault(
+    directory: &Path,
+    destination: &Path,
+    bytes: &[u8],
+    fault: GateArtifactWriteFault,
+) -> Result<()> {
+    publish_bytes_once_impl(directory, destination, bytes, Some(fault))
+}
+
+fn publish_bytes_once_impl(
+    directory: &Path,
+    destination: &Path,
+    bytes: &[u8],
+    #[cfg(test)] fault: Option<GateArtifactWriteFault>,
+) -> Result<()> {
     let temporary = directory.join(format!(".final-gate-{}.tmp", Ulid::new()));
     let result = (|| -> Result<()> {
         let mut file = OpenOptions::new()
@@ -506,6 +540,10 @@ fn publish_bytes_once(directory: &Path, destination: &Path, bytes: &[u8]) -> Res
             .with_context(|| format!("create final-gate artifact {}", temporary.display()))?;
         file.write_all(bytes).context("write final-gate artifact")?;
         file.sync_all().context("sync final-gate artifact")?;
+        #[cfg(test)]
+        if fault == Some(GateArtifactWriteFault::BeforeLink) {
+            bail!("fault injection before final-gate artifact link");
+        }
         match fs::hard_link(&temporary, destination) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -515,10 +553,22 @@ fn publish_bytes_once(directory: &Path, destination: &Path, bytes: &[u8]) -> Res
             }
             Err(error) => return Err(error).context("publish final-gate artifact"),
         }
-        File::open(directory)
-            .context("open final-gate artifact directory")?
+        #[cfg(test)]
+        if fault == Some(GateArtifactWriteFault::AfterLink) {
+            bail!("fault injection after final-gate artifact link");
+        }
+        let directory_file = File::open(directory).context("open final-gate artifact directory")?;
+        #[cfg(test)]
+        if fault == Some(GateArtifactWriteFault::BeforeDirectorySync) {
+            bail!("fault injection before final-gate artifact directory sync");
+        }
+        directory_file
             .sync_all()
             .context("sync final-gate artifact directory")?;
+        #[cfg(test)]
+        if fault == Some(GateArtifactWriteFault::AfterDirectorySync) {
+            bail!("fault injection after final-gate artifact directory sync");
+        }
         Ok(())
     })();
     let cleanup = fs::remove_file(&temporary);
