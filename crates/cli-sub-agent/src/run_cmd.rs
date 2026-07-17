@@ -151,7 +151,7 @@ impl SubagentRunConfig {
             false,
             false,
             None,
-            Default::default(),
+            crate::run_resource_overrides::RunResourceOverrides::inherited(),
             false,
             None,
             None,

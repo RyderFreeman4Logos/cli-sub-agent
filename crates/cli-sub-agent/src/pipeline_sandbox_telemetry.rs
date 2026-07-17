@@ -59,9 +59,21 @@ fn user_daemon_ipc_exposed_paths(plan: &IsolationPlan) -> Vec<String> {
 pub(crate) fn record_sandbox_telemetry(
     execute_options: &ExecuteOptions,
     session: &mut MetaSessionState,
+    resource_resolution: csa_session::ResourceResolutionInfo,
 ) -> bool {
     let Some(sandbox_context) = execute_options.sandbox.as_ref() else {
-        return crate::resource_admission::clear_spawn_memory_projection(session);
+        let sandbox_info = csa_session::SandboxInfo {
+            mode: "none".to_string(),
+            memory_max_mb: None,
+            filesystem_mode: None,
+            readonly_project_root: None,
+            resource_resolution: Some(resource_resolution),
+        };
+        if session.sandbox_info.as_ref() == Some(&sandbox_info) {
+            return false;
+        }
+        session.sandbox_info = Some(sandbox_info);
+        return true;
     };
 
     let capability = csa_resource::detect_resource_capability();
@@ -86,6 +98,7 @@ pub(crate) fn record_sandbox_telemetry(
         memory_max_mb: memory,
         filesystem_mode: fs_mode.clone(),
         readonly_project_root: readonly,
+        resource_resolution: Some(resource_resolution),
     };
     if session.sandbox_info.as_ref() == Some(&sandbox_info) {
         return false;

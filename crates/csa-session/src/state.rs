@@ -308,6 +308,46 @@ pub struct SandboxInfo {
     /// Whether the project root was mounted read-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readonly_project_root: Option<bool>,
+    /// Provenance for inherited and final resource values used by this child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_resolution: Option<ResourceResolutionInfo>,
+}
+
+/// Source of a resource value resolved for one CSA child.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceValueSource {
+    ExplicitCli,
+    InheritedParentExplicit,
+    Configuration,
+    ToolDefault,
+    DocumentedDefault,
+}
+
+/// One resource value together with its typed provenance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourcedResourceValue {
+    /// Resource value in megabytes.
+    pub value: u64,
+    /// Boundary that supplied the value.
+    pub source: ResourceValueSource,
+}
+
+/// Resource inheritance and final resolution recorded in child state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceResolutionInfo {
+    /// Memory limit explicitly inherited from the parent CSA invocation, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_memory_max_mb: Option<SourcedResourceValue>,
+    /// Final memory limit after CLI, inheritance, config, and default precedence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_memory_max_mb: Option<SourcedResourceValue>,
+    /// Free-memory threshold explicitly inherited from the parent CSA invocation, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_min_free_memory_mb: Option<SourcedResourceValue>,
+    /// Final free-memory threshold after precedence resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_min_free_memory_mb: Option<SourcedResourceValue>,
 }
 
 /// Genealogy tracking for session parent-child relationships

@@ -679,6 +679,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         None,
         None,
         None,
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable
@@ -757,7 +758,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         ParentSessionSource::ExplicitOnly,
         SessionCreationMode::DaemonManaged,
-        Default::default(),
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
         false,
         false,
         false,

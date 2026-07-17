@@ -128,7 +128,7 @@ pub(crate) async fn dispatch(
         complete_manual_step,
         cd,
         no_fs_sandbox,
-        resources: RunResourceOverrides::new(memory_max_mb, min_free_memory_mb),
+        resources: RunResourceOverrides::from_cli(memory_max_mb, min_free_memory_mb),
         current_depth,
         pipeline_source,
         startup_env: startup_env.clone(),

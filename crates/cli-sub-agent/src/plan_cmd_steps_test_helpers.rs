@@ -56,7 +56,7 @@ pub(crate) async fn execute_plan(
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
-        resources: Default::default(),
+        resources: crate::run_resource_overrides::RunResourceOverrides::absent(),
         startup_env: &startup_env,
     };
     execute_plan_with_journal(plan, variables, &mut run_ctx).await
@@ -85,7 +85,7 @@ pub(crate) async fn execute_step(
             tool_override,
             model_spec_override,
             no_fs_sandbox: false,
-            resources: Default::default(),
+            resources: crate::run_resource_overrides::RunResourceOverrides::absent(),
             startup_env: &startup_env,
         },
     )

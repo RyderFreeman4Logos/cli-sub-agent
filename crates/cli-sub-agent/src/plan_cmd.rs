@@ -314,6 +314,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         &cli_variables,
         explicit_resume,
     )?;
+    let resources = resources.with_resume_fallback(resume_context.resource_overrides);
     if resume_context.resumed {
         let next_step = plan
             .steps
@@ -349,6 +350,7 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         &workflow_path,
         resume_context.initial_vars.clone(),
     );
+    journal.resource_overrides = resources;
     journal.pipeline_source = resume_context
         .pipeline_source
         .clone()
@@ -676,3 +678,7 @@ mod tests_commit;
 #[cfg(test)]
 #[path = "plan_cmd_override_tests.rs"]
 mod override_tests;
+
+#[cfg(test)]
+#[path = "plan_cmd_resource_inheritance_tests.rs"]
+mod resource_inheritance_tests;

@@ -146,7 +146,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         false,
         false,
         None,
-        Default::default(),
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
         false,
         None,
         None,

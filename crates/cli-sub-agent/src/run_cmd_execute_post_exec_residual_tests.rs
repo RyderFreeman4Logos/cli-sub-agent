@@ -216,7 +216,7 @@ async fn fix_finding_2348_harness_covers_env_identity_amend_and_residual_gate() 
             extra_readable: &[],
             execution_env: Some(&merged_env),
         },
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
     ) {
         SandboxResolution::Ok(opts) => opts.sandbox.expect("expected sandbox context"),
         SandboxResolution::RequiredButUnavailable(message) => {

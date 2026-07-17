@@ -46,6 +46,14 @@ pub const CSA_PARENT_SESSION_ID_ENV_KEY: &str = "CSA_PARENT_SESSION_ID";
 /// Marker that a nested execution command was spawned by CSA itself.
 pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
 
+/// Typed explicit-resource snapshot inherited by a nested CSA invocation.
+///
+/// Intentionally not part of [`STARTUP_SUBTREE_ENV_KEYS`]: the run pipeline
+/// removes any generic-env copy and reapplies this numeric-only value from its
+/// typed resource-provenance contract. The provider process must retain it so
+/// a nested `csa` command inherits the explicit parent limits.
+pub const CSA_INHERITED_RESOURCE_OVERRIDES_ENV_KEY: &str = "CSA_INHERITED_RESOURCE_OVERRIDES";
+
 /// Leaf-tool git wrapper authorization for `git push`.
 ///
 /// This key is CSA-owned. Generic env maps and inherited process env MUST NOT

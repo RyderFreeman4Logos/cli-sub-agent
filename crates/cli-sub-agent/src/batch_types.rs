@@ -53,7 +53,17 @@ struct BatchTaskExecutionContext<'a> {
     global_config: &'a csa_config::GlobalConfig,
     model_catalog: &'a csa_config::EffectiveModelCatalog,
     resource_guard: &'a mut Option<ResourceGuard>,
+    resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
     level: usize,
     seq: usize,
+    startup_env: &'a StartupSubtreeEnv,
+}
+
+struct BatchExecutionContext<'a> {
+    project_root: &'a Path,
+    config: Option<Arc<ProjectConfig>>,
+    global_config: Arc<csa_config::GlobalConfig>,
+    model_catalog: Arc<csa_config::EffectiveModelCatalog>,
+    resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
     startup_env: &'a StartupSubtreeEnv,
 }

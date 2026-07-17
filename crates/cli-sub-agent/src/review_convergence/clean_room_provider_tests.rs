@@ -56,7 +56,7 @@ fn clean_limits() -> crate::pipeline::CleanRoomExecutionLimits {
         30,
         Some(10),
         Some(Duration::from_secs(30)),
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
         Some("quality".to_string()),
     )
     .expect("clean limits")

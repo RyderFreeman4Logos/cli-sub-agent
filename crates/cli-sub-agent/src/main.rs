@@ -221,6 +221,9 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
     let output_format = cli.format;
     let text_output = matches!(output_format, OutputFormat::Text);
     let command = cli.command;
+    run_resource_overrides::initialize_inherited_resource_overrides(
+        startup_env.internal_invocation(),
+    )?;
 
     let min_timeout = resolve_effective_min_timeout();
 
@@ -430,7 +433,7 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 no_failover,
                 fast_but_more_cost,
                 build_jobs,
-                resource_overrides: run_resource_overrides::RunResourceOverrides::new(
+                resource_overrides: run_resource_overrides::RunResourceOverrides::from_cli(
                     memory_max_mb,
                     min_free_memory_mb,
                 ),

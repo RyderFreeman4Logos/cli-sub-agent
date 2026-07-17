@@ -23,7 +23,7 @@ pub(super) fn acquire_or_persist_failure(
             err,
             cleanup_guard,
             None,
-            PipelinePreExecFailureDetails::default(),
+            PipelinePreExecFailureDetails::absent(),
         )
     })
 }

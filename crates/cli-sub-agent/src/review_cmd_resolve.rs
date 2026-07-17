@@ -26,7 +26,7 @@ pub(crate) use selection::{
 
 impl ReviewArgs {
     pub(crate) fn resource_overrides(&self) -> RunResourceOverrides {
-        RunResourceOverrides::new(self.memory_max_mb, self.min_free_memory_mb)
+        RunResourceOverrides::from_cli(self.memory_max_mb, self.min_free_memory_mb)
     }
 }
 

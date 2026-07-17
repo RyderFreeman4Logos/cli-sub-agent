@@ -73,6 +73,7 @@ pub(super) async fn execute_bash_step(
     project_root: &Path,
     workflow_path: &Path,
     startup_env: &StartupSubtreeEnv,
+    resources: RunResourceOverrides,
 ) -> Result<StepExecutionOutcome> {
     let script = extract_bash_code_block(prompt).unwrap_or(prompt);
     info!("{} - Executing bash: {}", label, truncate(script, 80));
@@ -80,7 +81,15 @@ pub(super) async fn execute_bash_step(
         super::validate_variable_name(key)?;
     }
 
-    let output = match spawn_bash(script, env_vars, project_root, workflow_path, startup_env).await
+    let output = match spawn_bash(
+        script,
+        env_vars,
+        project_root,
+        workflow_path,
+        startup_env,
+        resources,
+    )
+    .await
     {
         Ok(output) => output,
         Err(spawn_error) if is_argument_list_too_long(&spawn_error) => {
@@ -106,6 +115,7 @@ pub(super) async fn execute_bash_step(
                 project_root,
                 workflow_path,
                 startup_env,
+                resources,
             )
             .await
             .context("Failed to spawn bash after reducing STEP_* environment")?
@@ -147,6 +157,7 @@ async fn spawn_bash(
     project_root: &Path,
     workflow_path: &Path,
     startup_env: &StartupSubtreeEnv,
+    resources: RunResourceOverrides,
 ) -> std::io::Result<std::process::Output> {
     let workflow_dir = workflow_path.parent().unwrap_or(project_root);
     let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
@@ -175,6 +186,13 @@ async fn spawn_bash(
         // pipeline on codex-fallback provider-error text (#1847).
         .env(csa_core::env::CSA_PATTERN_INTERNAL_ENV_KEY, "1");
     apply_startup_child_contract_env(&mut cmd, startup_env);
+    cmd.env_remove(crate::run_resource_overrides::INHERITED_RESOURCE_OVERRIDES_ENV);
+    if let Some(value) = resources.child_env_value().map_err(std::io::Error::other)? {
+        cmd.env(
+            crate::run_resource_overrides::INHERITED_RESOURCE_OVERRIDES_ENV,
+            value,
+        );
+    }
     cmd.current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

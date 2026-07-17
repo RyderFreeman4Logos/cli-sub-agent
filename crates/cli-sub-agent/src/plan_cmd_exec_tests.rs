@@ -540,6 +540,7 @@ async fn spawn_bash_step_exposes_pattern_internal_marker() {
         project_root,
         &workflow_path,
         &startup_env,
+        RunResourceOverrides::absent(),
     )
     .await
     .expect("bash step should spawn");
@@ -569,6 +570,7 @@ async fn spawn_bash_step_exposes_current_executable_as_csa_bin() {
         project_root,
         &workflow_path,
         &startup_env,
+        RunResourceOverrides::absent(),
     )
     .await
     .expect("bash step should spawn");

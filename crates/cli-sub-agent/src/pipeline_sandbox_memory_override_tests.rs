@@ -63,7 +63,7 @@ fn resolve_with_memory_override(
             extra_readable: &[],
             execution_env: None,
         },
-        crate::run_resource_overrides::RunResourceOverrides::new(Some(memory_max_mb), None),
+        crate::run_resource_overrides::RunResourceOverrides::from_cli(Some(memory_max_mb), None),
     )
 }
 

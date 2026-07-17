@@ -16,7 +16,7 @@ fn make_args() -> PlanRunArgs {
         complete_manual_step: None,
         cd: None,
         no_fs_sandbox: false,
-        resources: Default::default(),
+        resources: RunResourceOverrides::absent(),
         current_depth: 0,
         pipeline_source: crate::plan_cmd::PlanRunPipelineSource::DirectPlanRun,
         startup_env: crate::startup_env::StartupSubtreeEnv::default(),

@@ -215,7 +215,7 @@ async fn execute_plan_stops_for_await_user() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
-        resources: Default::default(),
+        resources: RunResourceOverrides::absent(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
@@ -284,7 +284,7 @@ async fn execute_plan_continues_after_skipped_await_user_step() {
         resume_completed_steps: &completed,
         chunked: false,
         no_fs_sandbox: false,
-        resources: Default::default(),
+        resources: RunResourceOverrides::absent(),
         startup_env: &crate::startup_env::EMPTY_STARTUP_SUBTREE_ENV,
     };
 
