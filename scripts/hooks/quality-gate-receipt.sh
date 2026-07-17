@@ -54,13 +54,19 @@ bounded_environment_digest() {
 }
 
 rust_toolchain_digest() {
-  local rustc_path
-  rustc_path="$(command -v rustc)" || return 1
-  rustc_path="$(realpath -e "$rustc_path")" || return 1
+  local compiler_digest compiler_provenance rustc_path sysroot
+  sysroot="$(rustc --print sysroot)" || return 1
+  case "$sysroot" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  rustc_path="$(realpath -e "${sysroot}/bin/rustc")" || return 1
+  compiler_provenance="$("$rustc_path" -vV)" || return 1
+  compiler_digest="$(file_digest "$rustc_path")"
+  [ "$compiler_digest" != missing ] || return 1
   {
-    rustc -vV
-    printf 'binary_sha256=%s\n' "$(file_digest "$rustc_path")"
-    printf 'binary_realpath_sha256=%s\n' "$(printf '%s' "$rustc_path" | sha256_text)"
+    printf '%s\n' "$compiler_provenance"
+    printf 'binary_sha256=%s\n' "$compiler_digest"
   } | sha256_text
 }
 

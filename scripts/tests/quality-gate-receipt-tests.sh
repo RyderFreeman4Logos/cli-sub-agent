@@ -122,21 +122,43 @@ run_invalidation_matrix() {
   assert_invalidation checkout 'moved="${fixture}.moved"; mv "$fixture" "$moved"; fixture="$moved"; counter="${fixture}/.csa/state/gate-counter"'
   assert_invalidation cargo-lock 'printf "changed\n" >>"$fixture/Cargo.lock"'
   assert_invalidation weave-lock 'printf "changed\n" >>"$fixture/weave.lock"'
-  local fixture counter first second toolchain
+  local fixture counter first second target_spec toolchain toolchain_root
   fixture="$(new_fixture)"
   counter="${fixture}/.csa/state/gate-counter"
   for toolchain in toolchain-a toolchain-b; do
-    mkdir -p "$fixture/$toolchain"
-    printf '#!/usr/bin/env bash\nprintf "rustc 1.99.0\\nbinary: %s\\nhost: x86_64-unknown-linux-gnu\\n"\n' "$toolchain" \
-      >"$fixture/$toolchain/rustc"
-    chmod +x "$fixture/$toolchain/rustc"
+    toolchain_root="$test_root/$toolchain"
+    mkdir -p "$toolchain_root/bin"
+    cat >"$toolchain_root/bin/rustc" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  -vV)
+    printf 'rustc 1.99.0\\nbinary: $toolchain\\nhost: x86_64-unknown-linux-gnu\\n'
+    ;;
+  --print)
+    test "\${2:-}" = sysroot
+    printf '%s\\n' "$toolchain_root"
+    ;;
+  *) exit 64 ;;
+esac
+EOF
+    chmod +x "$toolchain_root/bin/rustc"
   done
-  first="$(invoke_identity "$fixture" "$counter" "PATH=${fixture}/toolchain-a:${PATH}")"
-  second="$(invoke_identity "$fixture" "$counter" "PATH=${fixture}/toolchain-b:${PATH}")"
+  first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
+  second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
   test "$first" != "$second"
   test "$(wc -c <"$counter")" -eq 2
   echo "PASS invalidation-toolchain"
   assert_invalidation target ':' '' 'CARGO_BUILD_TARGET=other-linux-target'
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  target_spec="$test_root/custom-target.json"
+  printf '{"arch":"x86_64"}\n' >"$target_spec"
+  first="$(invoke_identity "$fixture" "$counter" "CARGO_BUILD_TARGET=${target_spec}")"
+  printf '{"arch":"aarch64"}\n' >"$target_spec"
+  second="$(invoke_identity "$fixture" "$counter" "CARGO_BUILD_TARGET=${target_spec}")"
+  test "$first" != "$second"
+  test "$(wc -c <"$counter")" -eq 2
+  echo "PASS invalidation-target-spec-bytes"
   assert_invalidation feature-matrix ':' 'CSA_QUALITY_GATE_FEATURE_MATRIX=default' 'CSA_QUALITY_GATE_FEATURE_MATRIX=all-features'
   assert_invalidation environment ':' 'RUSTFLAGS=-Copt-level=1' 'RUSTFLAGS=-Copt-level=2'
   assert_invalidation recipe 'printf "changed\n" >>"$fixture/justfile"'
