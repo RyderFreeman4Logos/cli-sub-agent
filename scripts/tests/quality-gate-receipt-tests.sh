@@ -4,6 +4,9 @@ shopt -s inherit_errexit
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 export GIT_CONFIG_NOSYSTEM=1
+# Direct receipt-state inspections import local modules, so this contract suite
+# must not mutate the clean-worktree input by writing checkout bytecode.
+export PYTHONDONTWRITEBYTECODE=1
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
@@ -299,6 +302,8 @@ PY
   assert_contains interface-provenance-all quality_gate_provenance.py "$exports"
   assert_contains interface-secure-state-all quality_gate_secure_state.py "$exports"
 
+  assert_path_absent interface-no-bytecode-cache-before \
+    "$repo_root/scripts/__pycache__"
   set +e
   output="$(python3 "$repo_root/scripts/quality-gate-state.py" collect \
     --repo "$test_root/missing-PASSWORD-evidence" -- /bin/true 2>&1)"
@@ -308,6 +313,8 @@ PY
   assert_eq interface-bounded-cli-error-lines 1 "$(wc -l <<<"$output")"
   assert_not_matches interface-bounded-cli-error-sanitized \
     'Traceback|PASSWORD|missing-|/home/|/tmp/' "$output"
+  assert_path_absent interface-no-bytecode-cache-after \
+    "$repo_root/scripts/__pycache__"
   echo "PASS fixture-and-interface-contracts"
 }
 
