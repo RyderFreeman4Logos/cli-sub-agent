@@ -154,6 +154,7 @@ collect_manifest() {
     printf 'justfile_sha256=%s\n' "$(file_digest justfile)"
     printf 'lefthook_sha256=%s\n' "$(file_digest lefthook.yml)"
     printf 'gate_script_sha256=%s\n' "$(gate_script_digest "$1")"
+    printf 'quality_gate_entrypoint_sha256=%s\n' "$(file_digest scripts/hooks/quality-gates.sh)"
     printf 'recipe_sha256=%s\n' "$(recipe_digest)"
     printf 'gate_command_sha256=%s\n' "$gate_command_digest"
     printf 'implementation_sha256=%s\n' "$implementation_digest"
