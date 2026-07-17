@@ -2,6 +2,9 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use std::cell::RefCell;
+
 use anyhow::{Context, Result};
 
 use super::DaemonSpawnMode;
@@ -10,6 +13,56 @@ const SCOPE_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_TERM_GRACE: Duration = Duration::from_millis(100);
 const PROCESS_KILL_WAIT: Duration = Duration::from_secs(2);
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[cfg(test)]
+type BeforeFinalGroupSignalObserver = Box<dyn FnOnce(u32)>;
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_FINAL_GROUP_SIGNAL_OBSERVER: RefCell<Option<BeforeFinalGroupSignalObserver>> =
+        const { RefCell::new(None) };
+}
+
+/// Removes a test-only cleanup observer when its fixture scope ends.
+#[cfg(test)]
+pub(super) struct BeforeFinalGroupSignalObserverGuard;
+
+#[cfg(test)]
+impl Drop for BeforeFinalGroupSignalObserverGuard {
+    fn drop(&mut self) {
+        BEFORE_FINAL_GROUP_SIGNAL_OBSERVER.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
+/// Installs a one-shot observer immediately before the final group signal.
+///
+/// The hook is thread-local so concurrent tests cannot observe or replace one
+/// another's cleanup fixture. Its return value cannot alter cleanup control
+/// flow; tests record evidence and assert it only after cleanup completes.
+#[cfg(test)]
+pub(super) fn observe_before_final_group_signal_for_test(
+    observer: impl FnOnce(u32) + 'static,
+) -> BeforeFinalGroupSignalObserverGuard {
+    BEFORE_FINAL_GROUP_SIGNAL_OBSERVER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(
+            slot.is_none(),
+            "final group signal observer already installed"
+        );
+        *slot = Some(Box::new(observer));
+    });
+    BeforeFinalGroupSignalObserverGuard
+}
+
+#[cfg(test)]
+fn notify_before_final_group_signal_for_test(pid: u32) {
+    let observer = BEFORE_FINAL_GROUP_SIGNAL_OBSERVER.with(|slot| slot.borrow_mut().take());
+    if let Some(observer) = observer {
+        observer(pid);
+    }
+}
 
 /// Describes whether cleanup still owns an unreaped process-group leader.
 ///
@@ -199,6 +252,8 @@ fn terminate_and_reap_process_group(child: &mut Child) -> Result<()> {
 
     // The owned leader is still unreaped here, so this negative-PGID signal
     // cannot target a process group that reused the leader's numeric PID.
+    #[cfg(test)]
+    notify_before_final_group_signal_for_test(pid);
     let kill_error = signal_process_group(pgid, libc::SIGKILL, pid, child).err();
     let wait_error = match wait_and_reap_for_exit(child, PROCESS_KILL_WAIT) {
         Ok(Some(_)) => None,
