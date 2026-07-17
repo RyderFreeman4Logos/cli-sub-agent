@@ -88,7 +88,7 @@ pub(crate) fn resolve_clean_room_sandbox_options_with_capabilities(
         .map(|config| &config.resources)
         .unwrap_or(&default_resources);
     let memory_max_mb = resource_overrides.resolve_memory_max_mb(input.config, input.tool_name);
-    let resource_enforcement = if resource_overrides.memory_max_mb.is_some() {
+    let resource_enforcement = if resource_overrides.has_memory_max_override() {
         ResourceEnforcementMode::Required
     } else {
         match resources.enforcement_mode {
@@ -252,7 +252,13 @@ fn prepare_clean_room_runtime(
             .as_ref()
             .map(|sandbox| &sandbox.isolation_plan),
     )?;
-    if crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session) {
+    if crate::pipeline_sandbox::record_sandbox_telemetry(
+        &execute_options,
+        session,
+        input
+            .resource_overrides
+            .resolution_info(input.config, input.tool_name),
+    ) {
         csa_session::save_session(session).context("persist clean-room sandbox telemetry")?;
     }
     Ok(CleanRoomRuntimePlan {

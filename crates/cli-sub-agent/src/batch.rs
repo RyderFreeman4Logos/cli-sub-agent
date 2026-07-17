@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use crate::pipeline::{ConfigRefs, determine_project_root, execute_with_session};
+use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
@@ -100,16 +101,16 @@ pub(crate) async fn handle_batch(
     let config = config.map(Arc::new);
     let global_config = Arc::new(global_config);
     let model_catalog = Arc::new(model_catalog);
-    let results = execute_batch(
-        &execution_plan,
-        &batch_config.tasks,
-        &project_root,
+    let resource_overrides = RunResourceOverrides::new(None, None);
+    let batch_context = BatchExecutionContext {
+        project_root: &project_root,
         config,
         global_config,
         model_catalog,
+        resource_overrides,
         startup_env,
-    )
-    .await?;
+    };
+    let results = execute_batch(&execution_plan, &batch_config.tasks, &batch_context).await?;
 
     // 9. Print summary
     print_summary(&results);
@@ -270,24 +271,17 @@ fn print_execution_plan(plan: &ExecutionPlan, tasks: &[BatchTask]) {
 async fn execute_batch(
     plan: &ExecutionPlan,
     tasks: &[BatchTask],
-    project_root: &Path,
-    config: Option<Arc<ProjectConfig>>,
-    global_config: Arc<csa_config::GlobalConfig>,
-    model_catalog: Arc<csa_config::EffectiveModelCatalog>,
-    startup_env: &StartupSubtreeEnv,
+    context: &BatchExecutionContext<'_>,
 ) -> Result<Vec<TaskResult>> {
     let mut results = Vec::new();
     let task_map: HashMap<&str, &BatchTask> = tasks.iter().map(|t| (t.name.as_str(), t)).collect();
 
-    // Create resource guard if config exists
-    let mut resource_guard = if let Some(cfg) = config.as_deref() {
-        let limits = ResourceLimits {
-            min_free_memory_mb: cfg.resources.min_free_memory_mb,
-        };
-        Some(ResourceGuard::new(limits))
-    } else {
-        None
+    let limits = ResourceLimits {
+        min_free_memory_mb: context
+            .resource_overrides
+            .resolve_min_free_memory_mb(context.config.as_deref()),
     };
+    let mut resource_guard = Some(ResourceGuard::new(limits));
 
     // Execute each level
     for (level_idx, level) in plan.iter().enumerate() {
@@ -323,16 +317,8 @@ async fn execute_batch(
 
         // Execute parallel tasks concurrently
         if !parallel_tasks.is_empty() {
-            let parallel_results = execute_parallel_tasks(
-                &parallel_tasks,
-                project_root,
-                config.clone(),
-                Arc::clone(&global_config),
-                Arc::clone(&model_catalog),
-                startup_env,
-                level_idx + 1,
-            )
-            .await?;
+            let parallel_results =
+                execute_parallel_tasks(&parallel_tasks, context, level_idx + 1).await?;
             results.extend(parallel_results);
         }
 
@@ -341,14 +327,15 @@ async fn execute_batch(
             let result = execute_task(
                 task,
                 BatchTaskExecutionContext {
-                    project_root,
-                    config: config.as_deref(),
-                    global_config: &global_config,
-                    model_catalog: &model_catalog,
+                    project_root: context.project_root,
+                    config: context.config.as_deref(),
+                    global_config: &context.global_config,
+                    model_catalog: &context.model_catalog,
                     resource_guard: &mut resource_guard,
+                    resource_overrides: context.resource_overrides,
                     level: level_idx + 1,
                     seq: seq_idx + 1,
-                    startup_env,
+                    startup_env: context.startup_env,
                 },
             )
             .await;
@@ -362,23 +349,20 @@ async fn execute_batch(
 /// Execute parallel tasks concurrently using JoinSet.
 async fn execute_parallel_tasks(
     tasks: &[BatchTask],
-    project_root: &Path,
-    config: Option<Arc<ProjectConfig>>,
-    global_config: Arc<csa_config::GlobalConfig>,
-    model_catalog: Arc<csa_config::EffectiveModelCatalog>,
-    startup_env: &StartupSubtreeEnv,
+    context: &BatchExecutionContext<'_>,
     level: usize,
 ) -> Result<Vec<TaskResult>> {
     let mut join_set = JoinSet::new();
-    let project_root = project_root.to_path_buf();
-    let startup_env = startup_env.clone();
+    let project_root = context.project_root.to_path_buf();
+    let startup_env = context.startup_env.clone();
 
     for task in tasks {
         let task = task.clone();
         let project_root = project_root.clone();
-        let config = config.clone();
-        let global_config = Arc::clone(&global_config);
-        let model_catalog = Arc::clone(&model_catalog);
+        let config = context.config.clone();
+        let global_config = Arc::clone(&context.global_config);
+        let model_catalog = Arc::clone(&context.model_catalog);
+        let resource_overrides = context.resource_overrides;
         let startup_env = startup_env.clone();
 
         join_set.spawn(async move {
@@ -390,6 +374,7 @@ async fn execute_parallel_tasks(
                     global_config: &global_config,
                     model_catalog: &model_catalog,
                     resource_guard: &mut None, // Parallel tasks avoid shared guard contention.
+                    resource_overrides,
                     level,
                     seq: 0,
                     startup_env: &startup_env,
@@ -421,6 +406,7 @@ async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) 
         global_config,
         model_catalog,
         resource_guard,
+        resource_overrides,
         level,
         seq,
         startup_env,
@@ -618,10 +604,11 @@ async fn execute_task(task: &BatchTask, context: BatchTaskExecutionContext<'_>) 
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         initial_response_timeout_seconds,
-        None,  // batch does not set wall-clock timeout
-        None,  // batch does not use memory injection
-        None,  // batch does not inject MCP (callers don't have global_config)
-        None,  // batch does not run pre-session hooks
+        None, // batch does not set wall-clock timeout
+        None, // batch does not use memory injection
+        None, // batch does not inject MCP (callers don't have global_config)
+        None, // batch does not run pre-session hooks
+        resource_overrides.for_child(),
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable

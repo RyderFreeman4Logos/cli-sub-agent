@@ -35,9 +35,11 @@ pub(super) fn check_resources_before_spawn(
     });
     let projected_spawn_mb =
         spawn_memory_projection_mb_with_overrides(config, executor.tool_name(), resource_overrides);
-    if let Err(err) =
-        crate::resource_admission::persist_spawn_memory_projection(session, projected_spawn_mb)
-    {
+    if let Err(err) = crate::resource_admission::persist_spawn_memory_projection(
+        session,
+        projected_spawn_mb,
+        resource_overrides.resolution_info(config, executor.tool_name()),
+    ) {
         return Err(persist_pipeline_pre_exec_failure(
             project_root,
             session,
@@ -97,7 +99,7 @@ pub(super) fn check_resources_before_spawn(
             cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
             60,
         );
-    } else if resource_overrides.memory_max_mb.is_some() {
+    } else if resource_overrides.has_memory_max_override() {
         resource_guard.check_health(
             resource_overrides.resolve_memory_max_mb(None, executor.tool_name()),
             csa_config::default_sandbox_for_tool(executor.tool_name()).memory_swap_max_mb,

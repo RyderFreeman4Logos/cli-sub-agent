@@ -464,6 +464,7 @@ pub(crate) async fn execute_step_with_workflow(
                         step_ctx.project_root,
                         step_ctx.workflow_path,
                         step_ctx.startup_env,
+                        step_ctx.resources.for_child(),
                     ),
                     start,
                 )

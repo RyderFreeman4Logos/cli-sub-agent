@@ -679,6 +679,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         None,
         None,
         None,
+        crate::run_resource_overrides::RunResourceOverrides::default(),
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable

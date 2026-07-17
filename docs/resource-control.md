@@ -58,6 +58,27 @@ memory_max_mb = 3072
 enforcement_mode = "Required"
 ```
 
+### Nested Plan Resource Inheritance
+
+`csa plan run` freezes only resource values explicitly supplied at plan ingress.
+Every resource-admitted child launched through a direct CSA step, a Bash workflow
+step, a nested plan, or `csa batch` receives that immutable snapshot. Configuration
+values are deliberately excluded from the snapshot so each child can perform its
+normal config/default resolution when the parent supplied no explicit override.
+
+The deterministic precedence at each child boundary is:
+
+1. The child's explicit `--memory-max-mb` or `--min-free-memory-mb` value
+2. The parent plan's inherited explicit value
+3. The child's normal project/global configuration and documented defaults
+
+Plan journals persist the snapshot so explicit resume and retry paths reconstruct
+the same child launch policy. Session state records both inherited and effective
+values under `sandbox_info.resource_resolution`, including a typed source such as
+`explicit_cli`, `inherited_parent_explicit`, `configuration`, `tool_default`, or
+`documented_default`. The separately recorded `sandbox_info.memory_max_mb` remains
+the limit actually selected for the sandbox.
+
 ### Enforcement Modes
 
 | Mode | Behavior |

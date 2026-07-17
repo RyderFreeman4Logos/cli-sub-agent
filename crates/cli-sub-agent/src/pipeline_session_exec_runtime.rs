@@ -198,6 +198,9 @@ async fn prepare_session_runtime_inner(
             pattern_internal: input.startup_env.pattern_internal(),
             allow_git_push: input.allow_git_push,
         });
+    input
+        .resource_overrides
+        .apply_to_child_env(&mut merged_env)?;
     let cargo_target_policy = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
         input.task_type,
         input.executor.tool_name(),
@@ -344,8 +347,13 @@ async fn prepare_session_runtime_inner(
     if let Some(pre_session_hook) = input.pre_session_hook {
         execute_options = execute_options.with_pre_session_hook(pre_session_hook);
     }
-    if crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, session)
-        && let Err(err) = csa_session::save_session(session)
+    if crate::pipeline_sandbox::record_sandbox_telemetry(
+        &execute_options,
+        session,
+        input
+            .resource_overrides
+            .resolution_info(input.config, input.executor.tool_name()),
+    ) && let Err(err) = csa_session::save_session(session)
     {
         warn!(
             session = %session.meta_session_id,

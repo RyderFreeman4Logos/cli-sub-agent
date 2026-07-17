@@ -144,8 +144,9 @@ pub use convergence::{
     verify_merge_attestation, verify_terminal_artifact_pair,
 };
 pub use state::{
-    ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta,
-    SandboxInfo, SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
+    ContextStatus, FixConvergenceMeta, Genealogy, MetaSessionState, PhaseEvent,
+    ResourceResolutionInfo, ResourceValueSource, ReviewSessionMeta, SandboxInfo, SessionPhase,
+    SourcedResourceValue, TaskContext, TokenUsage, ToolState, write_review_meta,
 };
 
 pub use metadata::SessionMetadata;

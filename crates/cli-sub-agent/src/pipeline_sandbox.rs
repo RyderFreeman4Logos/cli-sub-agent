@@ -165,7 +165,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
         extra_readable,
         execution_env,
     } = input;
-    let has_run_memory_override = resource_overrides.memory_max_mb.is_some();
+    let has_run_memory_override = resource_overrides.has_memory_max_override();
 
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config

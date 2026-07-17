@@ -54,8 +54,9 @@ pub(crate) fn spawn_memory_projection_mb_with_overrides(
 pub(crate) fn persist_spawn_memory_projection(
     session: &mut MetaSessionState,
     projected_spawn_mb: u64,
+    resource_resolution: csa_session::ResourceResolutionInfo,
 ) -> anyhow::Result<()> {
-    if update_spawn_memory_projection(session, projected_spawn_mb) {
+    if update_spawn_memory_projection(session, projected_spawn_mb, resource_resolution) {
         csa_session::save_session(session)?;
     }
     Ok(())
@@ -84,12 +85,17 @@ pub(crate) fn persist_spawn_memory_admission_ready(
     })
 }
 
-fn update_spawn_memory_projection(session: &mut MetaSessionState, projected_spawn_mb: u64) -> bool {
+fn update_spawn_memory_projection(
+    session: &mut MetaSessionState,
+    projected_spawn_mb: u64,
+    resource_resolution: csa_session::ResourceResolutionInfo,
+) -> bool {
     session.sandbox_info = Some(SandboxInfo {
         mode: PRE_SPAWN_ADMISSION_MODE.to_string(),
         memory_max_mb: Some(projected_spawn_mb),
         filesystem_mode: None,
         readonly_project_root: None,
+        resource_resolution: Some(resource_resolution),
     });
     session.last_accessed = Utc::now();
     true
@@ -317,6 +323,7 @@ mod tests {
                 memory_max_mb,
                 filesystem_mode: None,
                 readonly_project_root: None,
+                resource_resolution: None,
             }),
             ..Default::default()
         }
@@ -336,6 +343,7 @@ mod tests {
                 memory_max_mb,
                 filesystem_mode: None,
                 readonly_project_root: None,
+                resource_resolution: None,
             }),
             ..Default::default()
         }
@@ -575,7 +583,12 @@ memory_max_mb = 16384
     fn spawn_projection_update_records_pre_spawn_memory_limit() {
         let mut session = MetaSessionState::default();
 
-        assert!(update_spawn_memory_projection(&mut session, 12_288));
+        let resolution = RunResourceOverrides::default().resolution_info(None, "codex");
+        assert!(update_spawn_memory_projection(
+            &mut session,
+            12_288,
+            resolution
+        ));
         let info = session.sandbox_info.expect("projection should be recorded");
 
         assert_eq!(info.mode, PRE_SPAWN_ADMISSION_MODE);
@@ -590,7 +603,12 @@ memory_max_mb = 16384
         let mut session = active_session("current", old, Some(12_288));
         session.last_accessed = old;
 
-        assert!(update_spawn_memory_projection(&mut session, 12_288));
+        let resolution = RunResourceOverrides::default().resolution_info(None, "codex");
+        assert!(update_spawn_memory_projection(
+            &mut session,
+            12_288,
+            resolution
+        ));
 
         assert!(
             session.last_accessed > old,

@@ -218,10 +218,7 @@ async fn execute_and_publish(
         &[],
         &[],
         context.args.error_marker_scan_override(),
-        RunResourceOverrides {
-            memory_max_mb: context.args.memory_max_mb,
-            min_free_memory_mb: context.args.min_free_memory_mb,
-        },
+        RunResourceOverrides::new(context.args.memory_max_mb, context.args.min_free_memory_mb),
         context.current_depth,
         SessionCreationMode::DaemonManaged,
         context.startup_env,

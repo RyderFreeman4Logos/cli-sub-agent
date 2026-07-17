@@ -46,6 +46,22 @@ fn parse_tool_name_empty_string_errors() {
     assert!(parse_tool_name("").is_err());
 }
 
+#[test]
+fn batch_child_snapshot_keeps_parent_explicit_resource_provenance() {
+    let child = RunResourceOverrides::new(Some(17_000), Some(2048)).for_child();
+    let resolution = child.resolution_info(None, "codex");
+
+    assert_eq!(child.resolve_memory_max_mb(None, "codex"), Some(17_000));
+    assert_eq!(child.resolve_min_free_memory_mb(None), 2048);
+    assert_eq!(
+        resolution.effective_memory_max_mb,
+        Some(csa_session::SourcedResourceValue {
+            value: 17_000,
+            source: csa_session::ResourceValueSource::InheritedParentExplicit,
+        })
+    );
+}
+
 // --- validate_tasks tests ---
 
 fn make_task(name: &str, tool: &str, depends_on: Vec<&str>) -> BatchTask {

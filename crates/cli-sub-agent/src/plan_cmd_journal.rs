@@ -19,7 +19,9 @@ use tracing::{info, warn};
 
 use weave::compiler::ExecutionPlan;
 
-pub(crate) const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 1;
+use crate::run_resource_overrides::RunResourceOverrides;
+
+pub(crate) const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 2;
 pub(crate) const PLAN_PIPELINE_SOURCE_DIRECT: &str = "direct-plan-run";
 pub(crate) const PLAN_PIPELINE_SOURCE_CLI_ALIAS: &str = "cli-alias";
 const ACTIVE_PLAN_JOURNAL_WARNING: &str = "dev2merge: journal is actively in use by another plan run; use --resume to continue or wait for it to complete";
@@ -69,6 +71,8 @@ pub(crate) struct PlanRunJournal {
     pub(crate) repo_head: Option<String>,
     #[serde(default)]
     pub(crate) repo_dirty: Option<bool>,
+    #[serde(default)]
+    pub(crate) resource_overrides: RunResourceOverrides,
 }
 
 impl PlanRunJournal {
@@ -88,6 +92,7 @@ impl PlanRunJournal {
             last_error: None,
             repo_head: None,
             repo_dirty: None,
+            resource_overrides: RunResourceOverrides::default(),
         }
     }
 }
@@ -96,6 +101,7 @@ pub(crate) struct PlanResumeContext {
     pub(crate) initial_vars: HashMap<String, String>,
     pub(crate) completed_steps: HashSet<usize>,
     pub(crate) pipeline_source: Option<String>,
+    pub(crate) resource_overrides: RunResourceOverrides,
     pub(crate) resumed: bool,
 }
 
@@ -369,6 +375,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
+            resource_overrides: RunResourceOverrides::default(),
             resumed: false,
         });
     }
@@ -403,6 +410,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
+            resource_overrides: RunResourceOverrides::default(),
             resumed: false,
         });
     }
@@ -414,6 +422,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
+            resource_overrides: RunResourceOverrides::default(),
             resumed: false,
         });
     }
@@ -433,6 +442,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
+            resource_overrides: RunResourceOverrides::default(),
             resumed: false,
         });
     }
@@ -443,6 +453,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
+            resource_overrides: RunResourceOverrides::default(),
             resumed: false,
         });
     }
@@ -452,6 +463,7 @@ pub(crate) fn load_plan_resume_context(
     );
 
     let pipeline_source = journal.pipeline_source.clone();
+    let resource_overrides = journal.resource_overrides;
     for (key, value) in journal.vars {
         initial_vars.insert(key, value);
     }
@@ -464,6 +476,7 @@ pub(crate) fn load_plan_resume_context(
         initial_vars,
         completed_steps: journal.completed_steps.into_iter().collect(),
         pipeline_source: Some(pipeline_source),
+        resource_overrides,
         resumed: true,
     })
 }

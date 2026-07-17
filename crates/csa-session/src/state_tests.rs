@@ -351,6 +351,40 @@ fn test_meta_session_state_toml_roundtrip() {
 }
 
 #[test]
+fn resource_resolution_provenance_roundtrips_in_session_state() {
+    let state = MetaSessionState {
+        sandbox_info: Some(SandboxInfo {
+            mode: "cgroup".to_string(),
+            memory_max_mb: Some(17_000),
+            filesystem_mode: Some("bwrap".to_string()),
+            readonly_project_root: Some(true),
+            resource_resolution: Some(ResourceResolutionInfo {
+                inherited_memory_max_mb: Some(SourcedResourceValue {
+                    value: 17_000,
+                    source: ResourceValueSource::InheritedParentExplicit,
+                }),
+                effective_memory_max_mb: Some(SourcedResourceValue {
+                    value: 17_000,
+                    source: ResourceValueSource::InheritedParentExplicit,
+                }),
+                inherited_min_free_memory_mb: None,
+                effective_min_free_memory_mb: Some(SourcedResourceValue {
+                    value: 1024,
+                    source: ResourceValueSource::Configuration,
+                }),
+            }),
+        }),
+        ..Default::default()
+    };
+
+    let encoded = toml::to_string_pretty(&state).expect("session state should serialize");
+    let decoded: MetaSessionState = toml::from_str(&encoded).expect("session state should parse");
+
+    assert_eq!(decoded.sandbox_info, state.sandbox_info);
+    assert!(encoded.contains("source = \"inherited_parent_explicit\""));
+}
+
+#[test]
 fn csa_version_deserializes_as_none_when_absent() {
     let toml_str = r#"
 meta_session_id = "01J6F5W0M6Q7BW7Q3T0J4A8V45"

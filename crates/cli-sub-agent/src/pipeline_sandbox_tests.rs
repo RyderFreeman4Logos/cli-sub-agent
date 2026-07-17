@@ -49,12 +49,14 @@ fn test_filesystem_sandbox_active_helper() {
         memory_max_mb: None,
         filesystem_mode: Some("bwrap".to_string()),
         readonly_project_root: None,
+        resource_resolution: None,
     };
     let inactive = csa_session::SandboxInfo {
         mode: "cgroup".to_string(),
         memory_max_mb: None,
         filesystem_mode: Some("none".to_string()),
         readonly_project_root: None,
+        resource_resolution: None,
     };
 
     assert!(filesystem_sandbox_active(Some(&active)));
@@ -185,11 +187,19 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection() {
             memory_max_mb: Some(12_288),
             filesystem_mode: None,
             readonly_project_root: None,
+            resource_resolution: None,
         }),
         ..Default::default()
     };
 
-    assert!(record_sandbox_telemetry(&execute_options, &mut session));
+    let resource_resolution = RunResourceOverrides::new(Some(17_000), Some(2048))
+        .for_child()
+        .resolution_info(None, "codex");
+    assert!(record_sandbox_telemetry(
+        &execute_options,
+        &mut session,
+        resource_resolution
+    ));
     let info = session
         .sandbox_info
         .as_ref()
@@ -199,10 +209,31 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection() {
     assert_eq!(info.memory_max_mb, Some(8192));
     assert_eq!(info.filesystem_mode.as_deref(), Some("none"));
     assert_eq!(info.readonly_project_root, Some(true));
+    assert_eq!(
+        info.resource_resolution,
+        Some(csa_session::ResourceResolutionInfo {
+            inherited_memory_max_mb: Some(csa_session::SourcedResourceValue {
+                value: 17_000,
+                source: csa_session::ResourceValueSource::InheritedParentExplicit,
+            }),
+            effective_memory_max_mb: Some(csa_session::SourcedResourceValue {
+                value: 17_000,
+                source: csa_session::ResourceValueSource::InheritedParentExplicit,
+            }),
+            inherited_min_free_memory_mb: Some(csa_session::SourcedResourceValue {
+                value: 2048,
+                source: csa_session::ResourceValueSource::InheritedParentExplicit,
+            }),
+            effective_min_free_memory_mb: Some(csa_session::SourcedResourceValue {
+                value: 2048,
+                source: csa_session::ResourceValueSource::InheritedParentExplicit,
+            }),
+        })
+    );
 }
 
 #[test]
-fn record_sandbox_telemetry_clears_pre_spawn_projection_without_sandbox() {
+fn record_sandbox_telemetry_preserves_resource_provenance_without_sandbox() {
     let execute_options = csa_executor::ExecuteOptions::new(StreamMode::BufferOnly, 600);
     let mut session = csa_session::MetaSessionState {
         meta_session_id: "test-session".to_string(),
@@ -211,13 +242,23 @@ fn record_sandbox_telemetry_clears_pre_spawn_projection_without_sandbox() {
             memory_max_mb: Some(12_288),
             filesystem_mode: None,
             readonly_project_root: None,
+            resource_resolution: None,
         }),
         ..Default::default()
     };
 
-    assert!(record_sandbox_telemetry(&execute_options, &mut session));
+    assert!(record_sandbox_telemetry(
+        &execute_options,
+        &mut session,
+        RunResourceOverrides::default().resolution_info(None, "codex")
+    ));
 
-    assert_eq!(session.sandbox_info, None);
+    let info = session
+        .sandbox_info
+        .expect("no-sandbox execution should retain resource provenance");
+    assert_eq!(info.mode, "none");
+    assert_eq!(info.memory_max_mb, None);
+    assert!(info.resource_resolution.is_some());
 }
 
 #[test]
@@ -245,11 +286,16 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection_without_memory_limit
             memory_max_mb: Some(4096),
             filesystem_mode: None,
             readonly_project_root: None,
+            resource_resolution: None,
         }),
         ..Default::default()
     };
 
-    assert!(record_sandbox_telemetry(&execute_options, &mut session));
+    assert!(record_sandbox_telemetry(
+        &execute_options,
+        &mut session,
+        RunResourceOverrides::default().resolution_info(None, "gemini-cli")
+    ));
     let info = session
         .sandbox_info
         .as_ref()
