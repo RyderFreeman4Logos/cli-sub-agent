@@ -2,10 +2,16 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
 source_runner="${repo_root}/scripts/hooks/quality-gate-receipt.sh"
 scenario="${1:-all}"
 test_root="$(mktemp -d)"
 trap 'rm -rf -- "$test_root"' EXIT
+python_executable="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+assert_executable fixture-python-launcher "$python_executable"
+fixture_launcher_dir="$test_root/fixture-launcher"
+mkdir -p "$fixture_launcher_dir"
+ln -s "$python_executable" "$fixture_launcher_dir/python3"
 
 new_fixture() {
   local fixture
@@ -38,7 +44,19 @@ new_fixture() {
 }
 
 json_field() {
-  python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
+  python3 -c '
+import json, sys
+field = sys.argv[1]
+try:
+    value = json.load(sys.stdin)[field]
+except (json.JSONDecodeError, KeyError, TypeError) as error:
+    print(
+        f"FAIL json-field-{field} expected=valid-json-field actual={type(error).__name__}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(value)
+' "$1"
 }
 
 run_exact_reuse() {
@@ -54,12 +72,13 @@ run_exact_reuse() {
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
   second_identity="$(printf '%s' "$second" | json_field receipt_identity)"
 
-  test "$first_status" = "executed"
-  test "$second_status" = "reused"
-  test "$first_identity" = "$second_identity"
-  test "$(wc -c <"$counter")" -eq 1
-  test "$(find "$fixture/.csa/state/quality-gate-receipts" -type f -name '*.json' | wc -l)" -eq 1
-  test -z "$(git -C "$fixture" status --short)"
+  assert_eq exact-reuse-first-status executed "$first_status"
+  assert_eq exact-reuse-second-status reused "$second_status"
+  assert_eq exact-reuse-identity "$first_identity" "$second_identity"
+  assert_eq exact-reuse-gate-runs 1 "$(wc -c <"$counter")"
+  assert_eq exact-reuse-receipt-count 1 \
+    "$(find "$fixture/.csa/state/quality-gate-receipts" -type f -name '*.json' | wc -l)"
+  assert_empty exact-reuse-fixture-status "$(git -C "$fixture" status --short)"
   echo "PASS exact-reuse"
 }
 
@@ -87,17 +106,18 @@ assert_manifest_contract() {
     quality_gate_secure_state_sha256 \
     quality_gate_provenance_sha256 \
     schema_version implementation_version; do
-    grep -q "^${key}=" <<<"$manifest" || {
-      echo "missing manifest dimension: $key" >&2
+    if ! grep -q "^${key}=" <<<"$manifest"; then
+      _receipt_test_fail "manifest-contract-${key}" field-present field-missing
       return 1
-    }
+    fi
   done
 }
 
 invoke_identity() {
   local fixture="$1" counter="$2" runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   shift 2
-  (cd "$fixture" && env "MISE_DATA_DIR=${test_root}/mise-default" "$@" \
+  (cd "$fixture" && env "MISE_DATA_DIR=${test_root}/mise-default" \
+    "PATH=${fixture_launcher_dir}:${PATH}" "$@" \
     "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") |
     json_field receipt_identity
 }
@@ -118,9 +138,50 @@ assert_invalidation() {
   else
     second="$(invoke_identity "$fixture" "$counter")"
   fi
-  test "$first" != "$second"
-  test "$(wc -c <"$counter")" -eq 2
+  assert_ne "invalidation-${name}-identity" "$first" "$second"
+  assert_eq "invalidation-${name}-gate-runs" 2 "$(wc -c <"$counter")"
   echo "PASS invalidation-$name"
+}
+
+run_path_toolchain_invalidation() {
+  local fixture counter first second runs toolchain toolchain_root
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  for toolchain in toolchain-a toolchain-b; do
+    toolchain_root="$test_root/$toolchain"
+    mkdir -p "$toolchain_root/bin"
+    cat >"$toolchain_root/bin/rustc" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  -vV)
+    printf 'rustc 1.99.0\\nbinary: $toolchain\\nhost: x86_64-unknown-linux-gnu\\n'
+    ;;
+  --print)
+    if [ "\${2:-}" != sysroot ]; then
+      printf 'fixture rustc expected --print sysroot, got: %s\n' "\${2:-unset}" >&2
+      exit 64
+    fi
+    printf '%s\\n' "$toolchain_root"
+    ;;
+  *) exit 64 ;;
+esac
+EOF
+    chmod +x "$toolchain_root/bin/rustc"
+    # Keep the public shell entrypoint from resolving Python through a mise shim
+    # that can reorder PATH before the fixture compiler is observed.
+    ln -s "$python_executable" "$toolchain_root/bin/python3"
+  done
+  first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
+  second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
+  assert_ne invalidation-toolchain-identity "$first" "$second"
+  runs="$(wc -c <"$counter")"
+  assert_eq invalidation-toolchain-gate-runs 2 "$runs"
+  echo "PASS invalidation-toolchain"
+}
+
+run_mise_data_dir_invalidation() {
+  assert_invalidation mise-data-dir ':' \
+    "MISE_DATA_DIR=${test_root}/mise-a" "MISE_DATA_DIR=${test_root}/mise-b"
 }
 
 run_invalidation_matrix() {
@@ -135,34 +196,9 @@ run_invalidation_matrix() {
   assert_invalidation weave-lock 'printf "changed\n" >>"$fixture/weave.lock"'
   assert_invalidation rust-toolchain-file \
     'printf "# changed toolchain contract\n" >>"$fixture/rust-toolchain.toml"'
-  local fixture counter first second target_spec toolchain toolchain_root
-  fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
-  for toolchain in toolchain-a toolchain-b; do
-    toolchain_root="$test_root/$toolchain"
-    mkdir -p "$toolchain_root/bin"
-    cat >"$toolchain_root/bin/rustc" <<EOF
-#!/usr/bin/env bash
-case "\${1:-}" in
-  -vV)
-    printf 'rustc 1.99.0\\nbinary: $toolchain\\nhost: x86_64-unknown-linux-gnu\\n'
-    ;;
-  --print)
-    test "\${2:-}" = sysroot
-    printf '%s\\n' "$toolchain_root"
-    ;;
-  *) exit 64 ;;
-esac
-EOF
-    chmod +x "$toolchain_root/bin/rustc"
-  done
-  first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
-  second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
-  test "$first" != "$second"
-  test "$(wc -c <"$counter")" -eq 2
-  echo "PASS invalidation-toolchain"
-  assert_invalidation mise-data-dir ':' \
-    "MISE_DATA_DIR=${test_root}/mise-a" "MISE_DATA_DIR=${test_root}/mise-b"
+  run_path_toolchain_invalidation
+  local fixture counter first second target_spec
+  run_mise_data_dir_invalidation
   assert_invalidation rustc ':' \
     "RUSTC=${test_root}/toolchain-a/bin/rustc" "RUSTC=${test_root}/toolchain-b/bin/rustc"
   printf '#!/usr/bin/env bash\nexec "$@"\n' >"$test_root/wrapper-a"
@@ -198,8 +234,8 @@ EOF
   first="$(invoke_identity "$fixture" "$counter" "CARGO_BUILD_TARGET=${target_spec}")"
   printf '{"arch":"aarch64"}\n' >"$target_spec"
   second="$(invoke_identity "$fixture" "$counter" "CARGO_BUILD_TARGET=${target_spec}")"
-  test "$first" != "$second"
-  test "$(wc -c <"$counter")" -eq 2
+  assert_ne invalidation-target-spec-bytes-identity "$first" "$second"
+  assert_eq invalidation-target-spec-bytes-gate-runs 2 "$(wc -c <"$counter")"
   echo "PASS invalidation-target-spec-bytes"
   assert_invalidation feature-matrix ':' 'CSA_QUALITY_GATE_FEATURE_MATRIX=default' 'CSA_QUALITY_GATE_FEATURE_MATRIX=all-features'
   assert_invalidation environment ':' 'RUSTFLAGS=-Copt-level=1' 'RUSTFLAGS=-Copt-level=2'
@@ -217,9 +253,13 @@ EOF
   git -C "$fixture" add scripts/hooks/drift-gate.sh
   git -C "$fixture" commit -qm "test: add drift gate"
   after="$(cd "$fixture" && "$runner" -- scripts/hooks/drift-gate.sh "$counter")"
-  test "$(printf '%s' "$after" | json_field rejection_reason)" = input_drift
-  test ! -e "$fixture/.csa/state/quality-gate-receipts/$(printf '%s' "$after" | json_field receipt_identity).json"
-  test "$before" != "$(printf '%s' "$after" | json_field receipt_identity)"
+  local after_identity
+  after_identity="$(printf '%s' "$after" | json_field receipt_identity)"
+  assert_eq invalidation-input-drift-reason input_drift \
+    "$(printf '%s' "$after" | json_field rejection_reason)"
+  assert_path_absent invalidation-input-drift-no-receipt \
+    "$fixture/.csa/state/quality-gate-receipts/${after_identity}.json"
+  assert_ne invalidation-input-drift-identity "$before" "$after_identity"
   echo "PASS invalidation-input-drift"
 }
 
@@ -236,17 +276,24 @@ assert_corruption_reexecutes() {
   receipt="$(current_receipt "$fixture")"
   eval "$mutation"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
-  test "$(printf '%s' "$output" | json_field status)" = executed
-  test -n "$(printf '%s' "$output" | json_field rejection_reason)"
-  test "$(wc -c <"$counter")" -eq 2
+  assert_eq "integrity-${name}-status" executed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_nonempty "integrity-${name}-reason" \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_eq "integrity-${name}-gate-runs" 2 "$(wc -c <"$counter")"
   echo "PASS integrity-$name"
 }
 
 assert_single_json() {
-  local record="$1"
-  test "$(printf '%s\n' "$record" | wc -l)" -eq 1
-  printf '%s' "$record" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value["status"] in {"executed", "reused", "gate_failed"}'
-  ! grep -Eq '/tmp/|example\.invalid|credential|secret-token' <<<"$record"
+  local record="$1" status
+  assert_eq structured-result-line-count 1 "$(printf '%s\n' "$record" | wc -l)"
+  status="$(printf '%s' "$record" | json_field status)"
+  case "$status" in
+    executed | reused | gate_failed) ;;
+    *) _receipt_test_fail structured-result-status allowed-status "$status" ;;
+  esac
+  assert_not_matches structured-result-redaction \
+    '/tmp/|example\.invalid|credential|secret-token' "$record"
 }
 
 wait_for_pid_bounded() {
@@ -254,10 +301,16 @@ wait_for_pid_bounded() {
   if ! timeout 10 tail --pid="$pid" -f /dev/null; then
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
-    echo "timed out waiting for fixture process ${pid}" >&2
+    _receipt_test_fail fixture-process-timeout completed-within-10s timed-out
     return 1
   fi
-  wait "$pid"
+  local code
+  if wait "$pid"; then
+    return 0
+  else
+    code=$?
+  fi
+  _receipt_test_fail fixture-process-exit 0 "$code"
 }
 
 run_integrity_concurrency() {
@@ -297,10 +350,11 @@ PY'
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/failing-gate.sh)"
   code=$?
   set -e
-  test "$code" -eq 7
-  test "$(printf '%s' "$output" | json_field status)" = gate_failed
+  assert_eq integrity-gate-failure-exit 7 "$code"
+  assert_eq integrity-gate-failure-status gate_failed \
+    "$(printf '%s' "$output" | json_field status)"
   assert_single_json "$output"
-  test -z "$(current_receipt "$fixture")"
+  assert_empty integrity-gate-failure-receipt "$(current_receipt "$fixture")"
   echo "PASS integrity-gate-failure"
 
   fixture="$(new_fixture)"
@@ -314,8 +368,8 @@ PY'
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/signal-gate.sh)"
   code=$?
   set -e
-  test "$code" -ne 0
-  test -z "$(current_receipt "$fixture")"
+  assert_ne integrity-signal-exit 0 "$code"
+  assert_empty integrity-signal-receipt "$(current_receipt "$fixture")"
   echo "PASS integrity-signal"
 
   fixture="$(new_fixture)"
@@ -326,10 +380,11 @@ PY'
     "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") >/dev/null 2>&1
   code=$?
   set -e
-  test "$code" -ne 0
-  test -z "$(current_receipt "$fixture")"
+  assert_ne integrity-crash-before-rename-exit 0 "$code"
+  assert_empty integrity-crash-before-rename-receipt "$(current_receipt "$fixture")"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
-  test "$(printf '%s' "$output" | json_field status)" = executed
+  assert_eq integrity-crash-before-rename-recovery-status executed \
+    "$(printf '%s' "$output" | json_field status)"
   echo "PASS integrity-crash-before-rename"
 
   fixture="$(new_fixture)"
@@ -359,8 +414,9 @@ PY'
   wait_for_pid_bounded "$writer_one"
   wait_for_pid_bounded "$writer_two"
   exec 7>&- 8>&-
-  test "$(wc -c <"$counter")" -eq 1
-  test "$(find "$receipt_dir" -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 1
+  assert_eq integrity-concurrency-initial-gate-runs 1 "$(wc -c <"$counter")"
+  assert_eq integrity-concurrency-receipt-count 1 \
+    "$(find "$receipt_dir" -maxdepth 1 -type f -name '*.json' | wc -l)"
   assert_single_json "$(cat "$fixture/.csa/state/writer-one.json")"
   assert_single_json "$(cat "$fixture/.csa/state/writer-two.json")"
   local writers=()
@@ -373,7 +429,7 @@ PY'
   for writer in "${writers[@]}"; do
     wait_for_pid_bounded "$writer"
   done
-  test "$(wc -c <"$counter")" -eq 1
+  assert_eq integrity-concurrency-final-gate-runs 1 "$(wc -c <"$counter")"
   echo "PASS integrity-concurrency"
 }
 
@@ -383,6 +439,8 @@ fi
 
 case "$scenario" in
   exact-reuse) run_exact_reuse ;;
+  path-toolchain-invalidation) run_path_toolchain_invalidation ;;
+  mise-data-dir-invalidation) run_mise_data_dir_invalidation ;;
   invalidation-matrix) run_invalidation_matrix ;;
   integrity-concurrency) run_integrity_concurrency ;;
   all) run_exact_reuse; run_invalidation_matrix; run_integrity_concurrency ;;
