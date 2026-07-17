@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+const SKILL_RUN_TIMEOUT: Duration = Duration::from_secs(30);
+const SKILL_RUN_TERMINATION_GRACE: Duration = Duration::from_secs(1);
 
 fn csa_cmd(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
@@ -66,8 +70,8 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-#[test]
-fn skill_run_preserves_plan_parent_resource_snapshot_for_nested_child() {
+#[tokio::test(flavor = "current_thread")]
+async fn skill_run_preserves_plan_parent_resource_snapshot_for_nested_child() {
     let home = tempfile::tempdir().expect("temporary home");
     let project = home.path().join("project");
     let skill_dir = project.join(".csa/skills/resource-probe");
@@ -105,7 +109,8 @@ enabled = false
     .expect("write project config");
 
     let fake_bin = install_fake_codex(&project);
-    let output = csa_cmd(home.path())
+    let mut command = csa_cmd(home.path());
+    command
         .current_dir(&project)
         .env("PATH", prepend_path(&fake_bin))
         .env("CSA_INTERNAL_INVOCATION", "1")
@@ -115,15 +120,33 @@ enabled = false
             "CSA_INHERITED_RESOURCE_OVERRIDES",
             r#"{"min_free_memory_mb":0}"#,
         )
-        .args(["skill", "run", "resource-probe", "inspect resources"])
-        .output()
-        .expect("run skill through CSA");
+        .args(["skill", "run", "resource-probe", "inspect resources"]);
+    let command_context = format!("{command:?}");
+    let child = csa_process::spawn_tool(command.into(), None)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("spawn CSA skill command {command_context}: {error:#}");
+        });
+    let output = csa_process::wait_and_capture_with_idle_timeout(
+        child,
+        csa_process::StreamMode::BufferOnly,
+        SKILL_RUN_TIMEOUT,
+        SKILL_RUN_TIMEOUT,
+        SKILL_RUN_TERMINATION_GRACE,
+        None,
+        csa_process::SpawnOptions::default(),
+        Some(SKILL_RUN_TIMEOUT),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        panic!("wait for CSA skill command {command_context}: {error:#}");
+    });
 
     assert!(
-        output.status.success(),
-        "skill run failed; stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        output.exit_code == 0,
+        "skill run failed ({command_context}); stdout={} stderr={}",
+        output.output,
+        output.stderr_output
     );
     let capture = find_file(
         &home.path().join(".local/state/cli-sub-agent"),
