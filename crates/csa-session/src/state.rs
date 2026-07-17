@@ -336,13 +336,13 @@ pub struct SourcedResourceValue {
 /// Resource inheritance and final resolution recorded in child state.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResourceResolutionInfo {
-    /// Memory limit explicitly inherited from the parent plan, if any.
+    /// Memory limit explicitly inherited from the parent CSA invocation, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_memory_max_mb: Option<SourcedResourceValue>,
     /// Final memory limit after CLI, inheritance, config, and default precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_memory_max_mb: Option<SourcedResourceValue>,
-    /// Free-memory threshold explicitly inherited from the parent plan, if any.
+    /// Free-memory threshold explicitly inherited from the parent CSA invocation, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_min_free_memory_mb: Option<SourcedResourceValue>,
     /// Final free-memory threshold after precedence resolution.

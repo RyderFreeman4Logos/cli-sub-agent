@@ -139,7 +139,7 @@ impl RunResourceOverrides {
         }
     }
 
-    /// Prefer values explicitly supplied at the current resume boundary.
+    /// Prefer current boundary values and fall back to the persisted plan snapshot.
     pub(crate) fn with_resume_fallback(self, persisted: Self) -> Self {
         Self {
             memory_max_mb: self.memory_max_mb.or(persisted.memory_max_mb),

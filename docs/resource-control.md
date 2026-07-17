@@ -69,12 +69,13 @@ normal config/default resolution when the parent supplied no explicit override.
 The deterministic precedence at each child boundary is:
 
 1. The child's explicit `--memory-max-mb` or `--min-free-memory-mb` value
-2. The parent plan's inherited explicit value
+2. The parent CSA invocation's inherited explicit value
 3. The child's normal project/global configuration and documented defaults
 
-Plan journals persist the snapshot so explicit resume and retry paths reconstruct
-the same child launch policy. Session state records both inherited and effective
-values under `sandbox_info.resource_resolution`, including a typed source such as
+Plan journals persist the snapshot so retry paths reuse it. An explicit resume
+uses it only as a fallback: values from the current boundary still take
+precedence. Session state records both inherited and effective values under
+`sandbox_info.resource_resolution`, including a typed source such as
 `explicit_cli`, `inherited_parent_explicit`, `configuration`, `tool_default`, or
 `documented_default`. The separately recorded `sandbox_info.memory_max_mb` remains
 the limit actually selected for the sandbox.
