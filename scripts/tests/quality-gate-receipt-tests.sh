@@ -26,7 +26,7 @@ new_fixture() {
   printf '#!/usr/bin/env bash\nset -euo pipefail\ncounter="$1"\nprintf "x" >>"$counter"\n' \
     >"$fixture/scripts/hooks/fake-quality-gate.sh"
   chmod +x "$fixture/scripts/hooks/fake-quality-gate.sh"
-  git -C "$fixture" add Cargo.toml Cargo.lock weave.lock justfile lefthook.yml rust-toolchain.toml scripts
+  git -C "$fixture" add Cargo.toml Cargo.lock justfile lefthook.yml rust-toolchain.toml scripts
   git -C "$fixture" commit -qm "test: initialize fixture"
   printf '%s\n' "$fixture"
 }
@@ -158,9 +158,143 @@ run_invalidation_matrix() {
   echo "PASS invalidation-input-drift"
 }
 
+current_receipt() {
+  find "$1/.csa/state/quality-gate-receipts" -maxdepth 1 -type f -name '*.json' | head -1
+}
+
+assert_corruption_reexecutes() {
+  local name="$1" mutation="$2" fixture counter runner receipt output
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  (cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") >/dev/null
+  receipt="$(current_receipt "$fixture")"
+  eval "$mutation"
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  test "$(printf '%s' "$output" | json_field status)" = executed
+  test -n "$(printf '%s' "$output" | json_field rejection_reason)"
+  test "$(wc -c <"$counter")" -eq 2
+  echo "PASS integrity-$name"
+}
+
+assert_single_json() {
+  local record="$1"
+  test "$(printf '%s\n' "$record" | wc -l)" -eq 1
+  printf '%s' "$record" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value["status"] in {"executed", "reused", "gate_failed"}'
+  ! grep -Eq '/tmp/|example\.invalid|credential|secret-token' <<<"$record"
+}
+
+run_integrity_concurrency() {
+  assert_corruption_reexecutes malformed 'printf "{truncated" >"$receipt"'
+  assert_corruption_reexecutes unknown-schema 'python3 - "$receipt" <<'"'"'PY'"'"'
+import json,sys
+p=sys.argv[1]; value=json.load(open(p)); value["schema_version"]=999; open(p,"w").write(json.dumps(value))
+PY'
+  assert_corruption_reexecutes missing-field 'python3 - "$receipt" <<'"'"'PY'"'"'
+import json,sys
+p=sys.argv[1]; value=json.load(open(p)); del value["status"]; open(p,"w").write(json.dumps(value))
+PY'
+  assert_corruption_reexecutes non-pass 'python3 - "$receipt" <<'"'"'PY'"'"'
+import json,sys
+p=sys.argv[1]; value=json.load(open(p)); value["status"]="FAIL"; open(p,"w").write(json.dumps(value))
+PY'
+  assert_corruption_reexecutes content-digest 'python3 - "$receipt" <<'"'"'PY'"'"'
+import json,sys
+p=sys.argv[1]; value=json.load(open(p)); value["receipt_digest"]="0"*64; open(p,"w").write(json.dumps(value))
+PY'
+  assert_corruption_reexecutes filename-digest 'python3 - "$receipt" <<'"'"'PY'"'"'
+import json,sys
+p=sys.argv[1]; value=json.load(open(p)); value["identity"]="f"*64; open(p,"w").write(json.dumps(value))
+PY'
+  assert_corruption_reexecutes symlink 'target="${receipt}.target"; mv "$receipt" "$target"; ln -s "$target" "$receipt"'
+  assert_corruption_reexecutes non-file 'rm -f "$receipt"; mkdir "$receipt"'
+
+  local fixture counter runner output code receipt_dir
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  printf '#!/usr/bin/env bash\nexit 7\n' >"$fixture/scripts/hooks/failing-gate.sh"
+  chmod +x "$fixture/scripts/hooks/failing-gate.sh"
+  git -C "$fixture" add scripts/hooks/failing-gate.sh
+  git -C "$fixture" commit -qm "test: add failing gate"
+  set +e
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/failing-gate.sh)"
+  code=$?
+  set -e
+  test "$code" -eq 7
+  test "$(printf '%s' "$output" | json_field status)" = gate_failed
+  assert_single_json "$output"
+  test -z "$(current_receipt "$fixture")"
+  echo "PASS integrity-gate-failure"
+
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  printf '#!/usr/bin/env bash\nkill -TERM "$PPID"\nexit 143\n' >"$fixture/scripts/hooks/signal-gate.sh"
+  chmod +x "$fixture/scripts/hooks/signal-gate.sh"
+  git -C "$fixture" add scripts/hooks/signal-gate.sh
+  git -C "$fixture" commit -qm "test: add signal gate"
+  set +e
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/signal-gate.sh)"
+  code=$?
+  set -e
+  test "$code" -ne 0
+  test -z "$(current_receipt "$fixture")"
+  echo "PASS integrity-signal"
+
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  set +e
+  (cd "$fixture" && CSA_QUALITY_GATE_TEST_FAULT=crash-before-publish \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") >/dev/null 2>&1
+  code=$?
+  set -e
+  test "$code" -ne 0
+  test -z "$(current_receipt "$fixture")"
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  test "$(printf '%s' "$output" | json_field status)" = executed
+  echo "PASS integrity-crash-before-rename"
+
+  fixture="$(new_fixture)"
+  counter="${fixture}/.csa/state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  receipt_dir="${fixture}/.csa/state/quality-gate-receipts"
+  mkfifo "$fixture/.csa/state/ready" "$fixture/.csa/state/release"
+  exec 7<>"$fixture/.csa/state/ready"
+  exec 8<>"$fixture/.csa/state/release"
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>"$1"\nprintf "ready\\n" >"$2"\nread -r _ <"$3"\n' >"$fixture/scripts/hooks/blocking-gate.sh"
+  chmod +x "$fixture/scripts/hooks/blocking-gate.sh"
+  git -C "$fixture" add scripts/hooks/blocking-gate.sh
+  git -C "$fixture" commit -qm "test: add blocking gate"
+  (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
+    .csa/state/ready .csa/state/release >.csa/state/writer-one.json) &
+  local writer_one=$!
+  read -r _ <&7
+  (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
+    .csa/state/ready .csa/state/release >.csa/state/writer-two.json) &
+  local writer_two=$!
+  printf 'release\n' >&8
+  wait "$writer_one"
+  wait "$writer_two"
+  exec 7>&- 8>&-
+  test "$(wc -c <"$counter")" -eq 1
+  test "$(find "$receipt_dir" -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 1
+  assert_single_json "$(cat "$fixture/.csa/state/writer-one.json")"
+  assert_single_json "$(cat "$fixture/.csa/state/writer-two.json")"
+  for _ in 1 2 3 4 5 6; do
+    (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
+      .csa/state/ready .csa/state/release >/dev/null) &
+  done
+  wait
+  test "$(wc -c <"$counter")" -eq 1
+  echo "PASS integrity-concurrency"
+}
+
 case "$scenario" in
   exact-reuse) run_exact_reuse ;;
   invalidation-matrix) run_invalidation_matrix ;;
-  all) run_exact_reuse; run_invalidation_matrix ;;
+  integrity-concurrency) run_integrity_concurrency ;;
+  all) run_exact_reuse; run_invalidation_matrix; run_integrity_concurrency ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac

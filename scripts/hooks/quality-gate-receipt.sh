@@ -17,6 +17,7 @@ state_dir="${repo_root}/.csa/state/quality-gate-receipts"
 mkdir -p "$state_dir" || exit 2
 manifest_file="$(mktemp "${state_dir}/manifest.XXXXXX")" || exit 2
 receipt_temp=""
+result_emitted=0
 cleanup() {
   rm -f -- "$manifest_file"
   if [ -n "$receipt_temp" ]; then
@@ -161,12 +162,12 @@ collect_manifest() {
 
 validate_receipt() {
   local receipt="$1" identity="$2" manifest="$3"
-  if [ ! -e "$receipt" ]; then
-    printf 'receipt_missing\n'
-    return 1
-  fi
   if [ -L "$receipt" ]; then
     printf 'receipt_symlink\n'
+    return 1
+  fi
+  if [ ! -e "$receipt" ]; then
+    printf 'receipt_missing\n'
     return 1
   fi
   if [ ! -f "$receipt" ]; then
@@ -278,8 +279,12 @@ print(json.dumps({
     },
 }, sort_keys=True, separators=(",", ":")))
 PY
+  result_emitted=1
 }
 
+collection_lock="${state_dir}/collection.lock"
+exec 8>"$collection_lock"
+flock 8
 collect_manifest "$manifest_file" "$@" || {
   echo 'ERROR: could not collect quality-gate acceptance manifest' >&2
   exit 2
@@ -287,13 +292,32 @@ collect_manifest "$manifest_file" "$@" || {
 identity="$(sha256sum "$manifest_file" | awk '{print $1}')"
 receipt="${state_dir}/${identity}.json"
 lock_file="${state_dir}/${identity}.lock"
+handle_signal() {
+  local code="$1" reason="$2"
+  if [ "$result_emitted" -eq 0 ]; then
+    emit_result gate_failed "$identity" "$reason" "$code"
+  fi
+  exit "$code"
+}
+trap 'handle_signal 129 signal_hup' HUP
+trap 'handle_signal 130 signal_int' INT
+trap 'handle_signal 143 signal_term' TERM
 
 exec 9>"$lock_file"
 flock 9
+flock -u 8
+exec 8>&-
 reason="$(validate_receipt "$receipt" "$identity" "$manifest_file" 2>/dev/null)"
 if [ "$reason" = valid ]; then
   emit_result reused "$identity" ""
   exit 0
+fi
+
+quarantine_failed=0
+if [ "$reason" != receipt_missing ]; then
+  quarantine="${state_dir}/rejected.${identity}.$$.$RANDOM"
+  "${repo_root}/scripts/rename-no-replace.py" "$receipt" "$quarantine" >/dev/null 2>&1 || \
+    quarantine_failed=1
 fi
 
 "$@" >&2
@@ -311,6 +335,11 @@ if ! collect_manifest "$post_manifest" "$@" || ! cmp -s "$manifest_file" "$post_
 fi
 rm -f -- "$post_manifest"
 
+if [ "$quarantine_failed" -ne 0 ]; then
+  emit_result gate_failed "$identity" publication_failed 1
+  exit 1
+fi
+
 if grep -qE '^(index_clean|tracked_worktree_clean)=false$' "$manifest_file" || \
    [ "$(grep '^untracked_worktree_digest=' "$manifest_file" | cut -d= -f2)" != "$(printf '' | sha256_text)" ]; then
   emit_result executed "$identity" dirty_state
@@ -319,6 +348,9 @@ fi
 
 receipt_temp="$(mktemp "${state_dir}/receipt.${identity}.XXXXXX")" || exit 2
 write_receipt "$receipt_temp" "$identity" "$manifest_file" || exit 2
+if [ "${CSA_QUALITY_GATE_TEST_FAULT-}" = crash-before-publish ]; then
+  kill -KILL "$$"
+fi
 "${repo_root}/scripts/rename-no-replace.py" "$receipt_temp" "$receipt" >/dev/null 2>&1
 rename_status=$?
 if [ "$rename_status" -ne 0 ]; then
