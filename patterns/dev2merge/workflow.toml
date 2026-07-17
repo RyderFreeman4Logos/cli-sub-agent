@@ -452,11 +452,14 @@ title = "Self-Review Gate"
 tool = "bash"
 prompt = '''
 Full and resume paths run the deterministic L1/L2 quality gate before
-cumulative CSA review. Language-appropriate checks are run based on project type (#2539).
+cumulative CSA review. The shared authoritative recipe publishes an exact-input
+receipt when available; other repositories retain language-aware fallback checks.
 
 ```bash
 set -euo pipefail
-if [ -f Cargo.toml ]; then
+if just --summary 2>/dev/null | tr ' ' '\n' | grep -qx "quality-gates"; then
+  just quality-gates
+elif [ -f Cargo.toml ]; then
   just fmt
   just clippy
   just test

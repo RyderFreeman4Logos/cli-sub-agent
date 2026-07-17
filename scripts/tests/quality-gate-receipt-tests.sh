@@ -118,7 +118,7 @@ run_invalidation_matrix() {
   assert_invalidation index 'printf "index\n" >"$fixture/index"; git -C "$fixture" add index'
   assert_invalidation tracked-worktree 'printf "dirty\n" >>"$fixture/Cargo.toml"'
   assert_invalidation untracked-worktree 'printf "untracked\n" >"$fixture/untracked"'
-  assert_invalidation repository 'git -C "$fixture" remote set-url origin https://example.invalid/other.git'
+  assert_invalidation repository 'mv "$fixture/.git" "$fixture/.git-store"; printf "gitdir: .git-store\\n" >"$fixture/.git"'
   assert_invalidation checkout 'moved="${fixture}.moved"; mv "$fixture" "$moved"; fixture="$moved"; counter="${fixture}/.csa/state/gate-counter"'
   assert_invalidation cargo-lock 'printf "changed\n" >>"$fixture/Cargo.lock"'
   assert_invalidation weave-lock 'printf "changed\n" >>"$fixture/weave.lock"'

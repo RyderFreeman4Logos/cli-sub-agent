@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
-use weave::compiler::plan_from_toml;
+use weave::compiler::{FailAction, plan_from_toml};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -80,6 +80,7 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
         ("Plan with mktd", "## Step 7: Plan with mktd"),
         ("Resume Commit", "## Step 9: Resume Commit"),
         ("Ensure Version Bumped", "## Step 10: Ensure Version Bumped"),
+        ("Self-Review Gate", "## Step 11: Self-Review Gate"),
         (
             "Decomposition Review Depth Warning",
             "## Step 11.5: Decomposition Review Depth Warning",
@@ -97,6 +98,52 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
             dev2merge_pattern_step_bash(&pattern, heading),
             dev2merge_workflow_step_bash(title),
             "dev2merge PATTERN.md and workflow.toml {heading} bash blocks must stay synced"
+        );
+    }
+}
+
+#[test]
+fn dev2merge_self_review_prefers_shared_quality_gate() {
+    let script = dev2merge_workflow_step_bash("Self-Review Gate");
+    let recipe_check = script
+        .find("grep -qx \"quality-gates\"")
+        .expect("Step 11 must detect the shared quality-gates recipe");
+    let shared_gate = script
+        .find("just quality-gates")
+        .expect("Step 11 must invoke the shared authoritative recipe");
+    let rust_fallback = script
+        .find("elif [ -f Cargo.toml ]")
+        .expect("Step 11 must retain the Rust fallback for repositories without the recipe");
+    assert!(recipe_check < shared_gate && shared_gate < rust_fallback);
+    assert!(
+        script.contains("just fmt")
+            && script.contains("just clippy")
+            && script.contains("just test")
+    );
+
+    let workflow =
+        std::fs::read_to_string(workspace_root().join("patterns/dev2merge/workflow.toml")).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+    for title in [
+        "Pre-PR Cumulative Review Gate",
+        "Push Gate",
+        "Pre-PR Review Verdict Check",
+        "Create or Reuse Pull Request",
+        "pr-bot Review & Merge Gate (HARD GATE)",
+    ] {
+        let step = plan
+            .steps
+            .iter()
+            .find(|step| step.title == title)
+            .unwrap_or_else(|| panic!("missing unconditional downstream hard gate: {title}"));
+        assert_eq!(step.on_fail, FailAction::Abort);
+        assert!(
+            !step
+                .condition
+                .as_deref()
+                .unwrap_or_default()
+                .contains("RECEIPT"),
+            "receipt reuse must not condition downstream hard gate {title}"
         );
     }
 }

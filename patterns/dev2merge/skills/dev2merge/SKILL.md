@@ -197,7 +197,7 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 8 | Execute with mktsk | Follow mktsk PATTERN.md directly, TaskCreate/TaskUpdate (skipped in resume mode) | main agent |
 | 9 | Resume Commit | resume mode only: stage, staged-diff check, commit uncommitted remainder | bash |
 | 10 | Version Bump | optional local Just version recipes; missing recipes skip | bash |
-| 11 | Self-Review Gate | Language-aware L1/L2 gate: Rust (just fmt/clippy/test), Python (ruff/pytest), Node (biome/vitest), Go (go vet/test); skips gracefully for unrecognized projects (#2539) | bash |
+| 11 | Self-Review Gate | Shared `quality-gates` recipe when present (authoritative receipt producer); otherwise Rust/Python/Node/Go language fallback (#2539) | bash |
 | 12 | Pre-PR Cumulative Review Gate | cumulative review helper runs `csa review --range ${DEFAULT_BRANCH}...HEAD` and owns exact-head verdict check when review runs | bash |
 | **ENDIF** | | | |
 | 13 | Push Gate | `REVIEW_COMPLETED=true` required | bash |

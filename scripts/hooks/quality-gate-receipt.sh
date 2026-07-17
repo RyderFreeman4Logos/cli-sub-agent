@@ -97,21 +97,12 @@ recipe_digest() {
 }
 
 repository_identity() {
+  local common_dir
+  common_dir="$(git rev-parse --git-common-dir)" || return 1
+  common_dir="$(realpath -e "$common_dir")" || return 1
   {
     git rev-list --max-parents=0 HEAD 2>/dev/null | sort
-    git remote get-url origin 2>/dev/null | python3 -c '
-import re, sys, urllib.parse
-raw = sys.stdin.read().strip()
-if not raw:
-    print("no-origin")
-elif "://" in raw:
-    parsed = urllib.parse.urlsplit(raw)
-    host = parsed.hostname or ""
-    port = f":{parsed.port}" if parsed.port else ""
-    print(f"{parsed.scheme}://{host}{port}{parsed.path}")
-else:
-    print(re.sub(r"^[^@/]+@", "", raw))
-'
+    printf 'git_common_dir_sha256=%s\n' "$(printf '%s' "$common_dir" | sha256_text)"
   } | sha256_text
 }
 
