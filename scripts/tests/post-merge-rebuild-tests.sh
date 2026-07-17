@@ -97,7 +97,10 @@ run_hook() {
     local install_dir="$1"
     local bin_dir="$2"
     local order_file="$3"
-    CSA_TEST_ORDER_FILE="$order_file" \
+    # Fixture calls must not inherit the outer CSA session's skip markers.
+    # The deliberate session-skip test below invokes the hook directly.
+    env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+        CSA_TEST_ORDER_FILE="$order_file" \
         CSA_POST_MERGE_INSTALL_DIR="$install_dir" \
         CSA_POST_MERGE_JUST="$bin_dir/just" \
         CSA_POST_MERGE_CARGO="$bin_dir/cargo" \
@@ -183,11 +186,7 @@ order3="$tmp3/order"
 : >"$order3"
 setup_fake_tools "$tmp3/tools" 0 0
 set +e
-CSA_TEST_ORDER_FILE="$order3" \
-    CSA_POST_MERGE_INSTALL_DIR="$install_dir3" \
-    CSA_POST_MERGE_JUST="$tmp3/tools/just" \
-    CSA_POST_MERGE_CARGO="$tmp3/tools/cargo" \
-    bash "$HOOK"
+run_hook "$install_dir3" "$tmp3/tools" "$order3"
 rc=$?
 set -e
 # Match production: hook gates on `test -w`, not UID. Root / CAP_DAC_OVERRIDE /
@@ -246,19 +245,11 @@ order6b="$tmp6/order-b"
 setup_fake_tools "$tmp6/tools" 0 0
 set +e
 (
-    CSA_TEST_ORDER_FILE="$order6a" \
-        CSA_POST_MERGE_INSTALL_DIR="$install_dir6" \
-        CSA_POST_MERGE_JUST="$tmp6/tools/just" \
-        CSA_POST_MERGE_CARGO="$tmp6/tools/cargo" \
-        bash "$HOOK"
+    run_hook "$install_dir6" "$tmp6/tools" "$order6a"
 ) &
 pid_a=$!
 (
-    CSA_TEST_ORDER_FILE="$order6b" \
-        CSA_POST_MERGE_INSTALL_DIR="$install_dir6" \
-        CSA_POST_MERGE_JUST="$tmp6/tools/just" \
-        CSA_POST_MERGE_CARGO="$tmp6/tools/cargo" \
-        bash "$HOOK"
+    run_hook "$install_dir6" "$tmp6/tools" "$order6b"
 ) &
 pid_b=$!
 wait "$pid_a"
