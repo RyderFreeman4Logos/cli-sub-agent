@@ -194,7 +194,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
                 err,
                 &mut cleanup_guard,
                 None,
-                PipelinePreExecFailureDetails::default(),
+                PipelinePreExecFailureDetails::absent(),
             ));
         }
     };
@@ -216,7 +216,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
                 err,
                 &mut cleanup_guard,
                 None,
-                PipelinePreExecFailureDetails::default(),
+                PipelinePreExecFailureDetails::absent(),
             ));
         }
     };
@@ -253,7 +253,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
                 err,
                 &mut cleanup_guard,
                 None,
-                PipelinePreExecFailureDetails::default(),
+                PipelinePreExecFailureDetails::absent(),
             ));
         }
         if budget.is_turns_exceeded(session.turn_count) {

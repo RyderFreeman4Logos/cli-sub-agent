@@ -38,7 +38,7 @@ enum SessionMemorySample {
 
 #[cfg(test)]
 pub(crate) fn spawn_memory_projection_mb(config: Option<&ProjectConfig>, tool_name: &str) -> u64 {
-    spawn_memory_projection_mb_with_overrides(config, tool_name, RunResourceOverrides::default())
+    spawn_memory_projection_mb_with_overrides(config, tool_name, RunResourceOverrides::absent())
 }
 
 pub(crate) fn spawn_memory_projection_mb_with_overrides(
@@ -366,7 +366,7 @@ memory_max_mb = 16384
 "#,
         )
         .expect("config should parse");
-        let overrides = RunResourceOverrides::new(Some(6144), None);
+        let overrides = RunResourceOverrides::from_cli(Some(6144), None);
 
         assert_eq!(
             spawn_memory_projection_mb_with_overrides(Some(&cfg), "codex", overrides),
@@ -583,7 +583,7 @@ memory_max_mb = 16384
     fn spawn_projection_update_records_pre_spawn_memory_limit() {
         let mut session = MetaSessionState::default();
 
-        let resolution = RunResourceOverrides::default().resolution_info(None, "codex");
+        let resolution = RunResourceOverrides::absent().resolution_info(None, "codex");
         assert!(update_spawn_memory_projection(
             &mut session,
             12_288,
@@ -603,7 +603,7 @@ memory_max_mb = 16384
         let mut session = active_session("current", old, Some(12_288));
         session.last_accessed = old;
 
-        let resolution = RunResourceOverrides::default().resolution_info(None, "codex");
+        let resolution = RunResourceOverrides::absent().resolution_info(None, "codex");
         assert!(update_spawn_memory_projection(
             &mut session,
             12_288,

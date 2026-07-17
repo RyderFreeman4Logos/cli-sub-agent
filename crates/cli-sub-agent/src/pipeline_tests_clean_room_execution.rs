@@ -12,7 +12,7 @@ pub(super) fn clean_limits() -> CleanRoomExecutionLimits {
         30,
         Some(10),
         Some(Duration::from_secs(30)),
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
         Some("quality".to_string()),
     )
     .expect("valid clean-room limits")
@@ -84,7 +84,7 @@ fn clean_room_execution_policy_rejects_forbidden_contract_and_limit_shapes() {
                 idle,
                 initial,
                 wall,
-                RunResourceOverrides::default(),
+                RunResourceOverrides::absent(),
                 None,
             )
             .is_err()

@@ -141,7 +141,7 @@ pub(crate) fn resolve_sandbox_options(
             extra_readable,
             execution_env: None,
         },
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
     )
 }
 

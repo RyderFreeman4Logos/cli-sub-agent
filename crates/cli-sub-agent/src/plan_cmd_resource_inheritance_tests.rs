@@ -43,7 +43,7 @@ csa review --range main...HEAD
             tool_override: None,
             model_spec_override: None,
             no_fs_sandbox: false,
-            resources: RunResourceOverrides::new(Some(17_000), None),
+            resources: RunResourceOverrides::from_cli(Some(17_000), None),
             startup_env: &startup_env,
         },
     )
@@ -95,7 +95,7 @@ csa review
             tool_override: None,
             model_spec_override: None,
             no_fs_sandbox: false,
-            resources: RunResourceOverrides::new(Some(17_000), Some(2048)),
+            resources: RunResourceOverrides::from_cli(Some(17_000), Some(2048)),
             startup_env: &startup_env,
         },
     )
@@ -147,7 +147,7 @@ async fn plan_retry_reuses_the_same_inherited_resource_snapshot() {
             tool_override: None,
             model_spec_override: None,
             no_fs_sandbox: false,
-            resources: RunResourceOverrides::new(Some(17_000), None),
+            resources: RunResourceOverrides::from_cli(Some(17_000), None),
             startup_env: &startup_env,
         },
     )
@@ -170,7 +170,7 @@ fn load_plan_resume_context_restores_explicit_resource_snapshot() {
     };
     let journal_path = tmp.path().join("test.journal.json");
     let mut journal = PlanRunJournal::new("test", &workflow_path, HashMap::new());
-    journal.resource_overrides = RunResourceOverrides::new(Some(17_000), Some(2048));
+    journal.resource_overrides = RunResourceOverrides::from_cli(Some(17_000), Some(2048));
     persist_plan_journal(&journal_path, &journal).unwrap();
 
     let context =

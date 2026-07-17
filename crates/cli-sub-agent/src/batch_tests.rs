@@ -48,7 +48,7 @@ fn parse_tool_name_empty_string_errors() {
 
 #[test]
 fn batch_child_snapshot_keeps_parent_explicit_resource_provenance() {
-    let child = RunResourceOverrides::new(Some(17_000), Some(2048)).for_child();
+    let child = RunResourceOverrides::from_cli(Some(17_000), Some(2048)).for_child();
     let resolution = child.resolution_info(None, "codex");
 
     assert_eq!(child.resolve_memory_max_mb(None, "codex"), Some(17_000));

@@ -38,7 +38,7 @@ fn resolve_sandbox_options_with_execution_env(
             extra_readable: &[],
             execution_env: Some(execution_env),
         },
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
     )
 }
 

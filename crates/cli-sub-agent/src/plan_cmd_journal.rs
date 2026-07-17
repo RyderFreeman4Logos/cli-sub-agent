@@ -71,7 +71,7 @@ pub(crate) struct PlanRunJournal {
     pub(crate) repo_head: Option<String>,
     #[serde(default)]
     pub(crate) repo_dirty: Option<bool>,
-    #[serde(default)]
+    #[serde(default = "RunResourceOverrides::absent")]
     pub(crate) resource_overrides: RunResourceOverrides,
 }
 
@@ -92,7 +92,7 @@ impl PlanRunJournal {
             last_error: None,
             repo_head: None,
             repo_dirty: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
         }
     }
 }
@@ -375,7 +375,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
             resumed: false,
         });
     }
@@ -410,7 +410,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
             resumed: false,
         });
     }
@@ -422,7 +422,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
             resumed: false,
         });
     }
@@ -442,7 +442,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
             resumed: false,
         });
     }
@@ -453,7 +453,7 @@ pub(crate) fn load_plan_resume_context(
             initial_vars,
             completed_steps: HashSet::new(),
             pipeline_source: None,
-            resource_overrides: RunResourceOverrides::default(),
+            resource_overrides: RunResourceOverrides::absent(),
             resumed: false,
         });
     }

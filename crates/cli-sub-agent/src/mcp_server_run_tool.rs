@@ -247,7 +247,7 @@ pub(super) async fn handle_run_tool(
             None, // MCP server does not use memory injection
             Some(&global_config),
             None, // MCP server does not run pre-session hooks
-            crate::run_resource_overrides::RunResourceOverrides::new(None, None).for_child(),
+            crate::run_resource_overrides::RunResourceOverrides::inherited().for_child(),
             false, // no_fs_sandbox
             false, // readonly_project_root
             &[],   // extra_writable

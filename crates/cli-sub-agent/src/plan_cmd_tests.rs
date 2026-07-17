@@ -146,7 +146,7 @@ fn load_plan_resume_context_reads_running_journal_with_explicit_resume() {
         last_error: None,
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     write_plan_journal_without_lock(&journal_path, &journal);
 
@@ -196,7 +196,7 @@ fn load_plan_resume_context_preserves_cli_alias_pipeline_source() {
         last_error: Some("manual handoff required".to_string()),
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
@@ -235,7 +235,7 @@ fn load_plan_resume_context_clears_stale_running_journal_without_explicit_resume
         last_error: None,
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     write_plan_journal_without_lock(&journal_path, &journal);
 
@@ -277,7 +277,7 @@ fn load_plan_resume_context_refuses_locked_running_journal_without_explicit_resu
         last_error: None,
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     write_plan_journal_without_lock(&journal_path, &journal);
     let _held_lock = hold_plan_journal_lock(&journal_path);
@@ -336,7 +336,7 @@ fn load_plan_resume_context_requires_explicit_resume_for_manual_handoff() {
         last_error: Some("manual handoff required".to_string()),
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
@@ -387,7 +387,7 @@ fn load_plan_resume_context_rejects_awaiting_user_journal_even_with_explicit_res
         last_error: Some("awaiting user action".to_string()),
         repo_head: Some("abc123".to_string()),
         repo_dirty: Some(false),
-        resource_overrides: RunResourceOverrides::default(),
+        resource_overrides: RunResourceOverrides::absent(),
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 

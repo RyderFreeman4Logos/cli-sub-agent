@@ -106,7 +106,7 @@ printf 'ok\n'
         None,
         Some(&global_config),
         pre_session_hook,
-        crate::run_resource_overrides::RunResourceOverrides::default(),
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],

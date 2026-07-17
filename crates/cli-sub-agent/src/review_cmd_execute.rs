@@ -172,7 +172,7 @@ pub(crate) async fn execute_review(
         extra_writable,
         extra_readable,
         error_marker_scan_override,
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
         0,
         crate::pipeline::SessionCreationMode::DaemonManaged,
         &startup_env,

@@ -433,7 +433,7 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 no_failover,
                 fast_but_more_cost,
                 build_jobs,
-                resource_overrides: run_resource_overrides::RunResourceOverrides::new(
+                resource_overrides: run_resource_overrides::RunResourceOverrides::from_cli(
                     memory_max_mb,
                     min_free_memory_mb,
                 ),

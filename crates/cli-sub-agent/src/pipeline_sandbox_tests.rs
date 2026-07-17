@@ -148,7 +148,7 @@ enforcement_mode = "best-effort"
             extra_readable: &[],
             execution_env: None,
         },
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -192,7 +192,7 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection() {
         ..Default::default()
     };
 
-    let resource_resolution = RunResourceOverrides::new(Some(17_000), Some(2048))
+    let resource_resolution = RunResourceOverrides::from_cli(Some(17_000), Some(2048))
         .for_child()
         .resolution_info(None, "codex");
     assert!(record_sandbox_telemetry(
@@ -250,7 +250,7 @@ fn record_sandbox_telemetry_preserves_resource_provenance_without_sandbox() {
     assert!(record_sandbox_telemetry(
         &execute_options,
         &mut session,
-        RunResourceOverrides::default().resolution_info(None, "codex")
+        RunResourceOverrides::absent().resolution_info(None, "codex")
     ));
 
     let info = session
@@ -294,7 +294,7 @@ fn record_sandbox_telemetry_overwrites_pre_spawn_projection_without_memory_limit
     assert!(record_sandbox_telemetry(
         &execute_options,
         &mut session,
-        RunResourceOverrides::default().resolution_info(None, "gemini-cli")
+        RunResourceOverrides::absent().resolution_info(None, "gemini-cli")
     ));
     let info = session
         .sandbox_info
@@ -483,7 +483,7 @@ enforcement_mode = "best-effort"
     assert!(
         resolve_clean_room_sandbox_options_with_capabilities(
             input,
-            RunResourceOverrides::default(),
+            RunResourceOverrides::absent(),
             csa_resource::FilesystemCapability::None,
             csa_resource::ResourceCapability::None,
         )
@@ -493,7 +493,7 @@ enforcement_mode = "best-effort"
     assert!(
         resolve_clean_room_sandbox_options_with_capabilities(
             input,
-            RunResourceOverrides::default(),
+            RunResourceOverrides::absent(),
             csa_resource::FilesystemCapability::Bwrap,
             csa_resource::ResourceCapability::None,
         )
@@ -530,7 +530,7 @@ enforcement_mode = "off"
             idle_timeout_seconds: 30,
             initial_response_timeout_seconds: Some(10),
         },
-        RunResourceOverrides::default(),
+        RunResourceOverrides::absent(),
         csa_resource::FilesystemCapability::Bwrap,
         csa_resource::ResourceCapability::None,
     )
@@ -577,7 +577,7 @@ fn clean_room_sandbox_rejects_read_write_overlap_before_spawn() {
     assert!(
         resolve_clean_room_sandbox_options_with_capabilities(
             input,
-            RunResourceOverrides::default(),
+            RunResourceOverrides::absent(),
             csa_resource::FilesystemCapability::Bwrap,
             csa_resource::ResourceCapability::None,
         )

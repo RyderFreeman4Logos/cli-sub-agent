@@ -81,7 +81,7 @@ pub(crate) async fn handle_skill_run(
         no_failover: false,
         fast_but_more_cost: false,
         build_jobs: None,
-        resource_overrides: Default::default(),
+        resource_overrides: crate::run_resource_overrides::RunResourceOverrides::inherited(),
         wait: false,
         idle_timeout: None,
         initial_response_timeout: None,

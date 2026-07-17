@@ -14,11 +14,21 @@ use crate::session_guard::{
     SessionCleanupGuard, write_pre_exec_error_result, write_pre_exec_error_result_with_no_provider,
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(super) struct PipelinePreExecFailureDetails<'a> {
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) task_type: Option<&'a str>,
     pub(super) resource_overrides: RunResourceOverrides,
+}
+
+impl PipelinePreExecFailureDetails<'_> {
+    pub(super) const fn absent() -> Self {
+        Self {
+            config: None,
+            task_type: None,
+            resource_overrides: RunResourceOverrides::absent(),
+        }
+    }
 }
 
 pub(super) fn check_resources_before_spawn(
@@ -133,7 +143,7 @@ pub(super) fn write_fatal_error_marker_sidecar(
             anyhow::anyhow!(err).context("Failed to reset active liveness scope"),
             cleanup_guard,
             None,
-            PipelinePreExecFailureDetails::default(),
+            PipelinePreExecFailureDetails::absent(),
         )
     })?;
 
@@ -150,7 +160,7 @@ pub(super) fn write_fatal_error_marker_sidecar(
             anyhow::anyhow!(err).context("Failed to write fatal error marker sidecar"),
             cleanup_guard,
             None,
-            PipelinePreExecFailureDetails::default(),
+            PipelinePreExecFailureDetails::absent(),
         )
     })
 }

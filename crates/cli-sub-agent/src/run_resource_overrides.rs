@@ -5,7 +5,8 @@ use csa_config::ProjectConfig;
 use csa_session::{ResourceResolutionInfo, ResourceValueSource, SourcedResourceValue};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const INHERITED_RESOURCE_OVERRIDES_ENV: &str = "CSA_INHERITED_RESOURCE_OVERRIDES";
+pub(crate) const INHERITED_RESOURCE_OVERRIDES_ENV: &str =
+    csa_core::env::CSA_INHERITED_RESOURCE_OVERRIDES_ENV_KEY;
 
 static INHERITED_RESOURCE_OVERRIDES: OnceLock<InheritedResourceOverrides> = OnceLock::new();
 
@@ -14,7 +15,7 @@ static INHERITED_RESOURCE_OVERRIDES: OnceLock<InheritedResourceOverrides> = Once
 /// The snapshot never contains config/default values. It keeps the immediate
 /// parent's explicit value separately so child metadata can distinguish an
 /// inherited value from the final value after child CLI precedence is applied.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunResourceOverrides {
     memory_max_mb: Option<u64>,
@@ -83,7 +84,9 @@ fn parse_inherited_resource_overrides(raw: &str) -> Result<InheritedResourceOver
 }
 
 impl RunResourceOverrides {
-    pub(crate) fn new(memory_max_mb: Option<u64>, min_free_memory_mb: Option<u64>) -> Self {
+    /// Resolve explicit values supplied at this command boundary over the
+    /// trusted snapshot inherited from the parent CSA process.
+    pub(crate) fn from_cli(memory_max_mb: Option<u64>, min_free_memory_mb: Option<u64>) -> Self {
         Self::from_cli_and_parent(
             memory_max_mb,
             min_free_memory_mb,
@@ -92,6 +95,30 @@ impl RunResourceOverrides {
                 .copied()
                 .unwrap_or_default(),
         )
+    }
+
+    /// Use only the trusted explicit-resource snapshot inherited at process ingress.
+    pub(crate) fn inherited() -> Self {
+        Self::from_cli_and_parent(
+            None,
+            None,
+            INHERITED_RESOURCE_OVERRIDES
+                .get()
+                .copied()
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Represent a boundary where no explicit resource provenance exists.
+    pub(crate) const fn absent() -> Self {
+        Self {
+            memory_max_mb: None,
+            min_free_memory_mb: None,
+            memory_max_mb_source: None,
+            min_free_memory_mb_source: None,
+            inherited_memory_max_mb: None,
+            inherited_min_free_memory_mb: None,
+        }
     }
 
     fn from_cli_and_parent(
@@ -297,6 +324,29 @@ mod tests {
     }
 
     #[test]
+    fn inherited_14_000_snapshot_keeps_value_and_provenance() {
+        let parent = parse_inherited_resource_overrides(
+            r#"{"memory_max_mb":14000,"min_free_memory_mb":1024}"#,
+        )
+        .expect("parent contract should parse");
+        let overrides = RunResourceOverrides::from_cli_and_parent(None, None, parent);
+        let info = overrides.resolution_info(None, "codex");
+
+        assert_eq!(
+            overrides.child_env_value().unwrap().as_deref(),
+            Some(r#"{"memory_max_mb":14000,"min_free_memory_mb":1024}"#)
+        );
+        assert_eq!(
+            info.inherited_memory_max_mb,
+            Some(SourcedResourceValue {
+                value: 14_000,
+                source: ResourceValueSource::InheritedParentExplicit,
+            })
+        );
+        assert_eq!(info.effective_memory_max_mb, info.inherited_memory_max_mb);
+    }
+
+    #[test]
     fn no_parent_override_preserves_config_and_tool_default_resolution() {
         let cfg: ProjectConfig = toml::from_str("[resources]\nmemory_max_mb = 8192\n").unwrap();
         let overrides = RunResourceOverrides::from_cli_and_parent(
@@ -348,5 +398,50 @@ mod tests {
 
         assert_eq!(resumed.resolve_memory_max_mb(None, "codex"), Some(12_000));
         assert_eq!(resumed.resolve_min_free_memory_mb(None), 2048);
+    }
+
+    #[test]
+    fn launch_boundaries_cannot_use_ambiguous_or_absent_constructors() {
+        let launch_boundaries = [
+            ("main.rs", include_str!("main.rs")),
+            ("run_cmd.rs", include_str!("run_cmd.rs")),
+            ("skill_run_cmd.rs", include_str!("skill_run_cmd.rs")),
+            (
+                "review_cmd_resolve.rs",
+                include_str!("review_cmd_resolve.rs"),
+            ),
+            (
+                "debate_cmd_execute.rs",
+                include_str!("debate_cmd_execute.rs"),
+            ),
+            ("plan_cmd_daemon.rs", include_str!("plan_cmd_daemon.rs")),
+            ("batch.rs", include_str!("batch.rs")),
+            (
+                "claude_sub_agent_cmd.rs",
+                include_str!("claude_sub_agent_cmd.rs"),
+            ),
+            (
+                "mcp_server_run_tool.rs",
+                include_str!("mcp_server_run_tool.rs"),
+            ),
+            (
+                "review_convergence/repair_authorization.rs",
+                include_str!("review_convergence/repair_authorization.rs"),
+            ),
+        ];
+
+        for (path, source) in launch_boundaries {
+            for forbidden in [
+                "RunResourceOverrides::new(",
+                "RunResourceOverrides::default(",
+                "RunResourceOverrides::absent(",
+                "resource_overrides: Default::default()",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "launch boundary {path} must select inherited or explicit CLI provenance, found {forbidden}"
+                );
+            }
+        }
     }
 }

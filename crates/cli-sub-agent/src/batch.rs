@@ -101,7 +101,7 @@ pub(crate) async fn handle_batch(
     let config = config.map(Arc::new);
     let global_config = Arc::new(global_config);
     let model_catalog = Arc::new(model_catalog);
-    let resource_overrides = RunResourceOverrides::new(None, None);
+    let resource_overrides = RunResourceOverrides::inherited();
     let batch_context = BatchExecutionContext {
         project_root: &project_root,
         config,
