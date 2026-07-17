@@ -96,6 +96,7 @@ tools = [{ tool = "codex", model = "gpt-5.4-mini", thinking_budget = "low" }]
 
 [resources]
 min_free_memory_mb = 128
+soft_limit_percent = 100
 
 [tools.codex]
 enabled = true
@@ -118,7 +119,7 @@ enabled = false
         .env("CSA_SKIP_BWRAP_PREFLIGHT", "1")
         .env(
             "CSA_INHERITED_RESOURCE_OVERRIDES",
-            r#"{"min_free_memory_mb":0}"#,
+            r#"{"memory_max_mb":9000,"min_free_memory_mb":0}"#,
         )
         .args(["skill", "run", "resource-probe", "inspect resources"]);
     let command_context = format!("{command:?}");
@@ -155,7 +156,7 @@ enabled = false
     .expect("locate child resource snapshot");
     assert_eq!(
         std::fs::read_to_string(&capture).expect("read child resource snapshot"),
-        r#"{"min_free_memory_mb":0}"#,
+        r#"{"memory_max_mb":9000,"min_free_memory_mb":0}"#,
         "the skill child must receive the plan parent's explicit resource snapshot"
     );
 
@@ -173,7 +174,17 @@ enabled = false
         .sandbox_info
         .and_then(|info| info.resource_resolution)
         .expect("session state must persist resource provenance");
-    assert_eq!(resolution.inherited_memory_max_mb, None);
+    assert_eq!(
+        resolution.inherited_memory_max_mb,
+        Some(csa_session::SourcedResourceValue {
+            value: 9000,
+            source: csa_session::ResourceValueSource::InheritedParentExplicit,
+        })
+    );
+    assert_eq!(
+        resolution.effective_memory_max_mb,
+        resolution.inherited_memory_max_mb
+    );
     assert_eq!(
         resolution.inherited_min_free_memory_mb,
         Some(csa_session::SourcedResourceValue {
