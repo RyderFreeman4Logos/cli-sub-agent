@@ -10,6 +10,17 @@ require_source_contract() {
   just --summary | tr ' ' '\n' | grep -qx quality-gates
   just --show quality-gates | grep -q 'scripts/hooks/quality-gates.sh'
   just --show pre-push | grep -q 'pre-push: quality-gates'
+  test "$(grep -c 'scripts/hooks/quality-gate-contract-tests.sh' \
+    scripts/hooks/pre-push-quality-gates.sh)" -eq 1
+  local suite
+  for suite in \
+    quality-gate-receipt-tests.sh \
+    quality-gate-receipt-hostile-tests.sh \
+    pre-push-quality-gates-tests.sh \
+    dev2merge-quality-gate-receipt-tests.sh; do
+    test "$(grep -c "scripts/tests/${suite}" \
+      scripts/hooks/quality-gate-contract-tests.sh)" -eq 1
+  done
   grep -q 'run: just pre-push' lefthook.yml
   grep -q 'run: scripts/hooks/branch-protection.sh' lefthook.yml
   grep -q 'run: scripts/hooks/version-check.sh' lefthook.yml
@@ -24,6 +35,10 @@ new_fixture() {
   git -C "$fixture" config user.email "pre-push-tests@example.invalid"
   git -C "$fixture" remote add origin https://example.invalid/pre-push.git
   cp "$repo_root/scripts/hooks/quality-gate-receipt.sh" "$fixture/scripts/hooks/"
+  cp "$repo_root/scripts/cargo-env-normalize.sh" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality-gate-state.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
   cp "$repo_root/scripts/rename-no-replace.py" "$fixture/scripts/"
   cp "$repo_root/rust-toolchain.toml" "$fixture/"
   printf '[workspace]\n' >"$fixture/Cargo.toml"

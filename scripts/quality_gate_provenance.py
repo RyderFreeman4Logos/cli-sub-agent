@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""Secure exact-input quality-gate receipt storage and provenance collection.
+
+The public ``run`` command owns the whole receipt lifecycle. Acceptance inputs are
+collected by a child entered through ``cargo-env-normalize.sh`` so the receipt sees
+the same Rust/Cargo environment as the authoritative gate. Receipt state is opened
+relative to verified directory descriptors and is never trusted by pathname alone.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+from typing import Sequence
+
+from quality_gate_secure_state import (
+    IMPLEMENTATION_VERSION,
+    SCHEMA_VERSION,
+    sha256_bytes,
+)
+
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_REPOSITORY_FILE_BYTES = 32 * 1024 * 1024
+MAX_TOOL_BYTES = 256 * 1024 * 1024
+COMMAND_TIMEOUT_SECONDS = 15
+
+ENV_PREFIXES = ("CARGO_", "RUST", "NEXTEST_", "MISE_")
+ENV_EXACT = {
+    "AR",
+    "BINDGEN_EXTRA_CLANG_ARGS",
+    "CC",
+    "CFLAGS",
+    "CPP",
+    "CPPFLAGS",
+    "CSA_PRESERVE_CARGO_TARGET_DIR",
+    "CXX",
+    "CXXFLAGS",
+    "LD",
+    "LDFLAGS",
+    "PKG_CONFIG_PATH",
+}
+ENV_NORMALIZED_SEPARATELY = {
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+}
+ENV_VOLATILE = {
+    "CARGO_MAKEFLAGS",
+    "CARGO_TARGET_TMPDIR",
+    "RUST_RECURSION_COUNT",
+}
+SECRET_MARKERS = ("AUTH", "CREDENTIAL", "KEY", "PASSWORD", "SECRET", "TOKEN")
+PROVENANCE_TOOLS = (
+    "bash",
+    "cargo",
+    "cargo-deny",
+    "cargo-nextest",
+    "clippy-driver",
+    "git",
+    "just",
+    "lefthook",
+    "python3",
+    "rg",
+    "rustfmt",
+    "shellcheck",
+)
+
+
+class ProvenanceError(RuntimeError):
+    """An acceptance input could not be normalized deterministically."""
+
+
+def encode_fields(fields: dict[str, str]) -> bytes:
+    """Encode a canonical line-oriented manifest."""
+
+    return "".join(f"{key}={fields[key]}\n" for key in sorted(fields)).encode()
+
+
+def run_checked(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
+) -> bytes:
+    """Run a bounded provenance command and return bounded stdout."""
+
+    try:
+        completed = subprocess.run(
+            list(command),
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ProvenanceError(
+            f"provenance command unavailable: {command[0]}"
+        ) from error
+    if completed.returncode != 0:
+        raise ProvenanceError(f"provenance command failed: {command[0]}")
+    if len(completed.stdout) > MAX_MANIFEST_BYTES:
+        raise ProvenanceError(f"provenance command output is too large: {command[0]}")
+    return completed.stdout
+
+
+def git_output(repo: Path, *arguments: str) -> str:
+    """Run a bounded Git query in the repository."""
+
+    output = run_checked(("git", *arguments), cwd=repo)
+    try:
+        return output.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise ProvenanceError("git provenance was not UTF-8") from error
+
+
+def hash_open_file(path: Path, maximum: int, *, resolve: bool = False) -> str:
+    """Hash a bounded regular file without following its final component."""
+
+    candidate = path.resolve(strict=True) if resolve else path
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as error:
+        raise ProvenanceError("required provenance file is unavailable") from error
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_size > maximum:
+            raise ProvenanceError("provenance file is not a bounded regular file")
+        digest = hashlib.sha256()
+        remaining = status.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ProvenanceError("provenance file was truncated while reading")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ProvenanceError("provenance file grew while reading")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def optional_repository_digest(repo: Path, relative: str) -> str:
+    """Hash a repository file or return the explicit missing sentinel."""
+
+    path = repo / relative
+    try:
+        return hash_open_file(path, MAX_REPOSITORY_FILE_BYTES)
+    except (FileNotFoundError, ProvenanceError):
+        if path.exists() or path.is_symlink():
+            raise
+        return "missing"
+
+
+def command_digest(command: Sequence[str]) -> str:
+    """Hash command arguments without shell quoting ambiguity."""
+
+    encoded = bytearray()
+    for argument in command:
+        value = os.fsencode(argument)
+        encoded.extend(len(value).to_bytes(8, "big"))
+        encoded.extend(value)
+    return sha256_bytes(bytes(encoded))
+
+
+def resolve_executable(value: str, *, require_absolute: bool) -> Path:
+    """Resolve an executable and reject ambiguous explicit paths."""
+
+    if require_absolute and not os.path.isabs(value):
+        raise ProvenanceError("explicit tool provenance must be absolute")
+    located = value if os.path.isabs(value) else shutil.which(value)
+    if not located:
+        raise ProvenanceError("required provenance executable is missing")
+    path = Path(located).resolve(strict=True)
+    status = path.stat()
+    if not stat.S_ISREG(status.st_mode) or not os.access(path, os.X_OK):
+        raise ProvenanceError("provenance executable is not an executable regular file")
+    return path
+
+
+def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
+    """Identify the normalized compiler, target, launchers, and their bytes."""
+
+    explicit_rustc = env.get("RUSTC")
+    selected_value = explicit_rustc or shutil.which("rustc", path=env.get("PATH"))
+    if not selected_value:
+        raise ProvenanceError("normalized rustc executable is missing")
+    if explicit_rustc and not os.path.isabs(selected_value):
+        raise ProvenanceError("explicit rustc provenance must be absolute")
+    selected_launcher = Path(selected_value)
+    selected = resolve_executable(selected_value, require_absolute=bool(explicit_rustc))
+    sysroot_raw = run_checked(
+        (str(selected_launcher), "--print", "sysroot"), cwd=repo, env=env
+    )
+    try:
+        sysroot_text = sysroot_raw.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise ProvenanceError("rustc sysroot was not UTF-8") from error
+    if not os.path.isabs(sysroot_text):
+        raise ProvenanceError("rustc sysroot provenance was not absolute")
+    sysroot = Path(sysroot_text).resolve(strict=True)
+    compiler = (sysroot / "bin" / "rustc").resolve(strict=True)
+    if compiler.parent != (sysroot / "bin").resolve(strict=True):
+        raise ProvenanceError("rustc escaped its canonical sysroot bin directory")
+    version = run_checked((str(compiler), "-vV"), cwd=repo, env=env)
+    host_lines = [
+        line.split(b":", 1)[1].strip()
+        for line in version.splitlines()
+        if line.startswith(b"host:")
+    ]
+    if len(host_lines) != 1 or not host_lines[0]:
+        raise ProvenanceError("rustc -vV did not contain one host")
+
+    parts = {
+        "compiler_bytes": hash_open_file(compiler, MAX_TOOL_BYTES),
+        "compiler_version": sha256_bytes(version),
+        "explicit_rustc": "unset",
+        "rustc_wrapper": "unset",
+        "rustc_workspace_wrapper": "unset",
+    }
+    if explicit_rustc:
+        parts["explicit_rustc"] = hash_open_file(selected, MAX_TOOL_BYTES)
+    for name, key in (
+        ("RUSTC_WRAPPER", "rustc_wrapper"),
+        ("RUSTC_WORKSPACE_WRAPPER", "rustc_workspace_wrapper"),
+    ):
+        value = env.get(name)
+        if value:
+            wrapper = resolve_executable(value, require_absolute=True)
+            parts[key] = hash_open_file(wrapper, MAX_TOOL_BYTES)
+
+    target = env.get("CARGO_BUILD_TARGET")
+    if target:
+        target_path = Path(target)
+        candidate = target_path if target_path.is_absolute() else repo / target_path
+        if candidate.exists() or candidate.is_symlink():
+            target_value = "file:" + hash_open_file(
+                candidate, MAX_REPOSITORY_FILE_BYTES
+            )
+        else:
+            target_value = "triple:" + sha256_bytes(target.encode())
+    else:
+        target_value = "host:" + sha256_bytes(host_lines[0])
+    return sha256_bytes(encode_fields(parts)), sha256_bytes(target_value.encode())
+
+
+def environment_provenance(env: dict[str, str]) -> str:
+    """Hash every normalized acceptance-affecting Rust/Cargo/nextest input."""
+
+    fields: dict[str, str] = {}
+    for name in sorted(env):
+        if name in ENV_VOLATILE or name in ENV_NORMALIZED_SEPARATELY:
+            continue
+        if name not in ENV_EXACT and not name.startswith(ENV_PREFIXES):
+            continue
+        value = env[name]
+        if any(marker in name.upper() for marker in SECRET_MARKERS):
+            fields[name] = "set" if value else "empty"
+        else:
+            fields[name] = sha256_bytes(os.fsencode(value))
+    for required in (
+        "CARGO_DENY_DISABLE_FETCH",
+        "CARGO_DENY_OFFLINE",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "MISE_DATA_DIR",
+        "NEXTEST_PROFILE",
+        "NEXTEST_TEST_THREADS",
+    ):
+        fields.setdefault(required, "unset")
+    return sha256_bytes(encode_fields(fields))
+
+
+def dotenv_provenance(repo: Path) -> str:
+    """Hash ignored dotenv inputs without exposing their names or contents."""
+
+    digest = hashlib.sha256()
+    try:
+        entries = sorted(repo.iterdir(), key=lambda path: os.fsencode(path.name))
+    except OSError as error:
+        raise ProvenanceError("could not enumerate dotenv provenance") from error
+    for path in entries:
+        if not path.name.startswith(".env"):
+            continue
+        if path.is_symlink():
+            raise ProvenanceError("dotenv provenance cannot be a symlink")
+        if not path.is_file():
+            continue
+        name_digest = sha256_bytes(os.fsencode(path.name))
+        content_digest = hash_open_file(path, 1024 * 1024)
+        digest.update(f"{name_digest}={content_digest}\n".encode())
+    return digest.hexdigest()
+
+
+def cargo_config_provenance(repo: Path, env: dict[str, str]) -> str:
+    """Hash effective Cargo configuration files while excluding credentials."""
+
+    fields: dict[str, str] = {}
+    candidates = [repo / ".cargo" / "config", repo / ".cargo" / "config.toml"]
+    cargo_home = env.get("CARGO_HOME")
+    if cargo_home:
+        if not os.path.isabs(cargo_home):
+            raise ProvenanceError("normalized CARGO_HOME was not absolute")
+        home = Path(cargo_home)
+        candidates.extend((home / "config", home / "config.toml"))
+    for index, path in enumerate(candidates):
+        if path.is_symlink():
+            raise ProvenanceError("Cargo config provenance cannot be a symlink")
+        if path.exists():
+            fields[str(index)] = hash_open_file(path, 4 * 1024 * 1024)
+        else:
+            fields[str(index)] = "missing"
+    return sha256_bytes(encode_fields(fields))
+
+
+def tool_provenance(repo: Path, env: dict[str, str]) -> str:
+    """Hash normalized executable bytes and bounded version provenance."""
+
+    fields: dict[str, str] = {}
+    for tool in PROVENANCE_TOOLS:
+        located = shutil.which(tool, path=env.get("PATH"))
+        if not located:
+            fields[tool] = "missing"
+            continue
+        path = resolve_executable(located, require_absolute=True)
+        fields[tool] = hash_open_file(path, MAX_TOOL_BYTES)
+    cargo = shutil.which("cargo", path=env.get("PATH"))
+    if not cargo:
+        raise ProvenanceError("normalized Cargo executable is missing")
+    fields["cargo_version"] = sha256_bytes(
+        run_checked((cargo, "-vV"), cwd=repo, env=env)
+    )
+    return sha256_bytes(encode_fields(fields))
+
+
+def repository_identity(repo: Path) -> str:
+    """Bind receipts to repository roots and the canonical common directory."""
+
+    roots = git_output(repo, "rev-list", "--max-parents=0", "HEAD").splitlines()
+    common_raw = git_output(repo, "rev-parse", "--git-common-dir")
+    common = Path(common_raw)
+    if not common.is_absolute():
+        common = repo / common
+    common = common.resolve(strict=True)
+    fields = {
+        "common": sha256_bytes(os.fsencode(common)),
+        "roots": sha256_bytes("\n".join(sorted(roots)).encode()),
+    }
+    return sha256_bytes(encode_fields(fields))
+
+
+def gate_script_digest(repo: Path, command: Sequence[str], env: dict[str, str]) -> str:
+    """Hash the actual first gate executable selected by the normalized environment."""
+
+    first = command[0]
+    candidate = Path(first)
+    if not candidate.is_absolute() and "/" in first:
+        candidate = repo / candidate
+    elif not candidate.is_absolute():
+        located = shutil.which(first, path=env.get("PATH"))
+        if not located:
+            return sha256_bytes(os.fsencode(first))
+        candidate = Path(located)
+    return hash_open_file(candidate, MAX_REPOSITORY_FILE_BYTES, resolve=True)
+
+
+def recipe_digest(repo: Path, env: dict[str, str]) -> str:
+    """Hash the effective authoritative Just recipe or its missing sentinel."""
+
+    try:
+        recipe = run_checked(("just", "--show", "quality-gates"), cwd=repo, env=env)
+    except ProvenanceError:
+        recipe = b"quality-gates-recipe-missing"
+    return sha256_bytes(recipe)
+
+
+def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) -> bytes:
+    """Collect the canonical acceptance manifest in a normalized child."""
+
+    if not command:
+        raise ProvenanceError("quality-gate command is empty")
+    compiler, target = compiler_provenance(repo, env)
+    index_clean = (
+        subprocess.run(
+            ("git", "diff", "--cached", "--quiet", "--ignore-submodules", "--"),
+            cwd=repo,
+            env=env,
+            check=False,
+        ).returncode
+        == 0
+    )
+    tracked_clean = (
+        subprocess.run(
+            ("git", "diff", "--quiet", "--ignore-submodules", "--"),
+            cwd=repo,
+            env=env,
+            check=False,
+        ).returncode
+        == 0
+    )
+    untracked = run_checked(
+        ("git", "ls-files", "--others", "--exclude-standard", "-z"),
+        cwd=repo,
+        env=env,
+    )
+    checkout = repo.resolve(strict=True)
+    if not checkout.is_absolute():
+        raise ProvenanceError("checkout provenance was not absolute")
+    feature_matrix = env.get(
+        "CSA_QUALITY_GATE_FEATURE_MATRIX",
+        "workspace-default,workspace-all-features,e2e",
+    )
+    fields = {
+        "cargo_config_sha256": cargo_config_provenance(repo, env),
+        "cargo_lock_sha256": optional_repository_digest(repo, "Cargo.lock"),
+        "checkout_identity": sha256_bytes(os.fsencode(checkout)),
+        "dotenv_sha256": dotenv_provenance(repo),
+        "environment_sha256": environment_provenance(env),
+        "feature_matrix_sha256": sha256_bytes(feature_matrix.encode()),
+        "gate_command_sha256": command_digest(command),
+        "gate_script_sha256": gate_script_digest(repo, command, env),
+        "head_oid": git_output(repo, "rev-parse", "HEAD"),
+        "implementation_sha256": optional_repository_digest(
+            repo, "scripts/hooks/quality-gate-receipt.sh"
+        ),
+        "implementation_version": IMPLEMENTATION_VERSION,
+        "index_clean": str(index_clean).lower(),
+        "index_oid": git_output(repo, "write-tree"),
+        "justfile_sha256": optional_repository_digest(repo, "justfile"),
+        "lefthook_sha256": optional_repository_digest(repo, "lefthook.yml"),
+        "normalizer_sha256": optional_repository_digest(
+            repo, "scripts/cargo-env-normalize.sh"
+        ),
+        "quality_gate_entrypoint_sha256": optional_repository_digest(
+            repo, "scripts/hooks/quality-gates.sh"
+        ),
+        "quality_gate_state_helper_sha256": optional_repository_digest(
+            repo, "scripts/quality-gate-state.py"
+        ),
+        "quality_gate_secure_state_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_secure_state.py"
+        ),
+        "quality_gate_provenance_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_provenance.py"
+        ),
+        "recipe_sha256": recipe_digest(repo, env),
+        "repository_identity": repository_identity(repo),
+        "rust_toolchain_file_sha256": optional_repository_digest(
+            repo, "rust-toolchain.toml"
+        ),
+        "rust_toolchain_sha256": compiler,
+        "schema_version": str(SCHEMA_VERSION),
+        "target_provenance_sha256": target,
+        "tool_provenance_sha256": tool_provenance(repo, env),
+        "tracked_worktree_clean": str(tracked_clean).lower(),
+        "tree_oid": git_output(repo, "rev-parse", "HEAD^{tree}"),
+        "untracked_worktree_digest": sha256_bytes(untracked),
+        "weave_lock_sha256": optional_repository_digest(repo, "weave.lock"),
+    }
+    manifest = encode_fields(fields)
+    if len(manifest) > MAX_MANIFEST_BYTES:
+        raise ProvenanceError("acceptance manifest is too large")
+    return manifest

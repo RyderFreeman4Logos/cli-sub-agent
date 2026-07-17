@@ -75,6 +75,10 @@ git -C "$fixture" config user.name "Dev2merge Tests"
 git -C "$fixture" config user.email "dev2merge-tests@example.invalid"
 git -C "$fixture" remote add origin https://example.invalid/dev2merge.git
 cp "$repo_root/scripts/hooks/quality-gate-receipt.sh" "$fixture/scripts/hooks/"
+cp "$repo_root/scripts/cargo-env-normalize.sh" "$fixture/scripts/"
+cp "$repo_root/scripts/quality-gate-state.py" "$fixture/scripts/"
+cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
+cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
 cp "$repo_root/scripts/rename-no-replace.py" "$fixture/scripts/"
 cp "$repo_root/rust-toolchain.toml" "$fixture/"
 printf '[workspace]\n' >"$fixture/Cargo.toml"
@@ -89,7 +93,7 @@ done
 chmod +x "$fixture/scripts/hooks/"*.sh
 cat >"$fixture/justfile" <<EOF
 quality-gates:
-    PATH="\${CSA_TEST_RUSTC_DIR:?}:\$PATH" scripts/hooks/quality-gate-receipt.sh -- scripts/hooks/pre-push-quality-gates.sh
+    MISE_DATA_DIR="$test_root/no-mise" PATH="\${CSA_TEST_RUSTC_DIR:?}:\$PATH" scripts/hooks/quality-gate-receipt.sh -- scripts/hooks/pre-push-quality-gates.sh
 
 pre-push:
     CSA_TEST_RUSTC_DIR="$hook_rustc_dir" just quality-gates

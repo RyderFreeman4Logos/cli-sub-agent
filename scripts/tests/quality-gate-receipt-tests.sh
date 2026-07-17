@@ -16,6 +16,12 @@ new_fixture() {
   git -C "$fixture" remote add origin "https://example.invalid/quality-gate.git"
   mkdir -p "$fixture/scripts/hooks" "$fixture/.csa/state"
   cp "${repo_root}/scripts/rename-no-replace.py" "$fixture/scripts/rename-no-replace.py"
+  cp "${repo_root}/scripts/cargo-env-normalize.sh" "$fixture/scripts/cargo-env-normalize.sh"
+  cp "${repo_root}/scripts/quality-gate-state.py" "$fixture/scripts/quality-gate-state.py"
+  cp "${repo_root}/scripts/quality_gate_secure_state.py" \
+    "$fixture/scripts/quality_gate_secure_state.py"
+  cp "${repo_root}/scripts/quality_gate_provenance.py" \
+    "$fixture/scripts/quality_gate_provenance.py"
   cp "$source_runner" "$fixture/scripts/hooks/quality-gate-receipt.sh"
   cp "${repo_root}/rust-toolchain.toml" "$fixture/rust-toolchain.toml"
   printf '[workspace]\n' >"$fixture/Cargo.toml"
@@ -73,10 +79,14 @@ assert_manifest_contract() {
   for key in \
     repository_identity checkout_identity head_oid tree_oid index_oid \
     index_clean tracked_worktree_clean untracked_worktree_digest \
-    cargo_lock_sha256 weave_lock_sha256 rust_toolchain_sha256 \
+    cargo_lock_sha256 weave_lock_sha256 rust_toolchain_sha256 rust_toolchain_file_sha256 \
     target_provenance_sha256 feature_matrix_sha256 environment_sha256 \
+    cargo_config_sha256 dotenv_sha256 normalizer_sha256 tool_provenance_sha256 \
     justfile_sha256 lefthook_sha256 gate_script_sha256 recipe_sha256 \
-    implementation_sha256 schema_version implementation_version; do
+    implementation_sha256 quality_gate_state_helper_sha256 \
+    quality_gate_secure_state_sha256 \
+    quality_gate_provenance_sha256 \
+    schema_version implementation_version; do
     grep -q "^${key}=" <<<"$manifest" || {
       echo "missing manifest dimension: $key" >&2
       return 1
@@ -87,7 +97,8 @@ assert_manifest_contract() {
 invoke_identity() {
   local fixture="$1" counter="$2" runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   shift 2
-  (cd "$fixture" && env "$@" "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") |
+  (cd "$fixture" && env "MISE_DATA_DIR=${test_root}/mise-default" "$@" \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") |
     json_field receipt_identity
 }
 
@@ -122,6 +133,8 @@ run_invalidation_matrix() {
   assert_invalidation checkout 'moved="${fixture}.moved"; mv "$fixture" "$moved"; fixture="$moved"; counter="${fixture}/.csa/state/gate-counter"'
   assert_invalidation cargo-lock 'printf "changed\n" >>"$fixture/Cargo.lock"'
   assert_invalidation weave-lock 'printf "changed\n" >>"$fixture/weave.lock"'
+  assert_invalidation rust-toolchain-file \
+    'printf "# changed toolchain contract\n" >>"$fixture/rust-toolchain.toml"'
   local fixture counter first second target_spec toolchain toolchain_root
   fixture="$(new_fixture)"
   counter="${fixture}/.csa/state/gate-counter"
@@ -148,6 +161,35 @@ EOF
   test "$first" != "$second"
   test "$(wc -c <"$counter")" -eq 2
   echo "PASS invalidation-toolchain"
+  assert_invalidation mise-data-dir ':' \
+    "MISE_DATA_DIR=${test_root}/mise-a" "MISE_DATA_DIR=${test_root}/mise-b"
+  assert_invalidation rustc ':' \
+    "RUSTC=${test_root}/toolchain-a/bin/rustc" "RUSTC=${test_root}/toolchain-b/bin/rustc"
+  printf '#!/usr/bin/env bash\nexec "$@"\n' >"$test_root/wrapper-a"
+  printf '#!/usr/bin/env bash\n# changed wrapper\nexec "$@"\n' >"$test_root/wrapper-b"
+  chmod +x "$test_root/wrapper-a" "$test_root/wrapper-b"
+  assert_invalidation rustc-wrapper ':' \
+    "RUSTC_WRAPPER=${test_root}/wrapper-a" "RUSTC_WRAPPER=${test_root}/wrapper-b"
+  assert_invalidation rustc-workspace-wrapper ':' \
+    "RUSTC_WORKSPACE_WRAPPER=${test_root}/wrapper-a" \
+    "RUSTC_WORKSPACE_WRAPPER=${test_root}/wrapper-b"
+  assert_invalidation cargo-encoded-rustflags ':' \
+    $'CARGO_ENCODED_RUSTFLAGS=-Copt-level=1\x1f-Cdebuginfo=0' \
+    $'CARGO_ENCODED_RUSTFLAGS=-Copt-level=2\x1f-Cdebuginfo=0'
+  assert_invalidation cargo-deny-disable-fetch ':' \
+    'CARGO_DENY_DISABLE_FETCH=0' 'CARGO_DENY_DISABLE_FETCH=1'
+  assert_invalidation cargo-deny-offline ':' \
+    'CARGO_DENY_OFFLINE=0' 'CARGO_DENY_OFFLINE=1'
+  assert_invalidation cargo-net-offline ':' \
+    'CARGO_NET_OFFLINE=false' 'CARGO_NET_OFFLINE=true'
+  assert_invalidation nextest-profile ':' \
+    'NEXTEST_PROFILE=default' 'NEXTEST_PROFILE=ci'
+  assert_invalidation nextest-test-threads ':' \
+    'NEXTEST_TEST_THREADS=1' 'NEXTEST_TEST_THREADS=2'
+  assert_invalidation rustc-bootstrap ':' \
+    'RUSTC_BOOTSTRAP=0' 'RUSTC_BOOTSTRAP=1'
+  assert_invalidation cargo-home ':' \
+    "CARGO_HOME=${test_root}/cargo-home-a" "CARGO_HOME=${test_root}/cargo-home-b"
   assert_invalidation target ':' '' 'CARGO_BUILD_TARGET=other-linux-target'
   fixture="$(new_fixture)"
   counter="${fixture}/.csa/state/gate-counter"
@@ -161,6 +203,7 @@ EOF
   echo "PASS invalidation-target-spec-bytes"
   assert_invalidation feature-matrix ':' 'CSA_QUALITY_GATE_FEATURE_MATRIX=default' 'CSA_QUALITY_GATE_FEATURE_MATRIX=all-features'
   assert_invalidation environment ':' 'RUSTFLAGS=-Copt-level=1' 'RUSTFLAGS=-Copt-level=2'
+  assert_invalidation dotenv 'printf "CARGO_DENY_OFFLINE=true\\n" >"$fixture/.env"'
   assert_invalidation recipe 'printf "changed\n" >>"$fixture/justfile"'
   assert_invalidation implementation 'printf "# changed\n" >>"$fixture/scripts/hooks/quality-gate-receipt.sh"'
 
@@ -204,6 +247,17 @@ assert_single_json() {
   test "$(printf '%s\n' "$record" | wc -l)" -eq 1
   printf '%s' "$record" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value["status"] in {"executed", "reused", "gate_failed"}'
   ! grep -Eq '/tmp/|example\.invalid|credential|secret-token' <<<"$record"
+}
+
+wait_for_pid_bounded() {
+  local pid="$1"
+  if ! timeout 10 tail --pid="$pid" -f /dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    echo "timed out waiting for fixture process ${pid}" >&2
+    return 1
+  fi
+  wait "$pid"
 }
 
 run_integrity_concurrency() {
@@ -292,26 +346,40 @@ PY'
   (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
     .csa/state/ready .csa/state/release >.csa/state/writer-one.json) &
   local writer_one=$!
-  read -r _ <&7
+  if ! timeout 5 bash -c 'read -r _ <&7' 7<&7; then
+    kill "$writer_one" 2>/dev/null || true
+    wait "$writer_one" 2>/dev/null || true
+    echo "timed out waiting for the first fixture writer" >&2
+    return 1
+  fi
   (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
     .csa/state/ready .csa/state/release >.csa/state/writer-two.json) &
   local writer_two=$!
   printf 'release\n' >&8
-  wait "$writer_one"
-  wait "$writer_two"
+  wait_for_pid_bounded "$writer_one"
+  wait_for_pid_bounded "$writer_two"
   exec 7>&- 8>&-
   test "$(wc -c <"$counter")" -eq 1
   test "$(find "$receipt_dir" -maxdepth 1 -type f -name '*.json' | wc -l)" -eq 1
   assert_single_json "$(cat "$fixture/.csa/state/writer-one.json")"
   assert_single_json "$(cat "$fixture/.csa/state/writer-two.json")"
+  local writers=()
   for _ in 1 2 3 4 5 6; do
     (cd "$fixture" && "$runner" -- scripts/hooks/blocking-gate.sh "$counter" \
       .csa/state/ready .csa/state/release >/dev/null) &
+    writers+=("$!")
   done
-  wait
+  local writer
+  for writer in "${writers[@]}"; do
+    wait_for_pid_bounded "$writer"
+  done
   test "$(wc -c <"$counter")" -eq 1
   echo "PASS integrity-concurrency"
 }
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 case "$scenario" in
   exact-reuse) run_exact_reuse ;;

@@ -13,6 +13,7 @@ just check-version-bumped
 just check-chinese
 scripts/cargo-env-normalize.sh cargo fmt --all -- --check
 ./scripts/hooks/check-env-dependent-tests.sh
+scripts/hooks/quality-gate-contract-tests.sh
 just deny
 just clippy
 # `just test` already includes workspace e2e tests in both default and
