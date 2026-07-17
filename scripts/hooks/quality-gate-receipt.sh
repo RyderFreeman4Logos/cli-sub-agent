@@ -38,6 +38,63 @@ file_digest() {
   fi
 }
 
+bounded_environment_digest() {
+  local name value
+  for name in \
+    CARGO_BUILD_TARGET CARGO_INCREMENTAL CARGO_PROFILE CFLAGS CC \
+    PKG_CONFIG_PATH RUSTDOCFLAGS RUSTFLAGS RUSTUP_TOOLCHAIN; do
+    value="${!name-}"
+    if [ -n "$value" ]; then
+      printf '%s=%s\n' "$name" "$(printf '%s' "$value" | sha256_text)"
+    else
+      printf '%s=unset\n' "$name"
+    fi
+  done | sha256_text
+}
+
+rust_toolchain_digest() {
+  local rustc_path
+  rustc_path="$(command -v rustc)" || return 1
+  rustc_path="$(realpath -e "$rustc_path")" || return 1
+  {
+    rustc -vV
+    printf 'binary_sha256=%s\n' "$(file_digest "$rustc_path")"
+    printf 'binary_realpath_sha256=%s\n' "$(printf '%s' "$rustc_path" | sha256_text)"
+  } | sha256_text
+}
+
+target_provenance_digest() {
+  local target="${CARGO_BUILD_TARGET-}" host
+  host="$(rustc -vV | awk -F': ' '$1 == "host" {print $2}')" || return 1
+  if [ -z "$target" ]; then
+    target="$host"
+  elif [ -f "$target" ]; then
+    target="file:$(realpath -e "$target" | sha256_text):$(file_digest "$target")"
+  fi
+  printf 'host=%s\ntarget=%s\n' "$host" "$target" | sha256_text
+}
+
+gate_script_digest() {
+  local command_name="$1" path
+  path="$(command -v "$command_name" 2>/dev/null || true)"
+  if [ -z "$path" ] && [ -f "$command_name" ]; then
+    path="$command_name"
+  fi
+  if [ -n "$path" ] && [ -f "$path" ] && [ ! -L "$path" ]; then
+    file_digest "$path"
+  else
+    printf '%s' "$command_name" | sha256_text
+  fi
+}
+
+recipe_digest() {
+  if [ -f justfile ] && just --show quality-gates >/dev/null 2>&1; then
+    just --show quality-gates 2>/dev/null | sha256_text
+  else
+    printf 'quality-gates-recipe-missing' | sha256_text
+  fi
+}
+
 repository_identity() {
   {
     git rev-list --max-parents=0 HEAD 2>/dev/null | sort
@@ -60,6 +117,7 @@ else:
 collect_manifest() {
   local output="$1" index_clean tracked_clean untracked_digest gate_command_digest
   local checkout_identity head_oid tree_oid index_oid repo_identity implementation_digest
+  local rust_toolchain target_provenance feature_matrix environment_digest
   shift
   git diff --cached --quiet --ignore-submodules -- && index_clean=true || index_clean=false
   git diff --quiet --ignore-submodules -- && tracked_clean=true || tracked_clean=false
@@ -70,6 +128,10 @@ collect_manifest() {
   tree_oid="$(git rev-parse 'HEAD^{tree}')" || return 1
   index_oid="$(git write-tree)" || return 1
   implementation_digest="$(file_digest "${repo_root}/scripts/hooks/quality-gate-receipt.sh")"
+  rust_toolchain="$(rust_toolchain_digest)" || return 1
+  target_provenance="$(target_provenance_digest)" || return 1
+  feature_matrix="$(printf '%s' "${CSA_QUALITY_GATE_FEATURE_MATRIX-workspace-default,workspace-all-features,e2e}" | sha256_text)"
+  environment_digest="$(bounded_environment_digest)"
   gate_command_digest="$(printf '%q\0' "$@" | sha256_text)"
   {
     printf 'schema_version=%s\n' "$schema_version"
@@ -82,6 +144,16 @@ collect_manifest() {
     printf 'index_clean=%s\n' "$index_clean"
     printf 'tracked_worktree_clean=%s\n' "$tracked_clean"
     printf 'untracked_worktree_digest=%s\n' "$untracked_digest"
+    printf 'cargo_lock_sha256=%s\n' "$(file_digest Cargo.lock)"
+    printf 'weave_lock_sha256=%s\n' "$(file_digest weave.lock)"
+    printf 'rust_toolchain_sha256=%s\n' "$rust_toolchain"
+    printf 'target_provenance_sha256=%s\n' "$target_provenance"
+    printf 'feature_matrix_sha256=%s\n' "$feature_matrix"
+    printf 'environment_sha256=%s\n' "$environment_digest"
+    printf 'justfile_sha256=%s\n' "$(file_digest justfile)"
+    printf 'lefthook_sha256=%s\n' "$(file_digest lefthook.yml)"
+    printf 'gate_script_sha256=%s\n' "$(gate_script_digest "$1")"
+    printf 'recipe_sha256=%s\n' "$(recipe_digest)"
     printf 'gate_command_sha256=%s\n' "$gate_command_digest"
     printf 'implementation_sha256=%s\n' "$implementation_digest"
   } >"$output"
