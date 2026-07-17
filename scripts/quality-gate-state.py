@@ -20,7 +20,7 @@ from quality_gate_provenance import (
     ProvenanceError,
     collect_manifest,
 )
-from quality_gate_sandbox import GateSandbox, IsolationError
+from quality_gate_sandbox import GateSandbox, IsolationError, ToolchainError
 from quality_gate_secure_state import (
     SCHEMA_VERSION,
     SecureState,
@@ -90,6 +90,9 @@ def run_receipt_gate(repo: Path, command: Sequence[str]) -> int:
         try:
             sandbox = GateSandbox(repo, os.environ.copy())
             sandbox.preflight()
+        except ToolchainError as error:
+            emit_result("gate_failed", "0" * 64, error.reason, 125, None)
+            return 125
         except (IsolationError, OSError):
             emit_result(
                 "gate_failed",
@@ -103,6 +106,9 @@ def run_receipt_gate(repo: Path, command: Sequence[str]) -> int:
             return run_receipt_gate_in_sandbox(repo, command, sandbox)
         finally:
             sandbox.close()
+    except ToolchainError as error:
+        emit_result("gate_failed", "0" * 64, error.reason, 125, None)
+        return 125
     except (IsolationError, OSError):
         emit_result("gate_failed", "0" * 64, "isolation_unavailable", 125, None)
         return 125

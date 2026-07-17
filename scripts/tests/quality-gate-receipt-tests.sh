@@ -71,6 +71,8 @@ new_fixture() {
     "$fixture/scripts/quality_gate_process.py"
   cp "${repo_root}/scripts/quality_gate_environment.py" \
     "$fixture/scripts/quality_gate_environment.py"
+  cp "${repo_root}/scripts/quality_gate_toolchain.py" \
+    "$fixture/scripts/quality_gate_toolchain.py"
   cp "$source_runner" "$fixture/scripts/hooks/quality-gate-receipt.sh"
   cp "${repo_root}/rust-toolchain.toml" "$fixture/rust-toolchain.toml"
   printf '[workspace]\n' >"$fixture/Cargo.toml"
@@ -161,7 +163,8 @@ assert_manifest_contract() {
 }
 
 invoke_identity() {
-  local fixture="$1" counter="$2" runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  local fixture="$1" counter="$2"
+  local runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   shift 2
   (cd "$fixture" && env "MISE_DATA_DIR=${test_root}/mise-default" \
     "PATH=${fixture_launcher_dir}:${PATH}" "$@" \
@@ -202,7 +205,7 @@ assert_sanitized_environment() {
   echo "PASS sanitized-$name"
 }
 
-run_path_toolchain_invalidation() {
+run_path_toolchain_canonicalization() {
   local fixture counter first second runs toolchain toolchain_root real_sysroot
   fixture="$(new_fixture)"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
@@ -233,10 +236,10 @@ EOF
   done
   first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
   second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
-  assert_ne invalidation-toolchain-identity "$first" "$second"
+  assert_eq canonicalized-pinned-toolchain-identity "$first" "$second"
   runs="$(wc -c <"$counter")"
-  assert_eq invalidation-toolchain-gate-runs 2 "$runs"
-  echo "PASS invalidation-toolchain"
+  assert_eq canonicalized-pinned-toolchain-gate-runs 1 "$runs"
+  echo "PASS canonicalized-pinned-toolchain"
 }
 
 run_mise_data_dir_invalidation() {
@@ -330,7 +333,7 @@ run_invalidation_matrix() {
   assert_invalidation weave-lock 'printf "changed\n" >>"$fixture/weave.lock"'
   assert_invalidation rust-toolchain-file \
     'printf "# changed toolchain contract\n" >>"$fixture/rust-toolchain.toml"'
-  run_path_toolchain_invalidation
+  run_path_toolchain_canonicalization
   local fixture counter first second target_spec
   run_mise_data_dir_invalidation
   assert_invalidation rustc ':' \
@@ -427,7 +430,7 @@ fi
 case "$scenario" in
   exact-reuse) run_exact_reuse ;;
   fixture-interface) run_fixture_and_interface_contracts ;;
-  path-toolchain-invalidation) run_path_toolchain_invalidation ;;
+  path-toolchain-canonicalization) run_path_toolchain_canonicalization ;;
   mise-data-dir-invalidation) run_mise_data_dir_invalidation ;;
   invalidation-matrix) run_invalidation_matrix ;;
   integrity-concurrency) run_integrity_concurrency ;;

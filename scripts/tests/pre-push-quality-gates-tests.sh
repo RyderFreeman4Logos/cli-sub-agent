@@ -72,6 +72,7 @@ new_fixture() {
   cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_process.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_environment.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_toolchain.py" "$fixture/scripts/"
   cp "$repo_root/scripts/rename-no-replace.py" "$fixture/scripts/"
   cp "$repo_root/rust-toolchain.toml" "$fixture/"
   printf '[workspace]\n' >"$fixture/Cargo.toml"

@@ -45,6 +45,9 @@ new_isolation_fixture() {
   if [ -f "$repo_root/scripts/quality_gate_environment.py" ]; then
     cp "$repo_root/scripts/quality_gate_environment.py" "$fixture/scripts/"
   fi
+  if [ -f "$repo_root/scripts/quality_gate_toolchain.py" ]; then
+    cp "$repo_root/scripts/quality_gate_toolchain.py" "$fixture/scripts/"
+  fi
   cp "$repo_root/scripts/hooks/quality-gate-receipt.sh" "$fixture/scripts/hooks/"
   cp "$repo_root/rust-toolchain.toml" "$fixture/"
   printf '[workspace]\n' >"$fixture/Cargo.toml"
@@ -69,6 +72,8 @@ current_receipt_count() {
   find "$1/.csa/state/quality-gate-receipts" -maxdepth 1 -type f \
     -name '*.json' 2>/dev/null | wc -l
 }
+
+source "$repo_root/scripts/tests/quality-gate-offline-toolchain-tests.sh"
 
 run_digest_correct_forgery() {
   local fixture runner counter first second first_code second_code second_status
@@ -470,6 +475,7 @@ case "$scenario" in
   state-capabilities) run_state_capability_isolation ;;
   process-tree) run_process_tree_termination ;;
   ambient-inputs) run_ambient_input_isolation ;;
+  offline-toolchain) run_offline_pinned_toolchain ;;
   isolation-failure) run_isolation_failure_paths ;;
   parent-death) run_parent_death_cleanup ;;
   all)
@@ -477,6 +483,7 @@ case "$scenario" in
     run_state_capability_isolation
     run_process_tree_termination
     run_ambient_input_isolation
+    run_offline_pinned_toolchain
     run_isolation_failure_paths
     run_parent_death_cleanup
     ;;

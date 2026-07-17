@@ -15,37 +15,34 @@ import stat
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from quality_gate_environment import PRIVATE_BIN_PATH, normalized_static_environment
 from quality_gate_process import ProcessResult, collect_bounded, execute_supervised
+from quality_gate_toolchain import ToolchainError, resolve_pinned_rust_tools
 
 __all__ = (
     "GateSandbox",
     "IsolationError",
+    "ToolchainError",
 )
 
 BWRAP = Path("/usr/bin/bwrap")
 GIT = Path("/usr/bin/git")
 
-_REQUIRED_TOOLS = ("bash", "cargo", "git", "python3", "rustc")
+_REQUIRED_TOOLS = ("bash", "git", "python3")
 _OPTIONAL_TOOLS = (
     "ar",
     "cargo-deny",
     "cargo-nextest",
-    "cargo-clippy",
     "cc",
-    "clippy-driver",
     "just",
     "ld",
     "lefthook",
     "make",
     "pkg-config",
     "rg",
-    "rustdoc",
-    "rustfmt",
     "shellcheck",
     "timeout",
 )
@@ -222,30 +219,10 @@ def _copy_snapshot(
     (destination / "target").mkdir(exist_ok=True)
 
 
-def _project_rust_bin(repo: Path) -> Path | None:
-    """Select the repository-pinned mise toolchain without invoking a shim."""
-
-    toolchain_file = repo / "rust-toolchain.toml"
-    try:
-        configuration = tomllib.loads(toolchain_file.read_text(encoding="utf-8"))
-        channel = configuration["toolchain"]["channel"]
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError):
-        return None
-    if not isinstance(channel, str) or not channel or "/" in channel or ".." in channel:
-        return None
-    root = Path("/usr/local/share/mise/installs/rust/stable/toolchains")
-    candidates = sorted(root.glob(f"{channel}-*"))
-    exact = root / channel
-    if exact.exists():
-        candidates.append(exact)
-    for candidate in candidates:
-        binary = candidate / "bin"
-        if (binary / "cargo").is_file() and (binary / "rustc").is_file():
-            return binary.resolve(strict=True)
-    return None
-
-
-def _selected_tools(repo: Path, environment: Mapping[str, str]) -> dict[str, Path]:
+def _selected_tools(
+    repo: Path, environment: Mapping[str, str]
+) -> tuple[str, dict[str, Path]]:
+    selector, rust_tools = resolve_pinned_rust_tools(repo, environment)
     selected: dict[str, Path] = {}
     search_path = environment.get("PATH", os.defpath)
     for name in (*_REQUIRED_TOOLS, *_OPTIONAL_TOOLS):
@@ -266,23 +243,8 @@ def _selected_tools(repo: Path, environment: Mapping[str, str]) -> dict[str, Pat
         if not stat.S_ISREG(status.st_mode) or not os.access(resolved, os.X_OK):
             raise IsolationError("sandbox tool provenance invalid")
         selected[name] = resolved
-    rust_bin = _project_rust_bin(repo)
-    if rust_bin is not None:
-        for name in (
-            "cargo",
-            "cargo-clippy",
-            "clippy-driver",
-            "rustc",
-            "rustdoc",
-            "rustfmt",
-        ):
-            candidate = rust_bin / name
-            current = selected.get(name)
-            if not candidate.is_file() or not os.access(candidate, os.X_OK):
-                continue
-            if current is None or current.name in {"mise", "rustup"}:
-                selected[name] = candidate.resolve(strict=True)
-    return selected
+    selected.update(rust_tools)
+    return selector, selected
 
 
 def _visible_in_sandbox(repo: Path, path: Path) -> bool:
@@ -309,6 +271,7 @@ class GateSandbox:
             self.target = (repo / "target").resolve(strict=True)
         except OSError as error:
             raise IsolationError("sandbox target cache unavailable") from error
+        self.rust_toolchain, self.tools = _selected_tools(repo, environment)
         sandbox_root = self.target / "quality-gate-sandboxes"
         self._created_sandbox_root = not sandbox_root.exists()
         sandbox_root.mkdir(mode=0o700, exist_ok=True)
@@ -334,7 +297,7 @@ class GateSandbox:
             self.source_fingerprint,
             self.clean_state,
         )
-        self.tools = _selected_tools(repo, environment)
+        self.environment["RUSTUP_TOOLCHAIN"] = self.rust_toolchain
         self.tool_mounts: dict[str, Path] = {}
         self.explicit_tools: dict[str, Path] = {}
         self.data_mounts: dict[str, Path] = {}
@@ -480,7 +443,7 @@ class GateSandbox:
         args.extend(("--tmpfs", str(cargo_home)))
         host_cargo_home = cargo_home
         if host_cargo_home.is_dir():
-            for child in ("bin", "git", "registry"):
+            for child in ("git", "registry"):
                 source = host_cargo_home / child
                 if source.exists():
                     args.extend(

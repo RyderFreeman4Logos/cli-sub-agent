@@ -69,6 +69,7 @@ PROVENANCE_TOOLS = (
     "bash",
     "cargo",
     "cargo-clippy",
+    "cargo-fmt",
     "cargo-nextest",
     "cc",
     "clippy-driver",
