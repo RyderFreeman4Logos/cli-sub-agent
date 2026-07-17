@@ -8,7 +8,7 @@ run_hostile_state() {
   local fixture counter runner victim output identity lock receipt code started elapsed
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   victim="${test_root}/state-victim"
   mkdir "$victim"
@@ -25,7 +25,7 @@ run_hostile_state() {
   echo "PASS hostile-state-directory-symlink"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   mkdir -p "${fixture}/.csa/state/quality-gate-receipts"
   victim="${test_root}/collection-lock-victim"
@@ -38,7 +38,7 @@ run_hostile_state() {
   echo "PASS hostile-collection-lock-symlink"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   identity="$(printf '%s' "$output" | json_field receipt_identity)"
@@ -54,7 +54,7 @@ run_hostile_state() {
   echo "PASS hostile-identity-lock-symlink"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   identity="$(printf '%s' "$output" | json_field receipt_identity)"
@@ -73,7 +73,7 @@ run_hostile_state() {
   echo "PASS hostile-state-and-lock-mode"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   mkdir -p "${fixture}/.csa/state/quality-gate-receipts"
   : >"${fixture}/.csa/state/quality-gate-receipts/collection.lock"
@@ -86,6 +86,7 @@ with open(sys.argv[1], "r+b", buffering=0) as lock:
     time.sleep(12)
 PY
   lock=$!
+  register_child "$lock"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -e "${fixture}/.csa/state/collection-lock-ready" ] && break
     sleep 0.1
@@ -100,6 +101,7 @@ PY
   elapsed="$(( $(date +%s) - started ))"
   kill "$lock" 2>/dev/null || true
   wait "$lock" 2>/dev/null || true
+  unregister_child "$lock"
   assert_eq hostile-collection-lock-timeout-exit 0 "$code"
   assert_num_lt hostile-collection-lock-timeout-elapsed 7 "$elapsed"
   assert_eq hostile-collection-lock-timeout-reason lock_timeout \
@@ -107,7 +109,7 @@ PY
   echo "PASS hostile-collection-lock-timeout"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   identity="$(printf '%s' "$output" | json_field receipt_identity)"
@@ -121,6 +123,7 @@ with open(sys.argv[1], "r+b", buffering=0) as lock:
     time.sleep(12)
 PY
   lock=$!
+  register_child "$lock"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -e "${fixture}/.csa/state/lock-ready" ] && break
     sleep 0.1
@@ -135,6 +138,7 @@ PY
   elapsed="$(( $(date +%s) - started ))"
   kill "$lock" 2>/dev/null || true
   wait "$lock" 2>/dev/null || true
+  unregister_child "$lock"
   assert_eq hostile-identity-lock-timeout-exit 0 "$code"
   assert_num_lt hostile-identity-lock-timeout-elapsed 7 "$elapsed"
   assert_eq hostile-identity-lock-timeout-reason lock_timeout \
@@ -142,7 +146,7 @@ PY
   echo "PASS hostile-lock-timeout"
 
   fixture="$(new_fixture)"
-  counter="${fixture}/.csa/state/gate-counter"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   identity="$(printf '%s' "$output" | json_field receipt_identity)"

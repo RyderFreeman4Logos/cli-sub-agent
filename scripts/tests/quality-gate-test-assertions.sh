@@ -7,7 +7,10 @@ _receipt_test_evidence() {
   rendered="${rendered//$'\r'/\\r}"
   rendered="${rendered//$'\t'/\\t}"
   case "$rendered" in
-    *"/"* | *"@"* | *"://"* | *[Ss][Ee][Cc][Rr][Ee][Tt]* | *[Tt][Oo][Kk][Ee][Nn]*)
+    *"/"* | *"@"* | *"://"* | \
+      *[Aa][Uu][Tt][Hh]* | *[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]* | \
+      *[Kk][Ee][Yy]* | *[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]* | \
+      *[Ss][Ee][Cc][Rr][Ee][Tt]* | *[Tt][Oo][Kk][Ee][Nn]*)
       digest="$(printf '%s' "$value" | sha256sum)"
       printf 'sha256:%s,length:%s' "${digest%% *}" "${#value}"
       ;;
@@ -86,9 +89,17 @@ assert_contains() {
 }
 
 assert_not_matches() {
-  local label="$1" pattern="$2" actual="$3"
-  if grep -Eq -- "$pattern" <<<"$actual"; then
-    _receipt_test_fail "$label" "no-match:${pattern}" \
-      "matched;content-$(_receipt_test_evidence "$actual")"
-  fi
+  local label="$1" pattern="$2" actual="$3" code
+  set +e
+  grep -Eq -- "$pattern" <<<"$actual"
+  code=$?
+  set -e
+  case "$code" in
+    0)
+      _receipt_test_fail "$label" "no-match:${pattern}" \
+        "matched;content-$(_receipt_test_evidence "$actual")"
+      ;;
+    1) return 0 ;;
+    *) _receipt_test_fail "$label" matcher-succeeded "matcher-exit-${code}" ;;
+  esac
 }

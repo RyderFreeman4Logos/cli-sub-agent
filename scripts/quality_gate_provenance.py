@@ -23,9 +23,17 @@ from quality_gate_secure_state import (
     sha256_bytes,
 )
 
+__all__ = (
+    "MAX_MANIFEST_BYTES",
+    "ProvenanceError",
+    "collect_manifest",
+)
+
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_REPOSITORY_FILE_BYTES = 32 * 1024 * 1024
 MAX_TOOL_BYTES = 256 * 1024 * 1024
+MAX_TOOLCHAIN_ENTRIES = 4096
+TOOLCHAIN_CONTENT_HASH_LIMIT = 1024 * 1024
 COMMAND_TIMEOUT_SECONDS = 15
 
 ENV_PREFIXES = ("CARGO_", "RUST", "NEXTEST_", "MISE_")
@@ -42,6 +50,8 @@ ENV_EXACT = {
     "LD",
     "LDFLAGS",
     "PKG_CONFIG_PATH",
+    "CSA_QUALITY_GATE_SANDBOX_VERSION",
+    "CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256",
 }
 ENV_NORMALIZED_SEPARATELY = {
     "RUSTC",
@@ -55,18 +65,26 @@ ENV_VOLATILE = {
 }
 SECRET_MARKERS = ("AUTH", "CREDENTIAL", "KEY", "PASSWORD", "SECRET", "TOKEN")
 PROVENANCE_TOOLS = (
+    "ar",
     "bash",
     "cargo",
-    "cargo-deny",
+    "cargo-clippy",
     "cargo-nextest",
+    "cc",
     "clippy-driver",
     "git",
     "just",
+    "ld",
     "lefthook",
+    "make",
+    "pkg-config",
     "python3",
     "rg",
+    "rustc",
+    "rustdoc",
     "rustfmt",
     "shellcheck",
+    "timeout",
 )
 
 
@@ -89,6 +107,10 @@ def run_checked(
 ) -> bytes:
     """Run a bounded provenance command and return bounded stdout."""
 
+    label = Path(command[0]).name
+    if label == "git" and len(command) > 1:
+        label = f"git:{command[1]}"
+
     try:
         completed = subprocess.run(
             list(command),
@@ -101,13 +123,11 @@ def run_checked(
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise ProvenanceError(
-            f"provenance command unavailable: {command[0]}"
-        ) from error
+        raise ProvenanceError(f"provenance command unavailable: {label}") from error
     if completed.returncode != 0:
-        raise ProvenanceError(f"provenance command failed: {command[0]}")
+        raise ProvenanceError(f"provenance command failed: {label}")
     if len(completed.stdout) > MAX_MANIFEST_BYTES:
-        raise ProvenanceError(f"provenance command output is too large: {command[0]}")
+        raise ProvenanceError(f"provenance command output is too large: {label}")
     return completed.stdout
 
 
@@ -187,6 +207,59 @@ def resolve_executable(value: str, *, require_absolute: bool) -> Path:
     return path
 
 
+def toolchain_closure_provenance(sysroot: Path) -> str:
+    """Bind the compiler runtime/component closure without trusting shims.
+
+    Large library bytes are represented by same-UID-unforgeable inode ctime plus
+    size and identity metadata; small manifests/configuration files are also
+    content-hashed. The sandbox mounts this closure read-only during the gate.
+    """
+
+    digest = hashlib.sha256()
+    digest.update(sha256_bytes(os.fsencode(sysroot)).encode())
+    entries = 0
+    for root_name in ("bin", "lib"):
+        root = sysroot / root_name
+        if not root.is_dir():
+            raise ProvenanceError("Rust sysroot closure is incomplete")
+        for directory, names, files in os.walk(root, followlinks=False):
+            names.sort(key=os.fsencode)
+            files.sort(key=os.fsencode)
+            for name in (*names, *files):
+                path = Path(directory) / name
+                relative = path.relative_to(sysroot)
+                try:
+                    status = path.lstat()
+                except OSError as error:
+                    raise ProvenanceError("Rust sysroot closure changed") from error
+                entries += 1
+                if entries > MAX_TOOLCHAIN_ENTRIES:
+                    raise ProvenanceError("Rust sysroot closure is too large")
+                metadata = (
+                    f"{relative}\0{status.st_mode:o}\0{status.st_uid}\0"
+                    f"{status.st_gid}\0{status.st_dev}\0{status.st_ino}\0"
+                    f"{status.st_size}\0{status.st_mtime_ns}\0{status.st_ctime_ns}\0"
+                ).encode()
+                digest.update(metadata)
+                if stat.S_ISLNK(status.st_mode):
+                    try:
+                        digest.update(os.fsencode(os.readlink(path)))
+                    except OSError as error:
+                        raise ProvenanceError("Rust sysroot link changed") from error
+                elif stat.S_ISREG(status.st_mode) and (
+                    status.st_size <= TOOLCHAIN_CONTENT_HASH_LIMIT
+                ):
+                    digest.update(
+                        hash_open_file(path, TOOLCHAIN_CONTENT_HASH_LIMIT).encode()
+                    )
+                elif not (stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode)):
+                    raise ProvenanceError(
+                        "Rust sysroot closure has unsupported entries"
+                    )
+    digest.update(str(entries).encode())
+    return digest.hexdigest()
+
+
 def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
     """Identify the normalized compiler, target, launchers, and their bytes."""
 
@@ -226,6 +299,7 @@ def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
         "explicit_rustc": "unset",
         "rustc_wrapper": "unset",
         "rustc_workspace_wrapper": "unset",
+        "sysroot_closure": toolchain_closure_provenance(sysroot),
     }
     if explicit_rustc:
         parts["explicit_rustc"] = hash_open_file(selected, MAX_TOOL_BYTES)
@@ -268,8 +342,6 @@ def environment_provenance(env: dict[str, str]) -> str:
         else:
             fields[name] = sha256_bytes(os.fsencode(value))
     for required in (
-        "CARGO_DENY_DISABLE_FETCH",
-        "CARGO_DENY_OFFLINE",
         "CARGO_ENCODED_RUSTFLAGS",
         "MISE_DATA_DIR",
         "NEXTEST_PROFILE",
@@ -388,7 +460,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
     if not command:
         raise ProvenanceError("quality-gate command is empty")
     compiler, target = compiler_provenance(repo, env)
-    index_clean = (
+    sandbox_index_clean = (
         subprocess.run(
             ("git", "diff", "--cached", "--quiet", "--ignore-submodules", "--"),
             cwd=repo,
@@ -397,7 +469,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         ).returncode
         == 0
     )
-    tracked_clean = (
+    sandbox_tracked_clean = (
         subprocess.run(
             ("git", "diff", "--quiet", "--ignore-submodules", "--"),
             cwd=repo,
@@ -411,6 +483,21 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         cwd=repo,
         env=env,
     )
+    index_clean = env.get("CSA_QUALITY_GATE_HOST_INDEX_CLEAN")
+    tracked_clean = env.get("CSA_QUALITY_GATE_HOST_TRACKED_CLEAN")
+    untracked_digest = env.get("CSA_QUALITY_GATE_HOST_UNTRACKED_SHA256")
+    if index_clean not in {"true", "false"} or tracked_clean not in {"true", "false"}:
+        raise ProvenanceError("host clean-state provenance is unavailable")
+    if untracked_digest is None or len(untracked_digest) != 64:
+        raise ProvenanceError("host untracked provenance is unavailable")
+    assert index_clean is not None
+    assert tracked_clean is not None
+    if (index_clean == "true") != sandbox_index_clean:
+        raise ProvenanceError("index clean-state changed during snapshot")
+    if (tracked_clean == "true") != sandbox_tracked_clean:
+        raise ProvenanceError("tracked clean-state changed during snapshot")
+    if untracked:
+        raise ProvenanceError("sandbox snapshot contains unexpected untracked files")
     checkout = repo.resolve(strict=True)
     if not checkout.is_absolute():
         raise ProvenanceError("checkout provenance was not absolute")
@@ -418,6 +505,14 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "CSA_QUALITY_GATE_FEATURE_MATRIX",
         "workspace-default,workspace-all-features,e2e",
     )
+    source_snapshot = env.get("CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256", "")
+    sandbox_version = env.get("CSA_QUALITY_GATE_SANDBOX_VERSION", "")
+    if (
+        len(source_snapshot) != 64
+        or any(character not in "0123456789abcdef" for character in source_snapshot)
+        or not sandbox_version
+    ):
+        raise ProvenanceError("sandbox provenance is unavailable")
     fields = {
         "cargo_config_sha256": cargo_config_provenance(repo, env),
         "cargo_lock_sha256": optional_repository_digest(repo, "Cargo.lock"),
@@ -432,8 +527,10 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
             repo, "scripts/hooks/quality-gate-receipt.sh"
         ),
         "implementation_version": IMPLEMENTATION_VERSION,
-        "index_clean": str(index_clean).lower(),
-        "index_oid": git_output(repo, "write-tree"),
+        "index_clean": index_clean,
+        "index_oid": sha256_bytes(
+            run_checked(("git", "ls-files", "--stage", "-z"), cwd=repo, env=env)
+        ),
         "justfile_sha256": optional_repository_digest(repo, "justfile"),
         "lefthook_sha256": optional_repository_digest(repo, "lefthook.yml"),
         "normalizer_sha256": optional_repository_digest(
@@ -442,14 +539,26 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "quality_gate_entrypoint_sha256": optional_repository_digest(
             repo, "scripts/hooks/quality-gates.sh"
         ),
+        "quality_gate_live_sha256": optional_repository_digest(
+            repo, "scripts/hooks/quality-gates-live.sh"
+        ),
         "quality_gate_state_helper_sha256": optional_repository_digest(
             repo, "scripts/quality-gate-state.py"
         ),
         "quality_gate_secure_state_sha256": optional_repository_digest(
             repo, "scripts/quality_gate_secure_state.py"
         ),
+        "quality_gate_sandbox_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_sandbox.py"
+        ),
         "quality_gate_provenance_sha256": optional_repository_digest(
             repo, "scripts/quality_gate_provenance.py"
+        ),
+        "quality_gate_process_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_process.py"
+        ),
+        "quality_gate_environment_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_environment.py"
         ),
         "recipe_sha256": recipe_digest(repo, env),
         "repository_identity": repository_identity(repo),
@@ -458,11 +567,13 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         ),
         "rust_toolchain_sha256": compiler,
         "schema_version": str(SCHEMA_VERSION),
+        "sandbox_version": sandbox_version,
+        "source_snapshot_sha256": source_snapshot,
         "target_provenance_sha256": target,
         "tool_provenance_sha256": tool_provenance(repo, env),
-        "tracked_worktree_clean": str(tracked_clean).lower(),
+        "tracked_worktree_clean": tracked_clean,
         "tree_oid": git_output(repo, "rev-parse", "HEAD^{tree}"),
-        "untracked_worktree_digest": sha256_bytes(untracked),
+        "untracked_worktree_digest": untracked_digest,
         "weave_lock_sha256": optional_repository_digest(repo, "weave.lock"),
     }
     manifest = encode_fields(fields)

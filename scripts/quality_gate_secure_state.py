@@ -1,4 +1,9 @@
-"""Descriptor-owned hostile-state handling for quality-gate receipts."""
+"""Descriptor-owned hostile-state handling for quality-gate receipts.
+
+The receipt digest detects accidental or partial content corruption.  It is not
+publisher authentication against another same-UID process; the coordinator's
+Linux capability boundary supplies that property by withholding this state.
+"""
 
 from __future__ import annotations
 
@@ -15,8 +20,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 1
-IMPLEMENTATION_VERSION = "2"
+__all__ = (
+    "IMPLEMENTATION_VERSION",
+    "SCHEMA_VERSION",
+    "ReceiptValidation",
+    "SecureState",
+    "StateError",
+    "sha256_bytes",
+)
+
+SCHEMA_VERSION = 2
+IMPLEMENTATION_VERSION = "3"
 LOCK_TIMEOUT_SECONDS = 2.0
 LOCK_POLL_SECONDS = 0.05
 MAX_RECEIPT_BYTES = 64 * 1024
@@ -269,7 +283,12 @@ class SecureState:
             return False
 
     def publish(self, name: str, identity: str, manifest: bytes) -> bool:
-        """Publish one immutable receipt by same-directory atomic no-replace rename."""
+        """Publish one content-checked receipt by atomic no-replace rename.
+
+        This method assumes the caller has excluded untrusted same-UID children
+        from the state capability; the unkeyed digest alone cannot establish
+        which process authored a receipt.
+        """
 
         payload: dict[str, object] = {
             "identity": identity,

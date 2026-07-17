@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s inherit_errexit
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+export GIT_CONFIG_NOSYSTEM=1
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
-test_root="$(mktemp -d)"
+mkdir -p "$repo_root/drafts"
+test_root="$(realpath -e "$(mktemp -d "$repo_root/drafts/dev2merge-quality-gate.XXXXXX")")"
 trap 'rm -rf -- "$test_root"' EXIT
 python_executable="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
 assert_executable dev2merge-fixture-python-launcher "$python_executable"
@@ -22,6 +27,103 @@ PY
 )"
 assert_contains dev2merge-workflow-quality-gate 'just quality-gates' "$step_eleven"
 assert_contains dev2merge-workflow-cargo-fallback 'elif [ -f Cargo.toml ]' "$step_eleven"
+step_eleven_script="$test_root/step-eleven.sh"
+python3 - "$repo_root/patterns/dev2merge/workflow.toml" >"$step_eleven_script" <<'PY'
+import re
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as source:
+    workflow = tomllib.load(source)
+prompt = next(
+    step["prompt"]
+    for step in workflow["workflow"]["steps"]
+    if step["title"] == "Self-Review Gate"
+)
+match = re.search(r"```bash\n(.*?)```", prompt, flags=re.DOTALL)
+if match is None:
+    raise SystemExit("Self-Review Gate has no Bash block")
+print(match.group(1), end="")
+PY
+chmod +x "$step_eleven_script"
+
+run_step_eleven_runtime_matrix() {
+  local case_root fake_bin output code
+  case_root="$test_root/step-summary-failure"
+  fake_bin="$case_root/bin"
+  mkdir -p "$fake_bin"
+  printf 'quality-gates:\n' >"$case_root/justfile"
+  printf '#!/usr/bin/env bash\nexit 69\n' >"$fake_bin/just"
+  chmod +x "$fake_bin/just"
+  set +e
+  output="$(cd "$case_root" && PATH="$fake_bin:/usr/bin:/bin" \
+    bash "$step_eleven_script" 2>&1)"
+  code=$?
+  set -e
+  assert_ne step-eleven-summary-failure-exit 0 "$code"
+  assert_contains step-eleven-summary-failure-diagnostic \
+    'just --summary failed' "$output"
+
+  case_root="$test_root/step-quality-recipe"
+  fake_bin="$case_root/bin"
+  mkdir -p "$fake_bin"
+  printf 'quality-gates:\n' >"$case_root/justfile"
+  cat >"$fake_bin/just" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = --summary ]; then
+  printf 'quality-gates\n'
+elif [ "${1:-}" = quality-gates ]; then
+  printf x >>"$STEP_COUNTER"
+else
+  exit 64
+fi
+SH
+  chmod +x "$fake_bin/just"
+  (cd "$case_root" && STEP_COUNTER="$case_root/count" \
+    PATH="$fake_bin:/usr/bin:/bin" bash "$step_eleven_script")
+  assert_eq step-eleven-quality-recipe-runs 1 "$(wc -c <"$case_root/count")"
+
+  case_root="$test_root/step-python-missing"
+  mkdir -p "$case_root/empty-bin"
+  printf '[project]\nname="fixture"\n' >"$case_root/pyproject.toml"
+  set +e
+  output="$(cd "$case_root" && PATH="$case_root/empty-bin:/usr/bin:/bin" \
+    bash "$step_eleven_script" 2>&1)"
+  code=$?
+  set -e
+  assert_ne step-eleven-python-missing-exit 0 "$code"
+  assert_contains step-eleven-python-missing-diagnostic \
+    'Python project has no usable lint runner' "$output"
+
+  case_root="$test_root/step-python-runners"
+  fake_bin="$case_root/bin"
+  mkdir -p "$fake_bin"
+  printf '[project]\nname="fixture"\n' >"$case_root/pyproject.toml"
+  for runner in ruff pytest; do
+    printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>"$STEP_COUNTER"\n' \
+      >"$fake_bin/$runner"
+    chmod +x "$fake_bin/$runner"
+  done
+  (cd "$case_root" && STEP_COUNTER="$case_root/count" \
+    PATH="$fake_bin:/usr/bin:/bin" bash "$step_eleven_script")
+  assert_eq step-eleven-python-runner-calls 3 "$(wc -c <"$case_root/count")"
+
+  case_root="$test_root/step-javascript-missing"
+  mkdir -p "$case_root/empty-bin"
+  printf '{}\n' >"$case_root/package.json"
+  set +e
+  output="$(cd "$case_root" && PATH="$case_root/empty-bin:/usr/bin:/bin" \
+    bash "$step_eleven_script" 2>&1)"
+  code=$?
+  set -e
+  assert_ne step-eleven-javascript-missing-exit 0 "$code"
+  assert_contains step-eleven-javascript-missing-diagnostic \
+    'JavaScript project has no usable lint runner' "$output"
+  echo "PASS dev2merge-step-eleven-runtime-matrix"
+}
+
+run_step_eleven_runtime_matrix
 
 hook_receipt_field() {
   local field="$1"
@@ -40,10 +142,11 @@ raise SystemExit(1)
 }
 
 fixture="$test_root/repo"
-toolchain_root="$test_root/toolchain"
-direct_rustc_dir="$test_root/direct-rustc"
-hook_rustc_dir="$test_root/hook-rustc"
-mkdir -p "$toolchain_root/bin" "$direct_rustc_dir" "$hook_rustc_dir"
+toolchain_root="$fixture/target/quality-gate-test-state/toolchain"
+direct_rustc_dir="$fixture/target/quality-gate-test-state/direct-rustc"
+hook_rustc_dir="$fixture/target/quality-gate-test-state/hook-rustc"
+mkdir -p "$toolchain_root/bin" "$toolchain_root/lib" \
+  "$direct_rustc_dir" "$hook_rustc_dir"
 cat >"$toolchain_root/bin/rustc" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -74,33 +177,61 @@ host: x86_64-unknown-linux-gnu
 release: 1.99.0
 LLVM version: 99.0.0
 EOF
+cat >"$toolchain_root/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" != -vV ]; then
+  printf 'unsupported fixture cargo arguments: %s\n' "$*" >&2
+  exit 64
+fi
+cat <<'VERSION'
+cargo 1.99.0 (111111111 2099-01-01)
+release: 1.99.0
+commit-hash: 1111111111111111111111111111111111111111
+VERSION
+EOF
 for entry in direct hook; do
-  printf '#!/usr/bin/env bash\n# %s launcher\nexec %q "$@"\n' \
-    "$entry" "$toolchain_root/bin/rustc" >"$test_root/${entry}-rustc/rustc"
+  launcher_dir="$direct_rustc_dir"
+  if [ "$entry" = hook ]; then
+    launcher_dir="$hook_rustc_dir"
+  fi
+  printf '#!/usr/bin/env bash\n# fixture launcher\nexec %q "$@"\n' \
+    "$toolchain_root/bin/rustc" >"$launcher_dir/rustc"
 done
-chmod +x "$toolchain_root/bin/rustc" "$direct_rustc_dir/rustc" "$hook_rustc_dir/rustc"
+chmod +x "$toolchain_root/bin/cargo" "$toolchain_root/bin/rustc" \
+  "$direct_rustc_dir/rustc" "$hook_rustc_dir/rustc"
+ln -s "$toolchain_root/bin/cargo" "$direct_rustc_dir/cargo"
+ln -s "$toolchain_root/bin/cargo" "$hook_rustc_dir/cargo"
 ln -s "$python_executable" "$direct_rustc_dir/python3"
 ln -s "$python_executable" "$hook_rustc_dir/python3"
 
-mkdir -p "$fixture/scripts/hooks" "$fixture/scripts" "$fixture/.csa/state"
+mkdir -p "$fixture/scripts/hooks" "$fixture/scripts" "$fixture/.csa/state" \
+  "$fixture/target/quality-gate-test-state"
+printf '/.csa/state/\n/target/\n' >"$fixture/.gitignore"
 git -C "$fixture" init -q
 git -C "$fixture" config user.name "Dev2merge Tests"
 git -C "$fixture" config user.email "dev2merge-tests@example.invalid"
 git -C "$fixture" remote add origin https://example.invalid/dev2merge.git
 cp "$repo_root/scripts/hooks/quality-gate-receipt.sh" "$fixture/scripts/hooks/"
+cp "$repo_root/scripts/hooks/quality-gates.sh" "$fixture/scripts/hooks/"
 cp "$repo_root/scripts/cargo-env-normalize.sh" "$fixture/scripts/"
 cp "$repo_root/scripts/quality-gate-state.py" "$fixture/scripts/"
 cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
 cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
+cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
+cp "$repo_root/scripts/quality_gate_process.py" "$fixture/scripts/"
+cp "$repo_root/scripts/quality_gate_environment.py" "$fixture/scripts/"
 cp "$repo_root/scripts/rename-no-replace.py" "$fixture/scripts/"
 cp "$repo_root/rust-toolchain.toml" "$fixture/"
 printf '[workspace]\n' >"$fixture/Cargo.toml"
 printf '# lock\n' >"$fixture/Cargo.lock"
 printf '# weave\n' >"$fixture/weave.lock"
-printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>.csa/state/quality-counter\n' \
+printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>target/quality-gate-test-state/quality-counter\n' \
   >"$fixture/scripts/hooks/pre-push-quality-gates.sh"
+printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>target/quality-gate-test-state/live-counter\n' \
+  >"$fixture/scripts/hooks/quality-gates-live.sh"
 for gate in branch-protection version-check review-check; do
-  printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>.csa/state/%s-counter\n' "$gate" \
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf x >>target/quality-gate-test-state/%s-counter\n' "$gate" \
     >"$fixture/scripts/hooks/${gate}.sh"
 done
 chmod +x "$fixture/scripts/hooks/"*.sh
@@ -108,13 +239,14 @@ chmod +x "$fixture/scripts/hooks/"*.sh
 # synthetic rustc launcher; normalized compiler changes remain observable.
 cat >"$fixture/justfile" <<EOF
 quality-gates:
-    @env -u CARGO_HOME -u RUSTUP_HOME MISE_DATA_DIR="$test_root/no-mise" PATH="\${CSA_TEST_RUSTC_DIR:?}:$fixture_base_path" scripts/hooks/quality-gate-receipt.sh -- scripts/hooks/pre-push-quality-gates.sh
+    @env -u CARGO_HOME -u RUSTUP_HOME MISE_DATA_DIR="$test_root/no-mise" PATH="\${CSA_TEST_RUSTC_DIR:?}:$fixture_base_path" scripts/hooks/quality-gates.sh
 
 pre-push:
-    CSA_TEST_RUSTC_DIR="$hook_rustc_dir" just quality-gates
+    @env -u CARGO_HOME -u RUSTUP_HOME MISE_DATA_DIR="$test_root/no-mise" PATH="$hook_rustc_dir:$fixture_base_path" CSA_QUALITY_GATE_HOOK_MODE=1 scripts/hooks/quality-gates.sh
 EOF
 cp "$repo_root/lefthook.yml" "$fixture/lefthook.yml"
-git -C "$fixture" add Cargo.toml Cargo.lock justfile lefthook.yml rust-toolchain.toml scripts
+git -C "$fixture" add .gitignore Cargo.toml Cargo.lock weave.lock justfile \
+  lefthook.yml rust-toolchain.toml scripts
 git -C "$fixture" commit -qm "test: initialize dev2merge fixture"
 
 producer_started_ns="$(date +%s%N)"
@@ -132,13 +264,15 @@ consumer_identity="$(hook_receipt_field receipt_identity <<<"$consumer")"
 
 assert_eq dev2merge-consumer-status reused "$consumer_status"
 assert_eq dev2merge-consumer-identity "$producer_identity" "$consumer_identity"
-assert_eq dev2merge-reuse-quality-runs 1 "$(wc -c <"$fixture/.csa/state/quality-counter")"
+assert_eq dev2merge-reuse-quality-runs 1 "$(wc -c <"$fixture/target/quality-gate-test-state/quality-counter")"
+assert_eq dev2merge-reuse-live-runs 2 \
+  "$(wc -c <"$fixture/target/quality-gate-test-state/live-counter")"
 assert_eq dev2merge-reuse-branch-protection-runs 1 \
-  "$(wc -c <"$fixture/.csa/state/branch-protection-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/branch-protection-counter")"
 assert_eq dev2merge-reuse-version-check-runs 1 \
-  "$(wc -c <"$fixture/.csa/state/version-check-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/version-check-counter")"
 assert_eq dev2merge-reuse-review-check-runs 2 \
-  "$(wc -c <"$fixture/.csa/state/review-check-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/review-check-counter")"
 
 printf '# changed compiler bytes\n' >>"$toolchain_root/bin/rustc"
 changed_consumer="$(cd "$fixture" && lefthook run pre-push 2>&1)"
@@ -147,7 +281,9 @@ changed_identity="$(hook_receipt_field receipt_identity <<<"$changed_consumer")"
 assert_eq dev2merge-compiler-bytes-status executed "$changed_status"
 assert_ne dev2merge-compiler-bytes-identity "$producer_identity" "$changed_identity"
 assert_eq dev2merge-compiler-bytes-quality-runs 2 \
-  "$(wc -c <"$fixture/.csa/state/quality-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/quality-counter")"
+assert_eq dev2merge-compiler-bytes-live-runs 3 \
+  "$(wc -c <"$fixture/target/quality-gate-test-state/live-counter")"
 
 cat >"$toolchain_root/provenance" <<'EOF'
 rustc 1.99.1 (222222222 2099-01-02)
@@ -164,11 +300,13 @@ provenance_identity="$(hook_receipt_field receipt_identity <<<"$provenance_consu
 assert_eq dev2merge-compiler-provenance-status executed "$provenance_status"
 assert_ne dev2merge-compiler-provenance-identity "$changed_identity" "$provenance_identity"
 assert_eq dev2merge-compiler-provenance-quality-runs 3 \
-  "$(wc -c <"$fixture/.csa/state/quality-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/quality-counter")"
+assert_eq dev2merge-final-live-runs 4 \
+  "$(wc -c <"$fixture/target/quality-gate-test-state/live-counter")"
 assert_eq dev2merge-final-branch-protection-runs 3 \
-  "$(wc -c <"$fixture/.csa/state/branch-protection-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/branch-protection-counter")"
 assert_eq dev2merge-final-version-check-runs 3 \
-  "$(wc -c <"$fixture/.csa/state/version-check-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/version-check-counter")"
 assert_eq dev2merge-final-review-check-runs 4 \
-  "$(wc -c <"$fixture/.csa/state/review-check-counter")"
+  "$(wc -c <"$fixture/target/quality-gate-test-state/review-check-counter")"
 echo "PASS dev2merge-quality-gate-receipt identity=${producer_identity} changed_identity=${changed_identity} provenance_identity=${provenance_identity} quality_runs=3 executed_ms=${producer_elapsed_ms} reused_ms=${consumer_elapsed_ms}"

@@ -139,7 +139,8 @@ pre-commit:
 quality-gates:
     scripts/hooks/quality-gates.sh
 
-pre-push: quality-gates
+pre-push:
+    CSA_QUALITY_GATE_HOOK_MODE=1 scripts/hooks/quality-gates.sh
 
 # ==============================================================================
 
