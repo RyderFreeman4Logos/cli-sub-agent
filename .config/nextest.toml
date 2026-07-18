@@ -4,5 +4,11 @@ retries = 2
 [profile.static]
 retries = 0
 fail-fast = false
-default-filter = "not (binary_id(=csa-executor) & test(=transport::tests::test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override))"
+default-filter = "not ((binary_id(=csa-executor) & test(=transport::tests::test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override)) | (binary_id(=cli-sub-agent::skill_resource_inheritance) & test(=skill_run_preserves_plan_parent_resource_snapshot_for_nested_child)) | (binary_id(=cli-sub-agent::bin/csa) & (test(=pipeline::clean_room_integration_tests::clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts) | test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_executes_only_fingerprinted_fake_with_exact_contract) | test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_rejects_stale_executor_request_and_program_before_execution))))"
+slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }
+
+[profile.live]
+retries = 0
+fail-fast = false
+default-filter = "(binary_id(=cli-sub-agent::skill_resource_inheritance) & test(=skill_run_preserves_plan_parent_resource_snapshot_for_nested_child)) | (binary_id(=cli-sub-agent::bin/csa) & (test(=pipeline::clean_room_integration_tests::clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts) | test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_executes_only_fingerprinted_fake_with_exact_contract) | test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_rejects_stale_executor_request_and_program_before_execution)))"
 slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }
