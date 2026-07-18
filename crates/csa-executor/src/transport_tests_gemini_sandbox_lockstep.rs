@@ -32,15 +32,76 @@ impl Drop for GeminiSharedNpmCacheScopedEnvVar {
 }
 
 #[cfg(unix)]
-fn writable_outside_allowlist_tempdir() -> tempfile::TempDir {
+fn writable_outside_allowlist_tempdir(
+    project_root: &Path,
+    home: &Path,
+    additional_allowlist_roots: &[&Path],
+) -> tempfile::TempDir {
     let workspace_target = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("target")
         .canonicalize()
         .expect("workspace target should be canonicalizable");
-    tempfile::tempdir_in(workspace_target)
-        .expect("create writable outside-allowlist tempdir under target")
+    let outside_root = tempfile::tempdir_in(workspace_target)
+        .expect("create writable outside-allowlist tempdir under target");
+    let canonical_target = outside_root
+        .path()
+        .canonicalize()
+        .expect("outside-allowlist target should be canonicalizable");
+
+    let mut allowlist_roots = vec![
+        ("project", project_root),
+        ("HOME", home),
+        ("temporary root", Path::new("/tmp")),
+    ];
+    let runtime_root = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    if let Some(runtime_root) = runtime_root.as_deref() {
+        allowlist_roots.push(("runtime root", runtime_root));
+    }
+    for root in additional_allowlist_roots {
+        allowlist_roots.push(("fixture allowlist root", root));
+    }
+    for (label, root) in allowlist_roots {
+        let canonical_root = root
+            .canonicalize()
+            .unwrap_or_else(|error| panic!("canonicalize {label} {}: {error}", root.display()));
+        assert!(
+            !canonical_target.starts_with(&canonical_root),
+            "outside-allowlist target {} must not be inside {label} {}",
+            canonical_target.display(),
+            canonical_root.display()
+        );
+    }
+
+    outside_root
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn test_writable_outside_allowlist_tempdir_rejects_runtime_root_descendant() {
+    let _env_lock = GEMINI_SHARED_NPM_CACHE_ENV_LOCK.lock().await;
+    let workspace_target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .canonicalize()
+        .expect("workspace target should be canonicalizable");
+    let _runtime_guard = GeminiSharedNpmCacheScopedEnvVar::set(
+        "XDG_RUNTIME_DIR",
+        workspace_target.to_str().expect("utf8 workspace target"),
+    );
+
+    let project_root = tempfile::tempdir().expect("project root");
+    let home = project_root.path().join("home");
+    std::fs::create_dir(&home).expect("fixture home");
+    let result = std::panic::catch_unwind(|| {
+        writable_outside_allowlist_tempdir(project_root.path(), &home, &[])
+    });
+    assert!(
+        result.is_err(),
+        "outside-allowlist fixture must fail when its target is inside the runtime allowlist"
+    );
 }
 
 #[tokio::test]
@@ -498,7 +559,8 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
         "HOME".to_string(),
         source_home.to_string_lossy().into_owned(),
     );
-    let outside_allowlist_root = writable_outside_allowlist_tempdir();
+    let outside_allowlist_root =
+        writable_outside_allowlist_tempdir(temp.path(), &source_home, &[]);
     let symlink_cache_root = temp.path().join("symlink-cache");
     std::os::unix::fs::symlink(outside_allowlist_root.path(), &symlink_cache_root)
         .expect("symlink cache root");

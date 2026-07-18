@@ -1,34 +1,24 @@
 #[tokio::test]
 async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override() {
-    if !matches!(
-        csa_resource::sandbox::detect_resource_capability(),
-        csa_resource::sandbox::ResourceCapability::CgroupV2
-    ) {
-        // This test specifically targets the cgroup sandbox spawn failure ->
-        // best-effort unsandboxed fallback branch.
-        return;
-    }
-
     let (temp, mut env, model_log_path) = setup_fake_gemini_environment(2);
-    // Force sandbox spawn failure by hiding systemd-run from PATH while keeping
-    // our fake gemini binary and basic shell tools available.
-    env.insert(
-        "PATH".to_string(),
-        format!("{}:/bin", temp.path().display()),
-    );
+    let private_bin = temp.path().join("private-bin");
+    std::fs::create_dir(&private_bin).expect("create private fixture PATH");
+    std::fs::rename(temp.path().join("gemini"), private_bin.join("gemini"))
+        .expect("move fake gemini into private fixture PATH");
+    for tool in ["bash", "cat"] {
+        std::os::unix::fs::symlink(Path::new("/bin").join(tool), private_bin.join(tool))
+            .unwrap_or_else(|error| panic!("link fixture {tool}: {error}"));
+    }
+    env.insert("PATH".to_string(), private_bin.display().to_string());
 
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
     });
     let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
-    // NOTE: resource=None means the cgroup spawn path is not exercised here;
-    // real cgroup spawn requires systemd user scope access which is not
-    // available in most CI environments.  The early return guard above
-    // already skips this test when CgroupV2 is not detected.
     let sandbox = SandboxTransportConfig {
         isolation_plan: csa_resource::isolation_plan::IsolationPlan {
-            resource: csa_resource::sandbox::ResourceCapability::None,
+            resource: csa_resource::sandbox::ResourceCapability::CgroupV2,
             filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::None,
             writable_paths: Vec::new(),
             readable_paths: Vec::new(),
@@ -47,6 +37,17 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         best_effort: true,
         session_id: "01HTESTBESTEFFORT0000000001".to_string(),
     };
+    assert_eq!(
+        sandbox.isolation_plan.resource,
+        csa_resource::sandbox::ResourceCapability::CgroupV2,
+        "fallback regression must exercise the cgroup spawn path"
+    );
+    let fixture_path = env.get("PATH").expect("fixture PATH");
+    assert!(
+        !std::env::split_paths(fixture_path)
+            .any(|entry| entry.join("systemd-run").is_file()),
+        "fixture PATH must make systemd-run unresolvable"
+    );
     let options = TransportOptions {
         stream_mode: StreamMode::BufferOnly,
         idle_timeout_seconds: 30,
