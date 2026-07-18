@@ -58,6 +58,18 @@ def emit_result(
         "status": status,
     }
     print(json.dumps(record, sort_keys=True, separators=(",", ":")), flush=True)
+    if code != 0:
+        safe_status = status
+        safe_reason = reason or "gate_exit_nonzero"
+        if len(safe_status) > 64 or not safe_status.replace("_", "").isalnum():
+            safe_status = "diagnostic_unavailable"
+        if len(safe_reason) > 64 or not safe_reason.replace("_", "").isalnum():
+            safe_reason = "diagnostic_unavailable"
+        print(
+            f"ERROR quality-gate status={safe_status} exit={code} reason={safe_reason}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def run_uncached(

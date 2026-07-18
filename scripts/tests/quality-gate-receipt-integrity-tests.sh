@@ -12,6 +12,8 @@ assert_corruption_reexecutes() {
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   (cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") >/dev/null
   receipt="$(current_receipt "$fixture")"
+  # Trusted mutation snippets reference this target through eval.
+  export receipt
   eval "$mutation"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   assert_eq "integrity-${name}-status" executed \
@@ -79,7 +81,7 @@ PY'
   assert_corruption_reexecutes symlink 'target="${receipt}.target"; mv "$receipt" "$target"; ln -s "$target" "$receipt"'
   assert_corruption_reexecutes non-file 'rm -f "$receipt"; mkdir "$receipt"'
 
-  local fixture counter runner output code receipt_dir
+  local fixture counter runner output code receipt_dir diagnostic_file diagnostic
   fixture="$(new_fixture)"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
@@ -87,14 +89,20 @@ PY'
   chmod +x "$fixture/scripts/hooks/failing-gate.sh"
   git -C "$fixture" add scripts/hooks/failing-gate.sh
   git -C "$fixture" commit -qm "test: add failing gate"
+  diagnostic_file="$fixture/target/failing-gate.stderr"
   set +e
-  output="$(cd "$fixture" && "$runner" -- scripts/hooks/failing-gate.sh)"
+  output="$(cd "$fixture" && \
+    "$runner" -- scripts/hooks/failing-gate.sh 2>"$diagnostic_file")"
   code=$?
   set -e
+  diagnostic="$(<"$diagnostic_file")"
   assert_eq integrity-gate-failure-exit 7 "$code"
   assert_eq integrity-gate-failure-status gate_failed \
     "$(printf '%s' "$output" | json_field status)"
   assert_single_json "$output"
+  assert_eq integrity-gate-failure-diagnostic \
+    'ERROR quality-gate status=gate_failed exit=7 reason=gate_exit_nonzero' \
+    "$diagnostic"
   assert_empty integrity-gate-failure-receipt "$(current_receipt "$fixture")"
   echo "PASS integrity-gate-failure"
 
@@ -105,11 +113,17 @@ PY'
   chmod +x "$fixture/scripts/hooks/signal-gate.sh"
   git -C "$fixture" add scripts/hooks/signal-gate.sh
   git -C "$fixture" commit -qm "test: add signal gate"
+  diagnostic_file="$fixture/target/signal-gate.stderr"
   set +e
-  output="$(cd "$fixture" && "$runner" -- scripts/hooks/signal-gate.sh)"
+  output="$(cd "$fixture" && \
+    "$runner" -- scripts/hooks/signal-gate.sh 2>"$diagnostic_file")"
   code=$?
   set -e
+  diagnostic="$(<"$diagnostic_file")"
   assert_ne integrity-signal-exit 0 "$code"
+  assert_eq integrity-signal-diagnostic \
+    'ERROR quality-gate status=gate_failed exit=143 reason=gate_exit_nonzero' \
+    "$diagnostic"
   assert_empty integrity-signal-receipt "$(current_receipt "$fixture")"
   echo "PASS integrity-signal"
 

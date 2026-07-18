@@ -4,7 +4,9 @@
 
 run_offline_pinned_toolchain() {
   local fixture runner counter toolchain_root resolver_root direct_bin hook_bin
-  local first second compiler_changed tool_changed missing code
+  local nested_bin first second nested_first nested_second wrong wrong_stderr
+  local compiler_changed tool_changed missing missing_stderr missing_diagnostic
+  local code nested_code nested_reason wrong_code wrong_diagnostic
   local first_identity second_identity compiler_identity tool_identity
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
@@ -13,8 +15,9 @@ run_offline_pinned_toolchain() {
   resolver_root="$fixture/target/toolchain-resolver"
   direct_bin="$fixture/target/direct-resolver"
   hook_bin="$fixture/target/hook-resolver"
+  nested_bin="$fixture/target/nested-outer-closure"
   mkdir -p "$toolchain_root/bin" "$toolchain_root/lib" "$resolver_root" \
-    "$direct_bin" "$hook_bin"
+    "$direct_bin" "$hook_bin" "$nested_bin"
   cat >"$fixture/rust-toolchain.toml" <<'EOF'
 [toolchain]
 channel = "9.96.0"
@@ -106,6 +109,15 @@ SH
     done
   done
   chmod +x "$direct_bin/"* "$hook_bin/"*
+  for tool in cargo cargo-fmt rustc rustdoc rustfmt cargo-clippy clippy-driver; do
+    ln -s "$toolchain_root/bin/$tool" "$nested_bin/$tool"
+  done
+  cat >"$nested_bin/rustup" <<'SH'
+#!/usr/bin/env bash
+echo 'unexpected ambient rustup resolver use' >&2
+exit 66
+SH
+  chmod +x "$nested_bin/rustup"
 
   first="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
@@ -120,6 +132,52 @@ SH
   assert_eq offline-toolchain-entrypoint-identity "$first_identity" "$second_identity"
   assert_eq offline-toolchain-gate-runs 1 "$(wc -c <"$counter")"
 
+  set +e
+  nested_first="$(cd "$fixture" && \
+    PATH="$nested_bin:/usr/bin:/bin" \
+    RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
+    "$runner" -- cargo fmt --nested-outer-receipt-case)"
+  nested_code=$?
+  set -e
+  if [ "$nested_code" -ne 0 ]; then
+    nested_reason="$(printf '%s' "$nested_first" | json_field rejection_reason)"
+    assert_eq nested-static-outer-receipt-exact-reuse-reason \
+      toolchain_component_missing "$nested_reason"
+  fi
+  assert_eq nested-static-outer-receipt-exact-reuse-exit 0 "$nested_code"
+  nested_second="$(cd "$fixture" && \
+    PATH="$nested_bin:/usr/bin:/bin" \
+    RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
+    "$runner" -- cargo fmt --nested-outer-receipt-case)"
+  assert_eq nested-static-outer-receipt-first-status executed \
+    "$(printf '%s' "$nested_first" | json_field status)"
+  assert_eq nested-static-outer-receipt-second-status reused \
+    "$(printf '%s' "$nested_second" | json_field status)"
+  assert_eq nested-static-outer-receipt-identity \
+    "$(printf '%s' "$nested_first" | json_field receipt_identity)" \
+    "$(printf '%s' "$nested_second" | json_field receipt_identity)"
+  assert_eq nested-static-outer-receipt-gate-runs 2 "$(wc -c <"$counter")"
+
+  wrong_stderr="$fixture/target/wrong-toolchain.stderr"
+  set +e
+  wrong="$(cd "$fixture" && \
+    PATH="$nested_bin:/usr/bin:/bin" \
+    RUSTUP_TOOLCHAIN=9.95.0-x86_64-unknown-linux-gnu \
+    "$runner" -- cargo fmt --wrong-nested-selector 2>"$wrong_stderr")"
+  wrong_code=$?
+  set -e
+  wrong_diagnostic="$(<"$wrong_stderr")"
+  assert_eq nested-static-outer-wrong-toolchain-exit 125 "$wrong_code"
+  assert_eq nested-static-outer-wrong-toolchain-status gate_failed \
+    "$(printf '%s' "$wrong" | json_field status)"
+  assert_eq nested-static-outer-wrong-toolchain-reason toolchain_invalid \
+    "$(printf '%s' "$wrong" | json_field rejection_reason)"
+  assert_eq nested-static-outer-wrong-toolchain-diagnostic \
+    'ERROR quality-gate status=gate_failed exit=125 reason=toolchain_invalid' \
+    "$wrong_diagnostic"
+  assert_eq nested-static-outer-wrong-toolchain-no-gate 2 \
+    "$(wc -c <"$counter")"
+
   printf '# changed compiler bytes\n' >>"$toolchain_root/bin/rustc"
   compiler_changed="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
@@ -127,7 +185,7 @@ SH
   assert_eq offline-toolchain-compiler-status executed \
     "$(printf '%s' "$compiler_changed" | json_field status)"
   assert_ne offline-toolchain-compiler-identity "$first_identity" "$compiler_identity"
-  assert_eq offline-toolchain-compiler-runs 2 "$(wc -c <"$counter")"
+  assert_eq offline-toolchain-compiler-runs 3 "$(wc -c <"$counter")"
 
   printf '# changed tool bytes\n' >>"$toolchain_root/bin/cargo-fmt"
   tool_changed="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
@@ -136,19 +194,28 @@ SH
   assert_eq offline-toolchain-tool-status executed \
     "$(printf '%s' "$tool_changed" | json_field status)"
   assert_ne offline-toolchain-tool-identity "$compiler_identity" "$tool_identity"
-  assert_eq offline-toolchain-tool-runs 3 "$(wc -c <"$counter")"
+  assert_eq offline-toolchain-tool-runs 4 "$(wc -c <"$counter")"
 
   mv "$toolchain_root/bin/cargo-fmt" "$toolchain_root/bin/cargo-fmt.missing"
+  missing_stderr="$fixture/target/missing-toolchain.stderr"
   set +e
   missing="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
-    "$runner" -- cargo fmt --all -- --check)"
+    "$runner" -- cargo fmt --all -- --check 2>"$missing_stderr")"
   code=$?
   set -e
+  missing_diagnostic="$(<"$missing_stderr")"
   assert_eq offline-toolchain-missing-exit 125 "$code"
   assert_eq offline-toolchain-missing-status gate_failed \
     "$(printf '%s' "$missing" | json_field status)"
   assert_eq offline-toolchain-missing-reason toolchain_component_missing \
     "$(printf '%s' "$missing" | json_field rejection_reason)"
-  assert_eq offline-toolchain-missing-no-gate 3 "$(wc -c <"$counter")"
+  assert_eq offline-toolchain-missing-diagnostic \
+    'ERROR quality-gate status=gate_failed exit=125 reason=toolchain_component_missing' \
+    "$missing_diagnostic"
+  assert_eq offline-toolchain-missing-diagnostic-lines 1 \
+    "$(wc -l <"$missing_stderr")"
+  assert_not_matches offline-toolchain-missing-diagnostic-sanitized \
+    '(/home/|/tmp/|PASSWORD|SECRET|TOKEN)' "$missing_diagnostic"
+  assert_eq offline-toolchain-missing-no-gate 4 "$(wc -c <"$counter")"
   echo "PASS isolation-offline-pinned-toolchain"
 }

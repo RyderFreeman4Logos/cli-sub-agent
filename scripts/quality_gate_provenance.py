@@ -552,6 +552,9 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "quality_gate_sandbox_sha256": optional_repository_digest(
             repo, "scripts/quality_gate_sandbox.py"
         ),
+        "quality_gate_toolchain_sha256": optional_repository_digest(
+            repo, "scripts/quality_gate_toolchain.py"
+        ),
         "quality_gate_provenance_sha256": optional_repository_digest(
             repo, "scripts/quality_gate_provenance.py"
         ),

@@ -1,13 +1,46 @@
 #!/usr/bin/env bash
 # Shared fail-loud assertions for quality-gate receipt shell contracts.
 
+_receipt_contract_suite=unregistered
+_receipt_contract_case=setup
+
+_receipt_contract_failure() {
+  local code="$1"
+  if [[ $- != *e* ]] || [ "${BASH_SUBSHELL:-0}" -ne 0 ]; then
+    return "$code"
+  fi
+  trap - ERR
+  printf 'FAIL contract-case suite=%s case=%s exit=%s\n' \
+    "$_receipt_contract_suite" "$_receipt_contract_case" "$code" >&2
+  exit "$code"
+}
+
+receipt_contract_install_failure_trap() {
+  local suite="$1"
+  case "$suite" in
+    '' | *[!a-zA-Z0-9_.-]*) suite=invalid-suite ;;
+  esac
+  _receipt_contract_suite="$suite"
+  _receipt_contract_case=setup
+  set -E
+  trap '_receipt_contract_failure "$?"' ERR
+}
+
+receipt_contract_set_case() {
+  local test_case="$1"
+  case "$test_case" in
+    '' | *[!a-zA-Z0-9_.-]*) test_case=invalid-case ;;
+  esac
+  _receipt_contract_case="$test_case"
+}
+
 _receipt_test_evidence() {
   local value="$1" rendered digest
   rendered="${value//$'\n'/\\n}"
   rendered="${rendered//$'\r'/\\r}"
   rendered="${rendered//$'\t'/\\t}"
   case "$rendered" in
-    *"/"* | *"@"* | *"://"* | \
+    *"/"* | *"@"* | \
       *[Aa][Uu][Tt][Hh]* | *[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]* | \
       *[Kk][Ee][Yy]* | *[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]* | \
       *[Ss][Ee][Cc][Rr][Ee][Tt]* | *[Tt][Oo][Kk][Ee][Nn]*)

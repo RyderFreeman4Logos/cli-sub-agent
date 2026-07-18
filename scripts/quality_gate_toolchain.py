@@ -12,13 +12,18 @@ import shutil
 import stat
 import subprocess
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 __all__ = (
+    "PinnedRustToolchain",
+    "SANDBOX_RUST_TOOLCHAIN_ROOT",
     "ToolchainError",
     "resolve_pinned_rust_tools",
 )
+
+SANDBOX_RUST_TOOLCHAIN_ROOT = Path("/run/csa-rust-toolchain")
 
 _RUST_TOOLS = (
     "cargo",
@@ -37,6 +42,15 @@ class ToolchainError(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__("pinned Rust toolchain unavailable")
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class PinnedRustToolchain:
+    """Canonical installed sysroot and every executable required by the gate."""
+
+    selector: str
+    sysroot: Path
+    tools: Mapping[str, Path]
 
 
 def _validated_executable(candidate: Path, reason: str) -> Path:
@@ -102,15 +116,72 @@ def _rustup_which(
     return _validated_executable(Path(lines[0]), "toolchain_component_missing")
 
 
+def _resolve_exact_rustc(
+    rustc: Path,
+    channel: str,
+    repo: Path,
+    environment: Mapping[str, str],
+) -> PinnedRustToolchain:
+    """Revalidate one compiler and its complete canonical sysroot closure."""
+
+    version = _run_query((str(rustc), "-vV"), repo, environment, "toolchain_invalid")
+    version_fields: dict[bytes, list[bytes]] = {}
+    for line in version.splitlines():
+        if b":" not in line:
+            continue
+        key, value = line.split(b":", 1)
+        version_fields.setdefault(key, []).append(value.strip())
+    hosts = version_fields.get(b"host", [])
+    releases = version_fields.get(b"release", [])
+    if len(hosts) != 1 or len(releases) != 1:
+        raise ToolchainError("toolchain_invalid")
+    try:
+        host = hosts[0].decode("ascii")
+        release = releases[0].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ToolchainError("toolchain_invalid") from error
+    if not host or release != channel:
+        raise ToolchainError("toolchain_invalid")
+
+    sysroot_output = _run_query(
+        (str(rustc), "--print", "sysroot"),
+        repo,
+        environment,
+        "toolchain_invalid",
+    )
+    try:
+        sysroot_lines = sysroot_output.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ToolchainError("toolchain_invalid") from error
+    if len(sysroot_lines) != 1 or not os.path.isabs(sysroot_lines[0]):
+        raise ToolchainError("toolchain_invalid")
+    try:
+        sysroot = Path(sysroot_lines[0]).resolve(strict=True)
+        rust_bin = (sysroot / "bin").resolve(strict=True)
+    except OSError as error:
+        raise ToolchainError("toolchain_invalid") from error
+
+    selected: dict[str, Path] = {}
+    for name in _RUST_TOOLS:
+        executable = _validated_executable(
+            rust_bin / name, "toolchain_component_missing"
+        )
+        if executable.parent != rust_bin:
+            raise ToolchainError("toolchain_invalid")
+        selected[name] = executable
+    return PinnedRustToolchain(f"{channel}-{host}", sysroot, selected)
+
+
 def resolve_pinned_rust_tools(
     repo: Path, environment: Mapping[str, str]
-) -> tuple[str, dict[str, Path]]:
+) -> PinnedRustToolchain:
     """Return an exact selector and verified tools from its canonical sysroot.
 
     The pin must be a concrete version with the Clippy and rustfmt components.
-    Every required executable must resolve through ``rustup which`` to the same
-    installed sysroot.  Missing or ambiguous inputs fail closed with a stable
-    reason suitable for the quality-gate structured result.
+    An inherited exact compiler capability is revalidated directly so nested
+    sandboxes do not need rustup metadata. Otherwise every executable must
+    resolve through ``rustup which`` to the same installed sysroot. Missing or
+    ambiguous inputs fail closed with a stable structured-result reason.
     """
 
     try:
@@ -142,62 +213,27 @@ def resolve_pinned_rust_tools(
     if not {"clippy", "rustfmt"}.issubset(components):
         raise ToolchainError("toolchain_component_missing")
 
+    exact_selector = environment.get("RUSTUP_TOOLCHAIN")
+    rustc_value = shutil.which("rustc", path=environment.get("PATH"))
+    if exact_selector and rustc_value:
+        direct_rustc = _validated_executable(
+            Path(rustc_value), "toolchain_component_missing"
+        )
+        if direct_rustc.name == "rustc":
+            direct = _resolve_exact_rustc(direct_rustc, channel, repo, environment)
+            if direct.tools["rustc"] == direct_rustc:
+                if direct.selector != exact_selector:
+                    raise ToolchainError("toolchain_invalid")
+                return direct
+
     rustup_value = shutil.which("rustup", path=environment.get("PATH"))
     if not rustup_value:
         raise ToolchainError("toolchain_component_missing")
     rustup = _validated_executable(Path(rustup_value), "toolchain_component_missing")
     selected_rustc = _rustup_which(rustup, channel, "rustc", repo, environment)
-    version = _run_query(
-        (str(selected_rustc), "-vV"), repo, environment, "toolchain_invalid"
-    )
-    version_fields: dict[bytes, list[bytes]] = {}
-    for line in version.splitlines():
-        if b":" not in line:
-            continue
-        key, value = line.split(b":", 1)
-        version_fields.setdefault(key, []).append(value.strip())
-    hosts = version_fields.get(b"host", [])
-    releases = version_fields.get(b"release", [])
-    if len(hosts) != 1 or len(releases) != 1:
-        raise ToolchainError("toolchain_invalid")
-    try:
-        host = hosts[0].decode("ascii")
-        release = releases[0].decode("ascii")
-    except UnicodeDecodeError as error:
-        raise ToolchainError("toolchain_invalid") from error
-    if not host or release != channel:
-        raise ToolchainError("toolchain_invalid")
-    selector = f"{channel}-{host}"
-    exact_rustc = _rustup_which(rustup, selector, "rustc", repo, environment)
-    if exact_rustc != selected_rustc:
-        raise ToolchainError("toolchain_invalid")
-
-    sysroot_output = _run_query(
-        (str(exact_rustc), "--print", "sysroot"),
-        repo,
-        environment,
-        "toolchain_invalid",
-    )
-    try:
-        sysroot_lines = sysroot_output.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ToolchainError("toolchain_invalid") from error
-    if len(sysroot_lines) != 1 or not os.path.isabs(sysroot_lines[0]):
-        raise ToolchainError("toolchain_invalid")
-    try:
-        sysroot = Path(sysroot_lines[0]).resolve(strict=True)
-        rust_bin = (sysroot / "bin").resolve(strict=True)
-    except OSError as error:
-        raise ToolchainError("toolchain_invalid") from error
-    if exact_rustc.parent != rust_bin:
-        raise ToolchainError("toolchain_invalid")
-
-    selected = {"rustc": exact_rustc}
+    resolved = _resolve_exact_rustc(selected_rustc, channel, repo, environment)
     for name in _RUST_TOOLS:
-        if name == "rustc":
-            continue
-        executable = _rustup_which(rustup, selector, name, repo, environment)
-        if executable.parent != rust_bin:
+        executable = _rustup_which(rustup, resolved.selector, name, repo, environment)
+        if executable != resolved.tools[name]:
             raise ToolchainError("toolchain_invalid")
-        selected[name] = executable
-    return selector, selected
+    return resolved

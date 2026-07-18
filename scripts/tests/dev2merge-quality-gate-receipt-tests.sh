@@ -7,6 +7,8 @@ export GIT_CONFIG_NOSYSTEM=1
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
+receipt_contract_install_failure_trap dev2merge-quality-gate-receipt-tests.sh
+receipt_contract_set_case source-contract
 mkdir -p "$repo_root/drafts"
 test_root="$(realpath -e "$(mktemp -d "$repo_root/drafts/dev2merge-quality-gate.XXXXXX")")"
 trap 'rm -rf -- "$test_root"' EXIT
@@ -118,6 +120,7 @@ SH
   echo "PASS dev2merge-step-eleven-runtime-matrix"
 }
 
+receipt_contract_set_case step-eleven-runtime-matrix
 run_step_eleven_runtime_matrix
 
 hook_receipt_field() {
@@ -136,6 +139,7 @@ raise SystemExit(1)
 ' "$field"
 }
 
+receipt_contract_set_case dev2merge-quality-gate-receipt
 fixture="$test_root/repo"
 mkdir -p "$fixture/scripts/hooks" "$fixture/scripts" "$fixture/.csa/state" \
   "$fixture/target/quality-gate-test-state"

@@ -68,7 +68,7 @@ def normalized_static_environment(
             "MISE_DATA_DIR": "/run/csa-mise-disabled",
             "PATH": f"{PRIVATE_BIN_PATH}:/usr/bin:/bin",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CSA_QUALITY_GATE_SANDBOX_VERSION": "bwrap-static-v1",
+            "CSA_QUALITY_GATE_SANDBOX_VERSION": "bwrap-static-v2",
             "CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256": source_fingerprint,
             "CSA_QUALITY_GATE_HOST_INDEX_CLEAN": clean_state[0],
             "CSA_QUALITY_GATE_HOST_TRACKED_CLEAN": clean_state[1],

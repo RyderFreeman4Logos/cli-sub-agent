@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-receipt-tests.sh"
+receipt_contract_install_failure_trap quality-gate-receipt-hostile-tests.sh
 
 run_hostile_state() {
   local fixture counter runner victim output identity lock receipt code started elapsed
@@ -181,4 +182,5 @@ PY
 }
 
 
+receipt_contract_set_case hostile-state-matrix
 run_hostile_state

@@ -11,6 +11,9 @@ export PYTHONDONTWRITEBYTECODE=1
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
 source "$repo_root/scripts/tests/quality-gate-receipt-integrity-tests.sh"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  receipt_contract_install_failure_trap quality-gate-receipt-tests.sh
+fi
 source_runner="${repo_root}/scripts/hooks/quality-gate-receipt.sh"
 scenario="${1:-all}"
 mkdir -p "$repo_root/drafts"
@@ -151,6 +154,7 @@ assert_manifest_contract() {
     implementation_sha256 quality_gate_state_helper_sha256 \
     quality_gate_secure_state_sha256 \
     quality_gate_provenance_sha256 quality_gate_sandbox_sha256 \
+    quality_gate_toolchain_sha256 \
     quality_gate_process_sha256 quality_gate_environment_sha256 \
     quality_gate_entrypoint_sha256 quality_gate_live_sha256 \
     source_snapshot_sha256 sandbox_version \
@@ -428,12 +432,39 @@ if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 fi
 
 case "$scenario" in
-  exact-reuse) run_exact_reuse ;;
-  fixture-interface) run_fixture_and_interface_contracts ;;
-  path-toolchain-canonicalization) run_path_toolchain_canonicalization ;;
-  mise-data-dir-invalidation) run_mise_data_dir_invalidation ;;
-  invalidation-matrix) run_invalidation_matrix ;;
-  integrity-concurrency) run_integrity_concurrency ;;
-  all) run_fixture_and_interface_contracts; run_exact_reuse; run_invalidation_matrix; run_integrity_concurrency ;;
+  exact-reuse)
+    receipt_contract_set_case exact-reuse
+    run_exact_reuse
+    ;;
+  fixture-interface)
+    receipt_contract_set_case fixture-interface
+    run_fixture_and_interface_contracts
+    ;;
+  path-toolchain-canonicalization)
+    receipt_contract_set_case path-toolchain-canonicalization
+    run_path_toolchain_canonicalization
+    ;;
+  mise-data-dir-invalidation)
+    receipt_contract_set_case mise-data-dir-invalidation
+    run_mise_data_dir_invalidation
+    ;;
+  invalidation-matrix)
+    receipt_contract_set_case invalidation-matrix
+    run_invalidation_matrix
+    ;;
+  integrity-concurrency)
+    receipt_contract_set_case integrity-concurrency
+    run_integrity_concurrency
+    ;;
+  all)
+    receipt_contract_set_case fixture-interface
+    run_fixture_and_interface_contracts
+    receipt_contract_set_case exact-reuse
+    run_exact_reuse
+    receipt_contract_set_case invalidation-matrix
+    run_invalidation_matrix
+    receipt_contract_set_case integrity-concurrency
+    run_integrity_concurrency
+    ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac

@@ -7,6 +7,7 @@ export GIT_CONFIG_NOSYSTEM=1
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
+receipt_contract_install_failure_trap pre-push-quality-gates-tests.sh
 scenario="${1:-receipt-reuse-with-hard-gates}"
 mkdir -p "$repo_root/drafts"
 test_root="$(realpath -e "$(mktemp -d "$repo_root/drafts/pre-push-quality-gates.XXXXXX")")"
@@ -151,6 +152,9 @@ run_contract() {
 }
 
 case "$scenario" in
-  receipt-reuse-with-hard-gates) run_contract ;;
+  receipt-reuse-with-hard-gates)
+    receipt_contract_set_case receipt-reuse-with-hard-gates
+    run_contract
+    ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;
 esac

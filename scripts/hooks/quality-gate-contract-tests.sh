@@ -2,27 +2,41 @@
 set -euo pipefail
 
 run_contract_suite() {
-  local suite="$1" expected="$2" code output count duplicates
-  if output="$(bash "$suite" 2>&1)"; then
+  local suite="$1" expected="$2" code count duplicates capture diagnostic
+  capture="$(mktemp "${TMPDIR:-/tmp}/quality-gate-contract.XXXXXX")"
+  if bash "$suite" >"$capture" 2>&1; then
     code=0
   else
     code=$?
   fi
   if [ "$code" -ne 0 ]; then
-    printf '%s\n' "$output" >&2
+    diagnostic="$(
+      tail -c 16384 "$capture" \
+        | grep -E '^(ERROR quality-gate status=[a-z0-9_-]+ exit=[0-9]+ reason=[a-z0-9_-]+|FAIL contract-case suite=[a-zA-Z0-9_.-]+ case=[a-zA-Z0-9_.-]+ exit=[0-9]+)$' \
+        | tail -20 || true
+    )"
+    if [ -n "$diagnostic" ]; then
+      printf '%s\n' "$diagnostic" >&2
+    else
+      printf 'FAIL contract-case suite=%s case=unreported exit=%s\n' \
+        "${suite##*/}" "$code" >&2
+    fi
     printf 'FAIL contract-suite-%s expected=exit-0 actual=exit-%s\n' \
       "${suite##*/}" "$code" >&2
+    rm -f "$capture"
     return "$code"
   fi
-  count="$(grep -c '^PASS ' <<<"$output" || true)"
-  duplicates="$(awk '/^PASS / { print $2 }' <<<"$output" | sort | uniq -d)"
+  count="$(grep -c '^PASS ' "$capture" || true)"
+  duplicates="$(awk '/^PASS / { print $2 }' "$capture" | sort | uniq -d)"
   if [ "$count" -ne "$expected" ] || [ -n "$duplicates" ]; then
-    printf '%s\n' "$output" >&2
+    tail -c 16384 "$capture" >&2
     printf 'FAIL contract-suite-%s expected=unique-pass-%s actual=pass-%s\n' \
       "${suite##*/}" "$expected" "$count" >&2
+    rm -f "$capture"
     return 1
   fi
-  printf '%s\n' "$output"
+  cat "$capture"
+  rm -f "$capture"
 }
 
 # Exact ratchet: 45 core + 7 hostile + 7 isolation + 1 pre-push + 2

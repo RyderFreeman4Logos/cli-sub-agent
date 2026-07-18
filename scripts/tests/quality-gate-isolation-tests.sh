@@ -8,6 +8,7 @@ export GIT_CONFIG_NOSYSTEM=1
 
 repo_root="$(git rev-parse --show-toplevel)"
 source "$repo_root/scripts/tests/quality-gate-test-assertions.sh"
+receipt_contract_install_failure_trap quality-gate-isolation-tests.sh
 scenario="${1:-all}"
 mkdir -p "$repo_root/drafts"
 test_root="$(realpath -e "$(mktemp -d "$repo_root/drafts/quality-gate-isolation.XXXXXX")")"
@@ -471,20 +472,48 @@ SH
 }
 
 case "$scenario" in
-  forgery) run_digest_correct_forgery ;;
-  state-capabilities) run_state_capability_isolation ;;
-  process-tree) run_process_tree_termination ;;
-  ambient-inputs) run_ambient_input_isolation ;;
-  offline-toolchain) run_offline_pinned_toolchain ;;
-  isolation-failure) run_isolation_failure_paths ;;
-  parent-death) run_parent_death_cleanup ;;
-  all)
+  forgery)
+    receipt_contract_set_case digest-correct-forgery
     run_digest_correct_forgery
+    ;;
+  state-capabilities)
+    receipt_contract_set_case state-capabilities
     run_state_capability_isolation
+    ;;
+  process-tree)
+    receipt_contract_set_case process-tree
     run_process_tree_termination
+    ;;
+  ambient-inputs)
+    receipt_contract_set_case ambient-inputs
     run_ambient_input_isolation
+    ;;
+  offline-toolchain)
+    receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
+    ;;
+  isolation-failure)
+    receipt_contract_set_case isolation-failure
     run_isolation_failure_paths
+    ;;
+  parent-death)
+    receipt_contract_set_case parent-death
+    run_parent_death_cleanup
+    ;;
+  all)
+    receipt_contract_set_case digest-correct-forgery
+    run_digest_correct_forgery
+    receipt_contract_set_case state-capabilities
+    run_state_capability_isolation
+    receipt_contract_set_case process-tree
+    run_process_tree_termination
+    receipt_contract_set_case ambient-inputs
+    run_ambient_input_isolation
+    receipt_contract_set_case offline-toolchain
+    run_offline_pinned_toolchain
+    receipt_contract_set_case isolation-failure
+    run_isolation_failure_paths
+    receipt_contract_set_case parent-death
     run_parent_death_cleanup
     ;;
   *) echo "unknown scenario: $scenario" >&2; exit 2 ;;

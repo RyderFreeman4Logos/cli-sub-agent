@@ -20,7 +20,12 @@ from typing import Mapping, Sequence
 
 from quality_gate_environment import PRIVATE_BIN_PATH, normalized_static_environment
 from quality_gate_process import ProcessResult, collect_bounded, execute_supervised
-from quality_gate_toolchain import ToolchainError, resolve_pinned_rust_tools
+from quality_gate_toolchain import (
+    SANDBOX_RUST_TOOLCHAIN_ROOT,
+    PinnedRustToolchain,
+    ToolchainError,
+    resolve_pinned_rust_tools,
+)
 
 __all__ = (
     "GateSandbox",
@@ -221,8 +226,8 @@ def _copy_snapshot(
 
 def _selected_tools(
     repo: Path, environment: Mapping[str, str]
-) -> tuple[str, dict[str, Path]]:
-    selector, rust_tools = resolve_pinned_rust_tools(repo, environment)
+) -> tuple[PinnedRustToolchain, dict[str, Path]]:
+    rust_toolchain = resolve_pinned_rust_tools(repo, environment)
     selected: dict[str, Path] = {}
     search_path = environment.get("PATH", os.defpath)
     for name in (*_REQUIRED_TOOLS, *_OPTIONAL_TOOLS):
@@ -243,8 +248,7 @@ def _selected_tools(
         if not stat.S_ISREG(status.st_mode) or not os.access(resolved, os.X_OK):
             raise IsolationError("sandbox tool provenance invalid")
         selected[name] = resolved
-    selected.update(rust_tools)
-    return selector, selected
+    return rust_toolchain, selected
 
 
 def _visible_in_sandbox(repo: Path, path: Path) -> bool:
@@ -297,7 +301,7 @@ class GateSandbox:
             self.source_fingerprint,
             self.clean_state,
         )
-        self.environment["RUSTUP_TOOLCHAIN"] = self.rust_toolchain
+        self.environment["RUSTUP_TOOLCHAIN"] = self.rust_toolchain.selector
         self.tool_mounts: dict[str, Path] = {}
         self.explicit_tools: dict[str, Path] = {}
         self.data_mounts: dict[str, Path] = {}
@@ -308,6 +312,10 @@ class GateSandbox:
             else:
                 destination.touch(mode=0o700)
                 self.tool_mounts[name] = executable
+        for name in self.rust_toolchain.tools:
+            os.symlink(
+                SANDBOX_RUST_TOOLCHAIN_ROOT / "bin" / name, self.private_bin / name
+            )
         for variable in ("RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"):
             value = environment.get(variable)
             if not value:
@@ -427,6 +435,14 @@ class GateSandbox:
         args.extend(("--ro-bind", str(self.git_dir), str(destination / ".git")))
         args.extend(("--bind", str(self.target), str(destination / "target")))
         args.extend(("--tmpfs", str(destination / ".csa")))
+        args.extend(("--dir", str(SANDBOX_RUST_TOOLCHAIN_ROOT)))
+        args.extend(
+            (
+                "--ro-bind",
+                str(self.rust_toolchain.sysroot),
+                str(SANDBOX_RUST_TOOLCHAIN_ROOT),
+            )
+        )
         args.extend(("--dir", PRIVATE_BIN_PATH))
         args.extend(("--ro-bind", str(self.private_bin), PRIVATE_BIN_PATH))
         for name, executable in sorted(self.tool_mounts.items()):
@@ -498,6 +514,11 @@ class GateSandbox:
         script = r"""
 set -euo pipefail
 test ! -e .csa/state
+test "$(rustc --print sysroot)" = /run/csa-rust-toolchain
+for tool in cargo cargo-clippy cargo-fmt clippy-driver rustc rustdoc rustfmt; do
+  test "$(command -v "$tool")" = "/run/csa-bin/$tool"
+  test -x "/run/csa-bin/$tool"
+done
 printf sandbox >.csa/preflight
 probe="target/.quality-gate-sandbox-probe.$$"
 printf target >"$probe"
