@@ -1,9 +1,11 @@
 use super::plan_cmd_steps::{StepExecutionContext, execute_step_with_workflow};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use weave::compiler::{FailAction, PlanStep, plan_from_toml};
+
+#[path = "plan_cmd_tests_pr_bot_git_archive.rs"]
+mod git_archive_fixture;
+use git_archive_fixture::git_archive_entries;
 
 #[tokio::test]
 async fn execute_step_with_workflow_exposes_runtime_paths_to_bash() {
@@ -117,58 +119,6 @@ fn extract_nth_shell_function(text: &str, name: &str, occurrence: usize, artifac
         panic!("{artifact} function '{name}' occurrence {occurrence} must terminate")
     });
     body[..end + 3].to_string()
-}
-
-fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<String> {
-    let tree = Command::new("git")
-        .args(["write-tree"])
-        .current_dir(repo_root)
-        .output()
-        .expect("git write-tree should run");
-    assert!(
-        tree.status.success(),
-        "git write-tree failed: {}",
-        String::from_utf8_lossy(&tree.stderr)
-    );
-    let tree_id = String::from_utf8(tree.stdout)
-        .expect("tree id should be utf-8")
-        .trim()
-        .to_string();
-
-    let archive = Command::new("git")
-        .args(["archive", "--format=tar", &tree_id, pathspec])
-        .current_dir(repo_root)
-        .output()
-        .expect("git archive should run");
-    assert!(
-        archive.status.success(),
-        "git archive failed: {}",
-        String::from_utf8_lossy(&archive.stderr)
-    );
-
-    let mut tar = Command::new("tar")
-        .args(["tf", "-"])
-        .current_dir(repo_root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("tar should start");
-    tar.stdin
-        .as_mut()
-        .expect("tar stdin")
-        .write_all(&archive.stdout)
-        .expect("should stream archive into tar");
-    let listing = tar.wait_with_output().expect("tar should finish");
-    assert!(
-        listing.status.success(),
-        "tar listing failed: {}",
-        String::from_utf8_lossy(&listing.stderr)
-    );
-    String::from_utf8(listing.stdout)
-        .expect("tar output should be utf-8")
-        .lines()
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 #[test]

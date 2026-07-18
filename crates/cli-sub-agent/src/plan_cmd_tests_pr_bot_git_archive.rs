@@ -1,0 +1,98 @@
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<String> {
+    let git_metadata = Command::new("git")
+        .args(["rev-parse", "--absolute-git-dir", "--git-common-dir"])
+        .current_dir(repo_root)
+        .output()
+        .expect("git metadata query should run");
+    assert!(
+        git_metadata.status.success(),
+        "git metadata query failed: {}",
+        String::from_utf8_lossy(&git_metadata.stderr)
+    );
+    let metadata = String::from_utf8(git_metadata.stdout).expect("git metadata should be utf-8");
+    let mut metadata_lines = metadata.lines();
+    let git_dir = PathBuf::from(
+        metadata_lines
+            .next()
+            .expect("absolute Git directory should be reported"),
+    );
+    let common_dir = PathBuf::from(
+        metadata_lines
+            .next()
+            .expect("common Git directory should be reported"),
+    );
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        repo_root.join(common_dir)
+    };
+    let real_index = git_dir.join("index");
+    let real_objects = common_dir.join("objects");
+    let isolated = tempfile::tempdir().expect("isolated Git storage should be created");
+    let isolated_index = isolated.path().join("index");
+    let isolated_objects = isolated.path().join("objects");
+    std::fs::copy(&real_index, &isolated_index).expect("real index should seed isolated index");
+    std::fs::create_dir(&isolated_objects).expect("isolated object directory should be created");
+    let alternates = std::env::join_paths([&real_objects])
+        .expect("real object directory should be representable as a Git alternate");
+
+    let tree = Command::new("git")
+        .args(["write-tree"])
+        .current_dir(repo_root)
+        .env("GIT_INDEX_FILE", &isolated_index)
+        .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+        .output()
+        .expect("git write-tree should run");
+    assert!(
+        tree.status.success(),
+        "git write-tree failed: {}",
+        String::from_utf8_lossy(&tree.stderr)
+    );
+    let tree_id = String::from_utf8(tree.stdout)
+        .expect("tree id should be utf-8")
+        .trim()
+        .to_string();
+
+    let archive = Command::new("git")
+        .args(["archive", "--format=tar", &tree_id, pathspec])
+        .current_dir(repo_root)
+        .env("GIT_INDEX_FILE", &isolated_index)
+        .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
+        .output()
+        .expect("git archive should run");
+    assert!(
+        archive.status.success(),
+        "git archive failed: {}",
+        String::from_utf8_lossy(&archive.stderr)
+    );
+
+    let mut tar = Command::new("tar")
+        .args(["tf", "-"])
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("tar should start");
+    tar.stdin
+        .as_mut()
+        .expect("tar stdin")
+        .write_all(&archive.stdout)
+        .expect("should stream archive into tar");
+    let listing = tar.wait_with_output().expect("tar should finish");
+    assert!(
+        listing.status.success(),
+        "tar listing failed: {}",
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    String::from_utf8(listing.stdout)
+        .expect("tar output should be utf-8")
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect()
+}
