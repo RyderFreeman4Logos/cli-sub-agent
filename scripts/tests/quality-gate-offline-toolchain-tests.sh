@@ -8,6 +8,9 @@ run_offline_pinned_toolchain() {
   local compiler_changed tool_changed missing missing_stderr missing_diagnostic
   local code nested_code nested_reason wrong_code wrong_diagnostic
   local first_identity second_identity compiler_identity tool_identity
+  local self_location_bin self_location_calls wrong_location_parent
+  local toolchain_root_literal wrong_location_root wrong_location_root_literal
+  local wrong_location_parent_literal self_location_calls_literal first_code
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/offline-toolchain-counter"
@@ -16,8 +19,13 @@ run_offline_pinned_toolchain() {
   direct_bin="$fixture/target/direct-resolver"
   hook_bin="$fixture/target/hook-resolver"
   nested_bin="$fixture/target/nested-outer-closure"
+  self_location_bin="$fixture/target/wrong-self-location-bin"
+  self_location_calls="$fixture/target/wrong-self-location.calls"
+  wrong_location_parent="$fixture/target/wrong-self-location"
+  wrong_location_root="$wrong_location_parent/pinned-toolchain"
   mkdir -p "$toolchain_root/bin" "$toolchain_root/lib" "$resolver_root" \
-    "$direct_bin" "$hook_bin" "$nested_bin"
+    "$direct_bin" "$hook_bin" "$nested_bin" "$self_location_bin" \
+    "$wrong_location_parent/locator" "$wrong_location_root/bin"
   cat >"$fixture/rust-toolchain.toml" <<'EOF'
 [toolchain]
 channel = "9.96.0"
@@ -26,15 +34,52 @@ EOF
   git -C "$fixture" add rust-toolchain.toml
   git -C "$fixture" commit -qm "test: pin offline fixture toolchain"
 
-  cat >"$toolchain_root/bin/rustc" <<'SH'
+  # A sealed launcher has no trustworthy source path. Poison legacy helper-based
+  # self-location so fixture roots must come from declared literals.
+  printf -v toolchain_root_literal '%q' "$toolchain_root"
+  printf -v self_location_calls_literal '%q' "$self_location_calls"
+  printf -v wrong_location_root_literal '%q' "$wrong_location_root"
+  printf -v wrong_location_parent_literal '%q' "$wrong_location_parent"
+  cat >"$self_location_bin/readlink" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-source="$(readlink -f "${BASH_SOURCE[0]}")"
-root="$(cd "$(dirname "$source")/.." && pwd)"
-case "$*" in
-  '--print sysroot') printf '%s\n' "$root" ;;
+calls=$self_location_calls_literal
+wrong_root=$wrong_location_root_literal
+test "\$#" -eq 2
+test "\${1:-}" = -f
+printf 'readlink\n' >>"\$calls"
+printf '%s\n' "\$wrong_root/bin/rustc"
+EOF
+  cat >"$self_location_bin/dirname" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+calls=$self_location_calls_literal
+wrong_root=$wrong_location_root_literal
+wrong_parent=$wrong_location_parent_literal
+test "\$#" -eq 1
+printf 'dirname\n' >>"\$calls"
+case "\${1##*/}" in
+  rustc) printf '%s\n' "\$wrong_root/bin" ;;
+  *) printf '%s\n' "\$wrong_parent/locator" ;;
+esac
+EOF
+  chmod +x "$self_location_bin/readlink" "$self_location_bin/dirname"
+
+  cat >"$toolchain_root/bin/rustc" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+root=$toolchain_root_literal
+case "\$*" in
+  '--print sysroot')
+    case "\$0" in
+      /run/csa-bin/rustc|/run/csa-rust-toolchain/bin/rustc)
+        printf '%s\n' /run/csa-rust-toolchain
+        ;;
+      *) printf '%s\n' "\$root" ;;
+    esac
+    ;;
   '-vV')
-    cat <<'EOF'
+    cat <<'VERSION'
 rustc 9.96.0 (111111111 2096-05-25)
 binary: rustc
 commit-hash: 1111111111111111111111111111111111111111
@@ -42,11 +87,11 @@ commit-date: 2096-05-25
 host: x86_64-unknown-linux-gnu
 release: 9.96.0
 LLVM version: 21.0.0
-EOF
+VERSION
     ;;
   *) printf 'unexpected fixture rustc arguments\n' >&2; exit 64 ;;
 esac
-SH
+EOF
   cat >"$toolchain_root/bin/cargo" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -72,29 +117,29 @@ SH
   done
   chmod +x "$toolchain_root/bin/"*
 
-  cat >"$resolver_root/rustup" <<'SH'
+  cat >"$resolver_root/rustup" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../pinned-toolchain" && pwd)"
-if [ "${1:-}" = which ]; then
-  test "${2:-}" = --toolchain
-  case "${3:-}" in
+root=$toolchain_root_literal
+if [ "\${1:-}" = which ]; then
+  test "\${2:-}" = --toolchain
+  case "\${3:-}" in
     9.96.0|9.96.0-x86_64-unknown-linux-gnu) ;;
     *) exit 65 ;;
   esac
-  tool="${4:-}"
-  test -x "$root/bin/$tool" || exit 66
-  printf '%s\n' "$root/bin/$tool"
+  tool="\${4:-}"
+  test -x "\$root/bin/\$tool" || exit 66
+  printf '%s\n' "\$root/bin/\$tool"
   exit 0
 fi
-tool="${CSA_TEST_RUSTUP_PROXY_NAME:?}"
-if [ "${RUSTUP_TOOLCHAIN:-}" != 9.96.0-x86_64-unknown-linux-gnu ]; then
+tool="\${CSA_TEST_RUSTUP_PROXY_NAME:?}"
+if [ "\${RUSTUP_TOOLCHAIN:-}" != 9.96.0-x86_64-unknown-linux-gnu ]; then
   echo 'info: syncing channel updates for 9.96.0-x86_64-unknown-linux-gnu' >&2
   echo 'error: offline fixture DNS denied while resolving pinned toolchain' >&2
   exit 68
 fi
-exec "$root/bin/$tool" "$@"
-SH
+exec "\$root/bin/\$tool" "\$@"
+EOF
   chmod +x "$resolver_root/rustup"
   printf '#!/usr/bin/env bash\n# direct launcher\nexec %q "$@"\n' \
     "$resolver_root/rustup" >"$direct_bin/rustup"
@@ -119,9 +164,17 @@ exit 66
 SH
   chmod +x "$nested_bin/rustup"
 
-  first="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
+  set +e
+  first="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
-  second="$(cd "$fixture" && PATH="$hook_bin:$PATH" \
+  first_code=$?
+  set -e
+  if [ "$first_code" -ne 0 ]; then
+    assert_path_exists offline-toolchain-self-location-sentinel-triggered \
+      "$self_location_calls"
+  fi
+  assert_eq offline-toolchain-first-exit 0 "$first_code"
+  second="$(cd "$fixture" && PATH="$hook_bin:$self_location_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
   second_identity="$(printf '%s' "$second" | json_field receipt_identity)"
@@ -134,7 +187,7 @@ SH
 
   set +e
   nested_first="$(cd "$fixture" && \
-    PATH="$nested_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --nested-outer-receipt-case)"
   nested_code=$?
@@ -146,7 +199,7 @@ SH
   fi
   assert_eq nested-static-outer-receipt-exact-reuse-exit 0 "$nested_code"
   nested_second="$(cd "$fixture" && \
-    PATH="$nested_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --nested-outer-receipt-case)"
   assert_eq nested-static-outer-receipt-first-status executed \
@@ -161,7 +214,7 @@ SH
   wrong_stderr="$fixture/target/wrong-toolchain.stderr"
   set +e
   wrong="$(cd "$fixture" && \
-    PATH="$nested_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.95.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --wrong-nested-selector 2>"$wrong_stderr")"
   wrong_code=$?
@@ -179,7 +232,7 @@ SH
     "$(wc -c <"$counter")"
 
   printf '# changed compiler bytes\n' >>"$toolchain_root/bin/rustc"
-  compiler_changed="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
+  compiler_changed="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
   compiler_identity="$(printf '%s' "$compiler_changed" | json_field receipt_identity)"
   assert_eq offline-toolchain-compiler-status executed \
@@ -188,7 +241,7 @@ SH
   assert_eq offline-toolchain-compiler-runs 4 "$(wc -c <"$counter")"
 
   printf '# changed tool bytes\n' >>"$toolchain_root/bin/cargo-fmt"
-  tool_changed="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
+  tool_changed="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
   tool_identity="$(printf '%s' "$tool_changed" | json_field receipt_identity)"
   assert_eq offline-toolchain-tool-status executed \
@@ -199,7 +252,7 @@ SH
   mv "$toolchain_root/bin/cargo-fmt" "$toolchain_root/bin/cargo-fmt.missing"
   missing_stderr="$fixture/target/missing-toolchain.stderr"
   set +e
-  missing="$(cd "$fixture" && PATH="$direct_bin:$PATH" \
+  missing="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check 2>"$missing_stderr")"
   code=$?
   set -e
@@ -217,6 +270,8 @@ SH
   assert_not_matches offline-toolchain-missing-diagnostic-sanitized \
     '(/home/|/tmp/|PASSWORD|SECRET|TOKEN)' "$missing_diagnostic"
   assert_eq offline-toolchain-missing-no-gate 5 "$(wc -c <"$counter")"
+  assert_path_absent offline-toolchain-no-self-location-coupling \
+    "$self_location_calls"
   echo "PASS isolation-offline-pinned-toolchain"
 }
 
