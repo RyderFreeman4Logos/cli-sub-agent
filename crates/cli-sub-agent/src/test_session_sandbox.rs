@@ -1,9 +1,11 @@
 // NOTE #1858: #[path]-included by tests; no `crate::`, no binary-only methods (dead_code).
-/// Redirect session state/cache I/O into a tempdir so tests work in sandboxed
-/// CI environments (avoids read-only host XDG paths leaking into test runs).
+/// Redirect session and Rust state/cache I/O into a tempdir so tests work in
+/// sandboxed CI environments (avoids read-only host paths leaking into tests).
 ///
 /// Also clears `CSA_DAEMON_*` env vars to prevent daemon session ID leaking
 /// into fresh test sessions.
+/// `PATH` and `MISE_DATA_DIR` remain untouched so installed toolchains stay
+/// executable while their writable state is isolated.
 ///
 /// Internally acquires [`TEST_ENV_LOCK`] to serialise all env-mutating tests
 /// across the process. Callers do NOT need to acquire any additional lock.
@@ -11,6 +13,25 @@ use std::ffi::OsString;
 use tokio::sync::OwnedMutexGuard;
 
 use super::test_env_lock::TEST_ENV_LOCK;
+
+// Keep these keys aligned with `pipeline_env::rust_session_writable_paths`.
+// `MISE_DATA_DIR` holds installed toolchains and is intentionally excluded.
+const RUST_STATE_HOME_ENV_DIRS: &[(&str, &str)] = &[
+    (csa_core::env::CARGO_HOME_ENV_KEY, "rust-state/cargo-home"),
+    (csa_core::env::RUSTUP_HOME_ENV_KEY, "rust-state/rustup-home"),
+    (
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        "rust-state/cargo-install-root",
+    ),
+    (
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        "rust-state/cargo-target",
+    ),
+    (
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+        "rust-state/mise-config",
+    ),
+];
 
 /// RAII guard that sandboxes session env vars and restores them on drop.
 ///
@@ -34,7 +55,7 @@ impl ScopedSessionSandbox {
     }
 
     fn from_guard(tmp: &tempfile::TempDir, lock: OwnedMutexGuard<()>) -> Self {
-        let keys: &[&'static str] = &[
+        let session_keys: &[&'static str] = &[
             "HOME",
             "XDG_STATE_HOME",
             "XDG_CACHE_HOME",
@@ -45,7 +66,27 @@ impl ScopedSessionSandbox {
             // processes (triggers no-op exit gate on fast test executions).
             "CSA_EMIT_CALLER_GUARD_INJECTION",
         ];
-        let originals: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        let rust_state_paths: Vec<_> = RUST_STATE_HOME_ENV_DIRS
+            .iter()
+            .map(|(key, relative)| (*key, tmp.path().join(relative)))
+            .collect();
+        for (key, path) in &rust_state_paths {
+            std::fs::create_dir_all(path)
+                .unwrap_or_else(|error| panic!("create sandboxed {key} directory: {error}"));
+            if *key == csa_core::env::CARGO_HOME_ENV_KEY {
+                for child in ["git", "registry"] {
+                    std::fs::create_dir_all(path.join(child)).unwrap_or_else(|error| {
+                        panic!("create sandboxed Cargo {child} cache directory: {error}")
+                    });
+                }
+            }
+        }
+        let originals: Vec<_> = session_keys
+            .iter()
+            .copied()
+            .chain(rust_state_paths.iter().map(|(key, _)| *key))
+            .map(|key| (key, std::env::var_os(key)))
+            .collect();
         let home_path = tmp.path();
         let state_path = tmp.path().join("state");
         let cache_path = tmp.path().join("cache");
@@ -58,6 +99,9 @@ impl ScopedSessionSandbox {
             std::env::remove_var("CSA_DAEMON_SESSION_DIR");
             std::env::remove_var("CSA_DAEMON_PROJECT_ROOT");
             std::env::remove_var("CSA_EMIT_CALLER_GUARD_INJECTION");
+            for (key, path) in rust_state_paths {
+                std::env::set_var(key, path);
+            }
         }
         Self {
             originals,
@@ -95,6 +139,19 @@ impl Drop for ScopedSessionSandbox {
 #[cfg(test)]
 mod tests {
     use super::ScopedSessionSandbox;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    const RUST_STATE_HOME_ENV_KEYS: &[&str] = &[
+        csa_core::env::CARGO_HOME_ENV_KEY,
+        csa_core::env::RUSTUP_HOME_ENV_KEY,
+        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
+        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+    ];
+    const RUST_STATE_CHILD_MARKER: &str = "CSA_TEST_SCOPED_SESSION_RUST_STATE_CHILD";
+    const RUST_STATE_TEST_NAME: &str =
+        "test_session_sandbox::tests::rust_state_env_is_sandboxed_and_restored";
 
     #[test]
     fn tracked_env_var_is_restored_on_drop() {
@@ -116,6 +173,98 @@ mod tests {
             std::env::var(KEY),
             Err(std::env::VarError::NotPresent),
             "tracked env var should be removed when it did not exist before sandboxing"
+        );
+    }
+
+    #[test]
+    fn rust_state_env_is_sandboxed_and_restored() {
+        let sandboxed_keys: Vec<_> = super::RUST_STATE_HOME_ENV_DIRS
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
+        assert_eq!(sandboxed_keys, RUST_STATE_HOME_ENV_KEYS);
+
+        if std::env::var_os(RUST_STATE_CHILD_MARKER).is_none() {
+            let mut child = Command::new(std::env::current_exe().expect("current test executable"));
+            child
+                .arg("--exact")
+                .arg(RUST_STATE_TEST_NAME)
+                .arg("--nocapture")
+                .env(RUST_STATE_CHILD_MARKER, "1");
+            for (index, key) in RUST_STATE_HOME_ENV_KEYS.iter().enumerate() {
+                if index % 2 == 0 {
+                    child.env(key, format!("/ambient/rust-state-{index}"));
+                } else {
+                    child.env_remove(key);
+                }
+            }
+
+            let output = child.output().expect("run isolated Rust state child test");
+            assert!(
+                output.status.success(),
+                "isolated Rust state child test failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let before: Vec<_> = RUST_STATE_HOME_ENV_KEYS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        let path_before = std::env::var_os("PATH");
+        let mise_data_before = std::env::var_os(csa_core::env::MISE_DATA_DIR_ENV_KEY);
+        let td = tempfile::tempdir().expect("tempdir");
+
+        {
+            let _sandbox = ScopedSessionSandbox::new_blocking(&td);
+            for key in RUST_STATE_HOME_ENV_KEYS {
+                let path = PathBuf::from(
+                    std::env::var_os(key).unwrap_or_else(|| panic!("{key} should be set")),
+                );
+                assert!(
+                    path.starts_with(td.path()),
+                    "{key} should be redirected beneath the sandbox root, got {}",
+                    path.display()
+                );
+                assert!(
+                    path.is_dir(),
+                    "{key} directory should exist: {}",
+                    path.display()
+                );
+                std::fs::write(path.join("writable-probe"), b"ok")
+                    .unwrap_or_else(|error| panic!("{key} should be writable: {error}"));
+            }
+
+            let cargo_home = PathBuf::from(
+                std::env::var_os(csa_core::env::CARGO_HOME_ENV_KEY)
+                    .expect("CARGO_HOME should be set"),
+            );
+            for child in ["git", "registry"] {
+                assert!(
+                    cargo_home.join(child).is_dir(),
+                    "Cargo {child} cache directory should exist"
+                );
+            }
+            assert_eq!(std::env::var_os("PATH"), path_before);
+            assert_eq!(
+                std::env::var_os(csa_core::env::MISE_DATA_DIR_ENV_KEY),
+                mise_data_before
+            );
+        }
+
+        for (key, expected) in before {
+            assert_eq!(
+                std::env::var_os(key),
+                expected,
+                "{key} should be restored exactly on drop"
+            );
+        }
+        assert_eq!(std::env::var_os("PATH"), path_before);
+        assert_eq!(
+            std::env::var_os(csa_core::env::MISE_DATA_DIR_ENV_KEY),
+            mise_data_before
         );
     }
 
