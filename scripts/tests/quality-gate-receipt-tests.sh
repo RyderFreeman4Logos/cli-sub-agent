@@ -148,6 +148,9 @@ assert_manifest_contract() {
     repository_identity checkout_identity head_oid tree_oid index_oid \
     index_clean tracked_worktree_clean untracked_worktree_digest \
     cargo_lock_sha256 weave_lock_sha256 rust_toolchain_sha256 rust_toolchain_file_sha256 \
+    rust_toolchain_launcher_authority_sha256 \
+    rust_toolchain_launcher_invocation_sha256 \
+    rust_toolchain_semantic_projection \
     target_provenance_sha256 feature_matrix_sha256 environment_sha256 \
     cargo_config_sha256 dotenv_sha256 normalizer_sha256 tool_provenance_sha256 \
     justfile_sha256 lefthook_sha256 gate_script_sha256 recipe_sha256 \

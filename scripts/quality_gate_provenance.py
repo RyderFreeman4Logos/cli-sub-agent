@@ -15,7 +15,7 @@ import shutil
 import stat
 import subprocess
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, TypeGuard
 
 from quality_gate_secure_state import (
     IMPLEMENTATION_VERSION,
@@ -52,6 +52,9 @@ ENV_EXACT = {
     "PKG_CONFIG_PATH",
     "CSA_QUALITY_GATE_SANDBOX_VERSION",
     "CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256",
+    "CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256",
+    "CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256",
+    "CSA_QUALITY_GATE_TOOLCHAIN_SEMANTIC_PROJECTION",
 }
 ENV_NORMALIZED_SEPARATELY = {
     "RUSTC",
@@ -99,6 +102,14 @@ def encode_fields(fields: dict[str, str]) -> bytes:
     return "".join(f"{key}={fields[key]}\n" for key in sorted(fields)).encode()
 
 
+def is_lower_sha256(value: object) -> TypeGuard[str]:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def run_checked(
     command: Sequence[str],
     *,
@@ -133,13 +144,23 @@ def run_checked(
 
 
 def git_output(repo: Path, *arguments: str) -> str:
-    """Run a bounded Git query in the repository."""
-
     output = run_checked(("git", *arguments), cwd=repo)
     try:
         return output.decode("utf-8").strip()
     except UnicodeDecodeError as error:
         raise ProvenanceError("git provenance was not UTF-8") from error
+
+
+def git_diff_is_clean(repo: Path, env: dict[str, str], *arguments: str) -> bool:
+    return (
+        subprocess.run(
+            ("git", "diff", *arguments, "--quiet", "--ignore-submodules", "--"),
+            cwd=repo,
+            env=env,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def hash_open_file(path: Path, maximum: int, *, resolve: bool = False) -> str:
@@ -171,8 +192,6 @@ def hash_open_file(path: Path, maximum: int, *, resolve: bool = False) -> str:
 
 
 def optional_repository_digest(repo: Path, relative: str) -> str:
-    """Hash a repository file or return the explicit missing sentinel."""
-
     path = repo / relative
     try:
         return hash_open_file(path, MAX_REPOSITORY_FILE_BYTES)
@@ -328,6 +347,26 @@ def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
     return sha256_bytes(encode_fields(parts)), sha256_bytes(target_value.encode())
 
 
+def toolchain_launcher_provenance(env: dict[str, str]) -> tuple[str, str, str]:
+    """Validate the outer launcher identities injected by the static sandbox."""
+
+    invocation = env.get("CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256")
+    authority = env.get("CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256")
+    projection = env.get("CSA_QUALITY_GATE_TOOLCHAIN_SEMANTIC_PROJECTION")
+    if (
+        not is_lower_sha256(invocation)
+        or not is_lower_sha256(authority)
+        or not isinstance(projection, str)
+        or not 0 < len(projection) <= 256
+        or not all(
+            character in "abcdefghijklmnopqrstuvwxyz0123456789-;"
+            for character in projection
+        )
+    ):
+        raise ProvenanceError("outer toolchain launcher provenance is unavailable")
+    return invocation, authority, projection
+
+
 def environment_provenance(env: dict[str, str]) -> str:
     """Hash every normalized acceptance-affecting Rust/Cargo/nextest input."""
 
@@ -446,8 +485,6 @@ def gate_script_digest(repo: Path, command: Sequence[str], env: dict[str, str]) 
 
 
 def recipe_digest(repo: Path, env: dict[str, str]) -> str:
-    """Hash the effective authoritative Just recipe or its missing sentinel."""
-
     try:
         recipe = run_checked(("just", "--show", "quality-gates"), cwd=repo, env=env)
     except ProvenanceError:
@@ -461,24 +498,11 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
     if not command:
         raise ProvenanceError("quality-gate command is empty")
     compiler, target = compiler_provenance(repo, env)
-    sandbox_index_clean = (
-        subprocess.run(
-            ("git", "diff", "--cached", "--quiet", "--ignore-submodules", "--"),
-            cwd=repo,
-            env=env,
-            check=False,
-        ).returncode
-        == 0
+    launcher_invocation, launcher_authority, launcher_projection = (
+        toolchain_launcher_provenance(env)
     )
-    sandbox_tracked_clean = (
-        subprocess.run(
-            ("git", "diff", "--quiet", "--ignore-submodules", "--"),
-            cwd=repo,
-            env=env,
-            check=False,
-        ).returncode
-        == 0
-    )
+    sandbox_index_clean = git_diff_is_clean(repo, env, "--cached")
+    sandbox_tracked_clean = git_diff_is_clean(repo, env)
     untracked = run_checked(
         ("git", "ls-files", "--others", "--exclude-standard", "-z"),
         cwd=repo,
@@ -491,8 +515,6 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         raise ProvenanceError("host clean-state provenance is unavailable")
     if untracked_digest is None or len(untracked_digest) != 64:
         raise ProvenanceError("host untracked provenance is unavailable")
-    assert index_clean is not None
-    assert tracked_clean is not None
     if (index_clean == "true") != sandbox_index_clean:
         raise ProvenanceError("index clean-state changed during snapshot")
     if (tracked_clean == "true") != sandbox_tracked_clean:
@@ -508,11 +530,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
     )
     source_snapshot = env.get("CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256", "")
     sandbox_version = env.get("CSA_QUALITY_GATE_SANDBOX_VERSION", "")
-    if (
-        len(source_snapshot) != 64
-        or any(character not in "0123456789abcdef" for character in source_snapshot)
-        or not sandbox_version
-    ):
+    if not is_lower_sha256(source_snapshot) or not sandbox_version:
         raise ProvenanceError("sandbox provenance is unavailable")
     fields = {
         "cargo_config_sha256": cargo_config_provenance(repo, env),
@@ -569,6 +587,9 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "rust_toolchain_file_sha256": optional_repository_digest(
             repo, "rust-toolchain.toml"
         ),
+        "rust_toolchain_launcher_authority_sha256": launcher_authority,
+        "rust_toolchain_launcher_invocation_sha256": launcher_invocation,
+        "rust_toolchain_semantic_projection": launcher_projection,
         "rust_toolchain_sha256": compiler,
         "schema_version": str(SCHEMA_VERSION),
         "sandbox_version": sandbox_version,

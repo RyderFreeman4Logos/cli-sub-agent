@@ -39,10 +39,10 @@ run_contract_suite() {
   rm -f "$capture"
 }
 
-# Exact ratchet: 45 core + 7 hostile + 7 isolation + 1 pre-push + 2
-# dev2merge runtime contracts = 62 independently named PASS cases.
+# Exact ratchet: 45 core + 7 hostile + 14 isolation + 1 pre-push + 2
+# dev2merge runtime contracts = 69 independently named PASS cases.
 run_contract_suite scripts/tests/quality-gate-receipt-tests.sh 45
 run_contract_suite scripts/tests/quality-gate-receipt-hostile-tests.sh 7
-run_contract_suite scripts/tests/quality-gate-isolation-tests.sh 7
+run_contract_suite scripts/tests/quality-gate-isolation-tests.sh 14
 run_contract_suite scripts/tests/pre-push-quality-gates-tests.sh 1
 run_contract_suite scripts/tests/dev2merge-quality-gate-receipt-tests.sh 2

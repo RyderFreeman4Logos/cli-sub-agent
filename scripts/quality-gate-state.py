@@ -51,6 +51,9 @@ def emit_result(
             "checkout": fields.get("checkout_identity", "unavailable"),
             "head": fields.get("head_oid", "unavailable"),
             "repository": fields.get("repository_identity", "unavailable"),
+            "toolchain": fields.get(
+                "rust_toolchain_semantic_projection", "unavailable"
+            ),
         },
         "receipt_identity": identity,
         "rejection_reason": reason,

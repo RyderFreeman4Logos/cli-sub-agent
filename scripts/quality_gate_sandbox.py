@@ -302,6 +302,15 @@ class GateSandbox:
             self.clean_state,
         )
         self.environment["RUSTUP_TOOLCHAIN"] = self.rust_toolchain.selector
+        self.environment["CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256"] = (
+            self.rust_toolchain.launcher_invocation_sha256
+        )
+        self.environment["CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256"] = (
+            self.rust_toolchain.launcher_authority_sha256
+        )
+        self.environment["CSA_QUALITY_GATE_TOOLCHAIN_SEMANTIC_PROJECTION"] = (
+            self.rust_toolchain.semantic_projection
+        )
         self.tool_mounts: dict[str, Path] = {}
         self.explicit_tools: dict[str, Path] = {}
         self.data_mounts: dict[str, Path] = {}

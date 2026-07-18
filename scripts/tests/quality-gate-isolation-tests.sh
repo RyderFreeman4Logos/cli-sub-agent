@@ -492,6 +492,10 @@ case "$scenario" in
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
     ;;
+  multicall-toolchain)
+    receipt_contract_set_case multicall-toolchain
+    run_multicall_toolchain
+    ;;
   isolation-failure)
     receipt_contract_set_case isolation-failure
     run_isolation_failure_paths
@@ -511,6 +515,8 @@ case "$scenario" in
     run_ambient_input_isolation
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
+    receipt_contract_set_case multicall-toolchain
+    run_multicall_toolchain
     receipt_contract_set_case isolation-failure
     run_isolation_failure_paths
     receipt_contract_set_case parent-death
