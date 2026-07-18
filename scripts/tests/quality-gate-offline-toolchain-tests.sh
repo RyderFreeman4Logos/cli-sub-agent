@@ -2,14 +2,22 @@
 # Offline pinned-toolchain contract for the capability sandbox.
 # Sourced after the isolation fixture and assertion helpers are defined.
 
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo 'source-only helper; run: bash scripts/tests/quality-gate-isolation-tests.sh offline-toolchain' >&2
+  exit 2
+fi
+
 run_offline_pinned_toolchain() {
   local fixture runner counter toolchain_root resolver_root direct_bin hook_bin
+  local python_executable
   local nested_bin first second nested_first nested_second wrong wrong_stderr
   local compiler_changed tool_changed missing missing_stderr missing_diagnostic
   local code nested_code nested_reason wrong_code wrong_diagnostic
+  local legacy_location legacy_calls
   local first_identity second_identity compiler_identity tool_identity
-  local self_location_bin self_location_calls wrong_location_parent
-  local toolchain_root_literal wrong_location_root wrong_location_root_literal
+  local ambient_helper_bin self_location_bin self_location_calls wrong_location_parent
+  local legacy_locator self_location_bin_literal toolchain_root_literal
+  local wrong_location_root wrong_location_root_literal
   local wrong_location_parent_literal self_location_calls_literal first_code
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
@@ -19,13 +27,16 @@ run_offline_pinned_toolchain() {
   direct_bin="$fixture/target/direct-resolver"
   hook_bin="$fixture/target/hook-resolver"
   nested_bin="$fixture/target/nested-outer-closure"
+  ambient_helper_bin="$fixture/target/ambient-helper-bin"
+  legacy_locator="$fixture/target/legacy-self-location"
   self_location_bin="$fixture/target/wrong-self-location-bin"
   self_location_calls="$fixture/target/wrong-self-location.calls"
   wrong_location_parent="$fixture/target/wrong-self-location"
   wrong_location_root="$wrong_location_parent/pinned-toolchain"
   mkdir -p "$toolchain_root/bin" "$toolchain_root/lib" "$resolver_root" \
-    "$direct_bin" "$hook_bin" "$nested_bin" "$self_location_bin" \
-    "$wrong_location_parent/locator" "$wrong_location_root/bin"
+    "$direct_bin" "$hook_bin" "$nested_bin" "$ambient_helper_bin" \
+    "$self_location_bin" "$wrong_location_parent/locator" \
+    "$wrong_location_root/bin"
   cat >"$fixture/rust-toolchain.toml" <<'EOF'
 [toolchain]
 channel = "9.96.0"
@@ -37,6 +48,7 @@ EOF
   # A sealed launcher has no trustworthy source path. Poison legacy helper-based
   # self-location so fixture roots must come from declared literals.
   printf -v toolchain_root_literal '%q' "$toolchain_root"
+  printf -v self_location_bin_literal '%q' "$self_location_bin"
   printf -v self_location_calls_literal '%q' "$self_location_calls"
   printf -v wrong_location_root_literal '%q' "$wrong_location_root"
   printf -v wrong_location_parent_literal '%q' "$wrong_location_parent"
@@ -65,9 +77,22 @@ esac
 EOF
   chmod +x "$self_location_bin/readlink" "$self_location_bin/dirname"
 
+  # Keep the ambient helper orthogonal to local tool-manager shims.
+  python_executable="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+  assert_executable offline-toolchain-python-launcher "$python_executable"
+  ln -s "$python_executable" "$ambient_helper_bin/python3"
+  cat >"$ambient_helper_bin/realpath" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+dirname /unrelated >/dev/null
+exec /usr/bin/realpath "$@"
+SH
+  chmod +x "$ambient_helper_bin/realpath"
+
   cat >"$toolchain_root/bin/rustc" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH=$self_location_bin_literal:\$PATH
 root=$toolchain_root_literal
 case "\$*" in
   '--print sysroot')
@@ -120,6 +145,7 @@ SH
   cat >"$resolver_root/rustup" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH=$self_location_bin_literal:\$PATH
 root=$toolchain_root_literal
 if [ "\${1:-}" = which ]; then
   test "\${2:-}" = --toolchain
@@ -164,18 +190,43 @@ exit 66
 SH
   chmod +x "$nested_bin/rustup"
 
+  cat >"$legacy_locator" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export PATH=$self_location_bin_literal:\$PATH
+dirname "\$(dirname "\$(readlink -f "\$0")")"
+EOF
+  chmod +x "$legacy_locator"
+  legacy_location="$("$legacy_locator")"
+  legacy_calls="$(<"$self_location_calls")"
+  assert_eq offline-toolchain-legacy-self-location-root \
+    "$wrong_location_parent/locator" "$legacy_location"
+  assert_eq offline-toolchain-legacy-self-location-call-count 3 \
+    "$(wc -l <"$self_location_calls")"
+  assert_eq offline-toolchain-legacy-self-location-calls \
+    $'readlink\ndirname\ndirname' "$legacy_calls"
+  rm -f "$self_location_calls"
+  assert_path_absent offline-toolchain-legacy-self-location-reset \
+    "$self_location_calls"
+
   set +e
-  first="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
+  first="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    PATH="$direct_bin:$ambient_helper_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
   first_code=$?
   set -e
-  if [ "$first_code" -ne 0 ]; then
-    assert_path_exists offline-toolchain-self-location-sentinel-triggered \
-      "$self_location_calls"
-  fi
+  assert_path_absent offline-toolchain-first-self-location \
+    "$self_location_calls"
   assert_eq offline-toolchain-first-exit 0 "$first_code"
-  second="$(cd "$fixture" && PATH="$hook_bin:$self_location_bin:$PATH" \
+  set +e
+  second="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    PATH="$hook_bin:$ambient_helper_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
+  code=$?
+  set -e
+  assert_path_absent offline-toolchain-second-self-location \
+    "$self_location_calls"
+  assert_eq offline-toolchain-second-exit 0 "$code"
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
   second_identity="$(printf '%s' "$second" | json_field receipt_identity)"
   assert_eq offline-toolchain-first-status executed \
@@ -187,21 +238,29 @@ SH
 
   set +e
   nested_first="$(cd "$fixture" && \
-    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$ambient_helper_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --nested-outer-receipt-case)"
   nested_code=$?
   set -e
+  assert_path_absent nested-static-outer-first-self-location \
+    "$self_location_calls"
   if [ "$nested_code" -ne 0 ]; then
     nested_reason="$(printf '%s' "$nested_first" | json_field rejection_reason)"
     assert_eq nested-static-outer-receipt-exact-reuse-reason \
       toolchain_component_missing "$nested_reason"
   fi
   assert_eq nested-static-outer-receipt-exact-reuse-exit 0 "$nested_code"
+  set +e
   nested_second="$(cd "$fixture" && \
-    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$ambient_helper_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.96.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --nested-outer-receipt-case)"
+  code=$?
+  set -e
+  assert_path_absent nested-static-outer-second-self-location \
+    "$self_location_calls"
+  assert_eq nested-static-outer-receipt-second-exit 0 "$code"
   assert_eq nested-static-outer-receipt-first-status executed \
     "$(printf '%s' "$nested_first" | json_field status)"
   assert_eq nested-static-outer-receipt-second-status reused \
@@ -214,7 +273,7 @@ SH
   wrong_stderr="$fixture/target/wrong-toolchain.stderr"
   set +e
   wrong="$(cd "$fixture" && \
-    PATH="$nested_bin:$self_location_bin:/usr/bin:/bin" \
+    PATH="$nested_bin:$ambient_helper_bin:/usr/bin:/bin" \
     RUSTUP_TOOLCHAIN=9.95.0-x86_64-unknown-linux-gnu \
     "$runner" -- cargo fmt --wrong-nested-selector 2>"$wrong_stderr")"
   wrong_code=$?
@@ -232,8 +291,15 @@ SH
     "$(wc -c <"$counter")"
 
   printf '# changed compiler bytes\n' >>"$toolchain_root/bin/rustc"
-  compiler_changed="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
+  set +e
+  compiler_changed="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    PATH="$direct_bin:$ambient_helper_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
+  code=$?
+  set -e
+  assert_path_absent offline-toolchain-compiler-self-location \
+    "$self_location_calls"
+  assert_eq offline-toolchain-compiler-exit 0 "$code"
   compiler_identity="$(printf '%s' "$compiler_changed" | json_field receipt_identity)"
   assert_eq offline-toolchain-compiler-status executed \
     "$(printf '%s' "$compiler_changed" | json_field status)"
@@ -241,8 +307,15 @@ SH
   assert_eq offline-toolchain-compiler-runs 4 "$(wc -c <"$counter")"
 
   printf '# changed tool bytes\n' >>"$toolchain_root/bin/cargo-fmt"
-  tool_changed="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
+  set +e
+  tool_changed="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    PATH="$direct_bin:$ambient_helper_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check)"
+  code=$?
+  set -e
+  assert_path_absent offline-toolchain-tool-self-location \
+    "$self_location_calls"
+  assert_eq offline-toolchain-tool-exit 0 "$code"
   tool_identity="$(printf '%s' "$tool_changed" | json_field receipt_identity)"
   assert_eq offline-toolchain-tool-status executed \
     "$(printf '%s' "$tool_changed" | json_field status)"
@@ -252,7 +325,8 @@ SH
   mv "$toolchain_root/bin/cargo-fmt" "$toolchain_root/bin/cargo-fmt.missing"
   missing_stderr="$fixture/target/missing-toolchain.stderr"
   set +e
-  missing="$(cd "$fixture" && PATH="$direct_bin:$self_location_bin:$PATH" \
+  missing="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    PATH="$direct_bin:$ambient_helper_bin:$PATH" \
     "$runner" -- cargo fmt --all -- --check 2>"$missing_stderr")"
   code=$?
   set -e
