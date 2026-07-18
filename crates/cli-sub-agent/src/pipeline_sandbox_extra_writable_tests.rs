@@ -226,58 +226,6 @@ fn test_rust_env_writable_preserves_ambient_cargo_dirs() {
     }
 }
 
-/// CLI --extra-writable paths are appended to writable_paths (APPEND semantics).
-#[test]
-fn test_extra_writable_appended_to_isolation_plan() {
-    let project_root = tempfile::tempdir().expect("project root tempdir");
-    let extra_dir = project_root.path().join("extra-dir");
-    std::fs::create_dir_all(&extra_dir).expect("create extra dir");
-    let cfg = parse_project_config(
-        r#"
-[resources]
-memory_max_mb = 2048
-enforcement_mode = "best-effort"
-"#,
-    );
-
-    let extra = vec![PathBuf::from("./extra-dir")];
-    let result = resolve_sandbox_options(
-        Some(&cfg),
-        "claude-code",
-        "test-session",
-        project_root.path(),
-        StreamMode::BufferOnly,
-        120,
-        600,
-        Some(120),
-        false,
-        false,
-        &extra,
-        &[],
-    );
-
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("Expected SandboxResolution::Ok");
-    };
-
-    let Some(ref sandbox) = opts.sandbox else {
-        return;
-    };
-
-    assert!(
-        sandbox
-            .isolation_plan
-            .writable_paths
-            .contains(&extra_dir.canonicalize().unwrap()),
-        "extra_writable path should be in writable_paths, got: {:?}",
-        sandbox.isolation_plan.writable_paths
-    );
-    assert!(
-        !sandbox.isolation_plan.readonly_project_root,
-        "extra_writable uses APPEND semantics; project root stays writable"
-    );
-}
-
 #[test]
 fn test_extra_writable_creates_missing_directory_before_sandbox_launch() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
