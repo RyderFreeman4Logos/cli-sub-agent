@@ -288,7 +288,7 @@ test_live_cardinality_contract() {
 
 require_source_contract() {
   local summary quality_recipe pre_push_recipe static_source contract_source
-  local live_source lefthook_source count suite
+  local live_source lefthook_source count suite contract_suite output code
   summary="$(just --no-dotenv --summary)"
   quality_recipe="$(just --no-dotenv --show quality-gates)"
   pre_push_recipe="$(just --no-dotenv --show pre-push)"
@@ -296,6 +296,7 @@ require_source_contract() {
   live_source="$(<scripts/hooks/quality-gates-live.sh)"
   contract_source="$(<scripts/hooks/quality-gate-contract-tests.sh)"
   lefthook_source="$(<lefthook.yml)"
+  source scripts/hooks/quality-gate-contract-tests.sh
   assert_contains source-contract-quality-recipe-listed quality-gates "$summary"
   assert_contains source-contract-quality-recipe-entrypoint \
     scripts/hooks/quality-gates.sh "$quality_recipe"
@@ -326,6 +327,57 @@ require_source_contract() {
     'run: scripts/hooks/version-check.sh' "$lefthook_source"
   assert_contains source-contract-hook-review-check \
     'run: scripts/hooks/review-check.sh' "$lefthook_source"
+
+  contract_suite="$test_root/contract-diagnostic-suite.sh"
+  cat >"$contract_suite" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' \
+  'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' \
+  'UNSAFE secret=top-secret path=/tmp/private-contract.log'
+exit 7
+EOF
+  chmod +x "$contract_suite"
+  set +e
+  output="$(run_contract_suite "$contract_suite" 1 2>&1)"
+  code=$?
+  set -e
+  assert_eq source-contract-diagnostic-exit 7 "$code"
+  assert_contains source-contract-safe-generic-diagnostic \
+    'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' "$output"
+  assert_not_matches source-contract-unsafe-diagnostic-redacted \
+    'top-secret|/tmp/private-contract\.log' "$output"
+
+  set +e
+  output="$(
+    run_quality_gate_contract_suites() { printf 'suite-ran\n'; }
+    quality_gate_contract_tests_main receipt-reuse-with-hard-gates 2>&1
+  )"
+  code=$?
+  set -e
+  assert_eq source-contract-selector-argument-exit 2 "$code"
+  assert_eq source-contract-selector-argument-diagnostic \
+    $'ERROR quality-gate-contract-tests accepts no arguments\nusage: bash scripts/hooks/quality-gate-contract-tests.sh' \
+    "$output"
+  assert_not_matches source-contract-selector-argument-runs-no-suite \
+    'suite-ran' "$output"
+
+  set +e
+  output="$(bash scripts/tests/quality-gate-offline-toolchain-tests.sh 2>&1)"
+  code=$?
+  set -e
+  assert_eq source-contract-offline-helper-direct-exit 2 "$code"
+  assert_eq source-contract-offline-helper-direct-hint \
+    'source-only helper; run: bash scripts/tests/quality-gate-isolation-tests.sh offline-toolchain' \
+    "$output"
+
+  set +e
+  output="$(bash scripts/tests/quality-gate-receipt-integrity-tests.sh 2>&1)"
+  code=$?
+  set -e
+  assert_eq source-contract-integrity-helper-direct-exit 2 "$code"
+  assert_eq source-contract-integrity-helper-direct-hint \
+    'source-only helper; run: bash scripts/tests/quality-gate-receipt-tests.sh' \
+    "$output"
 }
 
 new_fixture() {

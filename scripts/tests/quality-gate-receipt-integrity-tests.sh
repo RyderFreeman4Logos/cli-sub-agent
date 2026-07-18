@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Sourced by quality-gate-receipt-tests.sh after fixture helpers are defined.
 
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo 'source-only helper; run: bash scripts/tests/quality-gate-receipt-tests.sh' >&2
+  exit 2
+fi
+
 current_receipt() {
   find "$1/.csa/state/quality-gate-receipts" -maxdepth 1 -type f -name '*.json' | head -1
 }
