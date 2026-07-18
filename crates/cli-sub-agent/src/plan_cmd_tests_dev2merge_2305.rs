@@ -106,7 +106,7 @@ fn dev2merge_2305_changed_bash_blocks_stay_synced() {
 fn dev2merge_self_review_prefers_shared_quality_gate() {
     let script = dev2merge_workflow_step_bash("Self-Review Gate");
     let recipe_check = script
-        .find("grep -qx \"quality-gates\"")
+        .find("has_recipe \"quality-gates\"")
         .expect("Step 11 must detect the shared quality-gates recipe");
     let shared_gate = script
         .find("just quality-gates")

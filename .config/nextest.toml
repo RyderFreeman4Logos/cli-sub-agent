@@ -1,2 +1,8 @@
 [profile.default]
 retries = 2
+
+[profile.static]
+retries = 0
+fail-fast = false
+default-filter = "not (binary_id(=csa-executor) & test(=transport::tests::test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override))"
+slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }

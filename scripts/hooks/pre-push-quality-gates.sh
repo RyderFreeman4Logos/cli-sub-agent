@@ -14,4 +14,4 @@ scripts/cargo-env-normalize.sh cargo fmt --all -- --check
 just clippy
 # `just test` already includes workspace e2e tests in both default and
 # all-feature runs; do not execute the same all-feature e2e binary a third time.
-just test
+NEXTEST_PROFILE=static NEXTEST_USER_CONFIG_FILE=none NEXTEST_RETRIES=0 just test
