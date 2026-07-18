@@ -27,7 +27,7 @@ fn resolve_sandbox_options_with_execution_env(
     project_root: &std::path::Path,
     execution_env: &HashMap<String, String>,
 ) -> SandboxResolution {
-    resolve_sandbox_options_with_overrides(
+    resolve_sandbox_options_with_capabilities(
         SandboxResolveInput {
             config: Some(cfg),
             tool_name: "codex",
@@ -45,6 +45,8 @@ fn resolve_sandbox_options_with_execution_env(
             execution_env: Some(execution_env),
         },
         RunResourceOverrides::absent(),
+        csa_resource::ResourceCapability::Setrlimit,
+        csa_resource::FilesystemCapability::Bwrap,
     )
 }
 
@@ -181,12 +183,30 @@ fn test_rust_env_writable_preserves_ambient_cargo_dirs() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let home = project_root.path().join("home");
+    let cargo_home = project_root.path().join("ambient-cargo-home");
+    let rustup_home = project_root.path().join("ambient-rustup-home");
     let cargo_target_dir = project_root.path().join("ambient-target");
     let cargo_install_root = project_root.path().join("ambient-install-root");
-    for path in [&home, &cargo_target_dir, &cargo_install_root] {
+    let mise_config = project_root.path().join("ambient-mise-config");
+    for path in [
+        &home,
+        &cargo_home,
+        &rustup_home,
+        &cargo_target_dir,
+        &cargo_install_root,
+        &mise_config,
+    ] {
         std::fs::create_dir_all(path).expect("create ambient Rust env dir");
     }
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("HOME utf8"));
+    let _cargo_home = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_HOME_ENV_KEY,
+        cargo_home.to_str().expect("cargo home utf8"),
+    );
+    let _rustup_home = ScopedEnvVarRestore::set(
+        csa_core::env::RUSTUP_HOME_ENV_KEY,
+        rustup_home.to_str().expect("rustup home utf8"),
+    );
     let _target = ScopedEnvVarRestore::set(
         csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
         cargo_target_dir.to_str().expect("target utf8"),
@@ -194,6 +214,10 @@ fn test_rust_env_writable_preserves_ambient_cargo_dirs() {
     let _install_root = ScopedEnvVarRestore::set(
         csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
         cargo_install_root.to_str().expect("install root utf8"),
+    );
+    let _mise_config = ScopedEnvVarRestore::set(
+        csa_core::env::MISE_CONFIG_DIR_ENV_KEY,
+        mise_config.to_str().expect("mise config utf8"),
     );
     let cfg = sandbox_config();
     let execution_env =
@@ -210,11 +234,22 @@ fn test_rust_env_writable_preserves_ambient_cargo_dirs() {
     let result =
         resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
 
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("expected sandbox");
+    let opts = match result {
+        SandboxResolution::Ok(opts) => opts,
+        SandboxResolution::RequiredButUnavailable(message) => {
+            panic!("expected SandboxResolution::Ok, got RequiredButUnavailable({message})")
+        }
     };
-    let sandbox = opts.sandbox.expect("sandbox context");
-    for path in [&cargo_target_dir, &cargo_install_root] {
+    let sandbox = opts
+        .sandbox
+        .expect("expected SandboxResolution::Ok with sandbox=Some(_), got sandbox=None");
+    for path in [
+        &cargo_home,
+        &rustup_home,
+        &cargo_target_dir,
+        &cargo_install_root,
+        &mise_config,
+    ] {
         assert!(
             sandbox
                 .isolation_plan
