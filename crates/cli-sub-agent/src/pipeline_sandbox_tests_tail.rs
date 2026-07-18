@@ -259,29 +259,36 @@ enforcement_mode = "best-effort"
 "#,
     );
 
-    let result = resolve_sandbox_options(
-        Some(&cfg),
-        "claude-code",
-        "test-session",
-        project_root.path(),
-        StreamMode::BufferOnly,
-        120,
-        600,
-        Some(120),
-        false, // no_fs_sandbox
-        false, // readonly_project_root
-        &[],   // extra_writable
-        &[],   // extra_readable
+    let result = resolve_sandbox_options_with_capabilities(
+        SandboxResolveInput {
+            config: Some(&cfg),
+            tool_name: "claude-code",
+            session_id: "test-session",
+            project_root: project_root.path(),
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: None,
+        },
+        RunResourceOverrides::absent(),
+        csa_resource::ResourceCapability::Setrlimit,
+        csa_resource::FilesystemCapability::Bwrap,
     );
 
     let SandboxResolution::Ok(opts) = result else {
         panic!("Expected SandboxResolution::Ok");
     };
 
-    let Some(ref sandbox) = opts.sandbox else {
-        // No sandbox capability on this host — skip assertions.
-        return;
-    };
+    let sandbox = opts
+        .sandbox
+        .as_ref()
+        .expect("injected capabilities must produce a deterministic sandbox context");
 
     let writable = &sandbox.isolation_plan.writable_paths;
 
@@ -318,28 +325,36 @@ writable_paths = ["/tmp/restricted-only"]
 "#,
     );
 
-    let result = resolve_sandbox_options(
-        Some(&cfg),
-        "claude-code",
-        "test-session",
-        &project_root,
-        StreamMode::BufferOnly,
-        120,
-        600,
-        Some(120),
-        false,
-        false,
-        &[], // extra_writable
-        &[], // extra_readable
+    let result = resolve_sandbox_options_with_capabilities(
+        SandboxResolveInput {
+            config: Some(&cfg),
+            tool_name: "claude-code",
+            session_id: "test-session",
+            project_root: &project_root,
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: None,
+        },
+        RunResourceOverrides::absent(),
+        csa_resource::ResourceCapability::Setrlimit,
+        csa_resource::FilesystemCapability::Bwrap,
     );
 
     let SandboxResolution::Ok(opts) = result else {
         panic!("Expected SandboxResolution::Ok");
     };
 
-    let Some(ref sandbox) = opts.sandbox else {
-        return;
-    };
+    let sandbox = opts
+        .sandbox
+        .as_ref()
+        .expect("injected capabilities must produce a deterministic sandbox context");
 
     let writable = &sandbox.isolation_plan.writable_paths;
 
@@ -468,7 +483,7 @@ enforcement_mode = "off"
 }
 
 #[test]
-fn test_bwrap_args_include_all_writable_paths() {
+fn test_bwrap_plan_includes_all_writable_paths() {
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let extra_writable = project_root.path().join("extra-writable");
     std::fs::create_dir_all(&extra_writable).expect("extra writable directory");
