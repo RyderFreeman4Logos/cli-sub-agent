@@ -63,6 +63,7 @@ def normalized_static_environment(
             "GIT_CONFIG_VALUE_0": "/dev/null",
             "GIT_CONFIG_VALUE_1": "/dev/null",
             "CARGO_NET_OFFLINE": "true",
+            "JUST_TEMPDIR": "/tmp",
             "LANG": "C",
             "LC_ALL": "C",
             "MISE_DATA_DIR": "/run/csa-mise-disabled",

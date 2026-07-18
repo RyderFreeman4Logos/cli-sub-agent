@@ -74,6 +74,12 @@ current_receipt_count() {
     -name '*.json' 2>/dev/null | wc -l
 }
 
+assert_no_just_temp_residue() {
+  local label="$1" fixture="$2"
+  assert_eq "${label}-no-just-residue" 0 \
+    "$(find "$fixture/target" -path '*/quality-gate-sandboxes/*' -name 'just-*' -print | wc -l)"
+}
+
 source "$repo_root/scripts/tests/quality-gate-offline-toolchain-tests.sh"
 
 run_digest_correct_forgery() {
@@ -282,6 +288,7 @@ SH
     fi
     assert_eq "isolation-process-${label}-receipt-count" 0 \
       "$(current_receipt_count "$fixture")"
+    assert_no_just_temp_residue "isolation-process-${label}" "$fixture"
     owned_pids=()
   done
   echo "PASS isolation-process-tree-termination"
@@ -289,6 +296,7 @@ SH
 
 run_ambient_input_isolation() {
   local fixture runner counter first second global_config excludes_file output
+  local just_victim first_identity second_identity
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/gate-counter"
@@ -368,6 +376,65 @@ SH
   assert_eq isolation-global-exclude-reason dirty_state \
     "$(printf '%s' "$output" | json_field rejection_reason)"
   assert_eq isolation-global-exclude-receipts 0 "$(current_receipt_count "$fixture")"
+
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  counter="$fixture/target/nested-just-counter"
+  just_victim="$fixture/target/hostile-just-tempdir"
+  mkdir -p "$just_victim"
+  printf 'checkout-sentinel\n' >"$fixture/checkout-sentinel"
+  printf 'victim-sentinel\n' >"$just_victim/sentinel"
+  cat >"$fixture/justfile" <<'JUST'
+set tempdir := "."
+
+outer:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  test "${JUST_TEMPDIR:?}" = /tmp
+  printf outer >"${JUST_TEMPDIR}/outer-policy-probe"
+  if { printf unexpected >checkout-sentinel; } 2>/dev/null; then
+    exit 71
+  fi
+  exec just nested
+
+nested:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  test "${JUST_TEMPDIR:?}" = /tmp
+  printf nested >"${JUST_TEMPDIR}/nested-policy-probe"
+  if { printf unexpected >checkout-sentinel; } 2>/dev/null; then
+    exit 72
+  fi
+  printf x >>target/nested-just-counter
+JUST
+  git -C "$fixture" add justfile checkout-sentinel
+  git -C "$fixture" commit -qm "test: add nested Just static gate"
+
+  first="$(cd "$fixture" && JUST_TEMPDIR="$just_victim" \
+    "$runner" -- just outer)"
+  second="$(cd "$fixture" && JUST_TEMPDIR="$fixture/target/second-hostile-just-tempdir" \
+    "$runner" -- just outer)"
+  first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
+  second_identity="$(printf '%s' "$second" | json_field receipt_identity)"
+  assert_eq isolation-nested-just-first-status executed \
+    "$(printf '%s' "$first" | json_field status)"
+  assert_eq isolation-nested-just-second-status reused \
+    "$(printf '%s' "$second" | json_field status)"
+  assert_eq isolation-nested-just-reuse-identity "$first_identity" "$second_identity"
+  assert_eq isolation-nested-just-gate-runs 1 "$(wc -c <"$counter")"
+  assert_eq isolation-nested-just-checkout-sentinel checkout-sentinel \
+    "$(<"$fixture/checkout-sentinel")"
+  assert_eq isolation-nested-just-victim-sentinel victim-sentinel \
+    "$(<"$just_victim/sentinel")"
+  assert_path_absent isolation-nested-just-hostile-outer-probe \
+    "$just_victim/outer-policy-probe"
+  assert_path_absent isolation-nested-just-hostile-nested-probe \
+    "$just_victim/nested-policy-probe"
+  assert_eq isolation-nested-just-checkout-no-residue 0 \
+    "$(find "$fixture" -maxdepth 1 -name 'just-*' -print | wc -l)"
+  assert_eq isolation-nested-just-victim-no-residue 0 \
+    "$(find "$just_victim" -name 'just-*' -print | wc -l)"
+  assert_no_just_temp_residue isolation-nested-just "$fixture"
   echo "PASS isolation-ambient-inputs"
 }
 
@@ -389,6 +456,7 @@ run_isolation_failure_paths() {
   assert_eq isolation-missing-reason isolation_unavailable \
     "$(printf '%s' "$output" | json_field rejection_reason)"
   assert_eq isolation-missing-no-reuse 1 "$(wc -c <"$counter")"
+  assert_no_just_temp_residue isolation-missing "$fixture"
 
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
@@ -403,6 +471,7 @@ run_isolation_failure_paths() {
     "$(printf '%s' "$output" | json_field rejection_reason)"
   assert_path_absent isolation-start-no-gate "$counter"
   assert_eq isolation-start-no-receipt 0 "$(current_receipt_count "$fixture")"
+  assert_no_just_temp_residue isolation-start "$fixture"
   echo "PASS isolation-failure-paths"
 }
 
@@ -445,6 +514,7 @@ SH
   assert_path_absent isolation-parent-death-delayed-writer \
     "$fixture/target/delayed-writer"
   assert_eq isolation-parent-death-no-receipt 0 "$(current_receipt_count "$fixture")"
+  assert_no_just_temp_residue isolation-parent-death "$fixture"
   output="$(cd "$fixture" && "$runner" -- scripts/hooks/true-gate.sh \
     target/gate-counter)"
   assert_eq isolation-parent-death-lock-reacquired executed \
@@ -468,6 +538,7 @@ SH
   assert_path_absent isolation-early-exit-delayed-writer \
     "$fixture/target/early-exit-writer"
   assert_eq isolation-early-exit-receipt 1 "$(current_receipt_count "$fixture")"
+  assert_no_just_temp_residue isolation-early-exit "$fixture"
   echo "PASS isolation-parent-death-cleanup"
 }
 
