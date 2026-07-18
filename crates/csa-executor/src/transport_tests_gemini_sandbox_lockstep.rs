@@ -31,6 +31,18 @@ impl Drop for GeminiSharedNpmCacheScopedEnvVar {
     }
 }
 
+#[cfg(unix)]
+fn writable_outside_allowlist_tempdir() -> tempfile::TempDir {
+    let workspace_target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .canonicalize()
+        .expect("workspace target should be canonicalizable");
+    tempfile::tempdir_in(workspace_target)
+        .expect("create writable outside-allowlist tempdir under target")
+}
+
 #[tokio::test]
 async fn test_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_added() {
     let (temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
@@ -486,10 +498,7 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
         "HOME".to_string(),
         source_home.to_string_lossy().into_owned(),
     );
-    let outside_allowlist_root = tempfile::tempdir_in(
-        std::env::current_dir().expect("current dir for outside-allowlist tempdir"),
-    )
-    .expect("create outside-allowlist tempdir");
+    let outside_allowlist_root = writable_outside_allowlist_tempdir();
     let symlink_cache_root = temp.path().join("symlink-cache");
     std::os::unix::fs::symlink(outside_allowlist_root.path(), &symlink_cache_root)
         .expect("symlink cache root");
