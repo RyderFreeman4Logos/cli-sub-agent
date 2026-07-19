@@ -1,11 +1,4 @@
-"""Linux capability boundary for reusable static quality-gate execution.
-
-The coordinator attests the exact host Git index and physical tracked source,
-prepares a deterministic sanitized execution projection, then runs every collector
-and gate process in a Bubblewrap PID/mount/network namespace.  The checkout's real
-``.csa`` tree is never mounted into that namespace; only the target cache and a
-private temporary directory are writable.
-"""
+"""Run static gates in Bubblewrap over an attested sanitized source projection, excluding real .csa and writing only target cache/private tmp."""
 
 from __future__ import annotations
 
@@ -91,15 +84,7 @@ def _tracked_entries(repo: Path) -> list[tuple[str, str]]:
 
 
 def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
-    """Read one tracked path from the host worktree.
-
-    Returns ``None`` when the path is missing or no longer matches the indexed
-    entry type. Callers treat ``None`` as dirty tracked state that still permits
-    building an isolated uncached snapshot without publishing a receipt.
-
-    A ``stat()`` is performed before any blocking ``open()`` so that a tracked
-    file replaced by a FIFO/socket/device cannot hang receipt collection.
-    """
+    """Read a tracked host path; return None for missing/type-changed paths and stat before open to avoid FIFO/device blocking."""
 
     path = repo / relative
     try:
@@ -107,8 +92,6 @@ def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
             if not path.is_symlink():
                 return None
             return os.fsencode(os.readlink(path))
-        # Reject non-regular files (FIFO/socket/directory/device) BEFORE a
-        # blocking open() that could hang on a FIFO waiting for a writer.
         pre_lstat = os.lstat(path)
         if stat.S_ISLNK(pre_lstat.st_mode):
             return None
@@ -174,7 +157,6 @@ def _copy_snapshot(
         target.parent.mkdir(parents=True, exist_ok=True)
         value = _read_tracked_value(repo, mode, relative)
         if value is None:
-            # Keep snapshot buildable for dirty worktrees (deletion/type swap).
             continue
         if mode == "120000":
             link = os.fsdecode(value)
@@ -204,7 +186,7 @@ def _copy_snapshot(
 def _projection_fingerprint(
     snapshot: Path, entries: Sequence[tuple[str, str]]
 ) -> str:
-    """Hash the actual sanitized tracked bytes exposed to the static gate."""
+    """Hash sanitized tracked bytes exposed to the gate."""
 
     digest = hashlib.sha256()
     digest.update(b"masked-prefix\0.csa\0")
@@ -252,7 +234,7 @@ def _selected_tools(
 
 
 def _visible_in_sandbox(repo: Path, path: Path) -> bool:
-    """Return whether the prepared mount plan exposes this exact host path."""
+    """Whether the mount plan exposes this host path."""
 
     if path.is_relative_to(repo):
         return True
@@ -263,7 +245,7 @@ def _visible_in_sandbox(repo: Path, path: Path) -> bool:
 
 
 class GateSandbox:
-    """Prepared static-gate snapshot and namespace execution plan."""
+    """Static-gate snapshot and namespace plan."""
 
     def __init__(self, repo: Path, environment: Mapping[str, str]) -> None:
         self.repo = repo
@@ -354,6 +336,27 @@ class GateSandbox:
                 destination.touch(mode=0o700)
                 self.explicit_tools[mount_name] = executable
             self.environment[variable] = f"{PRIVATE_BIN_PATH}/{mount_name}"
+        for variable in ("CC", "CXX", "AR", "LD", "CPP"):
+            value = environment.get(variable)
+            if not value or not Path(value).is_absolute():
+                continue
+            try:
+                executable = Path(value).resolve(strict=True)
+                status = executable.stat()
+            except OSError as error:
+                self.close()
+                raise IsolationError("explicit native tool provenance invalid") from error
+            if not stat.S_ISREG(status.st_mode) or not os.access(executable, os.X_OK):
+                self.close()
+                raise IsolationError("explicit native tool provenance invalid")
+            mount_name = "explicit-" + variable.lower()
+            destination = self.private_bin / mount_name
+            if _visible_in_sandbox(repo, executable):
+                os.symlink(executable, destination)
+            else:
+                destination.touch(mode=0o700)
+                self.explicit_tools[mount_name] = executable
+            self.environment[variable] = f"{PRIVATE_BIN_PATH}/{mount_name}"
         target_value = environment.get("CARGO_BUILD_TARGET")
         if target_value:
             target_path = Path(target_value)
@@ -403,7 +406,7 @@ class GateSandbox:
         self.close()
 
     def current_source_fingerprint(self) -> str:
-        """Re-read the exact physical host source independently of the projection."""
+        """Re-read physical host source outside the projection."""
 
         return _source_fingerprint(
             self.repo,
@@ -412,7 +415,7 @@ class GateSandbox:
         )
 
     def host_attestation_matches(self) -> bool:
-        """Re-attest the host index, clean state, and source at a decision point."""
+        """Re-attest host index, clean state, and source."""
 
         return (
             _host_clean_state(self.repo) == self.clean_state
@@ -526,7 +529,7 @@ class GateSandbox:
         return args
 
     def preflight(self) -> None:
-        """Prove namespace, state masking, target, tmp, and descriptor isolation."""
+        """Verify namespace, masking, target, tmp, and descriptor isolation."""
 
         if self._test_failure == "missing":
             raise IsolationError("required isolation unavailable")
@@ -588,7 +591,7 @@ printf '%s\n%s\n' "$(readlink /proc/self/ns/mnt)" "$(readlink /proc/self/ns/net)
             raise IsolationError("required isolation unavailable")
 
     def collect(self, command: Sequence[str]) -> bytes:
-        """Collect canonical provenance inside the exact static-gate sandbox."""
+        """Collect provenance in the exact static-gate sandbox."""
 
         collector = (
             str(Path(sys.executable).resolve()),
@@ -605,7 +608,7 @@ printf '%s\n%s\n' "$(readlink /proc/self/ns/mnt)" "$(readlink /proc/self/ns/net)
             raise IsolationError("sandboxed provenance collection failed") from error
 
     def execute(self, command: Sequence[str]) -> ProcessResult:
-        """Run the static gate and synchronously terminate its PID namespace on signal."""
+        """Run the gate and terminate its PID namespace on signal."""
 
         return execute_supervised(
             self._command(command, normalize=True),

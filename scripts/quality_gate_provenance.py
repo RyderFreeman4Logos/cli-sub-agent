@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Secure exact-input quality-gate receipt provenance collection."""
+"""Collect secure exact-input quality-gate provenance."""
 
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ ENV_EXACT = {
     "CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256",
     "CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256",
     "CSA_QUALITY_GATE_TOOLCHAIN_SEMANTIC_PROJECTION",
-    # Ambient identity/path vars pinned by the sanitizer.
     "HOME",
     "LOGNAME",
     "SHELL",
@@ -98,7 +97,7 @@ class ProvenanceError(RuntimeError):
 
 
 def encode_fields(fields: dict[str, str]) -> bytes:
-    """Encode a canonical line-oriented manifest."""
+    """Encode a canonical line manifest."""
 
     return "".join(f"{key}={fields[key]}\n" for key in sorted(fields)).encode()
 
@@ -118,7 +117,7 @@ def run_checked(
     env: dict[str, str] | None = None,
     timeout: int = COMMAND_TIMEOUT_SECONDS,
 ) -> bytes:
-    """Run a bounded provenance command and return bounded stdout."""
+    """Run a bounded command and return bounded stdout."""
 
     label = Path(command[0]).name
     if label == "git" and len(command) > 1:
@@ -203,7 +202,7 @@ def optional_repository_digest(repo: Path, relative: str) -> str:
 
 
 def command_digest(command: Sequence[str]) -> str:
-    """Hash command arguments without shell quoting ambiguity."""
+    """Hash arguments without shell-quoting ambiguity."""
 
     encoded = bytearray()
     for argument in command:
@@ -214,7 +213,7 @@ def command_digest(command: Sequence[str]) -> str:
 
 
 def resolve_executable(value: str, *, require_absolute: bool) -> Path:
-    """Resolve an executable and reject ambiguous explicit paths."""
+    """Resolve an executable, rejecting ambiguous explicit paths."""
 
     if require_absolute and not os.path.isabs(value):
         raise ProvenanceError("explicit tool provenance must be absolute")
@@ -229,7 +228,7 @@ def resolve_executable(value: str, *, require_absolute: bool) -> Path:
 
 
 def toolchain_closure_provenance(sysroot: Path) -> str:
-    """Bind compiler runtime/component closure: inode ctime+size for large libs, content hash for manifests."""
+    """Bind compiler closure by metadata for large libs and content for manifests."""
 
     digest = hashlib.sha256()
     digest.update(sha256_bytes(os.fsencode(sysroot)).encode())
@@ -277,7 +276,7 @@ def toolchain_closure_provenance(sysroot: Path) -> str:
 
 
 def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
-    """Identify the normalized compiler, target, launchers, and their bytes."""
+    """Identify the normalized compiler, target, launchers, and bytes."""
 
     explicit_rustc = env.get("RUSTC")
     selected_value = explicit_rustc or shutil.which("rustc", path=env.get("PATH"))
@@ -344,7 +343,7 @@ def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
 
 
 def toolchain_launcher_provenance(env: dict[str, str]) -> tuple[str, str, str]:
-    """Validate the outer launcher identities injected by the static sandbox."""
+    """Validate static-sandbox outer launcher identities."""
 
     invocation = env.get("CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256")
     authority = env.get("CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256")
@@ -364,7 +363,7 @@ def toolchain_launcher_provenance(env: dict[str, str]) -> tuple[str, str, str]:
 
 
 def environment_provenance(env: dict[str, str]) -> str:
-    """Hash every normalized acceptance-affecting Rust/Cargo/nextest input."""
+    """Hash normalized acceptance-affecting Rust/Cargo/nextest inputs."""
 
     fields: dict[str, str] = {}
     for name in sorted(env):
@@ -388,7 +387,7 @@ def environment_provenance(env: dict[str, str]) -> str:
 
 
 def dotenv_provenance(repo: Path) -> str:
-    """Hash ignored dotenv inputs without exposing their names or contents."""
+    """Hash ignored dotenv inputs without exposing names or contents."""
 
     digest = hashlib.sha256()
     try:
@@ -409,7 +408,7 @@ def dotenv_provenance(repo: Path) -> str:
 
 
 def cargo_config_provenance(repo: Path, env: dict[str, str]) -> str:
-    """Hash effective Cargo configuration files while excluding credentials."""
+    """Hash effective Cargo configs while excluding credentials."""
 
     fields: dict[str, str] = {}
     candidates = [repo / ".cargo" / "config", repo / ".cargo" / "config.toml"]
@@ -430,7 +429,7 @@ def cargo_config_provenance(repo: Path, env: dict[str, str]) -> str:
 
 
 def tool_provenance(repo: Path, env: dict[str, str]) -> str:
-    """Hash executable bytes, cargo version, and explicit native tool overrides (CC/CXX/AR/LD/CPP)."""
+    """Hash executables, Cargo version, and native tool overrides."""
 
     fields: dict[str, str] = {}
     for tool in PROVENANCE_TOOLS:
@@ -453,6 +452,12 @@ def tool_provenance(repo: Path, env: dict[str, str]) -> str:
             fields[key] = "unset"
             continue
         candidate = Path(value)
+        if not candidate.is_absolute():
+            located = shutil.which(value, path=env.get("PATH"))
+            if not located:
+                fields[key] = sha256_bytes(os.fsencode(value))
+                continue
+            candidate = Path(located)
         try:
             resolved = candidate.resolve(strict=True)
             status = resolved.stat()
@@ -469,7 +474,7 @@ def tool_provenance(repo: Path, env: dict[str, str]) -> str:
 
 
 def repository_identity(repo: Path) -> str:
-    """Bind receipts to repository roots and the canonical common directory."""
+    """Bind receipts to repository roots and canonical common directory."""
 
     roots = git_output(repo, "rev-list", "--max-parents=0", "HEAD").splitlines()
     common_raw = git_output(repo, "rev-parse", "--git-common-dir")
@@ -485,7 +490,7 @@ def repository_identity(repo: Path) -> str:
 
 
 def gate_script_digest(repo: Path, command: Sequence[str], env: dict[str, str]) -> str:
-    """Hash the actual first gate executable selected by the normalized environment."""
+    """Hash the first gate executable selected by the normalized environment."""
 
     first = command[0]
     candidate = Path(first)
