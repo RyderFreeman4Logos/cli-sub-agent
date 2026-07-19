@@ -6,3 +6,10 @@ retries = 0
 fail-fast = false
 default-filter = "not ((binary_id(=cli-sub-agent::skill_resource_inheritance) & test(=skill_run_preserves_plan_parent_resource_snapshot_for_nested_child)) | (binary_id(=cli-sub-agent::bin/csa) & test(=pipeline::clean_room_integration_tests::clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts)) | (binary_id(=cli-sub-agent::bin/csa) & test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_executes_only_fingerprinted_fake_with_exact_contract)) | (binary_id(=cli-sub-agent::bin/csa) & test(=review_cmd::review_convergence::clean_room_provider_tests::production_adapter_propagates_fingerprinted_fake_nonzero_exit)))"
 slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }
+
+# Live-only skill inheritance exercises real process/pipe capture. Serialize it
+# against sibling Live clean-room tests to avoid intermittent SIGPIPE under the
+# exact Live partition (see #2844).
+[[profile.static.overrides]]
+filter = 'binary_id(=cli-sub-agent::skill_resource_inheritance) & test(=skill_run_preserves_plan_parent_resource_snapshot_for_nested_child)'
+threads-required = "num-test-threads"
