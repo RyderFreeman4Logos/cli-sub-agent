@@ -18,10 +18,11 @@ def _contains_secret(name: str) -> bool:
 
 def normalized_static_environment(
     source: Mapping[str, str],
-    source_fingerprint: str,
-    clean_state: tuple[str, str, str],
+    projection_fingerprint: str,
+    host_source_fingerprint: str,
+    clean_state: tuple[str, str, str, str],
 ) -> dict[str, str]:
-    """Return the complete, scrubbed environment shared by identity and execution."""
+    """Return scrubbed execution inputs plus separate host/projection attestations."""
 
     allowed: dict[str, str] = {}
     for name, value in source.items():
@@ -69,11 +70,13 @@ def normalized_static_environment(
             "MISE_DATA_DIR": "/run/csa-mise-disabled",
             "PATH": f"{PRIVATE_BIN_PATH}:/usr/bin:/bin",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CSA_QUALITY_GATE_SANDBOX_VERSION": "bwrap-static-v2",
-            "CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256": source_fingerprint,
+            "CSA_QUALITY_GATE_SANDBOX_VERSION": "bwrap-static-v3",
+            "CSA_QUALITY_GATE_SOURCE_SNAPSHOT_SHA256": projection_fingerprint,
+            "CSA_QUALITY_GATE_HOST_SOURCE_SHA256": host_source_fingerprint,
             "CSA_QUALITY_GATE_HOST_INDEX_CLEAN": clean_state[0],
             "CSA_QUALITY_GATE_HOST_TRACKED_CLEAN": clean_state[1],
             "CSA_QUALITY_GATE_HOST_UNTRACKED_SHA256": clean_state[2],
+            "CSA_QUALITY_GATE_HOST_INDEX_TREE": clean_state[3],
             "TZ": "UTC",
         }
     )

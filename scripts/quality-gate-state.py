@@ -146,12 +146,16 @@ def run_receipt_gate_in_sandbox(
             if not state.acquire_lock(collection_lock):
                 fallback_reason = "lock_timeout"
             else:
+                if not sandbox.host_attestation_matches():
+                    raise IsolationError("host source changed before collection")
                 manifest = sandbox.collect(command)
-                if (
-                    manifest_fields(manifest).get("source_snapshot_sha256")
-                    != sandbox.source_fingerprint
-                ):
+                fields = manifest_fields(manifest)
+                if fields.get("source_snapshot_sha256") != sandbox.snapshot_fingerprint:
                     raise IsolationError("sandbox source identity mismatch")
+                if fields.get("source_host_sha256") != sandbox.source_fingerprint:
+                    raise IsolationError("host source identity mismatch")
+                if not sandbox.host_attestation_matches():
+                    raise IsolationError("host source changed during collection")
                 identity = sha256_bytes(manifest)
                 identity_lock = state.open_lock(f"{identity}.lock")
                 if not state.acquire_lock(identity_lock):
@@ -182,6 +186,8 @@ def run_receipt_gate_in_sandbox(
         name = f"{identity}.json"
         validation = state.validate_receipt(name, identity, manifest)
         if validation.reason == "valid":
+            if not sandbox.host_attestation_matches():
+                return run_uncached(sandbox, command, manifest, "input_drift")
             emit_result("reused", identity, None, 0, manifest)
             return 0
 
@@ -200,9 +206,11 @@ def run_receipt_gate_in_sandbox(
             )
             return result.code
         try:
-            if sandbox.current_source_fingerprint() != sandbox.source_fingerprint:
+            if not sandbox.host_attestation_matches():
                 raise IsolationError("host source changed during gate")
             post_manifest = sandbox.collect(command)
+            if not sandbox.host_attestation_matches():
+                raise IsolationError("host source changed during collection")
         except (IsolationError, ProvenanceError):
             emit_result("executed", identity, "input_drift", 0, manifest)
             return 0
@@ -220,6 +228,9 @@ def run_receipt_gate_in_sandbox(
             return 0
         if not can_publish:
             emit_result("executed", identity, validation.reason, 0, manifest)
+            return 0
+        if not sandbox.host_attestation_matches():
+            emit_result("executed", identity, "input_drift", 0, manifest)
             return 0
         if not state.publish(name, identity, manifest):
             emit_result("gate_failed", identity, "publication_failed", 1, manifest)

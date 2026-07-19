@@ -1,7 +1,8 @@
 """Linux capability boundary for reusable static quality-gate execution.
 
-The coordinator prepares a tracked-source snapshot, then runs every collector and
-gate process in a Bubblewrap PID/mount/network namespace.  The checkout's real
+The coordinator attests the exact host Git index and physical tracked source,
+prepares a deterministic sanitized execution projection, then runs every collector
+and gate process in a Bubblewrap PID/mount/network namespace.  The checkout's real
 ``.csa`` tree is never mounted into that namespace; only the target cache and a
 private temporary directory are writable.
 """
@@ -27,6 +28,13 @@ from quality_gate_toolchain import (
     resolve_pinned_rust_tools,
 )
 
+from quality_gate_host_attestation import (
+    GIT,
+    IsolationError,
+    host_clean_state as _host_clean_state,
+    run_git as _run_git,
+)
+
 __all__ = (
     "GateSandbox",
     "IsolationError",
@@ -34,7 +42,6 @@ __all__ = (
 )
 
 BWRAP = Path("/usr/bin/bwrap")
-GIT = Path("/usr/bin/git")
 
 _REQUIRED_TOOLS = ("bash", "git", "python3")
 _OPTIONAL_TOOLS = (
@@ -59,65 +66,6 @@ _FIXED_TOOLS = {
 }
 
 
-class IsolationError(RuntimeError):
-    """Required sandbox preparation or containment could not be proven."""
-
-
-def _safe_git_environment() -> dict[str, str]:
-    return {
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-        "LC_ALL": "C",
-        "PATH": "/usr/bin:/bin",
-    }
-
-
-def _run_git(repo: Path, *arguments: str) -> bytes:
-    try:
-        completed = subprocess.run(
-            (str(GIT), *arguments),
-            cwd=repo,
-            env=_safe_git_environment(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise IsolationError("source snapshot unavailable") from error
-    if completed.returncode != 0:
-        raise IsolationError("source snapshot unavailable")
-    return completed.stdout
-
-
-def _host_clean_state(repo: Path) -> tuple[str, str, str]:
-    statuses: list[str] = []
-    for arguments in (
-        ("diff", "--cached", "--quiet", "--ignore-submodules", "--"),
-        ("diff", "--quiet", "--ignore-submodules", "--"),
-    ):
-        try:
-            completed = subprocess.run(
-                (str(GIT), *arguments),
-                cwd=repo,
-                env=_safe_git_environment(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise IsolationError("source clean-state unavailable") from error
-        if completed.returncode not in {0, 1}:
-            raise IsolationError("source clean-state unavailable")
-        statuses.append(str(completed.returncode == 0).lower())
-    untracked = _run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
-    return statuses[0], statuses[1], hashlib.sha256(untracked).hexdigest()
-
-
 def _tracked_entries(repo: Path) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     for record in _run_git(repo, "ls-files", "--stage", "-z").split(b"\0"):
@@ -125,11 +73,15 @@ def _tracked_entries(repo: Path) -> list[tuple[str, str]]:
             continue
         try:
             metadata, raw_path = record.split(b"\t", 1)
-            mode, _oid, stage = metadata.decode("ascii").split()
+            mode, oid, stage = metadata.decode("ascii").split()
             path = os.fsdecode(raw_path)
         except (UnicodeError, ValueError) as error:
             raise IsolationError("source snapshot metadata invalid") from error
-        if stage != "0" or mode not in {"100644", "100755", "120000"}:
+        if (
+            stage != "0"
+            or not oid.strip("0")
+            or mode not in {"100644", "100755", "120000"}
+        ):
             raise IsolationError("source snapshot contains unsupported entries")
         candidate = Path(path)
         if candidate.is_absolute() or ".." in candidate.parts:
@@ -224,6 +176,26 @@ def _copy_snapshot(
     (destination / "target").mkdir(exist_ok=True)
 
 
+def _projection_fingerprint(
+    snapshot: Path, entries: Sequence[tuple[str, str]]
+) -> str:
+    """Hash the actual sanitized tracked bytes exposed to the static gate."""
+
+    digest = hashlib.sha256()
+    digest.update(b"masked-prefix\0.csa\0")
+    for mode, relative in entries:
+        if relative == ".csa" or relative.startswith(".csa/"):
+            continue
+        raw_path = os.fsencode(relative)
+        value = _read_tracked_value(snapshot, mode, relative)
+        digest.update(mode.encode("ascii"))
+        digest.update(len(raw_path).to_bytes(8, "big"))
+        digest.update(raw_path)
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+    return digest.hexdigest()
+
+
 def _selected_tools(
     repo: Path, environment: Mapping[str, str]
 ) -> tuple[PinnedRustToolchain, dict[str, Path]]:
@@ -296,8 +268,13 @@ class GateSandbox:
         self.private_bin.mkdir(mode=0o700)
         self.empty_file.touch(mode=0o600)
         _copy_snapshot(repo, self.snapshot, self.entries)
+        if self.current_source_fingerprint() != self.source_fingerprint:
+            self.close()
+            raise IsolationError("host source changed during snapshot")
+        self.snapshot_fingerprint = _projection_fingerprint(self.snapshot, self.entries)
         self.environment = normalized_static_environment(
             environment,
+            self.snapshot_fingerprint,
             self.source_fingerprint,
             self.clean_state,
         )
@@ -398,12 +375,20 @@ class GateSandbox:
         self.close()
 
     def current_source_fingerprint(self) -> str:
-        """Re-read the host tracked source after the sandbox tree is gone."""
+        """Re-read the exact physical host source independently of the projection."""
 
         return _source_fingerprint(
             self.repo,
             _tracked_entries(self.repo),
             self._excluded_host_prefix,
+        )
+
+    def host_attestation_matches(self) -> bool:
+        """Re-attest the host index, clean state, and source at a decision point."""
+
+        return (
+            _host_clean_state(self.repo) == self.clean_state
+            and self.current_source_fingerprint() == self.source_fingerprint
         )
 
     def _cargo_home(self) -> Path:

@@ -40,6 +40,9 @@ new_isolation_fixture() {
   if [ -f "$repo_root/scripts/quality_gate_sandbox.py" ]; then
     cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
   fi
+  if [ -f "$repo_root/scripts/quality_gate_host_attestation.py" ]; then
+    cp "$repo_root/scripts/quality_gate_host_attestation.py" "$fixture/scripts/"
+  fi
   if [ -f "$repo_root/scripts/quality_gate_process.py" ]; then
     cp "$repo_root/scripts/quality_gate_process.py" "$fixture/scripts/"
   fi
@@ -81,6 +84,7 @@ assert_no_just_temp_residue() {
 }
 
 source "$repo_root/scripts/tests/quality-gate-offline-toolchain-tests.sh"
+source "$repo_root/scripts/tests/quality-gate-isolation-source-tests.sh"
 
 run_digest_correct_forgery() {
   local fixture runner counter first second first_code second_code second_status
@@ -294,150 +298,6 @@ SH
   echo "PASS isolation-process-tree-termination"
 }
 
-run_ambient_input_isolation() {
-  local fixture runner counter first second global_config excludes_file output
-  local just_victim first_identity second_identity
-  fixture="$(new_isolation_fixture)"
-  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
-  counter="$fixture/target/gate-counter"
-  mkdir -p "$(dirname "$fixture")/.cargo"
-  printf '[build]\nrustflags=["--cfg", "ancestor_injection"]\n' \
-    >"$(dirname "$fixture")/.cargo/config.toml"
-  cat >"$fixture/scripts/hooks/ambient-probe.sh" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-printf x >>"$1"
-test ! -e ../.cargo/config.toml
-test -z "${QUALITY_GATE_TEST_TOKEN:-}"
-for name in config config.toml credentials credentials.toml; do
-  path="${CARGO_HOME:?}/$name"
-  [ ! -s "$path" ]
-done
-SH
-  chmod +x "$fixture/scripts/hooks/ambient-probe.sh"
-  git -C "$fixture" add scripts/hooks/ambient-probe.sh
-  git -C "$fixture" commit -qm "test: add ambient input probe"
-  first="$(cd "$fixture" && QUALITY_GATE_TEST_TOKEN=alpha \
-    "$runner" -- scripts/hooks/ambient-probe.sh target/gate-counter)"
-  second="$(cd "$fixture" && QUALITY_GATE_TEST_TOKEN=beta \
-    "$runner" -- scripts/hooks/ambient-probe.sh target/gate-counter)"
-  assert_eq isolation-ambient-first-status executed \
-    "$(printf '%s' "$first" | json_field status)"
-  assert_eq isolation-ambient-second-status reused \
-    "$(printf '%s' "$second" | json_field status)"
-  assert_eq isolation-ambient-gate-runs 1 "$(wc -c <"$counter")"
-  assert_not_matches isolation-ambient-secret-values 'alpha|beta' "$first$second"
-
-  fixture="$(new_isolation_fixture)"
-  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
-  counter="$fixture/target/gate-counter"
-  printf 'external-secret\n' >"$test_root/external-symlink-target"
-  ln -s "$test_root/external-symlink-target" "$fixture/external-input"
-  cat >"$fixture/scripts/hooks/symlink-probe.sh" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-printf x >>"$1"
-test ! -e external-input
-SH
-  chmod +x "$fixture/scripts/hooks/symlink-probe.sh"
-  git -C "$fixture" add external-input scripts/hooks/symlink-probe.sh
-  git -C "$fixture" commit -qm "test: add external symlink probe"
-  output="$(cd "$fixture" && "$runner" -- scripts/hooks/symlink-probe.sh \
-    target/gate-counter)"
-  assert_eq isolation-external-symlink-status executed \
-    "$(printf '%s' "$output" | json_field status)"
-  assert_eq isolation-external-symlink-reason provenance_invalid \
-    "$(printf '%s' "$output" | json_field rejection_reason)"
-  assert_eq isolation-external-symlink-receipts 0 \
-    "$(current_receipt_count "$fixture")"
-  assert_eq isolation-external-symlink-host external-secret \
-    "$(<"$test_root/external-symlink-target")"
-
-  fixture="$(new_isolation_fixture)"
-  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
-  counter="$fixture/target/gate-counter"
-  excludes_file="$test_root/global-excludes"
-  global_config="$test_root/global-gitconfig"
-  printf 'globally-ignored\n' >"$excludes_file"
-  git config -f "$global_config" core.excludesFile "$excludes_file"
-  cat >"$fixture/scripts/hooks/dirty-gate.sh" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-printf x >>"$1"
-SH
-  chmod +x "$fixture/scripts/hooks/dirty-gate.sh"
-  git -C "$fixture" add scripts/hooks/dirty-gate.sh
-  git -C "$fixture" commit -qm "test: add dirty gate"
-  printf 'must-remain-dirty\n' >"$fixture/globally-ignored"
-  output="$(cd "$fixture" && GIT_CONFIG_GLOBAL="$global_config" \
-    "$runner" -- scripts/hooks/dirty-gate.sh target/gate-counter)"
-  assert_eq isolation-global-exclude-status executed \
-    "$(printf '%s' "$output" | json_field status)"
-  assert_eq isolation-global-exclude-reason dirty_state \
-    "$(printf '%s' "$output" | json_field rejection_reason)"
-  assert_eq isolation-global-exclude-receipts 0 "$(current_receipt_count "$fixture")"
-
-  fixture="$(new_isolation_fixture)"
-  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
-  counter="$fixture/target/nested-just-counter"
-  just_victim="$fixture/target/hostile-just-tempdir"
-  mkdir -p "$just_victim"
-  printf 'checkout-sentinel\n' >"$fixture/checkout-sentinel"
-  printf 'victim-sentinel\n' >"$just_victim/sentinel"
-  cat >"$fixture/justfile" <<'JUST'
-set tempdir := "."
-
-outer:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  test "${JUST_TEMPDIR:?}" = /tmp
-  printf outer >"${JUST_TEMPDIR}/outer-policy-probe"
-  if { printf unexpected >checkout-sentinel; } 2>/dev/null; then
-    exit 71
-  fi
-  exec just nested
-
-nested:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  test "${JUST_TEMPDIR:?}" = /tmp
-  printf nested >"${JUST_TEMPDIR}/nested-policy-probe"
-  if { printf unexpected >checkout-sentinel; } 2>/dev/null; then
-    exit 72
-  fi
-  printf x >>target/nested-just-counter
-JUST
-  git -C "$fixture" add justfile checkout-sentinel
-  git -C "$fixture" commit -qm "test: add nested Just static gate"
-
-  first="$(cd "$fixture" && JUST_TEMPDIR="$just_victim" \
-    "$runner" -- just outer)"
-  second="$(cd "$fixture" && JUST_TEMPDIR="$fixture/target/second-hostile-just-tempdir" \
-    "$runner" -- just outer)"
-  first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
-  second_identity="$(printf '%s' "$second" | json_field receipt_identity)"
-  assert_eq isolation-nested-just-first-status executed \
-    "$(printf '%s' "$first" | json_field status)"
-  assert_eq isolation-nested-just-second-status reused \
-    "$(printf '%s' "$second" | json_field status)"
-  assert_eq isolation-nested-just-reuse-identity "$first_identity" "$second_identity"
-  assert_eq isolation-nested-just-gate-runs 1 "$(wc -c <"$counter")"
-  assert_eq isolation-nested-just-checkout-sentinel checkout-sentinel \
-    "$(<"$fixture/checkout-sentinel")"
-  assert_eq isolation-nested-just-victim-sentinel victim-sentinel \
-    "$(<"$just_victim/sentinel")"
-  assert_path_absent isolation-nested-just-hostile-outer-probe \
-    "$just_victim/outer-policy-probe"
-  assert_path_absent isolation-nested-just-hostile-nested-probe \
-    "$just_victim/nested-policy-probe"
-  assert_eq isolation-nested-just-checkout-no-residue 0 \
-    "$(find "$fixture" -maxdepth 1 -name 'just-*' -print | wc -l)"
-  assert_eq isolation-nested-just-victim-no-residue 0 \
-    "$(find "$just_victim" -name 'just-*' -print | wc -l)"
-  assert_no_just_temp_residue isolation-nested-just "$fixture"
-  echo "PASS isolation-ambient-inputs"
-}
-
 run_isolation_failure_paths() {
   local fixture runner counter output code
   fixture="$(new_isolation_fixture)"
@@ -559,6 +419,10 @@ case "$scenario" in
     receipt_contract_set_case ambient-inputs
     run_ambient_input_isolation
     ;;
+  source-exactness)
+    receipt_contract_set_case source-exactness
+    run_source_exactness_contracts
+    ;;
   offline-toolchain)
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
@@ -583,6 +447,7 @@ case "$scenario" in
     receipt_contract_set_case process-tree
     run_process_tree_termination
     receipt_contract_set_case ambient-inputs
+    run_source_exactness_contracts
     run_ambient_input_isolation
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain

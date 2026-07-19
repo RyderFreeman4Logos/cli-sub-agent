@@ -502,7 +502,6 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         toolchain_launcher_provenance(env)
     )
     sandbox_index_clean = git_diff_is_clean(repo, env, "--cached")
-    sandbox_tracked_clean = git_diff_is_clean(repo, env)
     untracked = run_checked(
         ("git", "ls-files", "--others", "--exclude-standard", "-z"),
         cwd=repo,
@@ -511,14 +510,19 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
     index_clean = env.get("CSA_QUALITY_GATE_HOST_INDEX_CLEAN")
     tracked_clean = env.get("CSA_QUALITY_GATE_HOST_TRACKED_CLEAN")
     untracked_digest = env.get("CSA_QUALITY_GATE_HOST_UNTRACKED_SHA256")
+    host_index_tree = env.get("CSA_QUALITY_GATE_HOST_INDEX_TREE")
+    host_source = env.get("CSA_QUALITY_GATE_HOST_SOURCE_SHA256")
     if index_clean not in {"true", "false"} or tracked_clean not in {"true", "false"}:
         raise ProvenanceError("host clean-state provenance is unavailable")
     if untracked_digest is None or len(untracked_digest) != 64:
         raise ProvenanceError("host untracked provenance is unavailable")
+    if not host_index_tree or not host_source or not is_lower_sha256(host_source):
+        raise ProvenanceError("host source provenance is unavailable")
     if (index_clean == "true") != sandbox_index_clean:
         raise ProvenanceError("index clean-state changed during snapshot")
-    if (tracked_clean == "true") != sandbox_tracked_clean:
-        raise ProvenanceError("tracked clean-state changed during snapshot")
+    sandbox_head_tree = git_output(repo, "rev-parse", "HEAD^{tree}")
+    if index_clean == "true" and host_index_tree != sandbox_head_tree:
+        raise ProvenanceError("index tree changed during snapshot")
     if untracked:
         raise ProvenanceError("sandbox snapshot contains unexpected untracked files")
     checkout = repo.resolve(strict=True)
@@ -532,9 +536,29 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
     sandbox_version = env.get("CSA_QUALITY_GATE_SANDBOX_VERSION", "")
     if not is_lower_sha256(source_snapshot) or not sandbox_version:
         raise ProvenanceError("sandbox provenance is unavailable")
+    tracked_digests = {
+        "cargo_lock_sha256": "Cargo.lock",
+        "implementation_sha256": "scripts/hooks/quality-gate-receipt.sh",
+        "justfile_sha256": "justfile",
+        "lefthook_sha256": "lefthook.yml",
+        "normalizer_sha256": "scripts/cargo-env-normalize.sh",
+        "quality_gate_entrypoint_sha256": "scripts/hooks/quality-gates.sh",
+        "quality_gate_environment_sha256": "scripts/quality_gate_environment.py",
+        "quality_gate_host_attestation_sha256": (
+            "scripts/quality_gate_host_attestation.py"
+        ),
+        "quality_gate_live_sha256": "scripts/hooks/quality-gates-live.sh",
+        "quality_gate_process_sha256": "scripts/quality_gate_process.py",
+        "quality_gate_provenance_sha256": "scripts/quality_gate_provenance.py",
+        "quality_gate_sandbox_sha256": "scripts/quality_gate_sandbox.py",
+        "quality_gate_secure_state_sha256": "scripts/quality_gate_secure_state.py",
+        "quality_gate_state_helper_sha256": "scripts/quality-gate-state.py",
+        "quality_gate_toolchain_sha256": "scripts/quality_gate_toolchain.py",
+        "rust_toolchain_file_sha256": "rust-toolchain.toml",
+        "weave_lock_sha256": "weave.lock",
+    }
     fields = {
         "cargo_config_sha256": cargo_config_provenance(repo, env),
-        "cargo_lock_sha256": optional_repository_digest(repo, "Cargo.lock"),
         "checkout_identity": sha256_bytes(os.fsencode(checkout)),
         "dotenv_sha256": dotenv_provenance(repo),
         "environment_sha256": environment_provenance(env),
@@ -542,65 +566,30 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "gate_command_sha256": command_digest(command),
         "gate_script_sha256": gate_script_digest(repo, command, env),
         "head_oid": git_output(repo, "rev-parse", "HEAD"),
-        "implementation_sha256": optional_repository_digest(
-            repo, "scripts/hooks/quality-gate-receipt.sh"
-        ),
         "implementation_version": IMPLEMENTATION_VERSION,
         "index_clean": index_clean,
+        "index_tree_oid": host_index_tree,
         "index_oid": sha256_bytes(
             run_checked(("git", "ls-files", "--stage", "-z"), cwd=repo, env=env)
         ),
-        "justfile_sha256": optional_repository_digest(repo, "justfile"),
-        "lefthook_sha256": optional_repository_digest(repo, "lefthook.yml"),
-        "normalizer_sha256": optional_repository_digest(
-            repo, "scripts/cargo-env-normalize.sh"
-        ),
-        "quality_gate_entrypoint_sha256": optional_repository_digest(
-            repo, "scripts/hooks/quality-gates.sh"
-        ),
-        "quality_gate_live_sha256": optional_repository_digest(
-            repo, "scripts/hooks/quality-gates-live.sh"
-        ),
-        "quality_gate_state_helper_sha256": optional_repository_digest(
-            repo, "scripts/quality-gate-state.py"
-        ),
-        "quality_gate_secure_state_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_secure_state.py"
-        ),
-        "quality_gate_sandbox_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_sandbox.py"
-        ),
-        "quality_gate_toolchain_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_toolchain.py"
-        ),
-        "quality_gate_provenance_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_provenance.py"
-        ),
-        "quality_gate_process_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_process.py"
-        ),
-        "quality_gate_environment_sha256": optional_repository_digest(
-            repo, "scripts/quality_gate_environment.py"
-        ),
         "recipe_sha256": recipe_digest(repo, env),
         "repository_identity": repository_identity(repo),
-        "rust_toolchain_file_sha256": optional_repository_digest(
-            repo, "rust-toolchain.toml"
-        ),
         "rust_toolchain_launcher_authority_sha256": launcher_authority,
         "rust_toolchain_launcher_invocation_sha256": launcher_invocation,
         "rust_toolchain_semantic_projection": launcher_projection,
         "rust_toolchain_sha256": compiler,
         "schema_version": str(SCHEMA_VERSION),
         "sandbox_version": sandbox_version,
+        "source_host_sha256": host_source,
         "source_snapshot_sha256": source_snapshot,
         "target_provenance_sha256": target,
         "tool_provenance_sha256": tool_provenance(repo, env),
         "tracked_worktree_clean": tracked_clean,
         "tree_oid": git_output(repo, "rev-parse", "HEAD^{tree}"),
         "untracked_worktree_digest": untracked_digest,
-        "weave_lock_sha256": optional_repository_digest(repo, "weave.lock"),
     }
+    for key, relative in tracked_digests.items():
+        fields[key] = optional_repository_digest(repo, relative)
     manifest = encode_fields(fields)
     if len(manifest) > MAX_MANIFEST_BYTES:
         raise ProvenanceError("acceptance manifest is too large")

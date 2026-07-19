@@ -70,6 +70,8 @@ new_fixture() {
     "$fixture/scripts/quality_gate_provenance.py"
   cp "${repo_root}/scripts/quality_gate_sandbox.py" \
     "$fixture/scripts/quality_gate_sandbox.py"
+  cp "${repo_root}/scripts/quality_gate_host_attestation.py" \
+    "$fixture/scripts/quality_gate_host_attestation.py"
   cp "${repo_root}/scripts/quality_gate_process.py" \
     "$fixture/scripts/quality_gate_process.py"
   cp "${repo_root}/scripts/quality_gate_environment.py" \
@@ -145,7 +147,7 @@ assert_manifest_contract() {
   (cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter") >/dev/null
   manifest="$(receipt_manifest "$fixture")"
   for key in \
-    repository_identity checkout_identity head_oid tree_oid index_oid \
+    repository_identity checkout_identity head_oid tree_oid index_oid index_tree_oid \
     index_clean tracked_worktree_clean untracked_worktree_digest \
     cargo_lock_sha256 weave_lock_sha256 rust_toolchain_sha256 rust_toolchain_file_sha256 \
     rust_toolchain_launcher_authority_sha256 \
@@ -157,10 +159,11 @@ assert_manifest_contract() {
     implementation_sha256 quality_gate_state_helper_sha256 \
     quality_gate_secure_state_sha256 \
     quality_gate_provenance_sha256 quality_gate_sandbox_sha256 \
+    quality_gate_host_attestation_sha256 \
     quality_gate_toolchain_sha256 \
     quality_gate_process_sha256 quality_gate_environment_sha256 \
     quality_gate_entrypoint_sha256 quality_gate_live_sha256 \
-    source_snapshot_sha256 sandbox_version \
+    source_host_sha256 source_snapshot_sha256 sandbox_version \
     schema_version implementation_version; do
     if ! grep -q "^${key}=" <<<"$manifest"; then
       _receipt_test_fail "manifest-contract-${key}" field-present field-missing
