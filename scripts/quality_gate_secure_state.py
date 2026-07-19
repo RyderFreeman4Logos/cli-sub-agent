@@ -31,7 +31,11 @@ __all__ = (
 
 SCHEMA_VERSION = 2
 IMPLEMENTATION_VERSION = "8"
-LOCK_TIMEOUT_SECONDS = 2.0
+# Provenance collection is intentionally serialized. Six concurrent receipt
+# readers can otherwise exhaust a two-second queue budget and fail open into
+# duplicate uncached gate executions even though a valid receipt already exists.
+# Five seconds preserves a bounded fallback while covering the expected queue.
+LOCK_TIMEOUT_SECONDS = 5.0
 LOCK_POLL_SECONDS = 0.05
 MAX_RECEIPT_BYTES = 64 * 1024
 RENAME_NOREPLACE = 1

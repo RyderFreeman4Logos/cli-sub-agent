@@ -8,12 +8,58 @@ __all__ = ("PRIVATE_BIN_PATH", "normalized_static_environment")
 
 PRIVATE_BIN_PATH = "/run/csa-bin"
 SECRET_MARKERS = ("AUTH", "CREDENTIAL", "KEY", "PASSWORD", "SECRET", "TOKEN")
-NETWORK_MARKERS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+# Whole-variable network/credential drops (QGR-005): a name like
+# CARGO_HTTP_PROXY contains none of the SECRET_MARKERS yet carries a URL
+# that may embed credentials and is meaningless to an offline static gate.
+NETWORK_VAR_NAMES = {
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "FTP_PROXY",
+    "CARGO_HTTP_PROXY",
+    "CARGO_NET_GIT_FETCH_WITH_CLI",
+    "RUSTUP_DIST_SERVER",
+    "RUSTUP_UPDATE_ROOT",
+}
+# Variables that carry a registry URL or index whose value may embed secrets
+# and is irrelevant to an offline static build.
+REGISTRY_CREDENTIAL_VARS = {
+    "CARGO_REGISTRY_INDEX",
+    "CARGO_REGISTRY_DEFAULT",
+    "CARGO_REGISTRIES_CRATES_IO_PROTOCOL",
+    "CARGO_REGISTRY_TOKEN",
+    "CARGO_NET_GIT_FETCH_WITH_CLI",
+}
+# Ambient host identity/path variables (QGR-003). Forwarded verbatim is
+# non-deterministic across hosts; pin them to constants below.
+AMBIENT_PINNED = ("HOME", "LOGNAME", "SHELL", "TERM", "TMPDIR", "USER")
+AMBIENT_PINNED_VALUES = {
+    "HOME": "/home/quality-gate",
+    "LOGNAME": "quality-gate",
+    "SHELL": "/bin/sh",
+    "TERM": "dumb",
+    "TMPDIR": "/tmp",
+    "USER": "quality-gate",
+}
 
 
-def _contains_secret(name: str) -> bool:
+def _is_network_or_credential(name: str) -> bool:
     upper = name.upper()
-    return any(marker in upper for marker in SECRET_MARKERS)
+    if any(marker in upper for marker in SECRET_MARKERS):
+        return True
+    if upper in NETWORK_VAR_NAMES:
+        return True
+    if upper in REGISTRY_CREDENTIAL_VARS:
+        return True
+    # Registry tokens: CARGO_REGISTRIES_<NAME>_TOKEN, CARGO_REGISTRIES_<NAME>_INDEX
+    # when the value is a URL may carry credentials; treat the TOKEN form as secret
+    # and the INDEX/PROTOCOL form as network.
+    if upper.startswith("CARGO_REGISTRIES_") and (
+        upper.endswith("_TOKEN") or upper.endswith("_INDEX") or upper.endswith("_PROTOCOL")
+    ):
+        return True
+    return False
 
 
 def normalized_static_environment(
@@ -26,14 +72,12 @@ def normalized_static_environment(
 
     allowed: dict[str, str] = {}
     for name, value in source.items():
-        if (
-            _contains_secret(name)
-            or name.upper() in NETWORK_MARKERS
-            or name.startswith("CARGO_DENY_")
-        ):
+        if _is_network_or_credential(name):
+            continue
+        if name.startswith("CARGO_DENY_"):
             continue
         if (
-            name in {"HOME", "LOGNAME", "SHELL", "TERM", "TMPDIR", "USER"}
+            name in AMBIENT_PINNED
             or name.startswith(("CARGO_", "RUST", "NEXTEST_"))
             or name
             in {
@@ -53,6 +97,9 @@ def normalized_static_environment(
             }
         ):
             allowed[name] = value
+    # Pin ambient identity/path variables to deterministic constants.
+    for name, value in AMBIENT_PINNED_VALUES.items():
+        allowed[name] = value
     allowed.update(
         {
             "GIT_CONFIG_COUNT": "2",
@@ -80,6 +127,4 @@ def normalized_static_environment(
             "TZ": "UTC",
         }
     )
-    allowed.setdefault("HOME", "/home/quality-gate")
-    allowed.setdefault("TMPDIR", "/tmp")
     return allowed

@@ -96,6 +96,9 @@ def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
     Returns ``None`` when the path is missing or no longer matches the indexed
     entry type. Callers treat ``None`` as dirty tracked state that still permits
     building an isolated uncached snapshot without publishing a receipt.
+
+    A ``stat()`` is performed before any blocking ``open()`` so that a tracked
+    file replaced by a FIFO/socket/device cannot hang receipt collection.
     """
 
     path = repo / relative
@@ -104,6 +107,13 @@ def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
             if not path.is_symlink():
                 return None
             return os.fsencode(os.readlink(path))
+        # Reject non-regular files (FIFO/socket/directory/device) BEFORE a
+        # blocking open() that could hang on a FIFO waiting for a writer.
+        pre_lstat = os.lstat(path)
+        if stat.S_ISLNK(pre_lstat.st_mode):
+            return None
+        if not stat.S_ISREG(pre_lstat.st_mode):
+            return None
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
         return None

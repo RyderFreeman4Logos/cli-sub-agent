@@ -1,23 +1,35 @@
 //! Bounded subprocess helpers for unit/integration tests (Rust 015).
 
 #[cfg(test)]
-use std::process::{Command, Output, Stdio};
+use std::io::{Read, Seek, SeekFrom};
 #[cfg(test)]
-use std::time::Duration;
+use std::process::{Command, ExitStatus, Output, Stdio};
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 /// Run `command` with a hard wall-clock bound.
 ///
 /// The child is placed in its own process group. On timeout the whole group is
-/// signaled (TERM then KILL), pipes are drained via `wait_with_output`, and the
-/// direct child is reaped before panicking.
+/// signaled (TERM then KILL), and the direct child is synchronously reaped.
+/// Output is captured in anonymous temporary files rather than pipes so a child
+/// producing more than the pipe capacity cannot deadlock before it exits.
 #[cfg(test)]
 pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Output {
     use std::os::unix::process::CommandExt;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Instant;
 
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut stdout_file = tempfile::tempfile().expect("create bounded-command stdout file");
+    let mut stderr_file = tempfile::tempfile().expect("create bounded-command stderr file");
+    command
+        .stdout(Stdio::from(
+            stdout_file
+                .try_clone()
+                .expect("clone bounded-command stdout file"),
+        ))
+        .stderr(Stdio::from(
+            stderr_file
+                .try_clone()
+                .expect("clone bounded-command stderr file"),
+        ));
     // SAFETY: only setpgid(0, 0) in the child before exec.
     unsafe {
         command.pre_exec(|| {
@@ -28,28 +40,51 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Ou
         });
     }
 
-    let child = command.spawn().expect("spawn bounded test command");
+    let mut child = command.spawn().expect("spawn bounded test command");
     let pid = child.id() as i32;
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => output,
-        Ok(Err(error)) => panic!("bounded test command failed to wait: {error}"),
-        Err(_) => {
-            terminate_process_group(pid);
-            // Best-effort reap: waiter thread still owns Child and will collect.
-            let deadline = Instant::now() + Duration::from_secs(2);
-            loop {
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(Ok(_)) | Ok(Err(_)) => break,
-                    Err(_) if Instant::now() < deadline => continue,
-                    Err(_) => break,
-                }
+    let deadline = Instant::now() + timeout;
+    let mut last_status: Option<ExitStatus> = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                last_status = Some(status);
+                break;
             }
-            panic!("bounded test command exceeded {timeout:?}");
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => break,
+            Err(error) => panic!("bounded test command wait failed: {error}"),
         }
+    }
+
+    if last_status.is_none() {
+        terminate_process_group(pid);
+        // Reap the direct child unconditionally. Temporary-file capture means
+        // escaped descendants cannot keep this waiter blocked on inherited pipes.
+        let _ = child.wait();
+        panic!("bounded test command exceeded {timeout:?}");
+    }
+
+    let status = last_status.unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    stdout_file
+        .seek(SeekFrom::Start(0))
+        .expect("rewind bounded-command stdout file");
+    stderr_file
+        .seek(SeekFrom::Start(0))
+        .expect("rewind bounded-command stderr file");
+    stdout_file
+        .read_to_end(&mut stdout)
+        .expect("read bounded-command stdout file");
+    stderr_file
+        .read_to_end(&mut stderr)
+        .expect("read bounded-command stderr file");
+    Output {
+        status,
+        stdout,
+        stderr,
     }
 }
 

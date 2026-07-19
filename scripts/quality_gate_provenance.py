@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Secure exact-input quality-gate receipt storage and provenance collection.
-
-The public ``run`` command owns the whole receipt lifecycle. Acceptance inputs are
-collected by a child entered through ``cargo-env-normalize.sh`` so the receipt sees
-the same Rust/Cargo environment as the authoritative gate. Receipt state is opened
-relative to verified directory descriptors and is never trusted by pathname alone.
-"""
+"""Secure exact-input quality-gate receipt provenance collection."""
 
 from __future__ import annotations
 
@@ -55,6 +49,13 @@ ENV_EXACT = {
     "CSA_QUALITY_GATE_TOOLCHAIN_AUTHORITY_SHA256",
     "CSA_QUALITY_GATE_TOOLCHAIN_INVOCATION_SHA256",
     "CSA_QUALITY_GATE_TOOLCHAIN_SEMANTIC_PROJECTION",
+    # Ambient identity/path vars pinned by the sanitizer.
+    "HOME",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "USER",
 }
 ENV_NORMALIZED_SEPARATELY = {
     "RUSTC",
@@ -228,12 +229,7 @@ def resolve_executable(value: str, *, require_absolute: bool) -> Path:
 
 
 def toolchain_closure_provenance(sysroot: Path) -> str:
-    """Bind the compiler runtime/component closure without trusting shims.
-
-    Large library bytes are represented by same-UID-unforgeable inode ctime plus
-    size and identity metadata; small manifests/configuration files are also
-    content-hashed. The sandbox mounts this closure read-only during the gate.
-    """
+    """Bind compiler runtime/component closure: inode ctime+size for large libs, content hash for manifests."""
 
     digest = hashlib.sha256()
     digest.update(sha256_bytes(os.fsencode(sysroot)).encode())
@@ -434,7 +430,7 @@ def cargo_config_provenance(repo: Path, env: dict[str, str]) -> str:
 
 
 def tool_provenance(repo: Path, env: dict[str, str]) -> str:
-    """Hash normalized executable bytes and bounded version provenance."""
+    """Hash executable bytes, cargo version, and explicit native tool overrides (CC/CXX/AR/LD/CPP)."""
 
     fields: dict[str, str] = {}
     for tool in PROVENANCE_TOOLS:
@@ -450,6 +446,25 @@ def tool_provenance(repo: Path, env: dict[str, str]) -> str:
     fields["cargo_version"] = sha256_bytes(
         run_checked((cargo, "-vV"), cwd=repo, env=env)
     )
+    for override in ("CC", "CXX", "AR", "LD", "CPP"):
+        key = f"explicit-{override.lower()}"
+        value = env.get(override)
+        if not value:
+            fields[key] = "unset"
+            continue
+        candidate = Path(value)
+        try:
+            resolved = candidate.resolve(strict=True)
+            status = resolved.stat()
+        except OSError as error:
+            raise ProvenanceError(
+                "explicit native build-tool override is unavailable"
+            ) from error
+        if not stat.S_ISREG(status.st_mode) or not os.access(resolved, os.X_OK):
+            raise ProvenanceError(
+                "explicit native build-tool override is not an executable"
+            )
+        fields[key] = hash_open_file(resolved, MAX_TOOL_BYTES)
     return sha256_bytes(encode_fields(fields))
 
 

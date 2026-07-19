@@ -115,35 +115,53 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
         .expect("should stream archive into tar");
     drop(tar.stdin.take());
     let listing = {
-        use std::sync::mpsc;
+        use std::io::Read;
+        use std::process::{ExitStatus, Output};
         use std::thread;
         use std::time::Instant;
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(tar.wait_with_output());
-        });
-        match rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => panic!("tar wait failed: {error}"),
-            Err(_) => {
-                // SAFETY: tar_pid is the child we just spawned into its own group.
-                unsafe {
-                    let _ = libc::kill(-tar_pid, libc::SIGTERM);
+        let pid = tar_pid;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut last_status: Option<ExitStatus> = None;
+        loop {
+            match tar.try_wait() {
+                Ok(Some(status)) => {
+                    last_status = Some(status);
+                    break;
                 }
-                thread::sleep(Duration::from_millis(50));
-                unsafe {
-                    let _ = libc::kill(-tar_pid, libc::SIGKILL);
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
                 }
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    match rx.recv_timeout(Duration::from_millis(50)) {
-                        Ok(Ok(_)) | Ok(Err(_)) => break,
-                        Err(_) if Instant::now() < deadline => continue,
-                        Err(_) => break,
-                    }
-                }
-                panic!("tar listing exceeded 30s");
+                Ok(None) => break,
+                Err(error) => panic!("tar wait failed: {error}"),
             }
+        }
+        if last_status.is_none() {
+            // SAFETY: tar_pid is the child we just spawned into its own group.
+            unsafe {
+                let _ = libc::kill(-pid, libc::SIGTERM);
+            }
+            thread::sleep(Duration::from_millis(50));
+            unsafe {
+                let _ = libc::kill(-pid, libc::SIGKILL);
+            }
+            drop(tar.stdout.take());
+            drop(tar.stderr.take());
+            let _ = tar.wait();
+            panic!("tar listing exceeded 30s");
+        }
+        let status = last_status.unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        if let Some(mut handle) = tar.stdout.take() {
+            let _ = handle.read_to_end(&mut stdout);
+        }
+        if let Some(mut handle) = tar.stderr.take() {
+            let _ = handle.read_to_end(&mut stderr);
+        }
+        Output {
+            status,
+            stdout,
+            stderr,
         }
     };
     assert!(

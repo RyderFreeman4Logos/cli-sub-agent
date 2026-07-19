@@ -141,9 +141,8 @@ mod tests {
     use super::ScopedSessionSandbox;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
-    use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const RUST_STATE_HOME_ENV_KEYS: &[&str] = &[
         csa_core::env::CARGO_HOME_ENV_KEY,
@@ -158,8 +157,9 @@ mod tests {
 
     fn output_with_timeout(mut command: Command, timeout: Duration) -> Output {
         // Keep this helper local: the file is #[path]-included by integration tests.
+        use std::io::Read;
         use std::os::unix::process::CommandExt;
-        use std::time::Instant;
+        use std::process::ExitStatus;
 
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         // SAFETY: only setpgid(0, 0) in the child before exec.
@@ -171,34 +171,50 @@ mod tests {
                 Ok(())
             });
         }
-        let child = command.spawn().expect("spawn bounded test command");
+        let mut child = command.spawn().expect("spawn bounded test command");
         let pid = child.id() as i32;
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        match rx.recv_timeout(timeout) {
-            Ok(Ok(output)) => output,
-            Ok(Err(error)) => panic!("bounded test command failed to wait: {error}"),
-            Err(_) => {
-                // SAFETY: pid is the child we just spawned into its own group.
-                unsafe {
-                    let _ = libc::kill(-pid, libc::SIGTERM);
+        let deadline = Instant::now() + timeout;
+        let mut last_status: Option<ExitStatus> = None;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    last_status = Some(status);
+                    break;
                 }
-                thread::sleep(Duration::from_millis(50));
-                unsafe {
-                    let _ = libc::kill(-pid, libc::SIGKILL);
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(20));
                 }
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    match rx.recv_timeout(Duration::from_millis(50)) {
-                        Ok(Ok(_)) | Ok(Err(_)) => break,
-                        Err(_) if Instant::now() < deadline => continue,
-                        Err(_) => break,
-                    }
-                }
-                panic!("bounded test command exceeded {timeout:?}");
+                Ok(None) => break,
+                Err(error) => panic!("bounded test command wait failed: {error}"),
             }
+        }
+        if last_status.is_none() {
+            // SAFETY: pid is the child we just spawned into its own group.
+            unsafe {
+                let _ = libc::kill(-pid, libc::SIGTERM);
+            }
+            thread::sleep(Duration::from_millis(50));
+            unsafe {
+                let _ = libc::kill(-pid, libc::SIGKILL);
+            }
+            drop(child.stdout.take());
+            drop(child.stderr.take());
+            let _ = child.wait();
+            panic!("bounded test command exceeded {timeout:?}");
+        }
+        let status = last_status.unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        if let Some(mut handle) = child.stdout.take() {
+            let _ = handle.read_to_end(&mut stdout);
+        }
+        if let Some(mut handle) = child.stderr.take() {
+            let _ = handle.read_to_end(&mut stderr);
+        }
+        Output {
+            status,
+            stdout,
+            stderr,
         }
     }
 
