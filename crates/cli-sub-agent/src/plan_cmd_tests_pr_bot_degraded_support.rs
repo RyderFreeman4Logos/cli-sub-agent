@@ -1,8 +1,10 @@
+use crate::test_bounded_command::status_with_timeout;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use weave::compiler::{PlanStep, VariableDecl, plan_from_toml};
 
 pub(super) fn workspace_root() -> PathBuf {
@@ -345,17 +347,22 @@ pub(super) fn write_native_review_bypass_artifact(root: &Path, head: &str) {
 pub(super) fn write_review_check_skip_audit_log(root: &Path) {
     let bin_dir = root.join("bin");
     let existing_path = std::env::var("PATH").unwrap_or_default();
-    let status = Command::new("bash")
-        .arg(workspace_root().join("scripts/hooks/review-check.sh"))
-        .current_dir(root)
-        .env("PATH", format!("{}:{}", bin_dir.display(), existing_path))
-        .env("CSA_SKIP_REVIEW_CHECK", "1")
-        .env(
-            "CSA_SKIP_REVIEW_CHECK_REASON",
-            "source=native range=main...HEAD verdict=clean",
-        )
-        .status()
-        .unwrap();
+    let status = status_with_timeout(
+        {
+            let mut command = Command::new("bash");
+            command
+                .arg(workspace_root().join("scripts/hooks/review-check.sh"))
+                .current_dir(root)
+                .env("PATH", format!("{}:{}", bin_dir.display(), existing_path))
+                .env("CSA_SKIP_REVIEW_CHECK", "1")
+                .env(
+                    "CSA_SKIP_REVIEW_CHECK_REASON",
+                    "source=native range=main...HEAD verdict=clean",
+                );
+            command
+        },
+        Duration::from_secs(30),
+    );
     assert!(status.success());
 }
 

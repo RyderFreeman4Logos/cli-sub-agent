@@ -566,6 +566,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "gate_command_sha256": command_digest(command),
         "gate_script_sha256": gate_script_digest(repo, command, env),
         "head_oid": git_output(repo, "rev-parse", "HEAD"),
+        "host_tcb_policy": "ambient_os_runtime_v1",
         "implementation_version": IMPLEMENTATION_VERSION,
         "index_clean": index_clean,
         "index_tree_oid": host_index_tree,

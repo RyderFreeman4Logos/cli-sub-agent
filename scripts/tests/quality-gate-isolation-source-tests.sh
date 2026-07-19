@@ -216,6 +216,48 @@ SH
   git -C "$fixture" commit -qm "test: add sanitized source topology"
 }
 
+
+assert_exact_source_dirty_deletion_and_type_change() {
+  local fixture runner counter output code
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  counter="$fixture/target/gate-counter"
+  # unstaged deletion of tracked regular file
+  rm -f "$fixture/Cargo.toml"
+  set +e
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/true-gate.sh target/gate-counter)"
+  code=$?
+  set -e
+  assert_eq source-exactness-deletion-exit 0 "$code"
+  assert_eq source-exactness-deletion-status executed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq source-exactness-deletion-reason dirty_state \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_eq source-exactness-deletion-gate-count 1 "$(wc -c <"$counter")"
+  assert_eq source-exactness-deletion-receipt-count 0 \
+    "$(current_receipt_count "$fixture")"
+
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  counter="$fixture/target/gate-counter"
+  rm -f "$fixture/Cargo.toml"
+  ln -s /tmp/quality-gate-type-swap "$fixture/Cargo.toml"
+  set +e
+  output="$(cd "$fixture" && "$runner" -- scripts/hooks/true-gate.sh target/gate-counter)"
+  code=$?
+  set -e
+  assert_eq source-exactness-type-swap-exit 0 "$code"
+  assert_eq source-exactness-type-swap-status executed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq source-exactness-type-swap-reason dirty_state \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_eq source-exactness-type-swap-gate-count 1 "$(wc -c <"$counter")"
+  assert_eq source-exactness-type-swap-receipt-count 0 \
+    "$(current_receipt_count "$fixture")"
+  echo "PASS isolation-source-dirty-deletion-type-change"
+}
+
+
 run_source_exactness_contracts() {
   local fixture runner counter external_target first second third identity index_before
   local flags_before index_after flags_after other_target output drift_writer
@@ -377,5 +419,6 @@ SH
     assert_path_absent "source-exactness-${output}-drift-no-receipt" \
       "$fixture/.csa/state/quality-gate-receipts/${identity}.json"
   done
-}
+  assert_exact_source_dirty_deletion_and_type_change
 
+}

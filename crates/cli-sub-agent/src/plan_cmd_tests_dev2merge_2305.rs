@@ -1,5 +1,7 @@
+use crate::test_bounded_command::output_with_timeout;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use tempfile::TempDir;
 use weave::compiler::{FailAction, plan_from_toml};
@@ -479,11 +481,16 @@ fn run_version_bump_script_with_fake_just(
         std::env::var("PATH").unwrap_or_default()
     );
 
-    Command::new("bash")
-        .arg("-c")
-        .arg(dev2merge_workflow_step_bash(title))
-        .current_dir(repo.path())
-        .env("PATH", path)
-        .output()
-        .unwrap()
+    output_with_timeout(
+        {
+            let mut command = Command::new("bash");
+            command
+                .arg("-c")
+                .arg(dev2merge_workflow_step_bash(title))
+                .current_dir(repo.path())
+                .env("PATH", path);
+            command
+        },
+        Duration::from_secs(60),
+    )
 }

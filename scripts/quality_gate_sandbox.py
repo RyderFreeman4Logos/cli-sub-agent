@@ -90,18 +90,27 @@ def _tracked_entries(repo: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes:
+def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
+    """Read one tracked path from the host worktree.
+
+    Returns ``None`` when the path is missing or no longer matches the indexed
+    entry type. Callers treat ``None`` as dirty tracked state that still permits
+    building an isolated uncached snapshot without publishing a receipt.
+    """
+
     path = repo / relative
     try:
         if mode == "120000":
+            if not path.is_symlink():
+                return None
             return os.fsencode(os.readlink(path))
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except OSError as error:
-        raise IsolationError("tracked source changed during snapshot") from error
+    except OSError:
+        return None
     try:
         status = os.fstat(descriptor)
         if not stat.S_ISREG(status.st_mode):
-            raise IsolationError("tracked source is not a regular file")
+            return None
         digest_input = bytearray()
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
@@ -138,6 +147,9 @@ def _source_fingerprint(
         digest.update(mode.encode("ascii"))
         digest.update(len(raw_path).to_bytes(8, "big"))
         digest.update(raw_path)
+        if value is None:
+            digest.update(b"missing-or-type-changed\0")
+            continue
         digest.update(len(value).to_bytes(8, "big"))
         digest.update(value)
     return digest.hexdigest()
@@ -151,6 +163,9 @@ def _copy_snapshot(
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         value = _read_tracked_value(repo, mode, relative)
+        if value is None:
+            # Keep snapshot buildable for dirty worktrees (deletion/type swap).
+            continue
         if mode == "120000":
             link = os.fsdecode(value)
             resolved = (target.parent / link).resolve(strict=False)
@@ -191,6 +206,9 @@ def _projection_fingerprint(
         digest.update(mode.encode("ascii"))
         digest.update(len(raw_path).to_bytes(8, "big"))
         digest.update(raw_path)
+        if value is None:
+            digest.update(b"missing-or-type-changed\0")
+            continue
         digest.update(len(value).to_bytes(8, "big"))
         digest.update(value)
     return digest.hexdigest()

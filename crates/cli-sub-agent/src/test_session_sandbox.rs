@@ -140,7 +140,10 @@ impl Drop for ScopedSessionSandbox {
 mod tests {
     use super::ScopedSessionSandbox;
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Command, Output, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     const RUST_STATE_HOME_ENV_KEYS: &[&str] = &[
         csa_core::env::CARGO_HOME_ENV_KEY,
@@ -152,6 +155,21 @@ mod tests {
     const RUST_STATE_CHILD_MARKER: &str = "CSA_TEST_SCOPED_SESSION_RUST_STATE_CHILD";
     const RUST_STATE_TEST_NAME: &str =
         "test_session_sandbox::tests::rust_state_env_is_sandboxed_and_restored";
+
+    fn output_with_timeout(mut command: Command, timeout: Duration) -> Output {
+        // Keep this helper local: the file is #[path]-included by integration tests.
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().expect("spawn bounded test command");
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => panic!("bounded test command failed to wait: {error}"),
+            Err(_) => panic!("bounded test command exceeded {timeout:?}"),
+        }
+    }
 
     #[test]
     fn tracked_env_var_is_restored_on_drop() {
@@ -199,7 +217,7 @@ mod tests {
                 }
             }
 
-            let output = child.output().expect("run isolated Rust state child test");
+            let output = output_with_timeout(child, Duration::from_secs(120));
             assert!(
                 output.status.success(),
                 "isolated Rust state child test failed\nstdout:\n{}\nstderr:\n{}",

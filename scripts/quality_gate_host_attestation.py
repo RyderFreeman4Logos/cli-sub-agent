@@ -3,6 +3,13 @@
 Attests HEAD/index equality and physical tracked worktree bytes without trusting
 index skip-worktree/assume-unchanged bits. Shared by the sandbox coordinator so
 sanitized execution projections never stand in for host clean-state.
+
+Receipt identity (issue #2803 AC1) binds repository/checkout OIDs, clean
+index/worktree contracts, lockfiles, selected Rust toolchain/sysroot, target
+provenance, feature matrix, recipe digests, and implementation version. Host
+dynamic libraries, distro Python stdlib trees, and Cargo registry/git cache
+blobs outside lock-addressed inputs remain ambient OS TCB for Static reuse
+(same trust class as the kernel and bwrap), policy tag ambient_os_runtime_v1.
 """
 
 from __future__ import annotations

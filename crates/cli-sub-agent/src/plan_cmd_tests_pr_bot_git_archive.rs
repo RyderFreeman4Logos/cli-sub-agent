@@ -1,13 +1,20 @@
+use crate::test_bounded_command::output_with_timeout;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<String> {
-    let git_metadata = Command::new("git")
-        .args(["rev-parse", "--absolute-git-dir", "--git-common-dir"])
-        .current_dir(repo_root)
-        .output()
-        .expect("git metadata query should run");
+    let git_metadata = output_with_timeout(
+        {
+            let mut command = Command::new("git");
+            command
+                .args(["rev-parse", "--absolute-git-dir", "--git-common-dir"])
+                .current_dir(repo_root);
+            command
+        },
+        Duration::from_secs(30),
+    );
     assert!(
         git_metadata.status.success(),
         "git metadata query failed: {}",
@@ -40,14 +47,19 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
     let alternates = std::env::join_paths([&real_objects])
         .expect("real object directory should be representable as a Git alternate");
 
-    let tree = Command::new("git")
-        .args(["write-tree"])
-        .current_dir(repo_root)
-        .env("GIT_INDEX_FILE", &isolated_index)
-        .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
-        .output()
-        .expect("git write-tree should run");
+    let tree = output_with_timeout(
+        {
+            let mut command = Command::new("git");
+            command
+                .args(["write-tree"])
+                .current_dir(repo_root)
+                .env("GIT_INDEX_FILE", &isolated_index)
+                .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates);
+            command
+        },
+        Duration::from_secs(30),
+    );
     assert!(
         tree.status.success(),
         "git write-tree failed: {}",
@@ -58,14 +70,19 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
         .trim()
         .to_string();
 
-    let archive = Command::new("git")
-        .args(["archive", "--format=tar", &tree_id, pathspec])
-        .current_dir(repo_root)
-        .env("GIT_INDEX_FILE", &isolated_index)
-        .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates)
-        .output()
-        .expect("git archive should run");
+    let archive = output_with_timeout(
+        {
+            let mut command = Command::new("git");
+            command
+                .args(["archive", "--format=tar", &tree_id, pathspec])
+                .current_dir(repo_root)
+                .env("GIT_INDEX_FILE", &isolated_index)
+                .env("GIT_OBJECT_DIRECTORY", &isolated_objects)
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &alternates);
+            command
+        },
+        Duration::from_secs(30),
+    );
     assert!(
         archive.status.success(),
         "git archive failed: {}",
@@ -84,7 +101,20 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
         .expect("tar stdin")
         .write_all(&archive.stdout)
         .expect("should stream archive into tar");
-    let listing = tar.wait_with_output().expect("tar should finish");
+    drop(tar.stdin.take());
+    let listing = {
+        use std::sync::mpsc;
+        use std::thread;
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(tar.wait_with_output());
+        });
+        match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => panic!("tar wait failed: {error}"),
+            Err(_) => panic!("tar listing exceeded 30s"),
+        }
+    };
     assert!(
         listing.status.success(),
         "tar listing failed: {}",
