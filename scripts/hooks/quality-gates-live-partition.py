@@ -46,6 +46,7 @@ class ContractError(ValueError):
 class Inventory:
     universe: frozenset[tuple[str, str]]
     matches: frozenset[tuple[str, str]]
+    ignored: frozenset[tuple[str, str]]
 
 
 def require_mapping(value: object, label: str) -> dict[str, object]:
@@ -165,14 +166,21 @@ def emit_fixture_inventory(args: argparse.Namespace) -> None:
             status = "matches"
         if args.fault == "union-omission" and mode in {"static", "live"} and (binary_id, test_name) == live[0]:
             status = "mismatch"
-        if args.fault == "all-mismatch" and (binary_id, test_name) == static[0]:
+        all_mismatch_fault = (
+            args.fault == "default-all-mismatch" and not all_features
+        ) or (args.fault == "all-features-all-mismatch" and all_features)
+        ignored_fault = args.fault == "all-features-ignored" and all_features
+        if (all_mismatch_fault or ignored_fault) and (binary_id, test_name) == static[0]:
             status = "mismatch"
         if args.fault == "unknown-status" and mode == "live" and (binary_id, test_name) == live[0]:
             status = "unknown"
         suite = suites.setdefault(binary_id, {"binary-id": binary_id, "testcases": {}})
         testcases = suite["testcases"]
         assert isinstance(testcases, dict)
-        testcases[test_name] = {"filter-match": {"status": status}}
+        filter_match = {"status": status}
+        if ignored_fault and (binary_id, test_name) == static[0]:
+            filter_match["reason"] = "ignored"
+        testcases[test_name] = {"filter-match": filter_match}
     print(json.dumps({"rust-suites": suites}, sort_keys=True))
 
 
@@ -184,6 +192,7 @@ def load_inventory(path: Path, label: str) -> Inventory:
     suites = require_mapping(require_mapping(inventory, label).get("rust-suites"), f"{label}.rust-suites")
     universe: set[tuple[str, str]] = set()
     matches: set[tuple[str, str]] = set()
+    ignored: set[tuple[str, str]] = set()
     for suite_name, raw_suite in suites.items():
         suite = require_mapping(raw_suite, f"{label}.rust-suites[{suite_name!r}]")
         binary_id = suite.get("binary-id")
@@ -208,7 +217,9 @@ def load_inventory(path: Path, label: str) -> Inventory:
             universe.add(identity)
             if status == "matches":
                 matches.add(identity)
-    return Inventory(frozenset(universe), frozenset(matches))
+            elif filter_match.get("reason") == "ignored":
+                ignored.add(identity)
+    return Inventory(frozenset(universe), frozenset(matches), frozenset(ignored))
 
 
 def validate_inventories(args: argparse.Namespace) -> None:
@@ -216,7 +227,13 @@ def validate_inventories(args: argparse.Namespace) -> None:
     all_inventory = load_inventory(args.all_inventory, f"{args.leg} All")
     static_inventory = load_inventory(args.static_inventory, f"{args.leg} Static")
     live_inventory = load_inventory(args.live_inventory, f"{args.leg} Live")
-    if all_inventory.matches != all_inventory.universe:
+    # The default leg may retain nextest's built-in default filtering. For the
+    # all-features inventory built with --ignore-default-filter, only explicit
+    # nextest `ignored` cases may remain outside the matching set.
+    unexplained_mismatches = (
+        all_inventory.universe - all_inventory.matches - all_inventory.ignored
+    )
+    if args.leg == "all-features" and unexplained_mismatches:
         raise ContractError(f"{args.leg} All inventory matches differ from universe")
     if static_inventory.universe != all_inventory.universe:
         raise ContractError(f"{args.leg} Static inventory universe differs from All")
