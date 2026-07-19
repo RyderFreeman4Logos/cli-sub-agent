@@ -234,7 +234,11 @@ case "\${1:-}" in
       printf 'fixture rustc expected --print sysroot, got: %s\n' "\${2:-unset}" >&2
       exit 64
     fi
-    printf '%s\\n' "$real_sysroot"
+    if [ "\${0:-}" = /run/csa-bin/rustc ]; then
+      printf '%s\\n' /run/csa-rust-toolchain
+    else
+      printf '%s\\n' "$real_sysroot"
+    fi
     ;;
   *) exit 64 ;;
 esac
