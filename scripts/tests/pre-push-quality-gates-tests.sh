@@ -26,7 +26,6 @@ test_static_nextest_profile_contract() {
   assert_contains static-profile-slow-timeout \
     'slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }' \
     "$config"
-
   count="$(grep -Ec '^default-filter = ' .config/nextest.toml || true)"
   assert_eq static-profile-single-selector 1 "$count"
   selector_output="$(
@@ -85,7 +84,6 @@ EOF
   assert_eq static-gate-single-test-invocation 1 "$count"
   assert_eq static-gate-hostile-env-is-pinned \
     'argv=test|profile=static|user-config=none|retries=0' "$observed"
-
   static_source="$(<scripts/hooks/pre-push-quality-gates.sh)"
   count="$(
     grep -Ec \
@@ -209,7 +207,7 @@ EOF
   run_live_nextest_fixture_case \
     "$fixture" "$override_capture" 999999999999999999999999 7
   assert_live_invocation_capture live-overridden-build-jobs "$override_capture" 7
-  for fault in live-3 live-5 overlap union-omission identity-drift unknown-status; do
+  for fault in live-3 live-5 overlap union-omission all-mismatch identity-drift unknown-status; do
     set +e
     run_live_nextest_fixture_case \
       "$fixture" "$fixture/$fault-capture" 0 2 "$fault" >/dev/null 2>&1
@@ -217,7 +215,6 @@ EOF
     set -e
     assert_ne "live-partition-rejects-${fault}" 0 "$code"
   done
-
   live_source="$(<scripts/hooks/quality-gates-live.sh)"
   assert_contains live-selector-ignore-default '--ignore-default-filter' "$live_source"
   assert_contains live-selector-complement "-E 'not default()'" "$live_source"
@@ -262,7 +259,6 @@ test_live_preflight_and_leg_order_contract() {
   assert_eq live-preflight-and-leg-order \
     $'preflight\ninventory:default\ninventory:all-features\nrun:default\nrun:all-features' \
     "$actual"
-
   set +e
   failure_output="$(
     set +e
@@ -275,7 +271,6 @@ test_live_preflight_and_leg_order_contract() {
   set -e
   assert_ne live-cgroup-preflight-failure-exit 0 "$failure_code"
   assert_empty live-cgroup-preflight-failure-runs-no-cargo "$failure_output"
-
   fixture="$test_root/live-filesystem-preflight"
   bin="$fixture/bin"
   mkdir -p "$bin"
@@ -382,7 +377,6 @@ require_source_contract() {
     'run: scripts/hooks/version-check.sh' "$lefthook_source"
   assert_contains source-contract-hook-review-check \
     'run: scripts/hooks/review-check.sh' "$lefthook_source"
-
   contract_suite="$test_root/contract-diagnostic-suite.sh"
   cat >"$contract_suite" <<'EOF'
 #!/usr/bin/env bash
@@ -401,7 +395,6 @@ EOF
     'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' "$output"
   assert_not_matches source-contract-unsafe-diagnostic-redacted \
     'top-secret|/tmp/private-contract\.log' "$output"
-
   set +e
   output="$(
     run_quality_gate_contract_suites() { printf 'suite-ran\n'; }

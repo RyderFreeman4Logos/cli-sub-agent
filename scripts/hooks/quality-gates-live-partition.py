@@ -165,6 +165,8 @@ def emit_fixture_inventory(args: argparse.Namespace) -> None:
             status = "matches"
         if args.fault == "union-omission" and mode in {"static", "live"} and (binary_id, test_name) == live[0]:
             status = "mismatch"
+        if args.fault == "all-mismatch" and (binary_id, test_name) == static[0]:
+            status = "mismatch"
         if args.fault == "unknown-status" and mode == "live" and (binary_id, test_name) == live[0]:
             status = "unknown"
         suite = suites.setdefault(binary_id, {"binary-id": binary_id, "testcases": {}})
@@ -214,6 +216,8 @@ def validate_inventories(args: argparse.Namespace) -> None:
     all_inventory = load_inventory(args.all_inventory, f"{args.leg} All")
     static_inventory = load_inventory(args.static_inventory, f"{args.leg} Static")
     live_inventory = load_inventory(args.live_inventory, f"{args.leg} Live")
+    if all_inventory.matches != all_inventory.universe:
+        raise ContractError(f"{args.leg} All inventory matches differ from universe")
     if static_inventory.universe != all_inventory.universe:
         raise ContractError(f"{args.leg} Static inventory universe differs from All")
     overlap = static_inventory.matches & live_inventory.matches

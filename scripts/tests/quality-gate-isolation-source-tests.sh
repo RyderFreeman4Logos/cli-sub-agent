@@ -10,7 +10,8 @@ fi
 run_ambient_input_isolation() {
   local fixture runner counter first second global_config excludes_file output code
   local just_victim first_identity second_identity external_target
-  local masked_native_tool missing_native_tool
+  local explicit_tool_root variable basename tool_path missing_native_tool index
+  local -a explicit_variables explicit_basenames explicit_tool_env
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/gate-counter"
@@ -177,31 +178,59 @@ JUST
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/native-tool-counter"
-  masked_native_tool="$test_root/masked-native-tool"
+  explicit_tool_root="$test_root/explicit-tools"
   missing_native_tool="$test_root/missing-native-tool"
-  cat >"$masked_native_tool" <<'SH'
+  explicit_variables=(
+    RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CC CXX AR LD CPP
+  )
+  explicit_basenames=(
+    rustc sccache-wrapper workspace-wrapper clang clang++ llvm-ar ld.lld clang-cpp
+  )
+  mkdir -p "$explicit_tool_root"
+  for index in "${!explicit_variables[@]}"; do
+    variable="${explicit_variables[$index]}"
+    basename="${explicit_basenames[$index]}"
+    tool_path="$explicit_tool_root/$basename"
+    cat >"$tool_path" <<SH
 #!/usr/bin/env bash
-exit 0
+set -euo pipefail
+test "\$(basename -- "\$0")" = "$basename"
+if [ "\${1-}" = --print ] && [ "\${2-}" = sysroot ]; then
+  printf '%s\\n' /run/csa-rust-toolchain
+fi
 SH
-  chmod +x "$masked_native_tool"
+    chmod +x "$tool_path"
+    if [ "$variable" = CXX ]; then
+      mv "$tool_path" "$explicit_tool_root/native-multicall-terminal"
+      ln -s native-multicall-terminal "$tool_path"
+    fi
+    explicit_tool_env+=("$variable=$tool_path")
+  done
   cat >"$fixture/scripts/hooks/native-tool-ambient-probe.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-for variable in CC CXX AR LD CPP; do
-  expected="/run/csa-bin/explicit-${variable,,}"
-  test "${!variable:?}" = "$expected"
-  test -x "$expected"
-  "$expected"
+for variable in RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CC CXX AR LD CPP; do
+  case "$variable" in
+    RUSTC) expected=rustc ;;
+    RUSTC_WRAPPER) expected=sccache-wrapper ;;
+    RUSTC_WORKSPACE_WRAPPER) expected=workspace-wrapper ;;
+    CC) expected=clang ;;
+    CXX) expected=clang++ ;;
+    AR) expected=llvm-ar ;;
+    LD) expected=ld.lld ;;
+    CPP) expected=clang-cpp ;;
+  esac
+  executable="${!variable:?}"
+  test "$executable" = "/run/csa-bin/$expected"
+  test -x "$executable"
+  "$executable"
 done
 printf x >>"$1"
 SH
   chmod +x "$fixture/scripts/hooks/native-tool-ambient-probe.sh"
   git -C "$fixture" add scripts/hooks/native-tool-ambient-probe.sh
   git -C "$fixture" commit -qm "test: add native tool ambient probe"
-  output="$(cd "$fixture" && \
-    CC="$masked_native_tool" CXX="$masked_native_tool" \
-    AR="$masked_native_tool" LD="$masked_native_tool" \
-    CPP="$masked_native_tool" \
+  output="$(cd "$fixture" && env "${explicit_tool_env[@]}" \
     "$runner" -- scripts/hooks/native-tool-ambient-probe.sh \
     target/native-tool-counter)"
   assert_eq isolation-native-tool-masked-status executed \
