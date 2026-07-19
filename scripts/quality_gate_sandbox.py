@@ -343,19 +343,18 @@ class GateSandbox:
             try:
                 executable = Path(value).resolve(strict=True)
                 status = executable.stat()
-            except OSError as error:
-                self.close()
-                raise IsolationError("explicit native tool provenance invalid") from error
+            except OSError:
+                self.environment.pop(variable, None)
+                continue
+            if not _visible_in_sandbox(repo, executable):
+                self.environment.pop(variable, None)
+                continue
             if not stat.S_ISREG(status.st_mode) or not os.access(executable, os.X_OK):
                 self.close()
                 raise IsolationError("explicit native tool provenance invalid")
             mount_name = "explicit-" + variable.lower()
             destination = self.private_bin / mount_name
-            if _visible_in_sandbox(repo, executable):
-                os.symlink(executable, destination)
-            else:
-                destination.touch(mode=0o700)
-                self.explicit_tools[mount_name] = executable
+            os.symlink(executable, destination)
             self.environment[variable] = f"{PRIVATE_BIN_PATH}/{mount_name}"
         target_value = environment.get("CARGO_BUILD_TARGET")
         if target_value:

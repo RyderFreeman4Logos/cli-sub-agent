@@ -10,6 +10,7 @@ fi
 run_ambient_input_isolation() {
   local fixture runner counter first second global_config excludes_file output
   local just_victim first_identity second_identity external_target
+  local masked_native_tool missing_native_tool
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/gate-counter"
@@ -172,6 +173,39 @@ JUST
   assert_eq isolation-nested-just-victim-no-residue 0 \
     "$(find "$just_victim" -name 'just-*' -print | wc -l)"
   assert_no_just_temp_residue isolation-nested-just "$fixture"
+
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  counter="$fixture/target/native-tool-counter"
+  masked_native_tool="$test_root/masked-native-tool"
+  missing_native_tool="$test_root/missing-native-tool"
+  cat >"$masked_native_tool" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$masked_native_tool"
+  cat >"$fixture/scripts/hooks/native-tool-ambient-probe.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if env | grep -Eq '^(CC|CXX|AR|LD|CPP)='; then
+  exit 73
+fi
+printf x >>"$1"
+SH
+  chmod +x "$fixture/scripts/hooks/native-tool-ambient-probe.sh"
+  git -C "$fixture" add scripts/hooks/native-tool-ambient-probe.sh
+  git -C "$fixture" commit -qm "test: add native tool ambient probe"
+  output="$(cd "$fixture" && \
+    CC="$masked_native_tool" CXX="$missing_native_tool" \
+    AR="$masked_native_tool" LD="$missing_native_tool" \
+    CPP="$masked_native_tool" \
+    "$runner" -- scripts/hooks/native-tool-ambient-probe.sh \
+    target/native-tool-counter)"
+  assert_eq isolation-native-tool-ambient-status executed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq isolation-native-tool-ambient-runs 1 "$(wc -c <"$counter")"
+  assert_eq isolation-native-tool-ambient-receipts 1 \
+    "$(current_receipt_count "$fixture")"
   echo "PASS isolation-ambient-inputs"
 }
 
