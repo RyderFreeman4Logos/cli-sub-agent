@@ -13,3 +13,9 @@ slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-t
 [[profile.static.overrides]]
 filter = 'binary_id(=cli-sub-agent::skill_resource_inheritance) & test(=skill_run_preserves_plan_parent_resource_snapshot_for_nested_child)'
 threads-required = "num-test-threads"
+
+# Static pr-bot degraded local-fallback is fixture-sensitive under the full
+# Static partition fan-out (see #2847). Serialize it while keeping retries at 0.
+[[profile.static.overrides]]
+filter = 'binary_id(=cli-sub-agent::bin/csa) & test(=plan_cmd::tests_pr_bot_degraded::execute_pr_bot_degraded_local_fallback_records_rationale_and_reaches_merge)'
+threads-required = "num-test-threads"
