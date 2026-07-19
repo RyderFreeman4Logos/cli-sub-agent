@@ -4,52 +4,7 @@ set -euo pipefail
 
 live_cargo_build_jobs=
 live_cargo_build_jobs_resolved=0
-
-require_single_nextest_match() {
-  local leg="$1" count
-  if ! count="$(
-    python3 -c '
-import json
-import sys
-
-try:
-    inventory = json.load(sys.stdin)
-    suites = inventory.get("rust-suites")
-    if not isinstance(suites, dict):
-        raise ValueError("rust-suites must be an object")
-    count = 0
-    for suite in suites.values():
-        if not isinstance(suite, dict):
-            raise ValueError("suite must be an object")
-        testcases = suite.get("testcases")
-        if not isinstance(testcases, dict):
-            raise ValueError("testcases must be an object")
-        for testcase in testcases.values():
-            if not isinstance(testcase, dict):
-                raise ValueError("testcase must be an object")
-            filter_match = testcase.get("filter-match")
-            if (
-                isinstance(filter_match, dict)
-                and filter_match.get("status") == "matches"
-            ):
-                count += 1
-except (json.JSONDecodeError, ValueError) as error:
-    print(f"ERROR: invalid nextest inventory: {error}", file=sys.stderr)
-    raise SystemExit(2)
-
-print(count)
-'
-  )"; then
-    printf 'ERROR: unable to inspect live Cgroup inventory for %s.\n' "$leg" >&2
-    return 1
-  fi
-  if [ "$count" -ne 1 ]; then
-    printf 'ERROR: live Cgroup inventory for %s matched %s tests; expected exactly 1.\n' \
-      "$leg" "$count" >&2
-    return 1
-  fi
-  printf 'Live Cgroup inventory for %s: exactly 1 matching test.\n' "$leg"
-}
+live_partition_validator=scripts/hooks/quality-gates-live-partition.py
 
 resolve_live_cargo_build_jobs() {
   if [[ -v CARGO_BUILD_JOBS ]]; then
@@ -63,7 +18,15 @@ resolve_live_cargo_build_jobs() {
 
 run_live_nextest() {
   local action="$1"
-  shift
+  local partition="$2"
+  shift 2
+  local -a filter_args=()
+  case "$partition" in
+    all) filter_args=(--ignore-default-filter) ;;
+    static) ;;
+    live) filter_args=(--ignore-default-filter -E 'not default()') ;;
+    *) printf 'ERROR: unknown nextest partition: %s\n' "$partition" >&2; return 2 ;;
+  esac
   if [ "$live_cargo_build_jobs_resolved" != 1 ]; then
     if ! resolve_live_cargo_build_jobs; then
       return 1
@@ -77,8 +40,7 @@ run_live_nextest() {
     scripts/cargo-env-normalize.sh cargo nextest "$action" \
       --profile static \
       --user-config-file none \
-      --ignore-default-filter \
-      -E 'not default()' \
+      "${filter_args[@]}" \
       "$@"
 }
 
@@ -104,36 +66,101 @@ require_live_cgroup_host() {
   fi
 }
 
-run_live_cgroup_leg() {
-  local leg="$1"
-  shift
-  local -a workspace_args=("$@")
-
-  printf 'Inventorying live Cgroup test for %s...\n' "$leg"
-  if ! run_live_nextest list \
-    "${workspace_args[@]}" --message-format json \
-    | require_single_nextest_match "$leg"; then
+require_live_filesystem_host() {
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo 'ERROR: timeout is required for the live filesystem host preflight.' >&2
     return 1
   fi
-  printf 'Running live Cgroup test for %s...\n' "$leg"
-  run_live_nextest run \
-    "${workspace_args[@]}" \
-    --no-tests fail --test-threads 1
+  if ! command -v unshare >/dev/null 2>&1; then
+    echo 'ERROR: unshare is required for the live filesystem host preflight.' >&2
+    return 1
+  fi
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo 'ERROR: bwrap is required for the live filesystem host preflight.' >&2
+    return 1
+  fi
+  if ! timeout --signal=TERM --kill-after=5s 20s \
+    unshare --user --map-root-user /bin/true; then
+    echo 'ERROR: bounded user-namespace preflight failed.' >&2
+    return 1
+  fi
+  if ! timeout --signal=TERM --kill-after=5s 20s \
+    bwrap --die-with-parent --unshare-all --ro-bind / / \
+      --dev /dev --proc /proc /bin/true; then
+    echo 'ERROR: bounded strict Bubblewrap preflight failed.' >&2
+    return 1
+  fi
 }
 
-run_live_cgroup_tests() {
+require_live_host_capabilities() {
+  require_live_cgroup_host && require_live_filesystem_host
+}
+
+inventory_live_partition_leg() {
+  local leg="$1"
+  local inventory_root="$2"
+  shift 2
+  local -a workspace_args=("$@")
+  local all_inventory="$inventory_root/$leg-all.json"
+  local static_inventory="$inventory_root/$leg-static.json"
+  local live_inventory="$inventory_root/$leg-live.json"
+
+  printf 'Inventorying All/Static/Live partitions for %s...\n' "$leg"
+  if ! run_live_nextest list all "${workspace_args[@]}" --message-format json >"$all_inventory"; then
+    return 1
+  fi
+  if ! run_live_nextest list static "${workspace_args[@]}" --message-format json >"$static_inventory"; then
+    return 1
+  fi
+  if ! run_live_nextest list live "${workspace_args[@]}" --message-format json >"$live_inventory"; then
+    return 1
+  fi
+  if ! python3 "$live_partition_validator" validate-inventories \
+    --config .config/nextest.toml \
+    --leg "$leg" \
+    --all "$all_inventory" \
+    --static "$static_inventory" \
+    --live "$live_inventory" \
+    --identities-out "$inventory_root/$leg-live-identities"; then
+    return 1
+  fi
+}
+
+run_live_partition_leg() {
+  local leg="$1"
+  shift
+  printf 'Running exact Live partition for %s...\n' "$leg"
+  run_live_nextest run live "$@" --no-tests fail --test-threads 1
+}
+
+run_live_partition_tests() (
   live_cargo_build_jobs_resolved=0
+  if ! require_live_host_capabilities; then
+    return 1
+  fi
   if ! resolve_live_cargo_build_jobs; then
     return 1
   fi
-  if ! require_live_cgroup_host; then
+  local inventory_root
+  inventory_root="$(mktemp -d "${TMPDIR:-/tmp}/csa-live-partition.XXXXXX")"
+  trap 'rm -rf -- "$inventory_root"' EXIT
+  if ! inventory_live_partition_leg default "$inventory_root" --workspace; then
     return 1
   fi
-  if ! run_live_cgroup_leg default --workspace; then
+  if ! inventory_live_partition_leg all-features "$inventory_root" --workspace --all-features; then
     return 1
   fi
-  run_live_cgroup_leg all-features --workspace --all-features
-}
+  if ! cmp -s \
+    "$inventory_root/default-live-identities" \
+    "$inventory_root/all-features-live-identities"; then
+    echo 'ERROR: default/all-features Live identities differ.' >&2
+    return 1
+  fi
+  if ! run_live_partition_leg default --workspace; then
+    return 1
+  fi
+  run_live_partition_leg all-features --workspace --all-features
+)
 
 quality_gates_live_main() {
   local repo_root
@@ -146,7 +173,7 @@ quality_gates_live_main() {
     just check-version-bumped
   fi
   ./scripts/hooks/check-env-dependent-tests.sh
-  run_live_cgroup_tests
+  run_live_partition_tests
   scripts/hooks/quality-gate-contract-tests.sh
   # Advisory databases and policy/network freshness are deliberately live. They
   # are never authenticated by, or skipped because of, the static-stage receipt.

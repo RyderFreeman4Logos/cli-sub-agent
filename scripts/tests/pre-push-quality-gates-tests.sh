@@ -16,8 +16,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 test_static_nextest_profile_contract() {
   receipt_contract_set_case static-nextest-profile
-  local config default_filter selector_pattern test_identifier test_leaf
-  local count declarations owners
+  local config count selector_output
   config="$(<.config/nextest.toml)"
   assert_contains static-profile-preserves-default-retries \
     $'[profile.default]\nretries = 2' "$config"
@@ -30,35 +29,14 @@ test_static_nextest_profile_contract() {
 
   count="$(grep -Ec '^default-filter = ' .config/nextest.toml || true)"
   assert_eq static-profile-single-selector 1 "$count"
-  default_filter="$(sed -nE 's/^default-filter = "(.*)"$/\1/p' .config/nextest.toml)"
-  selector_pattern='^not \(binary_id\(=csa-executor\) & test\(=([[:alnum:]_:]+)\)\)$'
-  if [[ "$default_filter" =~ $selector_pattern ]]; then
-    test_identifier="${BASH_REMATCH[1]}"
-  else
-    _receipt_test_fail static-profile-exact-selector \
-      'not (binary_id(=csa-executor) & test(=<fully-qualified-test>))' \
-      "$default_filter"
-  fi
-  case "$test_identifier" in
-    transport::tests::*) ;;
-    *)
-      _receipt_test_fail static-profile-transport-test \
-        'transport::tests::<test>' "$test_identifier"
-      ;;
-  esac
-  test_leaf="${test_identifier##*::}"
-  declarations="$(
-    git grep -E \
-      "^[[:space:]]*(async[[:space:]]+)?fn[[:space:]]+${test_leaf}[[:space:]]*\\(" \
-      -- ':(glob)crates/**/*.rs' || true
+  selector_output="$(
+    python3 scripts/hooks/quality-gates-live-partition.py selector \
+      --config .config/nextest.toml
   )"
-  count="$(grep -c . <<<"$declarations" || true)"
-  assert_eq static-profile-target-declaration-count 1 "$count"
-  owners="$(
-    git grep -l -F "$test_identifier" -- \
-      ':(glob)**/*.sh' ':(glob)**/*.py' || true
-  )"
-  assert_empty static-profile-target-owned-only-by-nextest-config "$owners"
+  count="$(grep -c . <<<"$selector_output" || true)"
+  assert_eq static-profile-exact-live-tuples 4 "$count"
+  python3 scripts/hooks/quality-gates-live-partition.py test-selector-fixtures \
+    --config .config/nextest.toml
   echo 'PASS static-nextest-profile'
 }
 
@@ -121,11 +99,13 @@ EOF
 }
 
 assert_live_invocation_capture() {
-  local case_prefix="$1" capture="$2" expected_jobs="$3" shared invocation index
+  local case_prefix="$1" capture="$2" expected_jobs="$3" common all_filter live_filter invocation index
   local -a invocations
   mapfile -t invocations <"$capture"
-  assert_eq "${case_prefix}-invocation-count" 4 "${#invocations[@]}"
-  shared='<--profile><static><--user-config-file><none><--ignore-default-filter><-E><not default()>'
+  assert_eq "${case_prefix}-invocation-count" 8 "${#invocations[@]}"
+  common='<--profile><static><--user-config-file><none>'
+  all_filter='<--ignore-default-filter>'
+  live_filter='<--ignore-default-filter><-E><not default()>'
   for index in "${!invocations[@]}"; do
     invocation="${invocations[$index]}"
     assert_contains "${case_prefix}-${index}-profile" 'profile=static' "$invocation"
@@ -134,29 +114,41 @@ assert_live_invocation_capture() {
     assert_contains "${case_prefix}-${index}-double-spawn" 'double-spawn=0' "$invocation"
     assert_contains "${case_prefix}-${index}-build-jobs" \
       "build-jobs=${expected_jobs}" "$invocation"
-    assert_contains "${case_prefix}-${index}-shared-selector" "$shared" "$invocation"
+    assert_contains "${case_prefix}-${index}-common-selector" "$common" "$invocation"
   done
-  assert_contains "${case_prefix}-default-list" \
-    "<list>${shared}<--workspace><--message-format><json>" "$(<"$capture")"
+  assert_contains "${case_prefix}-default-all-list" \
+    "<list>${common}${all_filter}<--workspace><--message-format><json>" "$(<"$capture")"
+  assert_contains "${case_prefix}-default-static-list" \
+    "<list>${common}<--workspace><--message-format><json>" "$(<"$capture")"
+  assert_contains "${case_prefix}-default-live-list" \
+    "<list>${common}${live_filter}<--workspace><--message-format><json>" "$(<"$capture")"
   assert_contains "${case_prefix}-default-run" \
-    "<run>${shared}<--workspace><--no-tests><fail><--test-threads><1>" \
+    "<run>${common}${live_filter}<--workspace><--no-tests><fail><--test-threads><1>" \
     "$(<"$capture")"
-  assert_contains "${case_prefix}-all-features-list" \
-    "<list>${shared}<--workspace><--all-features><--message-format><json>" \
+  assert_contains "${case_prefix}-all-features-all-list" \
+    "<list>${common}${all_filter}<--workspace><--all-features><--message-format><json>" \
+    "$(<"$capture")"
+  assert_contains "${case_prefix}-all-features-static-list" \
+    "<list>${common}<--workspace><--all-features><--message-format><json>" \
+    "$(<"$capture")"
+  assert_contains "${case_prefix}-all-features-live-list" \
+    "<list>${common}${live_filter}<--workspace><--all-features><--message-format><json>" \
     "$(<"$capture")"
   assert_contains "${case_prefix}-all-features-run" \
-    "<run>${shared}<--workspace><--all-features><--no-tests><fail><--test-threads><1>" \
+    "<run>${common}${live_filter}<--workspace><--all-features><--no-tests><fail><--test-threads><1>" \
     "$(<"$capture")"
 }
 
 run_live_nextest_fixture_case() {
-  local fixture="$1" capture="$2" retries="$3" build_jobs="$4"
+  local fixture="$1" capture="$2" retries="$3" build_jobs="$4" fault="${5:-none}"
   local -a env_options=() env_vars=(
     "LIVE_NEXTEST_CAPTURE=$capture"
     'NEXTEST_PROFILE=hostile'
     'NEXTEST_USER_CONFIG_FILE=hostile'
     "NEXTEST_RETRIES=$retries"
     'NEXTEST_DOUBLE_SPAWN=hostile'
+    "LIVE_PARTITION_FAULT=$fault"
+    "LIVE_PARTITION_VALIDATOR=$fixture/scripts/hooks/quality-gates-live-partition.py"
   )
   if [ "$build_jobs" = auto ]; then
     env_options=(-u CARGO_BUILD_JOBS -u FAIL_DETECT_BUILD_JOBS)
@@ -168,19 +160,22 @@ run_live_nextest_fixture_case() {
     env "${env_options[@]}" "${env_vars[@]}" bash -c "
 set -euo pipefail
 source \"\$1\"
-require_live_cgroup_host() { :; }
-run_live_cgroup_tests >/dev/null
+require_live_host_capabilities() { :; }
+live_partition_validator=\"$fixture/scripts/hooks/quality-gates-live-partition.py\"
+run_live_partition_tests >/dev/null
 " bash "$repo_root/scripts/hooks/quality-gates-live.sh"
   )
 }
 
 test_live_selector_and_leg_contract() {
   receipt_contract_set_case live-selector-and-legs
-  local live_source fixture auto_capture override_capture count
+  local live_source fixture auto_capture override_capture count code fault
   fixture="$test_root/live-selector-and-legs"
   auto_capture="$fixture/auto-capture"
   override_capture="$fixture/override-capture"
-  mkdir -p "$fixture/scripts"
+  mkdir -p "$fixture/.config" "$fixture/scripts/hooks"
+  cp .config/nextest.toml "$fixture/.config/"
+  cp scripts/hooks/quality-gates-live-partition.py "$fixture/scripts/hooks/"
   cat >"$fixture/scripts/detect-build-jobs.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -202,7 +197,8 @@ set -euo pipefail
   printf '\n'
 } >>"$LIVE_NEXTEST_CAPTURE"
 if [ "${3:-}" = list ]; then
-  printf '%s\n' '{"rust-suites":{"suite":{"testcases":{"target":{"filter-match":{"status":"matches"}}}}}}'
+  python3 "$LIVE_PARTITION_VALIDATOR" fixture-inventory \
+    --fault "$LIVE_PARTITION_FAULT" -- "$@"
 fi
 EOF
   chmod +x "$fixture/scripts/detect-build-jobs.sh" \
@@ -213,69 +209,128 @@ EOF
   run_live_nextest_fixture_case \
     "$fixture" "$override_capture" 999999999999999999999999 7
   assert_live_invocation_capture live-overridden-build-jobs "$override_capture" 7
+  for fault in live-3 live-5 overlap union-omission identity-drift unknown-status; do
+    set +e
+    run_live_nextest_fixture_case \
+      "$fixture" "$fixture/$fault-capture" 0 2 "$fault" >/dev/null 2>&1
+    code=$?
+    set -e
+    assert_ne "live-partition-rejects-${fault}" 0 "$code"
+  done
 
   live_source="$(<scripts/hooks/quality-gates-live.sh)"
-  assert_contains live-selector-profile '--profile static' "$live_source"
-  assert_contains live-selector-user-config '--user-config-file none' "$live_source"
   assert_contains live-selector-ignore-default '--ignore-default-filter' "$live_source"
   assert_contains live-selector-complement "-E 'not default()'" "$live_source"
   assert_contains live-run-no-tests-fail '--no-tests fail' "$live_source"
   assert_contains live-run-single-thread '--test-threads 1' "$live_source"
   assert_contains live-default-leg \
-    'run_live_cgroup_leg default --workspace' "$live_source"
+    'run_live_partition_leg default --workspace' "$live_source"
   assert_contains live-all-features-leg \
-    'run_live_cgroup_leg all-features --workspace --all-features' "$live_source"
-  count="$(grep -Ec 'nextest list' <<<"$live_source" || true)"
-  assert_eq live-single-inventory-path 1 "$count"
-  count="$(grep -Ec 'nextest run' <<<"$live_source" || true)"
+    'run_live_partition_leg all-features --workspace --all-features' "$live_source"
+  count="$(grep -Ec 'run_live_nextest list' <<<"$live_source" || true)"
+  assert_eq live-all-static-live-inventory-paths 3 "$count"
+  count="$(grep -Ec 'run_live_nextest run' <<<"$live_source" || true)"
   assert_eq live-single-execution-path 1 "$count"
+  python3 scripts/hooks/quality-gates-live-partition.py check-function \
+    --source crates/csa-executor/src/transport_tests_gemini_fallback_tail.rs \
+    --function test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override
+  python3 scripts/hooks/quality-gates-live-partition.py check-function \
+    --source crates/cli-sub-agent/src/pipeline_sandbox_extra_writable_tests.rs \
+    --function test_rust_env_writable_uses_execution_env_instead_of_ambient_cargo_dirs
+  python3 scripts/hooks/quality-gates-live-partition.py check-function \
+    --source crates/cli-sub-agent/src/pipeline_sandbox_tests_tail.rs \
+    --function test_csa_state_paths_in_writable_paths
+  python3 scripts/hooks/quality-gates-live-partition.py check-function \
+    --source crates/cli-sub-agent/src/pipeline_sandbox_tests_tail.rs \
+    --function test_csa_state_paths_survive_replace_semantics
   echo 'PASS live-selector-and-legs'
 }
 
 test_live_preflight_and_leg_order_contract() {
   receipt_contract_set_case live-preflight-and-leg-order
-  local actual failure_code failure_output
+  local actual failure_code failure_output fixture bin capture case_name
   actual="$(
-    require_live_cgroup_host() { printf '%s\n' preflight; }
-    run_live_cgroup_leg() { printf 'leg:%s\n' "$*"; }
-    run_live_cgroup_tests
+    export CARGO_BUILD_JOBS=1
+    require_live_host_capabilities() { printf '%s\n' preflight; }
+    inventory_live_partition_leg() {
+      printf 'inventory:%s\n' "$1"
+      printf 'same\n' >"$2/$1-live-identities"
+    }
+    run_live_partition_leg() { printf 'run:%s\n' "$1"; }
+    run_live_partition_tests
   )"
   assert_eq live-preflight-and-leg-order \
-    $'preflight\nleg:default --workspace\nleg:all-features --workspace --all-features' \
+    $'preflight\ninventory:default\ninventory:all-features\nrun:default\nrun:all-features' \
     "$actual"
 
   set +e
   failure_output="$(
     set +e
     require_live_cgroup_host() { return 1; }
-    run_live_cgroup_leg() { printf 'unexpected-leg:%s\n' "$*"; }
-    run_live_cgroup_tests
+    require_live_filesystem_host() { printf 'unexpected-filesystem-preflight\n'; }
+    run_live_nextest() { printf 'unexpected-nextest\n'; }
+    run_live_partition_tests
   )"
   failure_code=$?
   set -e
-  assert_ne live-preflight-failure-exit 0 "$failure_code"
-  assert_empty live-preflight-failure-runs-no-leg "$failure_output"
+  assert_ne live-cgroup-preflight-failure-exit 0 "$failure_code"
+  assert_empty live-cgroup-preflight-failure-runs-no-cargo "$failure_output"
+
+  fixture="$test_root/live-filesystem-preflight"
+  bin="$fixture/bin"
+  mkdir -p "$bin"
+  cat >"$bin/timeout" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *unshare*) exit "${FAKE_UNSHARE_RC:-0}" ;;
+  *bwrap*) exit "${FAKE_BWRAP_RC:-0}" ;;
+esac
+exit 99
+EOF
+  printf '#!/bin/sh\nexit 0\n' >"$bin/unshare"
+  printf '#!/bin/sh\nexit 0\n' >"$bin/bwrap"
+  chmod +x "$bin/timeout" "$bin/unshare" "$bin/bwrap"
+  for case_name in missing-unshare missing-bwrap failing-unshare failing-bwrap; do
+    capture="$fixture/$case_name-cargo"
+    rm -f "$capture"
+    cp /bin/true "$bin/unshare"
+    cp /bin/true "$bin/bwrap"
+    case "$case_name" in
+      missing-unshare) rm "$bin/unshare" ;;
+      missing-bwrap) rm "$bin/bwrap" ;;
+      failing-unshare) export FAKE_UNSHARE_RC=1 FAKE_BWRAP_RC=0 ;;
+      failing-bwrap) export FAKE_UNSHARE_RC=0 FAKE_BWRAP_RC=1 ;;
+    esac
+    set +e
+    (
+      PATH="$bin"
+      require_live_cgroup_host() { :; }
+      run_live_nextest() { printf 'cargo\n' >>"$capture"; }
+      run_live_partition_tests
+    ) >/dev/null 2>&1
+    failure_code=$?
+    set -e
+    assert_ne "live-${case_name}-exit" 0 "$failure_code"
+    [ ! -e "$capture" ] || assert_empty "live-${case_name}-runs-no-cargo" "$(<"$capture")"
+    unset FAKE_UNSHARE_RC FAKE_BWRAP_RC
+  done
   echo 'PASS live-preflight-and-leg-order'
 }
 
 test_live_cardinality_contract() {
-  local matches="$1" expected_code="$2" json code
+  local matches="$1" expected_code="$2" code fault fixture capture
   receipt_contract_set_case "live-cardinality-${matches}"
   case "$matches" in
-    0)
-      json='{"test-count":99,"rust-suites":{"suite":{"testcases":{"other":{"filter-match":{"status":"mismatch"}}}}}}'
-      ;;
-    1)
-      json='{"test-count":99,"rust-suites":{"suite":{"testcases":{"target":{"filter-match":{"status":"matches"}},"other":{"filter-match":{"status":"mismatch"}}}}}}'
-      ;;
-    2)
-      json='{"test-count":99,"rust-suites":{"suite":{"testcases":{"target-a":{"filter-match":{"status":"matches"}},"target-b":{"filter-match":{"status":"matches"}}}}}}'
-      ;;
+    3) fault=live-3 ;;
+    4) fault=none ;;
+    5) fault=live-5 ;;
     *) echo "invalid synthetic match count: $matches" >&2; return 2 ;;
   esac
+  fixture="$test_root/live-selector-and-legs"
+  capture="$fixture/cardinality-$matches-capture"
   set +e
-  printf '%s\n' "$json" \
-    | require_single_nextest_match "synthetic-${matches}" >/dev/null 2>&1
+  run_live_nextest_fixture_case \
+    "$fixture" "$capture" 0 2 "$fault" >/dev/null 2>&1
   code=$?
   set -e
   if [ "$expected_code" = 0 ]; then
@@ -486,9 +541,9 @@ case "$scenario" in
     test_static_gate_invocation_contract
     test_live_selector_and_leg_contract
     test_live_preflight_and_leg_order_contract
-    test_live_cardinality_contract 0 1
-    test_live_cardinality_contract 1 0
-    test_live_cardinality_contract 2 1
+    test_live_cardinality_contract 3 1
+    test_live_cardinality_contract 4 0
+    test_live_cardinality_contract 5 1
     receipt_contract_set_case receipt-reuse-with-hard-gates
     run_contract
     ;;
