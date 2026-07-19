@@ -89,13 +89,25 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
         String::from_utf8_lossy(&archive.stderr)
     );
 
-    let mut tar = Command::new("tar")
+    let mut tar = Command::new("tar");
+    use std::os::unix::process::CommandExt;
+    // SAFETY: only setpgid(0, 0) in the child before exec.
+    unsafe {
+        tar.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut tar = tar
         .args(["tf", "-"])
         .current_dir(repo_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .expect("tar should start");
+    let tar_pid = tar.id() as i32;
     tar.stdin
         .as_mut()
         .expect("tar stdin")
@@ -105,6 +117,7 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
     let listing = {
         use std::sync::mpsc;
         use std::thread;
+        use std::time::Instant;
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let _ = tx.send(tar.wait_with_output());
@@ -112,7 +125,25 @@ pub(super) fn git_archive_entries(repo_root: &Path, pathspec: &str) -> Vec<Strin
         match rx.recv_timeout(Duration::from_secs(30)) {
             Ok(Ok(output)) => output,
             Ok(Err(error)) => panic!("tar wait failed: {error}"),
-            Err(_) => panic!("tar listing exceeded 30s"),
+            Err(_) => {
+                // SAFETY: tar_pid is the child we just spawned into its own group.
+                unsafe {
+                    let _ = libc::kill(-tar_pid, libc::SIGTERM);
+                }
+                thread::sleep(Duration::from_millis(50));
+                unsafe {
+                    let _ = libc::kill(-tar_pid, libc::SIGKILL);
+                }
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    match rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(Ok(_)) | Ok(Err(_)) => break,
+                        Err(_) if Instant::now() < deadline => continue,
+                        Err(_) => break,
+                    }
+                }
+                panic!("tar listing exceeded 30s");
+            }
         }
     };
     assert!(

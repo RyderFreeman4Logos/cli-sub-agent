@@ -325,14 +325,29 @@ class SecureState:
             os.kill(os.getpid(), signal.SIGKILL)
         try:
             rename_no_replace(self.descriptor, temporary, self.descriptor, name)
-            os.fsync(self.descriptor)
-            return True
         except FileExistsError:
             return self.validate_receipt(name, identity, manifest).reason == "valid"
         except OSError:
             return False
         finally:
             safe_unlink(self.descriptor, temporary)
+        if os.environ.get("CSA_QUALITY_GATE_TEST_FAULT") == "fsync-after-rename":
+            # Simulate directory durability failure after a successful rename.
+            if self.validate_receipt(name, identity, manifest).reason == "valid":
+                return True
+            self.quarantine(name)
+            return False
+        try:
+            os.fsync(self.descriptor)
+        except OSError:
+            # Rename already published a visible receipt. Keep external state
+            # consistent: validated success counts as publish success; otherwise
+            # quarantine so the next run cannot reuse a half-durable PASS.
+            if self.validate_receipt(name, identity, manifest).reason == "valid":
+                return True
+            self.quarantine(name)
+            return False
+        return True
 
 
 def reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:

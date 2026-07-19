@@ -203,4 +203,23 @@ PY'
   done
   assert_eq integrity-concurrency-final-gate-runs 1 "$(wc -c <"$counter")"
   echo "PASS integrity-concurrency"
+
+  fixture="$(new_fixture)"
+  counter="${fixture}/target/quality-gate-test-state/gate-counter"
+  runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
+  # After rename, directory fsync failure must not report gate_failed while leaving
+  # a reusable PASS receipt. Visible+valid => publish success.
+  first="$(cd "$fixture" && CSA_QUALITY_GATE_TEST_FAULT=fsync-after-rename \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  assert_eq integrity-fsync-after-rename-status executed \
+    "$(printf '%s' "$first" | json_field status)"
+  identity="$(printf '%s' "$first" | json_field receipt_identity)"
+  assert_path_exists integrity-fsync-after-rename-receipt \
+    "$fixture/.csa/state/quality-gate-receipts/${identity}.json"
+  second="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  assert_eq integrity-fsync-after-rename-reuse reused \
+    "$(printf '%s' "$second" | json_field status)"
+  assert_eq integrity-fsync-after-rename-gate-count 1 "$(wc -c <"$counter")"
+  echo "PASS integrity-fsync-after-rename"
+
 }
