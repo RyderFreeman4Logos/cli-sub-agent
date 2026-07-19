@@ -93,7 +93,7 @@ PROVENANCE_TOOLS = (
 
 
 class ProvenanceError(RuntimeError):
-    """An acceptance input could not be normalized deterministically."""
+    """Acceptance input normalization failure."""
 
 
 def encode_fields(fields: dict[str, str]) -> bytes:
@@ -110,14 +110,8 @@ def is_lower_sha256(value: object) -> TypeGuard[str]:
     )
 
 
-def run_checked(
-    command: Sequence[str],
-    *,
-    cwd: Path,
-    env: dict[str, str] | None = None,
-    timeout: int = COMMAND_TIMEOUT_SECONDS,
-) -> bytes:
-    """Run a bounded command and return bounded stdout."""
+def run_checked(command: Sequence[str], *, cwd: Path, env: dict[str, str] | None = None, timeout: int = COMMAND_TIMEOUT_SECONDS) -> bytes:
+    """Run a bounded command, return bounded stdout."""
 
     label = Path(command[0]).name
     if label == "git" and len(command) > 1:
@@ -152,19 +146,21 @@ def git_output(repo: Path, *arguments: str) -> str:
 
 
 def git_diff_is_clean(repo: Path, env: dict[str, str], *arguments: str) -> bool:
-    return (
-        subprocess.run(
+    try:
+        completed = subprocess.run(
             ("git", "diff", *arguments, "--quiet", "--ignore-submodules", "--"),
             cwd=repo,
             env=env,
             check=False,
-        ).returncode
-        == 0
-    )
+            timeout=COMMAND_TIMEOUT_SECONDS * 2,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ProvenanceError("provenance command timed out: git:diff") from error
+    return completed.returncode == 0
 
 
 def hash_open_file(path: Path, maximum: int, *, resolve: bool = False) -> str:
-    """Hash a bounded regular file without following its final component."""
+    """Hash a bounded regular file, no final-component follow."""
 
     candidate = path.resolve(strict=True) if resolve else path
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -228,7 +224,7 @@ def resolve_executable(value: str, *, require_absolute: bool) -> Path:
 
 
 def toolchain_closure_provenance(sysroot: Path) -> str:
-    """Bind compiler closure by metadata for large libs and content for manifests."""
+    """Bind compiler closure: metadata for large libs, content for manifests."""
 
     digest = hashlib.sha256()
     digest.update(sha256_bytes(os.fsencode(sysroot)).encode())
@@ -276,7 +272,7 @@ def toolchain_closure_provenance(sysroot: Path) -> str:
 
 
 def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
-    """Identify the normalized compiler, target, launchers, and bytes."""
+    """Identify normalized compiler, target, launchers, bytes."""
 
     explicit_rustc = env.get("RUSTC")
     selected_value = explicit_rustc or shutil.which("rustc", path=env.get("PATH"))
@@ -363,7 +359,7 @@ def toolchain_launcher_provenance(env: dict[str, str]) -> tuple[str, str, str]:
 
 
 def environment_provenance(env: dict[str, str]) -> str:
-    """Hash normalized acceptance-affecting Rust/Cargo/nextest inputs."""
+    """Hash acceptance-affecting Rust/Cargo/nextest inputs."""
 
     fields: dict[str, str] = {}
     for name in sorted(env):
@@ -387,7 +383,7 @@ def environment_provenance(env: dict[str, str]) -> str:
 
 
 def dotenv_provenance(repo: Path) -> str:
-    """Hash ignored dotenv inputs without exposing names or contents."""
+    """Hash ignored dotenv inputs without exposing names."""
 
     digest = hashlib.sha256()
     try:
@@ -474,7 +470,7 @@ def tool_provenance(repo: Path, env: dict[str, str]) -> str:
 
 
 def repository_identity(repo: Path) -> str:
-    """Bind receipts to repository roots and canonical common directory."""
+    """Bind receipts to repo roots and canonical common dir."""
 
     roots = git_output(repo, "rev-list", "--max-parents=0", "HEAD").splitlines()
     common_raw = git_output(repo, "rev-parse", "--git-common-dir")
@@ -490,7 +486,7 @@ def repository_identity(repo: Path) -> str:
 
 
 def gate_script_digest(repo: Path, command: Sequence[str], env: dict[str, str]) -> str:
-    """Hash the first gate executable selected by the normalized environment."""
+    """Hash the first gate executable from the normalized environment."""
 
     first = command[0]
     candidate = Path(first)
@@ -513,7 +509,7 @@ def recipe_digest(repo: Path, env: dict[str, str]) -> str:
 
 
 def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) -> bytes:
-    """Collect the canonical acceptance manifest in a normalized child."""
+    """Collect canonical acceptance manifest in a normalized child."""
 
     if not command:
         raise ProvenanceError("quality-gate command is empty")

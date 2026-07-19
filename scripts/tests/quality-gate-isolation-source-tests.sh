@@ -8,7 +8,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 run_ambient_input_isolation() {
-  local fixture runner counter first second global_config excludes_file output
+  local fixture runner counter first second global_config excludes_file output code
   local just_victim first_identity second_identity external_target
   local masked_native_tool missing_native_tool
   fixture="$(new_isolation_fixture)"
@@ -187,24 +187,42 @@ SH
   cat >"$fixture/scripts/hooks/native-tool-ambient-probe.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-if env | grep -Eq '^(CC|CXX|AR|LD|CPP)='; then
-  exit 73
-fi
+for variable in CC CXX AR LD CPP; do
+  expected="/run/csa-bin/explicit-${variable,,}"
+  test "${!variable:?}" = "$expected"
+  test -x "$expected"
+  "$expected"
+done
 printf x >>"$1"
 SH
   chmod +x "$fixture/scripts/hooks/native-tool-ambient-probe.sh"
   git -C "$fixture" add scripts/hooks/native-tool-ambient-probe.sh
   git -C "$fixture" commit -qm "test: add native tool ambient probe"
   output="$(cd "$fixture" && \
-    CC="$masked_native_tool" CXX="$missing_native_tool" \
-    AR="$masked_native_tool" LD="$missing_native_tool" \
+    CC="$masked_native_tool" CXX="$masked_native_tool" \
+    AR="$masked_native_tool" LD="$masked_native_tool" \
     CPP="$masked_native_tool" \
     "$runner" -- scripts/hooks/native-tool-ambient-probe.sh \
     target/native-tool-counter)"
-  assert_eq isolation-native-tool-ambient-status executed \
+  assert_eq isolation-native-tool-masked-status executed \
     "$(printf '%s' "$output" | json_field status)"
-  assert_eq isolation-native-tool-ambient-runs 1 "$(wc -c <"$counter")"
-  assert_eq isolation-native-tool-ambient-receipts 1 \
+  assert_eq isolation-native-tool-masked-runs 1 "$(wc -c <"$counter")"
+  assert_eq isolation-native-tool-masked-receipts 1 \
+    "$(current_receipt_count "$fixture")"
+
+  set +e
+  output="$(cd "$fixture" && CC="$missing_native_tool" \
+    "$runner" -- scripts/hooks/native-tool-ambient-probe.sh \
+    target/native-tool-counter)"
+  code=$?
+  set -e
+  assert_eq isolation-native-tool-missing-exit 125 "$code"
+  assert_eq isolation-native-tool-missing-status gate_failed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq isolation-native-tool-missing-reason isolation_unavailable \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_eq isolation-native-tool-missing-no-run 1 "$(wc -c <"$counter")"
+  assert_eq isolation-native-tool-missing-no-receipt 1 \
     "$(current_receipt_count "$fixture")"
   echo "PASS isolation-ambient-inputs"
 }

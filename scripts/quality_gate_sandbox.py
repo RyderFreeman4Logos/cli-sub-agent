@@ -343,18 +343,19 @@ class GateSandbox:
             try:
                 executable = Path(value).resolve(strict=True)
                 status = executable.stat()
-            except OSError:
-                self.environment.pop(variable, None)
-                continue
-            if not _visible_in_sandbox(repo, executable):
-                self.environment.pop(variable, None)
-                continue
+            except OSError as error:
+                self.close()
+                raise IsolationError("explicit native tool provenance invalid") from error
             if not stat.S_ISREG(status.st_mode) or not os.access(executable, os.X_OK):
                 self.close()
                 raise IsolationError("explicit native tool provenance invalid")
             mount_name = "explicit-" + variable.lower()
             destination = self.private_bin / mount_name
-            os.symlink(executable, destination)
+            if _visible_in_sandbox(repo, executable):
+                os.symlink(executable, destination)
+            else:
+                destination.touch(mode=0o700)
+                self.explicit_tools[mount_name] = executable
             self.environment[variable] = f"{PRIVATE_BIN_PATH}/{mount_name}"
         target_value = environment.get("CARGO_BUILD_TARGET")
         if target_value:
@@ -593,7 +594,7 @@ printf '%s\n%s\n' "$(readlink /proc/self/ns/mnt)" "$(readlink /proc/self/ns/net)
         """Collect provenance in the exact static-gate sandbox."""
 
         collector = (
-            str(Path(sys.executable).resolve()),
+            f"{PRIVATE_BIN_PATH}/python3",
             "scripts/quality-gate-state.py",
             "collect",
             "--repo",
