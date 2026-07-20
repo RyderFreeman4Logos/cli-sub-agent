@@ -86,6 +86,7 @@ fn csa_cmd(tmp: &Path) -> Command {
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
+        .env("HERMES_MODEL_PROVIDER", "openai")
         .env("TOKIO_WORKER_THREADS", "1");
     cmd
 }

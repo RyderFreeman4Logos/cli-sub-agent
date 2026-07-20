@@ -293,8 +293,9 @@ pub enum SessionCommands {
     },
 
     /// Wait for a daemon session to report a terminal result.
-    /// Timeout comes from the caller model provider TTL when detectable, otherwise
-    /// `~/.config/cli-sub-agent/config.toml` `[kv_cache].default_ttl_seconds`.
+    /// Requires a configured `[kv_cache.provider_ttls]` key with TTL > 0. Pass
+    /// `--model-provider` on every wait; best-effort detection is accepted only
+    /// when it resolves to a configured positive-TTL key.
     ///
     /// Optional memory early-exit: `--memory-warn-mb <N>` (or config
     /// `[session_wait].memory_warn_mb`) samples the watched session's process-tree RSS
@@ -318,8 +319,8 @@ pub enum SessionCommands {
         #[arg(long)]
         memory_warn_mb: Option<u64>,
 
-        /// Override the auto-detected caller provider for wait TTL selection.
-        /// Accepted values: any key from [kv_cache.provider_ttls] (e.g. claude, openai, glm, xai, other).
+        /// Caller provider for wait TTL selection. Derive this dynamically on every wait.
+        /// Accepted values: any configured [kv_cache.provider_ttls] key with TTL > 0.
         #[arg(long, value_parser = csa_config::parse_model_provider)]
         model_provider: Option<csa_config::ModelProvider>,
 

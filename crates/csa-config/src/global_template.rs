@@ -120,12 +120,14 @@ task_pool_workers = 1
 
 # KV cache-aware polling defaults.
 # `frequent_poll_seconds`: fast external state (GitHub API, bot responses).
-# `default_ttl_seconds`: fallback when caller model provider detection is unavailable.
+# `default_ttl_seconds`: general long-poll TTL; it is not a providerless session-wait fallback.
 # `long_poll_seconds` is a deprecated alias for `default_ttl_seconds`.
 [kv_cache]
 frequent_poll_seconds = 60
 default_ttl_seconds = 240
 
+# `csa session wait` requires one positive-TTL key from this table. Calling agents
+# should derive the current provider dynamically and pass `--model-provider` every time.
 [kv_cache.provider_ttls]
 claude = 3300
 openai = 1700

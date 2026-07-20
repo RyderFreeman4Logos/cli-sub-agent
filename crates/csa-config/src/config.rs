@@ -605,7 +605,9 @@ stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5
 [kv_cache]
 frequent_poll_seconds = 60
+# General long-poll TTL; not a providerless `csa session wait` fallback.
 default_ttl_seconds = 240
+# `csa session wait` requires a positive-TTL key passed via --model-provider.
 [kv_cache.provider_ttls]
 claude = 3300
 openai = 1700

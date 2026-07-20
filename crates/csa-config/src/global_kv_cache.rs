@@ -71,12 +71,21 @@ impl<'de> Deserialize<'de> for ProviderTtls {
 }
 
 impl ProviderTtls {
-    fn sanitized(mut self, path: Option<&Path>) -> Self {
-        for (provider, default) in DEFAULT_PROVIDER_TTLS {
-            let entry = self.0.entry(provider.to_string()).or_insert(default);
-            if *entry == 0 {
+    fn sanitized(self, path: Option<&Path>) -> Self {
+        for (provider, seconds) in &self.0 {
+            if *seconds == 0 {
                 let key = format!("kv_cache.provider_ttls.{provider}");
-                *entry = sanitize_kv_cache_seconds(*entry, &key, default, path);
+                match path {
+                    Some(path) => tracing::warn!(
+                        path = %path.display(),
+                        key,
+                        "Provider TTL is zero; csa session wait will reject this provider"
+                    ),
+                    None => tracing::warn!(
+                        key,
+                        "Provider TTL is zero; csa session wait will reject this provider"
+                    ),
+                }
             }
         }
         self
@@ -88,13 +97,13 @@ pub struct KvCacheConfig {
     /// Poll interval for fast-changing external state such as GitHub bot events.
     #[serde(default = "default_kv_cache_frequent_poll_seconds")]
     pub frequent_poll_seconds: u64,
-    /// Fallback TTL for `csa session wait` when the caller model provider is unknown.
+    /// General long-poll TTL. `csa session wait` requires a provider-specific TTL.
     #[serde(default = "default_kv_cache_long_poll_seconds")]
     pub default_ttl_seconds: u64,
     /// Deprecated alias for `default_ttl_seconds`.
     ///
     /// Kept so old config readers and `csa config get kv_cache.long_poll_seconds`
-    /// continue to see the effective fallback TTL.
+    /// continue to see the effective general long-poll TTL.
     #[serde(default = "default_kv_cache_long_poll_seconds")]
     pub long_poll_seconds: u64,
     /// Provider-specific TTL caps for model-aware `csa session wait` calls.
@@ -248,7 +257,7 @@ gemini = 900
     }
 
     #[test]
-    fn provider_ttls_sanitize_zero_known_defaults_and_keep_custom() {
+    fn provider_ttls_keep_zero_values_invalid_for_strict_wait_lookup() {
         let provider_ttls = ProviderTtls(BTreeMap::from([
             ("claude".to_string(), 0),
             ("custom".to_string(), 0),
@@ -256,9 +265,8 @@ gemini = 900
 
         let provider_ttls = provider_ttls.sanitized(None);
 
-        assert_eq!(provider_ttls.0["claude"], 3300);
+        assert_eq!(provider_ttls.0["claude"], 0);
         assert_eq!(provider_ttls.0["custom"], 0);
-        assert_eq!(provider_ttls.0["xai"], 1700);
     }
 
     #[test]

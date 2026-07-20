@@ -7,6 +7,7 @@ fn csa_cmd(tmp: &Path) -> Command {
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
+        .env("HERMES_MODEL_PROVIDER", "openai")
         .env("TOKIO_WORKER_THREADS", "1");
     cmd
 }
@@ -323,8 +324,8 @@ fn session_wait_classifies_corrupt_state_as_registry_loss() {
     let config_path = global_config_path(tmp.path());
     std::fs::create_dir_all(config_path.parent().expect("config parent"))
         .expect("create config dir");
-    std::fs::write(&config_path, "[kv_cache]\nlong_poll_seconds = 1\n")
-        .expect("write short wait config");
+    std::fs::write(&config_path, "[kv_cache.provider_ttls]\nopenai = 1\n")
+        .expect("write short provider wait config");
 
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
