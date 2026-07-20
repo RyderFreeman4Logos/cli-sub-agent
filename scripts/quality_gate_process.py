@@ -20,6 +20,7 @@ __all__ = ("ProcessResult", "collect_bounded", "execute_supervised")
 
 TERM_GRACE_SECONDS = 2.0
 KILL_GRACE_SECONDS = 5.0
+EXECUTION_TIMEOUT_SECONDS = 60 * 60
 COLLECT_TIMEOUT_SECONDS = 60
 MAX_COLLECT_BYTES = 256 * 1024
 
@@ -63,6 +64,8 @@ def execute_supervised(
 
     active: subprocess.Popen[bytes] | None = None
     received: signal.Signals | None = None
+    timed_out = False
+    execution_deadline = time.monotonic() + EXECUTION_TIMEOUT_SECONDS
 
     def forward(signum: int, _frame: object) -> None:
         nonlocal received
@@ -96,15 +99,27 @@ def execute_supervised(
             forward(int(received), object())
         termination_deadline: float | None = None
         while True:
+            wait_timeout = 0.1
+            if received is None and not timed_out:
+                wait_timeout = max(
+                    0.0, min(wait_timeout, execution_deadline - time.monotonic())
+                )
             try:
-                return_code = active.wait(timeout=0.1)
+                return_code = active.wait(timeout=wait_timeout)
                 break
             except subprocess.TimeoutExpired:
-                if received is None:
+                now = time.monotonic()
+                if received is None and not timed_out and now < execution_deadline:
                     continue
+                if received is None and not timed_out:
+                    timed_out = True
+                    try:
+                        os.kill(active.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
                 if termination_deadline is None:
-                    termination_deadline = time.monotonic() + TERM_GRACE_SECONDS
-                if time.monotonic() < termination_deadline:
+                    termination_deadline = now + TERM_GRACE_SECONDS
+                if now < termination_deadline:
                     continue
                 try:
                     os.kill(active.pid, signal.SIGKILL)
@@ -125,6 +140,8 @@ def execute_supervised(
             signal.SIGTERM: "signal_term",
         }[received]
         return ProcessResult(128 + int(received), reason)
+    if timed_out:
+        return ProcessResult(124, "gate_timeout")
     if return_code < 0:
         return ProcessResult(128 - return_code, "gate_child_signal")
     return ProcessResult(return_code)

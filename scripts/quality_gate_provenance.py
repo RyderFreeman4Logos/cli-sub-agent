@@ -93,7 +93,7 @@ PROVENANCE_TOOLS = (
 
 
 class ProvenanceError(RuntimeError):
-    """Acceptance input normalization failure."""
+    """Acceptance input normalization."""
 
 
 def encode_fields(fields: dict[str, str]) -> bytes:
@@ -359,7 +359,7 @@ def toolchain_launcher_provenance(env: dict[str, str]) -> tuple[str, str, str]:
 
 
 def environment_provenance(env: dict[str, str]) -> str:
-    """Hash acceptance-affecting Rust/Cargo/nextest inputs."""
+    """Hash acceptance-affecting inputs."""
 
     fields: dict[str, str] = {}
     for name in sorted(env):
@@ -451,8 +451,9 @@ def tool_provenance(repo: Path, env: dict[str, str]) -> str:
         if not candidate.is_absolute():
             located = shutil.which(value, path=env.get("PATH"))
             if not located:
-                fields[key] = sha256_bytes(os.fsencode(value))
-                continue
+                raise ProvenanceError(
+                    "explicit native build-tool override is unavailable"
+                )
             candidate = Path(located)
         try:
             resolved = candidate.resolve(strict=True)

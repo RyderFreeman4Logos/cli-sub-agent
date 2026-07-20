@@ -97,7 +97,9 @@ def _read_tracked_value(repo: Path, mode: str, relative: str) -> bytes | None:
             return None
         if not stat.S_ISREG(pre_lstat.st_mode):
             return None
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
     except OSError:
         return None
     try:

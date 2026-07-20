@@ -415,8 +415,13 @@ case "$scenario" in
     receipt_contract_set_case process-tree
     run_process_tree_termination
     ;;
+  process-deadline)
+    receipt_contract_set_case process-deadline
+    run_process_wall_clock_deadline
+    ;;
   ambient-inputs)
     receipt_contract_set_case ambient-inputs
+    run_python_boundary_contracts
     run_ambient_input_isolation
     ;;
   source-exactness)
@@ -446,7 +451,10 @@ case "$scenario" in
     run_state_capability_isolation
     receipt_contract_set_case process-tree
     run_process_tree_termination
+    receipt_contract_set_case process-deadline
+    run_process_wall_clock_deadline
     receipt_contract_set_case ambient-inputs
+    run_python_boundary_contracts
     run_source_exactness_contracts
     run_ambient_input_isolation
     receipt_contract_set_case offline-toolchain

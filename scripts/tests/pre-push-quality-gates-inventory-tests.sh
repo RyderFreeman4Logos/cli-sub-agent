@@ -50,10 +50,8 @@ EOF
     "$fixture" "$override_capture" 999999999999999999999999 7
   assert_live_invocation_capture live-overridden-build-jobs "$override_capture" 7
   run_live_nextest_fixture_case \
-    "$fixture" "$fixture/default-all-mismatch-capture" 0 2 default-all-mismatch
-  run_live_nextest_fixture_case \
     "$fixture" "$fixture/all-features-ignored-capture" 0 2 all-features-ignored
-  for fault in live-3 live-5 overlap union-omission all-features-all-mismatch identity-drift unknown-status; do
+  for fault in live-3 live-5 overlap union-omission default-all-mismatch all-features-all-mismatch identity-drift unknown-status; do
     set +e
     run_live_nextest_fixture_case \
       "$fixture" "$fixture/$fault-capture" 0 2 "$fault" >/dev/null 2>&1

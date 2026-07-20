@@ -227,13 +227,12 @@ def validate_inventories(args: argparse.Namespace) -> None:
     all_inventory = load_inventory(args.all_inventory, f"{args.leg} All")
     static_inventory = load_inventory(args.static_inventory, f"{args.leg} Static")
     live_inventory = load_inventory(args.live_inventory, f"{args.leg} Live")
-    # The default leg may retain nextest's built-in default filtering. For the
-    # all-features inventory built with --ignore-default-filter, only explicit
+    # Every All inventory must account for its complete universe. Only explicit
     # nextest `ignored` cases may remain outside the matching set.
     unexplained_mismatches = (
         all_inventory.universe - all_inventory.matches - all_inventory.ignored
     )
-    if args.leg == "all-features" and unexplained_mismatches:
+    if unexplained_mismatches:
         raise ContractError(f"{args.leg} All inventory matches differ from universe")
     if static_inventory.universe != all_inventory.universe:
         raise ContractError(f"{args.leg} Static inventory universe differs from All")

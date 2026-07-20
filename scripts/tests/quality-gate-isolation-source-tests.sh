@@ -7,6 +7,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   exit 2
 fi
 
+source "$repo_root/scripts/tests/quality-gate-isolation-env-tests.sh"
+
 run_ambient_input_isolation() {
   local fixture runner counter first second global_config excludes_file output code
   local just_victim first_identity second_identity external_target

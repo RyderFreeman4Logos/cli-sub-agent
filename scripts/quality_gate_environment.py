@@ -42,6 +42,11 @@ AMBIENT_PINNED_VALUES = {
     "TMPDIR": "/tmp",
     "USER": "quality-gate",
 }
+VOLATILE_RECURSION_ENV = {
+    "CARGO_MAKEFLAGS",
+    "CARGO_TARGET_TMPDIR",
+    "RUST_RECURSION_COUNT",
+}
 
 
 def _is_network_or_credential(name: str) -> bool:
@@ -73,6 +78,8 @@ def normalized_static_environment(
     allowed: dict[str, str] = {}
     for name, value in source.items():
         if _is_network_or_credential(name):
+            continue
+        if name in VOLATILE_RECURSION_ENV:
             continue
         if name.startswith("CARGO_DENY_"):
             continue
