@@ -153,6 +153,40 @@ fn wait_with_legal_custom_provider_reaches_session_lookup() {
 }
 
 #[test]
+fn wait_uses_only_explicitly_configured_provider_ttl_keys() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = global_config_path(tmp.path());
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("create config dir");
+    std::fs::write(path, "[kv_cache.provider_ttls]\ncustom = 17\n")
+        .expect("write explicit-only wait config");
+
+    let rejected = run_wait(tmp.path(), &["--model-provider", "claude"]);
+    let rejected_stderr = stderr(&rejected);
+    assert_eq!(rejected.status.code(), Some(1), "{rejected_stderr}");
+    assert!(
+        rejected_stderr.contains("requires --model-provider <key>"),
+        "{rejected_stderr}"
+    );
+    assert!(rejected_stderr.contains("custom=17"), "{rejected_stderr}");
+    assert!(
+        !rejected_stderr.contains("session registry lookup failed"),
+        "{rejected_stderr}"
+    );
+
+    let accepted = run_wait(tmp.path(), &["--model-provider", "custom"]);
+    let accepted_stderr = stderr(&accepted);
+    assert_eq!(accepted.status.code(), Some(1), "{accepted_stderr}");
+    assert!(
+        accepted_stderr.contains("session registry lookup failed"),
+        "{accepted_stderr}"
+    );
+    assert!(
+        !accepted_stderr.contains("requires --model-provider <key>"),
+        "{accepted_stderr}"
+    );
+}
+
+#[test]
 fn session_wait_help_requires_a_configured_provider_ttl() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())
