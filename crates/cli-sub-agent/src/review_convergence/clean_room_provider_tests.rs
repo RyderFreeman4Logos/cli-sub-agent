@@ -66,6 +66,7 @@ fn low_resource_config() -> csa_config::ProjectConfig {
     toml::from_str(
         r#"
 [resources]
+memory_max_mb = 256
 min_free_memory_mb = 1
 idle_timeout_seconds = 30
 initial_response_timeout_seconds = 10
@@ -473,6 +474,7 @@ async fn production_adapter_rejects_stale_executor_request_and_program_before_ex
 #[tokio::test]
 async fn production_adapter_propagates_fingerprinted_fake_nonzero_exit() {
     let temp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&temp).await;
     let lease_context = lease_context(temp.path());
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
