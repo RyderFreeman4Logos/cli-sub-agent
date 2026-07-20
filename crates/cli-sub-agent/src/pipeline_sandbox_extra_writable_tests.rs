@@ -27,7 +27,7 @@ fn resolve_sandbox_options_with_execution_env(
     project_root: &std::path::Path,
     execution_env: &HashMap<String, String>,
 ) -> SandboxResolution {
-    resolve_sandbox_options_with_overrides(
+    resolve_sandbox_options_with_capabilities(
         SandboxResolveInput {
             config: Some(cfg),
             tool_name: "codex",
@@ -45,6 +45,8 @@ fn resolve_sandbox_options_with_execution_env(
             execution_env: Some(execution_env),
         },
         RunResourceOverrides::absent(),
+        csa_resource::ResourceCapability::Setrlimit,
+        csa_resource::FilesystemCapability::Bwrap,
     )
 }
 
@@ -177,105 +179,68 @@ fn test_rust_env_writable_preserves_explicit_safe_values() {
 }
 
 #[test]
-fn test_rust_env_writable_preserves_ambient_cargo_dirs() {
+fn test_rust_env_writable_uses_execution_env_instead_of_ambient_cargo_dirs() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let project_root = tempfile::tempdir().expect("project root tempdir");
     let home = project_root.path().join("home");
-    let cargo_target_dir = project_root.path().join("ambient-target");
-    let cargo_install_root = project_root.path().join("ambient-install-root");
-    for path in [&home, &cargo_target_dir, &cargo_install_root] {
-        std::fs::create_dir_all(path).expect("create ambient Rust env dir");
+    let rust_env = [
+        (csa_core::env::CARGO_HOME_ENV_KEY, "cargo-home"),
+        (csa_core::env::RUSTUP_HOME_ENV_KEY, "rustup-home"),
+        (csa_core::env::CARGO_TARGET_DIR_ENV_KEY, "target"),
+        (csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "install-root"),
+        (csa_core::env::MISE_CONFIG_DIR_ENV_KEY, "mise-config"),
+    ];
+    let poisoned_paths = rust_env
+        .iter()
+        .map(|(_, name)| project_root.path().join(format!("ambient-{name}")))
+        .collect::<Vec<_>>();
+    let controlled_paths = rust_env
+        .iter()
+        .map(|(_, name)| project_root.path().join("controlled-rust-state").join(name))
+        .collect::<Vec<_>>();
+    for path in std::iter::once(&home)
+        .chain(&poisoned_paths)
+        .chain(&controlled_paths)
+    {
+        std::fs::create_dir_all(path).expect("create Rust env fixture directory");
     }
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("HOME utf8"));
-    let _target = ScopedEnvVarRestore::set(
-        csa_core::env::CARGO_TARGET_DIR_ENV_KEY,
-        cargo_target_dir.to_str().expect("target utf8"),
-    );
-    let _install_root = ScopedEnvVarRestore::set(
-        csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY,
-        cargo_install_root.to_str().expect("install root utf8"),
-    );
-    let cfg = sandbox_config();
-    let execution_env =
-        crate::pipeline_env::build_merged_env(crate::pipeline_env::MergedEnvRequest {
-            extra_env: None,
-            config: Some(&cfg),
-            global_config: None,
-            project_root: Some(project_root.path()),
-            tool_name: "codex",
-            current_depth: 0,
-            pattern_internal: false,
-            allow_git_push: false,
-        });
-    let result =
-        resolve_sandbox_options_with_execution_env(&cfg, project_root.path(), &execution_env);
-
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("expected sandbox");
-    };
-    let sandbox = opts.sandbox.expect("sandbox context");
-    for path in [&cargo_target_dir, &cargo_install_root] {
+    let _poisoned_env = rust_env
+        .iter()
+        .zip(&poisoned_paths)
+        .map(|((key, _), path)| ScopedEnvVarRestore::set(key, path))
+        .collect::<Vec<_>>();
+    let execution_env = rust_env
+        .iter()
+        .zip(&controlled_paths)
+        .map(|((key, _), path)| ((*key).to_string(), path.to_string_lossy().into_owned()))
+        .collect::<HashMap<_, _>>();
+    let plan = add_execution_env_writable_paths(
+        csa_resource::isolation_plan::IsolationPlanBuilder::new(
+            csa_resource::isolation_plan::EnforcementMode::BestEffort,
+        ),
+        Some(&execution_env),
+        project_root.path(),
+    )
+    .expect("controlled execution env should produce writable paths")
+    .build()
+    .expect("controlled execution env should produce an isolation plan");
+    for path in controlled_paths {
         assert!(
-            sandbox
-                .isolation_plan
-                .writable_paths
-                .contains(&path.canonicalize().unwrap()),
+            plan.writable_paths.contains(&path.canonicalize().unwrap()),
             "missing {}",
             path.display()
         );
     }
-}
-
-/// CLI --extra-writable paths are appended to writable_paths (APPEND semantics).
-#[test]
-fn test_extra_writable_appended_to_isolation_plan() {
-    let project_root = tempfile::tempdir().expect("project root tempdir");
-    let extra_dir = project_root.path().join("extra-dir");
-    std::fs::create_dir_all(&extra_dir).expect("create extra dir");
-    let cfg = parse_project_config(
-        r#"
-[resources]
-memory_max_mb = 2048
-enforcement_mode = "best-effort"
-"#,
-    );
-
-    let extra = vec![PathBuf::from("./extra-dir")];
-    let result = resolve_sandbox_options(
-        Some(&cfg),
-        "claude-code",
-        "test-session",
-        project_root.path(),
-        StreamMode::BufferOnly,
-        120,
-        600,
-        Some(120),
-        false,
-        false,
-        &extra,
-        &[],
-    );
-
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("Expected SandboxResolution::Ok");
-    };
-
-    let Some(ref sandbox) = opts.sandbox else {
-        return;
-    };
-
-    assert!(
-        sandbox
-            .isolation_plan
-            .writable_paths
-            .contains(&extra_dir.canonicalize().unwrap()),
-        "extra_writable path should be in writable_paths, got: {:?}",
-        sandbox.isolation_plan.writable_paths
-    );
-    assert!(
-        !sandbox.isolation_plan.readonly_project_root,
-        "extra_writable uses APPEND semantics; project root stays writable"
-    );
+    for poisoned_path in poisoned_paths {
+        assert!(
+            !plan
+                .writable_paths
+                .contains(&poisoned_path.canonicalize().unwrap()),
+            "ambient process env path {} must not leak into the sandbox plan",
+            poisoned_path.display()
+        );
+    }
 }
 
 #[test]

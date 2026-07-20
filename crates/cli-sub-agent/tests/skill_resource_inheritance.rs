@@ -43,6 +43,17 @@ printf '%s\n' \
         .permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&codex, permissions).expect("make fake codex executable");
+    let which = bin_dir.join("which");
+    std::fs::write(
+        &which,
+        "#!/bin/sh\nif [ \"${1:-}\" = bwrap ]; then exit 1; fi\nexec /usr/bin/which \"$@\"\n",
+    )
+    .expect("write rejecting which fixture");
+    let mut permissions = std::fs::metadata(&which)
+        .expect("rejecting which metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&which, permissions).expect("make rejecting which executable");
     bin_dir
 }
 
@@ -91,11 +102,15 @@ tools = [{ tool = "codex", model = "gpt-5.4-mini", thinking_budget = "low" }]
 
     let project_config = project.join(".csa/config.toml");
     std::fs::write(
-        project_config,
+        &project_config,
         r#"schema_version = 1
 
 [resources]
 min_free_memory_mb = 128
+soft_limit_percent = 100
+
+[filesystem_sandbox]
+enforcement_mode = "off"
 
 [tools.codex]
 enabled = true
@@ -107,6 +122,15 @@ enabled = false
 "#,
     )
     .expect("write project config");
+    let parsed_config: csa_config::ProjectConfig = toml::from_str(
+        &std::fs::read_to_string(&project_config).expect("read project config fixture"),
+    )
+    .expect("parse project config fixture");
+    assert_eq!(
+        parsed_config.filesystem_sandbox.enforcement_mode.as_deref(),
+        Some("off"),
+        "resource inheritance fixture must disable unrelated filesystem enforcement"
+    );
 
     let fake_bin = install_fake_codex(&project);
     let mut command = csa_cmd(home.path());
@@ -115,10 +139,9 @@ enabled = false
         .env("PATH", prepend_path(&fake_bin))
         .env("CSA_INTERNAL_INVOCATION", "1")
         .env("CSA_DEPTH", "1")
-        .env("CSA_SKIP_BWRAP_PREFLIGHT", "1")
         .env(
             "CSA_INHERITED_RESOURCE_OVERRIDES",
-            r#"{"min_free_memory_mb":0}"#,
+            r#"{"memory_max_mb":9000,"min_free_memory_mb":0}"#,
         )
         .args(["skill", "run", "resource-probe", "inspect resources"]);
     let command_context = format!("{command:?}");
@@ -155,7 +178,7 @@ enabled = false
     .expect("locate child resource snapshot");
     assert_eq!(
         std::fs::read_to_string(&capture).expect("read child resource snapshot"),
-        r#"{"min_free_memory_mb":0}"#,
+        r#"{"memory_max_mb":9000,"min_free_memory_mb":0}"#,
         "the skill child must receive the plan parent's explicit resource snapshot"
     );
 
@@ -173,7 +196,17 @@ enabled = false
         .sandbox_info
         .and_then(|info| info.resource_resolution)
         .expect("session state must persist resource provenance");
-    assert_eq!(resolution.inherited_memory_max_mb, None);
+    assert_eq!(
+        resolution.inherited_memory_max_mb,
+        Some(csa_session::SourcedResourceValue {
+            value: 9000,
+            source: csa_session::ResourceValueSource::InheritedParentExplicit,
+        })
+    );
+    assert_eq!(
+        resolution.effective_memory_max_mb,
+        resolution.inherited_memory_max_mb
+    );
     assert_eq!(
         resolution.inherited_min_free_memory_mb,
         Some(csa_session::SourcedResourceValue {

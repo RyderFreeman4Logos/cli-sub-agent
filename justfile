@@ -136,9 +136,11 @@ pre-commit:
     just test
     just test-e2e
 
-# Authoritative local replacement for hosted GitHub CI.
+quality-gates:
+    scripts/hooks/quality-gates.sh
+
 pre-push:
-    scripts/hooks/pre-push-quality-gates.sh
+    CSA_QUALITY_GATE_HOOK_MODE=1 scripts/hooks/quality-gates.sh
 
 # ==============================================================================
 

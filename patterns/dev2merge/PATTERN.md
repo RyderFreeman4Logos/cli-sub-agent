@@ -405,24 +405,81 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 Tool: bash
 OnFail: abort
 Full and resume paths run the deterministic L1/L2 quality gate before
-cumulative CSA review. Language-appropriate checks are run based on project type (#2539).
+cumulative CSA review. The shared authoritative recipe publishes an exact-input
+receipt when available; other repositories retain language-aware fallback checks.
 
 ```bash
 set -euo pipefail
-if [ -f Cargo.toml ]; then
-  just fmt && just clippy && just test
+summary=""
+if [ -f justfile ] || [ -f Justfile ] || [ -f .justfile ]; then
+  if ! summary="$(just --summary)"; then
+    echo "ERROR: just --summary failed; quality-gate discovery is unavailable." >&2
+    exit 1
+  fi
+fi
+has_recipe() { grep -qx "$1" <<<"$(tr ' ' '\n' <<<"$summary")"; }
+missing_runner() {
+  printf 'ERROR: %s project has no usable %s runner.\n' "$1" "$2" >&2
+  exit 1
+}
+
+if has_recipe "quality-gates"; then
+  just quality-gates
+elif [ -f Cargo.toml ]; then
+  if has_recipe fmt && has_recipe clippy && has_recipe test; then
+    just fmt
+    just clippy
+    just test
+  elif command -v cargo >/dev/null 2>&1; then
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo test --workspace --all-features
+  else
+    missing_runner Rust "format/lint/test"
+  fi
 elif [ -f pyproject.toml ]; then
-  { just lint 2>/dev/null || { ruff check . && ruff format --check .; }; }
-  (just test 2>/dev/null || pytest)
+  if has_recipe lint; then
+    just lint
+  elif command -v ruff >/dev/null 2>&1; then
+    ruff check .
+    ruff format --check .
+  else
+    missing_runner Python lint
+  fi
+  if has_recipe test; then
+    just test
+  elif command -v pytest >/dev/null 2>&1; then
+    pytest
+  else
+    missing_runner Python test
+  fi
 elif [ -f package.json ]; then
-  (just lint 2>/dev/null || biome check .)
-  (just test 2>/dev/null || vitest run)
+  if has_recipe lint; then
+    just lint
+  elif command -v biome >/dev/null 2>&1; then
+    biome check .
+  else
+    missing_runner JavaScript lint
+  fi
+  if has_recipe test; then
+    just test
+  elif command -v vitest >/dev/null 2>&1; then
+    vitest run
+  else
+    missing_runner JavaScript test
+  fi
 elif [ -f go.mod ]; then
-  go vet ./... && go test ./...
-elif just --summary 2>/dev/null | grep -q pre-commit; then
+  command -v go >/dev/null 2>&1 || missing_runner Go "lint/test"
+  go vet ./...
+  if command -v golangci-lint >/dev/null 2>&1; then
+    golangci-lint run
+  fi
+  go test ./...
+elif has_recipe "pre-commit"; then
   just pre-commit
 else
-  echo "WARNING: No recognized project type; skipping L1/L2 gate."
+  echo "ERROR: no recognized project type or quality-gate recipe." >&2
+  exit 1
 fi
 ```
 

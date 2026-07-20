@@ -129,6 +129,8 @@ mod stdout_write;
 #[cfg(any(feature = "parallel-tasks", test))]
 pub mod task_lock;
 #[cfg(test)]
+mod test_bounded_command;
+#[cfg(test)]
 mod test_env_lock;
 #[cfg(test)]
 mod test_session_sandbox;

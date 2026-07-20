@@ -149,6 +149,35 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     input: SandboxResolveInput<'_>,
     resource_overrides: RunResourceOverrides,
 ) -> SandboxResolution {
+    resolve_sandbox_options_with_capability_source(
+        input,
+        resource_overrides,
+        csa_resource::detect_resource_capability,
+        csa_resource::detect_filesystem_capability,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_sandbox_options_with_capabilities(
+    input: SandboxResolveInput<'_>,
+    resource_overrides: RunResourceOverrides,
+    resource_capability: csa_resource::ResourceCapability,
+    filesystem_capability: csa_resource::FilesystemCapability,
+) -> SandboxResolution {
+    resolve_sandbox_options_with_capability_source(
+        input,
+        resource_overrides,
+        || resource_capability,
+        || filesystem_capability,
+    )
+}
+
+fn resolve_sandbox_options_with_capability_source(
+    input: SandboxResolveInput<'_>,
+    resource_overrides: RunResourceOverrides,
+    resource_capability: impl Fn() -> csa_resource::ResourceCapability,
+    filesystem_capability: impl Fn() -> csa_resource::FilesystemCapability,
+) -> SandboxResolution {
     let SandboxResolveInput {
         config,
         tool_name,
@@ -205,11 +234,11 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
             return SandboxResolution::Ok(Box::new(execute_options));
         };
 
-        let resource_cap = csa_resource::detect_resource_capability();
+        let resource_cap = resource_capability();
         let fs_cap = if no_fs_sandbox {
             csa_resource::FilesystemCapability::None
         } else {
-            csa_resource::detect_filesystem_capability()
+            filesystem_capability()
         };
         if let Some(message) = memory_override::capability_error_if_unenforced(
             tool_name,
@@ -346,7 +375,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     };
 
     // Memory limit exists — detect capabilities and build IsolationPlan.
-    let resource_cap = csa_resource::detect_resource_capability();
+    let resource_cap = resource_capability();
     if let Some(message) = memory_override::capability_error_if_unenforced(
         tool_name,
         has_run_memory_override,
@@ -374,7 +403,7 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     let fs_cap = if matches!(fs_enforcement, ResourceEnforcementMode::Off) {
         csa_resource::FilesystemCapability::None
     } else {
-        csa_resource::detect_filesystem_capability()
+        filesystem_capability()
     };
 
     // Map config enforcement mode to resource enforcement mode.

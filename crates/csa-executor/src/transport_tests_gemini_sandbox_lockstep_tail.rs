@@ -14,10 +14,8 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
         "HOME".to_string(),
         source_home.to_string_lossy().into_owned(),
     );
-    let outside_allowlist_root = tempfile::tempdir_in(
-        std::env::current_dir().expect("current dir for outside-allowlist tempdir"),
-    )
-    .expect("create outside-allowlist tempdir");
+    let outside_allowlist_root =
+        writable_outside_allowlist_tempdir(temp.path(), &source_home, &[]);
     let symlink_cache_root = temp.path().join("symlink-cache");
     std::os::unix::fs::symlink(outside_allowlist_root.path(), &symlink_cache_root)
         .expect("symlink cache root");

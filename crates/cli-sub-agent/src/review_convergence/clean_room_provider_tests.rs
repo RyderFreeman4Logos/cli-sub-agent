@@ -66,6 +66,7 @@ fn low_resource_config() -> csa_config::ProjectConfig {
     toml::from_str(
         r#"
 [resources]
+memory_max_mb = 256
 min_free_memory_mb = 1
 idle_timeout_seconds = 30
 initial_response_timeout_seconds = 10
@@ -466,8 +467,39 @@ async fn production_adapter_rejects_stale_executor_request_and_program_before_ex
             .to_string()
             .contains("fingerprint")
     );
+    assert!(!marker.exists());
+}
 
-    let recaptured = ProviderCommandAuthority::capture(
+#[cfg(unix)]
+#[tokio::test]
+async fn production_adapter_propagates_fingerprinted_fake_nonzero_exit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&temp).await;
+    let lease_context = lease_context(temp.path());
+    let frozen = epoch();
+    let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
+        factory(frozen.head_oid().as_str().to_string(), false);
+    let root = temp.path().join("clean-room");
+    let bundle = temp.path().join("evidence.md");
+    let guard = workspace_factory
+        .create(
+            &temp.path().join("source"),
+            &root,
+            &bundle,
+            frozen,
+            &lease_context,
+        )
+        .expect("guard");
+    fs::create_dir_all(&root).expect("clean-room root");
+    fs::write(&bundle, "evidence\n").expect("evidence");
+    let program = root.join("opencode");
+    write_executable(&program, "#!/bin/sh\nexit 99\n");
+    let admitted = crate::pipeline::AdmittedExecutor::from_model_spec_for_test(
+        "opencode/openai/gpt-5.4/xhigh",
+    )
+    .expect("admitted executor");
+    let snapshot = opencode_authority("captured", "gpt-5.4");
+    let command_authority = ProviderCommandAuthority::capture(
         &admitted,
         &snapshot,
         ProviderEnvironmentInputs::new(
@@ -483,22 +515,29 @@ async fn production_adapter_rejects_stale_executor_request_and_program_before_ex
         temp.path(),
         &SystemProviderProgramResolver,
     )
-    .expect("recaptured provider authority");
-    let mut failing_provider = ProductionCleanRoomProvider::new(
+    .expect("provider authority");
+    let request = ProviderSessionRequest::from_authority(
+        guard.workspace(),
+        &snapshot,
+        ExactProviderPrompt::new("propagate nonzero exit"),
+    )
+    .expect("request");
+    let config = low_resource_config();
+    let global = csa_config::GlobalConfig::default();
+    let mut provider = ProductionCleanRoomProvider::new(
         &admitted,
-        &recaptured,
+        &command_authority,
         Some(&config),
         Some(&global),
         clean_limits(),
     )
-    .expect("failing provider");
+    .expect("provider");
     assert!(
-        failing_provider
+        provider
             .run(&request)
             .await
             .expect_err("nonzero fake provider exit must propagate")
             .to_string()
             .contains("status 99")
     );
-    assert!(!marker.exists());
 }
