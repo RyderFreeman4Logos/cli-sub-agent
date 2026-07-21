@@ -15,9 +15,7 @@ set dotenv-load := true
 # Calculate repo root (compatible with submodules)
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
 _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
-# Auto-detect Cargo fan-out; callers may override CARGO_BUILD_JOBS.
-_auto_build_jobs := `scripts/detect-build-jobs.sh`
-export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", _auto_build_jobs)
+# Cargo parallelism controlled by ~/.cargo/config.toml.
 # Disable nextest double-spawn for symlinked target directories (#1742).
 export NEXTEST_DOUBLE_SPAWN := "0"
 # Trust this repository's mise config in non-interactive sandboxes.
@@ -226,7 +224,7 @@ deny:
 _nextest_threads := `_v="${NEXTEST_TEST_THREADS:-16}"; case "$_v" in *[!0-9]*|'') echo 16 ;; *) echo "$_v" ;; esac`
 
 # Run all tests in the workspace across default and feature builds.
-# Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
+# Cargo parallelism controlled by ~/.cargo/config.toml.
 # NEXTEST_TEST_THREADS caps nextest parallelism (default 16, see #2650).
 test:
     just check-cargo-target-writable
@@ -236,7 +234,7 @@ test:
     {{_io_prefix}} {{_cargo}} nextest run --workspace --all-features --test-threads {{_nextest_threads}}
 
 # Run e2e tests only.
-# Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
+# Cargo parallelism controlled by ~/.cargo/config.toml.
 # NEXTEST_TEST_THREADS is caller-controlled.
 test-e2e:
     just check-cargo-target-writable
@@ -244,7 +242,7 @@ test-e2e:
     {{_io_prefix}} {{_cargo}} nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
-# Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
+# Cargo parallelism controlled by ~/.cargo/config.toml.
 # NEXTEST_TEST_THREADS is caller-controlled.
 # Usage: just test-p my-crate
 test-p package:
@@ -253,7 +251,7 @@ test-p package:
     {{_io_prefix}} {{_cargo}} nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
-# Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
+# Cargo parallelism controlled by ~/.cargo/config.toml.
 # NEXTEST_TEST_THREADS is caller-controlled.
 # Usage: just test-f login_validation
 test-f pattern:
