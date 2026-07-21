@@ -461,7 +461,10 @@ custom = 1666
         let message = error.to_string();
         assert!(message.contains("requires --model-provider <key>"));
         assert!(message.contains("custom=1666"));
-        assert!(message.contains("capped at 3000 seconds"));
+        assert!(
+            !message.contains("capped at 3000 seconds"),
+            "explicit-only provider_ttls must not inherit an implicit clamped default: {message}"
+        );
         assert!(message.contains("CSA:CALLER_HINT"));
         assert!(message.contains("dynamically on every wait"));
         assert!(!message.contains("default_ttl_seconds = 555"));

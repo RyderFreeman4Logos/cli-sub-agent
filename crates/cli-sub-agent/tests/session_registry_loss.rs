@@ -28,6 +28,13 @@ fn global_config_path(tmp: &Path) -> PathBuf {
     }
 }
 
+fn write_wait_provider_config(tmp: &Path) {
+    let path = global_config_path(tmp);
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("create config dir");
+    std::fs::write(path, "[kv_cache.provider_ttls]\nopenai = 1\n")
+        .expect("write short provider wait config");
+}
+
 fn session_dir_for(tmp: &Path, project: &Path, session_id: &str) -> PathBuf {
     let canonical_project = project.canonicalize().expect("canonical project path");
     let storage_key = canonical_project
@@ -286,6 +293,7 @@ fn session_result_lookup_miss_uses_exact_id_registry_loss_without_list_hint() {
 #[test]
 fn session_wait_lookup_miss_reports_structured_gc_pruned_registry_loss() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    write_wait_provider_config(tmp.path());
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
     let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FBG";
@@ -294,6 +302,8 @@ fn session_wait_lookup_miss_reports_structured_gc_pruned_registry_loss() {
         .args([
             "session",
             "wait",
+            "--model-provider",
+            "openai",
             "--session",
             session_id,
             "--cd",
@@ -321,11 +331,7 @@ fn session_wait_lookup_miss_reports_structured_gc_pruned_registry_loss() {
 #[test]
 fn session_wait_classifies_corrupt_state_as_registry_loss() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let config_path = global_config_path(tmp.path());
-    std::fs::create_dir_all(config_path.parent().expect("config parent"))
-        .expect("create config dir");
-    std::fs::write(&config_path, "[kv_cache.provider_ttls]\nopenai = 1\n")
-        .expect("write short provider wait config");
+    write_wait_provider_config(tmp.path());
 
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).expect("create project");
@@ -339,6 +345,8 @@ fn session_wait_classifies_corrupt_state_as_registry_loss() {
         .args([
             "session",
             "wait",
+            "--model-provider",
+            "openai",
             "--session",
             &session_id,
             "--cd",

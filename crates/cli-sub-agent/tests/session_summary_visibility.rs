@@ -91,6 +91,17 @@ fn csa_cmd(tmp: &Path) -> Command {
     cmd
 }
 
+fn write_wait_provider_config(tmp: &Path) {
+    let path = if cfg!(target_os = "macos") {
+        tmp.join("Library/Application Support/cli-sub-agent/config.toml")
+    } else {
+        tmp.join(".config/cli-sub-agent/config.toml")
+    };
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("create config dir");
+    std::fs::write(path, "[kv_cache.provider_ttls]\nopenai = 1\n")
+        .expect("write short provider wait config");
+}
+
 fn scrub_inherited_csa_env(cmd: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("CSA_") {
@@ -140,6 +151,7 @@ fn create_empty_output_failure_session(
     tmp: &Path,
     name: &str,
 ) -> (std::path::PathBuf, String, std::path::PathBuf) {
+    write_wait_provider_config(tmp);
     let state_home = tmp.join(".local/state");
     std::fs::create_dir_all(&state_home).expect("create state home");
     let _home_guard = EnvVarGuard::set("HOME", tmp);
@@ -189,15 +201,13 @@ fn assert_subcommand_surfaces_summary_for_session(
     subcommand: &str,
     session_id: &str,
 ) {
+    let mut args = vec!["session", subcommand, "--session", session_id];
+    if subcommand == "wait" {
+        args.extend(["--model-provider", "openai"]);
+    }
+    args.extend(["--cd", project.to_str().expect("project path utf8")]);
     let output = csa_cmd(tmp)
-        .args([
-            "session",
-            subcommand,
-            "--session",
-            session_id,
-            "--cd",
-            project.to_str().expect("project path utf8"),
-        ])
+        .args(args)
         .current_dir(project)
         .output()
         .expect("run csa session command");
@@ -300,6 +310,8 @@ fn session_wait_default_bounds_output_and_hides_stdout_log() {
         .args([
             "session",
             "wait",
+            "--model-provider",
+            "openai",
             "--session",
             &session_id,
             "--cd",
@@ -487,6 +499,8 @@ fn session_wait_verbose_streams_stdout_log() {
             "session",
             "wait",
             "--verbose",
+            "--model-provider",
+            "openai",
             "--session",
             &session_id,
             "--cd",
@@ -518,6 +532,8 @@ fn session_wait_env_verbose_streams_stdout_log() {
         .args([
             "session",
             "wait",
+            "--model-provider",
+            "openai",
             "--session",
             &session_id,
             "--cd",
@@ -546,6 +562,8 @@ fn session_wait_json_outputs_parseable_summary() {
             "session",
             "wait",
             "--json",
+            "--model-provider",
+            "openai",
             "--session",
             &session_id,
             "--cd",
