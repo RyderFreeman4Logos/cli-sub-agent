@@ -1,12 +1,12 @@
-# Justfile for Rust Workspace
-# Generic helpers for Rust monorepo management.
+# Rust workspace helpers.
 # ⚠️ AI AGENT: Do NOT modify this file or use `git commit -n`/`--no-verify` to bypass pre-commit. Fix the actual code.
 
 set shell := ["bash", "-c"]
-# Keep Just's transient scripts inside the repo so sandboxed commit paths
-# do not depend on a writable XDG runtime dir such as /run/user/$UID.
-# Use the repo root itself so the temp path exists in both normal clones and
-# linked worktrees, where `.git` may be a file instead of a directory.
+
+# IO scheduling: run cargo at idle priority to avoid starving interactive processes
+_io_prefix := "ionice -c 3 nice -n 19"
+
+# Keep Just temp scripts repo-local for sandbox and linked-worktree compatibility.
 set tempdir := "."
 # Automatically load .env file if present
 set dotenv-load := true
@@ -15,19 +15,12 @@ set dotenv-load := true
 # Calculate repo root (compatible with submodules)
 _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel`
 _cargo := _repo_root + "/scripts/cargo-env-normalize.sh cargo"
-# Default Cargo/rustc fan-out for Just recipes is auto-detected from available
-# memory; override with `CARGO_BUILD_JOBS=<n> just ...`.
-# NEXTEST_TEST_THREADS defaults to 16 in the `test` recipe below (#2650);
-# see comment there for rationale.
+# Auto-detect Cargo fan-out; callers may override CARGO_BUILD_JOBS.
 _auto_build_jobs := `scripts/detect-build-jobs.sh`
 export CARGO_BUILD_JOBS := env_var_or_default("CARGO_BUILD_JOBS", _auto_build_jobs)
-# Disable nextest's double-spawn test execution mode. With symlinked target/
-# directories the double-spawn re-exec fails with "No such file or directory"
-# (#1742). The `double-spawn` key was removed from nextest's TOML config schema;
-# the NEXTEST_DOUBLE_SPAWN environment variable is the official replacement.
+# Disable nextest double-spawn for symlinked target directories (#1742).
 export NEXTEST_DOUBLE_SPAWN := "0"
-# Just already executes repository-controlled code, so trust this checkout's
-# mise config and avoid interactive trust prompts on sandboxed commit paths.
+# Trust this repository's mise config in non-interactive sandboxes.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
 
 # Keep cargo state local to avoid host pollution (Optional)
@@ -187,19 +180,19 @@ fmt:
     if (( ${#staged_rs[@]} == 0 )); then
         exit 0
     fi
-    {{_cargo}} fmt --all
+    {{_io_prefix}} {{_cargo}} fmt --all
     printf '%s\0' "${staged_rs[@]}" | xargs -0 git add --
 
 # Run clippy for the entire workspace (strict mode).
 clippy:
     just check-cargo-target-writable
-    {{_cargo}} clippy --workspace --all-features -- -D warnings
+    {{_io_prefix}} {{_cargo}} clippy --workspace --all-features -- -D warnings
 
 # Run clippy for a specific package.
 # Usage: just clippy-p my-crate
 clippy-p package:
     just check-cargo-target-writable
-    {{_cargo}} clippy -p {{package}} --all-features -- -D warnings
+    {{_io_prefix}} {{_cargo}} clippy -p {{package}} --all-features -- -D warnings
 
 # Security audit (requires cargo-deny)
 deny:
@@ -212,7 +205,7 @@ deny:
     fi; \
     deny_output="$(mktemp "${TMPDIR:-/tmp}/csa-deny-output.XXXXXX")"; \
     trap 'rm -f "$deny_output"' EXIT; \
-    if {{_cargo}} deny check $deny_args >"$deny_output" 2>&1; then \
+    if {{_io_prefix}} {{_cargo}} deny check $deny_args >"$deny_output" 2>&1; then \
         echo "cargo deny check passed (success output suppressed)"; \
     else \
         status=$?; \
@@ -238,9 +231,9 @@ _nextest_threads := `_v="${NEXTEST_TEST_THREADS:-16}"; case "$_v" in *[!0-9]*|''
 test:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace --test-threads {{_nextest_threads}}
+    {{_io_prefix}} {{_cargo}} nextest run --workspace --test-threads {{_nextest_threads}}
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace --all-features --test-threads {{_nextest_threads}}
+    {{_io_prefix}} {{_cargo}} nextest run --workspace --all-features --test-threads {{_nextest_threads}}
 
 # Run e2e tests only.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
@@ -248,7 +241,7 @@ test:
 test-e2e:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run --package cli-sub-agent --test e2e --all-features
+    {{_io_prefix}} {{_cargo}} nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
@@ -257,7 +250,7 @@ test-e2e:
 test-p package:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run -p {{package}} --all-features
+    {{_io_prefix}} {{_cargo}} nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
 # Env: CARGO_BUILD_JOBS defaults to auto-detected safe parallelism;
@@ -266,7 +259,7 @@ test-p package:
 test-f pattern:
     just check-cargo-target-writable
     just check-nextest-state-writable
-    {{_cargo}} nextest run --workspace --all-features -E 'test({{pattern}})'
+    {{_io_prefix}} {{_cargo}} nextest run --workspace --all-features -E 'test({{pattern}})'
 
 # ==============================================================================
 # 🛠 Git Helpers
@@ -421,7 +414,7 @@ git-push-all:
 release-dry-run:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$({{_cargo}} metadata --no-deps --format-version 1 \
+    version=$({{_io_prefix}} {{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
     echo "Release dry run only (no changes made)."
@@ -435,7 +428,7 @@ release-dry-run:
 release-tag-local:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$({{_cargo}} metadata --no-deps --format-version 1 \
+    version=$({{_io_prefix}} {{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
 
@@ -453,7 +446,7 @@ release-tag-local:
 release-tag:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$({{_cargo}} metadata --no-deps --format-version 1 \
+    version=$({{_io_prefix}} {{_cargo}} metadata --no-deps --format-version 1 \
         | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
     tag="v${version}"
 
@@ -488,7 +481,7 @@ install install_dir="/usr/local/bin":
     set -euo pipefail
     d={{quote(install_dir)}}; t="${CARGO_TARGET_DIR:-{{_repo_root}}/target}"
     just check-cargo-target-writable
-    {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
+    {{_io_prefix}} {{_cargo}} build --release --all-features -p cli-sub-agent -p weave
     install -m 755 "$t/release/csa" "$d/csa"
     install -m 755 "$t/release/weave" "$d/weave"
     "{{_repo_root}}/scripts/verify-csa-install-provenance.sh" "$t/release/csa" "$d/csa"
@@ -498,11 +491,11 @@ install install_dir="/usr/local/bin":
 # All crates inherit version.workspace, so a single workspace bump suffices.
 # Requires: cargo-edit (cargo install cargo-edit)
 bump-patch:
-    {{_cargo}} set-version --bump patch -p cli-sub-agent
-    @{{_cargo}} run --quiet -p cli-sub-agent -- migrate
+    {{_io_prefix}} {{_cargo}} set-version --bump patch -p cli-sub-agent
+    @{{_io_prefix}} {{_cargo}} run --quiet -p cli-sub-agent -- migrate
     git add Cargo.toml Cargo.lock weave.lock
     @echo "Bumped workspace version:"
-    @{{_cargo}} metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
+    @{{_io_prefix}} {{_cargo}} metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
 
 # Generate CHANGELOG.md from Conventional Commits (requires git-cliff).
 changelog:
