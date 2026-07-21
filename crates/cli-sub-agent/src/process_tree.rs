@@ -71,27 +71,38 @@ pub(crate) fn detect_ancestor_tool() -> Option<String> {
     None
 }
 
-pub(crate) fn codex_yield_hint() -> String {
+pub(crate) fn codex_yield_hint(shell_wait_command: Option<&str>) -> String {
     if detect_ancestor_tool().as_deref() != Some("codex") {
         return String::new();
     }
-    format_codex_yield_hint(csa_config::GlobalConfig::resolve_codex_session_wait_yield_ms())
+    format_codex_yield_hint(
+        csa_config::GlobalConfig::resolve_codex_session_wait_yield_ms(),
+        shell_wait_command,
+    )
 }
 
-pub(crate) fn format_codex_yield_hint(yield_time_ms: u64) -> String {
+pub(crate) fn format_codex_yield_hint(
+    yield_time_ms: u64,
+    shell_wait_command: Option<&str>,
+) -> String {
     let mcp_tool_timeout_sec = csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_TOOL_TIMEOUT_SEC;
     let mcp_internal_timeout_sec = csa_config::DEFAULT_CODEX_SESSION_WAIT_MCP_INTERNAL_TIMEOUT_SEC;
+    let shell_fallback = shell_wait_command.map_or_else(
+        || "Shell fallback only after deriving a configured provider: include --model-provider; do not issue a bare session wait.".to_string(),
+        |command| format!("Shell fallback only: shell({{ command: '{command}', yield_time_ms: {yield_time_ms} }})"),
+    );
     format!(
         "\n<!-- CSA:CODEX_HINT mcp_tool=\"csa_session_wait\" tool_timeout_sec={mcp_tool_timeout_sec} timeout_seconds={mcp_internal_timeout_sec} yield_time_ms={ms} \
          rule=\"You are running inside Codex. Prefer the CSA MCP tool csa_session_wait with outer tool_timeout_sec: {mcp_tool_timeout_sec} \
          and csa_session_wait timeout_seconds: {mcp_internal_timeout_sec}; it blocks inside the MCP server and avoids repeated shell wakeups. \
-         Shell fallback only: call csa session wait in one shell tool call with yield_time_ms: {ms}. \
+         {shell_fallback}. \
          Do not manually poll every 10-30s or reissue shell waits while a wait is already running. \
          Example MCP tool call: csa_session_wait({{ session_id: '<ID>', cd: '<PATH>', timeout_seconds: {mcp_internal_timeout_sec} }}) with outer tool_timeout_sec: {mcp_tool_timeout_sec}. \
-         Example shell fallback: shell({{ command: 'csa session wait --session <ID> --cd <PATH>', yield_time_ms: {ms} }})\" -->",
+         Example shell fallback is provider-qualified when available.\" -->",
         ms = yield_time_ms,
         mcp_tool_timeout_sec = mcp_tool_timeout_sec,
         mcp_internal_timeout_sec = mcp_internal_timeout_sec,
+        shell_fallback = shell_fallback,
     )
 }
 
@@ -341,7 +352,10 @@ mod tests {
 
     #[test]
     fn test_format_codex_yield_hint_prefers_mcp_wait_with_shell_fallback() {
-        let hint = format_codex_yield_hint(csa_config::DEFAULT_CODEX_SESSION_WAIT_YIELD_MS);
+        let hint = format_codex_yield_hint(
+            csa_config::DEFAULT_CODEX_SESSION_WAIT_YIELD_MS,
+            Some("csa session wait --session <ID> --model-provider openai --cd <PATH>"),
+        );
 
         assert!(hint.contains("CSA:CODEX_HINT"));
         assert!(hint.contains("mcp_tool=\"csa_session_wait\""));
@@ -360,7 +374,10 @@ mod tests {
 
     #[test]
     fn test_format_codex_yield_hint_uses_configured_interval() {
-        let hint = format_codex_yield_hint(450_000);
+        let hint = format_codex_yield_hint(
+            450_000,
+            Some("csa session wait --session <ID> --model-provider openai --cd <PATH>"),
+        );
 
         assert!(hint.contains("mcp_tool=\"csa_session_wait\""));
         assert!(hint.contains("tool_timeout_sec=7200"));

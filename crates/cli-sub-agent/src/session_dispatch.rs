@@ -187,7 +187,8 @@ pub(crate) fn dispatch(
         } => {
             let wait_caller_identity = wait_caller_identity.validate_for_wait()?;
             let sid = resolve_session_id(session_id, session)?;
-            let wait_timeout = resolve_wait_ttl(model_provider)?;
+            let (wait_model_provider, wait_timeout) =
+                resolve_wait_provider_and_ttl(model_provider)?;
             let resolved_memory_warn_mb =
                 resolve_session_wait_memory_warn_mb(memory_warn_mb, cd.as_deref());
             let output_mode = session_cmds::SessionWaitOutputMode::from_flags(verbose, json);
@@ -198,6 +199,7 @@ pub(crate) fn dispatch(
                 resolved_memory_warn_mb,
                 output_mode,
                 wait_caller_identity,
+                Some(wait_model_provider),
             )?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
@@ -246,7 +248,14 @@ pub(crate) fn dispatch(
 ///
 /// CLI provider override wins over best-effort provider detection. Both paths
 /// must resolve to a configured `[kv_cache.provider_ttls]` key with TTL > 0.
+#[cfg(test)]
 fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>) -> Result<u64> {
+    Ok(resolve_wait_provider_and_ttl(cli_model_provider)?.1)
+}
+
+fn resolve_wait_provider_and_ttl(
+    cli_model_provider: Option<ModelProvider>,
+) -> Result<(ModelProvider, u64)> {
     let detected_provider = detect_model_provider();
     let config = match GlobalConfig::load() {
         Ok(config) => config,
@@ -261,20 +270,22 @@ fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>) -> Result<u64> {
     };
 
     if let Some(provider) = cli_model_provider.as_ref() {
-        return provider_ttl(provider, &config.kv_cache).ok_or_else(|| {
-            wait_provider_error(
-                Some(provider),
-                detected_provider.as_ref(),
-                Some(&config),
-                None,
-            )
-        });
+        return provider_ttl(provider, &config.kv_cache)
+            .map(|ttl| (provider.clone(), ttl))
+            .ok_or_else(|| {
+                wait_provider_error(
+                    Some(provider),
+                    detected_provider.as_ref(),
+                    Some(&config),
+                    None,
+                )
+            });
     }
 
     if let Some(provider) = detected_provider.as_ref()
         && let Some(ttl) = provider_ttl(provider, &config.kv_cache)
     {
-        return Ok(ttl);
+        return Ok((provider.clone(), ttl));
     }
 
     Err(wait_provider_error(

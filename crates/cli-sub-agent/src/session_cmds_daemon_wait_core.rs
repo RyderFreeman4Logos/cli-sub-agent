@@ -10,8 +10,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::completion::{
-    SESSION_WAIT_FAILURE_EXIT_CODE, SESSION_WAIT_MEMORY_WARN_EXIT_CODE, emit_wait_cap_outcome,
-    resolve_wait_completion_status_and_exit,
+    SESSION_WAIT_FAILURE_EXIT_CODE, SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitCapContext,
+    emit_wait_cap_outcome, resolve_wait_completion_status_and_exit,
 };
 use super::liveness::{resume_handoff_blocks_target_reconcile, session_has_live_execution};
 use super::registry_loss::{
@@ -19,6 +19,7 @@ use super::registry_loss::{
     session_registry_state_loss,
 };
 use super::target::resolve_wait_target;
+pub(crate) use super::types::WaitEmitters;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
     emit_wait_terminal_output, load_completed_daemon_result_with_fallback, refresh_result_for_wait,
@@ -29,31 +30,6 @@ use crate::session_cmds_daemon::{
     emit_failure_summary_for_empty_output, finalize_daemon_completion_if_present,
     load_daemon_completion_packet,
 };
-
-type ReconcileEmitter<'a> =
-    Box<dyn FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome> + 'a>;
-type CompletionSignalEmitter<'a> = Box<dyn FnMut(&str, &str, i32, bool, bool) + 'a>;
-type MemorySampler<'a> = Box<dyn FnMut(&Path, &str) -> std::io::Result<u64> + 'a>;
-type MemoryWarnEmitter<'a> = Box<dyn FnMut(&str, u64, u64) + 'a>;
-type TerminalOutputEmitter<'a> = Box<
-    dyn FnMut(
-            &Path,
-            &str,
-            Option<&csa_session::SessionResult>,
-            super::SessionWaitOutputMode,
-        ) -> Result<bool>
-        + 'a,
->;
-type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
-
-pub(crate) struct WaitEmitters<'a> {
-    pub(crate) reconcile_dead_active_session: ReconcileEmitter<'a>,
-    pub(crate) emit_completion_signal: CompletionSignalEmitter<'a>,
-    pub(crate) sample_session_tree_rss_mb: MemorySampler<'a>,
-    pub(crate) emit_memory_warn_marker: MemoryWarnEmitter<'a>,
-    pub(crate) emit_terminal_output: TerminalOutputEmitter<'a>,
-    pub(crate) emit_next_step: NextStepEmitter<'a>,
-}
 
 /// Core polling loop implementation for session wait.
 ///
@@ -556,6 +532,10 @@ pub(crate) fn handle_session_wait_with_emitters(
             return Ok(emit_wait_cap_outcome(
                 &resolved.session_id,
                 cd.as_deref(),
+                WaitCapContext {
+                    project_root: effective_root,
+                    preferred_provider: wait_options.model_provider.as_ref(),
+                },
                 wait_options.behavior.wait_timeout_secs,
                 elapsed,
                 result_session_dir,
