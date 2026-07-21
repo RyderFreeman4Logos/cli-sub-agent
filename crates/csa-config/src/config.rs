@@ -245,6 +245,11 @@ impl ProjectConfig {
     pub fn redacted_for_display(&self) -> Self {
         let mut redacted = self.clone();
         redacted.memory.llm = redacted.memory.llm.redacted_for_display();
+        for tool_cfg in redacted.tools.values_mut() {
+            if tool_cfg.api_key.is_some() {
+                tool_cfg.api_key = Some("***REDACTED***".to_string());
+            }
+        }
         redacted
     }
 
