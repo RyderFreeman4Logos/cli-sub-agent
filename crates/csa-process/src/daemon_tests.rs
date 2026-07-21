@@ -175,7 +175,12 @@ fn test_daemon_spawn_supports_multi_word_subcommand() {
         session_dir: session_dir.clone(),
         csa_binary: wrapper,
         subcommand: "plan run".to_string(),
-        args: vec!["--".to_string(), "echo got=$1,$2,$3,$4,$5".to_string()],
+        // Keep the wrapper alive through spawn_daemon's initial liveness
+        // inspection. The argument log is emitted before this command runs.
+        args: vec![
+            "--".to_string(),
+            "echo got=$1,$2,$3,$4,$5; sleep 2".to_string(),
+        ],
         env: HashMap::new(),
     };
 

@@ -88,6 +88,7 @@ pub(crate) fn handle_session_wait_with_memory_warn(
         memory_warn_mb,
         SessionWaitOutputMode::from_flags(false, false),
         WaitCallerIdentity::capture(),
+        None,
     )
 }
 
@@ -98,13 +99,17 @@ pub(crate) fn handle_session_wait_with_options(
     memory_warn_mb: Option<u64>,
     output_mode: SessionWaitOutputMode,
     caller_identity: WaitCallerIdentity,
+    model_provider: Option<csa_config::ModelProvider>,
 ) -> Result<i32> {
     handle_session_wait_with_hooks_output_mode(
         session,
         cd,
-        WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
-        output_mode,
-        caller_identity,
+        WaitExecutionOptions {
+            behavior: WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
+            output_mode,
+            caller_identity,
+            model_provider,
+        },
         |project_root, session_id, trigger| {
             let reconciled = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
                 project_root,
@@ -139,6 +144,7 @@ pub(crate) fn handle_session_wait_for_mcp(
             behavior: WaitBehavior::new(wait_timeout_secs, memory_warn_mb),
             output_mode,
             caller_identity,
+            model_provider: None,
         },
         core::WaitEmitters {
             reconcile_dead_active_session: Box::new(|project_root, session_id, trigger| {
@@ -304,9 +310,12 @@ where
     handle_session_wait_with_hooks_output_mode(
         session,
         cd,
-        wait_behavior,
-        SessionWaitOutputMode::from_flags(false, false),
-        WaitCallerIdentity::capture(),
+        WaitExecutionOptions {
+            behavior: wait_behavior,
+            output_mode: SessionWaitOutputMode::from_flags(false, false),
+            caller_identity: WaitCallerIdentity::capture(),
+            model_provider: None,
+        },
         reconcile_dead_active_session,
         emit_completion_signal,
     )
@@ -315,9 +324,7 @@ where
 fn handle_session_wait_with_hooks_output_mode<R, E>(
     session: String,
     cd: Option<String>,
-    wait_behavior: WaitBehavior,
-    output_mode: SessionWaitOutputMode,
-    caller_identity: WaitCallerIdentity,
+    wait_options: WaitExecutionOptions,
     mut reconcile_dead_active_session: R,
     mut emit_completion_signal: E,
 ) -> Result<i32>
@@ -329,11 +336,7 @@ where
     handle_session_wait_with_hooks_and_sampler_output_mode(
         session,
         cd,
-        WaitExecutionOptions {
-            behavior: wait_behavior,
-            output_mode,
-            caller_identity,
-        },
+        wait_options,
         &mut reconcile_dead_active_session,
         &mut emit_completion_signal,
         |project_root, session_id| {
@@ -375,6 +378,7 @@ where
             behavior: wait_behavior,
             output_mode: SessionWaitOutputMode::from_flags(false, false),
             caller_identity: WaitCallerIdentity::capture(),
+            model_provider: None,
         },
         reconcile_dead_active_session,
         emit_completion_signal,
@@ -423,6 +427,7 @@ pub(crate) fn handle_session_wait_with_identity_for_test(
         None,
         SessionWaitOutputMode::from_flags(false, false),
         caller_identity,
+        None,
     )
 }
 
@@ -451,7 +456,7 @@ fn emit_wait_completion_signal(
     eprintln!(
         "<!-- CSA:CALLER_HINT action=\"next_session\" rule=\"More sessions? Wait each in a SEPARATE Bash call. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->"
     );
-    let codex_hint = crate::process_tree::codex_yield_hint();
+    let codex_hint = crate::process_tree::codex_yield_hint(None);
     if !codex_hint.is_empty() {
         eprint!("{codex_hint}");
     }

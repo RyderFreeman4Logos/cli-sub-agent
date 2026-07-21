@@ -61,12 +61,15 @@ fn assert_wait_hint_contract(block: &str, site: &str) {
 #[test]
 fn daemon_wait_command_places_cd_after_single_session_id() {
     let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R9";
-    let command =
-        crate::daemon_caller_hints::format_session_wait_command(session_id, Path::new("/tmp/repo"));
+    let command = crate::daemon_caller_hints::format_session_wait_command(
+        session_id,
+        Path::new("/tmp/repo"),
+        "openai",
+    );
 
     assert_eq!(
         command,
-        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/tmp/repo'"
+        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider openai --cd '/tmp/repo'"
     );
     assert_eq!(
         command.matches(session_id).count(),
@@ -84,6 +87,7 @@ fn daemon_wait_command_shell_escapes_project_root_single_quotes() {
     let command = crate::daemon_caller_hints::format_session_wait_command(
         "01KAS6M5XG7V4M4M6YDRS7P8R9",
         Path::new("/tmp/csa'; touch /tmp/csa-review-proof; echo '"),
+        "openai",
     );
     assert!(
         command.contains("'\\''; touch /tmp/csa-review-proof; echo '\\'''"),
@@ -100,12 +104,13 @@ fn daemon_caller_hint_attrs_escape_shell_command_values() {
     let command = crate::daemon_caller_hints::format_session_wait_command(
         "01KAS6M5XG7V4M4M6YDRS7P8R9",
         Path::new("/tmp/a\"b&<c>d"),
+        "openai",
     );
     let attr = crate::daemon_caller_hints::escape_structured_comment_attr(&command);
 
     assert_eq!(
         attr,
-        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/tmp/a&quot;b&amp;&lt;c&gt;d'"
+        "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider openai --cd '/tmp/a&quot;b&amp;&lt;c&gt;d'"
     );
     assert!(
         !attr.contains('"') && !attr.contains('<') && !attr.contains('>'),
@@ -140,7 +145,10 @@ fn caller_hint_blocks_ignores_unrelated_mentions_in_comments() {
 
 #[test]
 fn codex_yield_hint_prefers_mcp_wait_and_keeps_shell_fallback_yield() {
-    let hint = crate::process_tree::format_codex_yield_hint(450_000);
+    let hint = crate::process_tree::format_codex_yield_hint(
+        450_000,
+        Some("csa session wait --session <ID> --model-provider openai --cd <PATH>"),
+    );
 
     assert!(hint.contains("mcp_tool=\"csa_session_wait\""), "{hint}");
     assert!(hint.contains("tool_timeout_sec=7200"), "{hint}");

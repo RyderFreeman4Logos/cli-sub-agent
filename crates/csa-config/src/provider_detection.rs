@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::global::{DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig};
+use crate::global::KvCacheConfig;
 
 const HERMES_MODEL_PROVIDER_ENV: &str = "HERMES_MODEL_PROVIDER";
 
@@ -23,7 +23,7 @@ impl ModelProvider {
         }
         Some(match normalized.as_str() {
             "anthropic" | "claude" => Self::new("claude"),
-            "openai" => Self::new("openai"),
+            "openai" | "openai-codex" => Self::new("openai"),
             "zai" | "zhipu" | "zhipuai" | "glm" => Self::new("glm"),
             "xai" | "xai-oauth" | "grok" => Self::new("xai"),
             _ => Self(normalized),
@@ -50,19 +50,14 @@ pub fn detect_model_provider() -> Option<ModelProvider> {
 /// Provider TTLs exceeding this cap are clamped to prevent excessively long waits.
 pub const MAX_WAIT_TTL_SECONDS: u64 = 3000;
 
-pub fn provider_ttl(provider: &ModelProvider, config: &KvCacheConfig) -> u64 {
-    let provider_seconds = config
+pub fn provider_ttl(provider: &ModelProvider, config: &KvCacheConfig) -> Option<u64> {
+    config
         .provider_ttls
         .0
         .get(provider.as_str())
         .copied()
-        .unwrap_or_default();
-    let resolved = if provider_seconds > 0 {
-        provider_seconds
-    } else {
-        fallback_default_ttl(config)
-    };
-    resolved.min(MAX_WAIT_TTL_SECONDS)
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| seconds.min(MAX_WAIT_TTL_SECONDS))
 }
 
 fn detect_model_provider_from_env() -> Option<ModelProvider> {
@@ -140,16 +135,6 @@ fn normalize_provider_name(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn fallback_default_ttl(config: &KvCacheConfig) -> u64 {
-    if config.default_ttl_seconds > 0 {
-        config.default_ttl_seconds
-    } else if config.long_poll_seconds > 0 {
-        config.long_poll_seconds
-    } else {
-        DEFAULT_KV_CACHE_LONG_POLL_SECS
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,7 +206,10 @@ model:
         let mut config = KvCacheConfig::default();
         config.provider_ttls.0.insert("openai".to_string(), 1800);
 
-        assert_eq!(provider_ttl(&ModelProvider::new("openai"), &config), 1800);
+        assert_eq!(
+            provider_ttl(&ModelProvider::new("openai"), &config),
+            Some(1800)
+        );
     }
 
     #[test]
@@ -229,6 +217,14 @@ model:
         assert_eq!(
             ModelProvider::from_hermes_value("xai-oauth"),
             Some(ModelProvider::new("xai"))
+        );
+    }
+
+    #[test]
+    fn from_hermes_value_maps_openai_codex_to_openai() {
+        assert_eq!(
+            ModelProvider::from_hermes_value("openai-codex"),
+            Some(ModelProvider::new("openai"))
         );
     }
 
@@ -249,7 +245,7 @@ model:
     }
 
     #[test]
-    fn provider_ttl_falls_back_to_default() {
+    fn provider_ttl_rejects_zero_ttl() {
         let mut provider_ttls = crate::ProviderTtls::default();
         provider_ttls.0.insert("glm".to_string(), 0);
         let config = KvCacheConfig {
@@ -258,17 +254,17 @@ model:
             ..Default::default()
         };
 
-        assert_eq!(provider_ttl(&ModelProvider::new("glm"), &config), 123);
+        assert_eq!(provider_ttl(&ModelProvider::new("glm"), &config), None);
     }
 
     #[test]
-    fn provider_ttl_missing_custom_provider_falls_back_to_default() {
+    fn provider_ttl_rejects_missing_custom_provider() {
         let config = KvCacheConfig {
             default_ttl_seconds: 123,
             ..Default::default()
         };
 
-        assert_eq!(provider_ttl(&ModelProvider::new("gemini"), &config), 123);
+        assert_eq!(provider_ttl(&ModelProvider::new("gemini"), &config), None);
     }
 
     #[test]
@@ -287,8 +283,11 @@ model:
             provider_ttls,
         };
         // Claude TTL 5000 > 3000 cap → clamped to 3000
-        assert_eq!(provider_ttl(&ModelProvider::new("claude"), &config), 3000);
-        // OpenAI falls back to default 540 < 3000 → not clamped
-        assert_eq!(provider_ttl(&ModelProvider::new("openai"), &config), 540);
+        assert_eq!(
+            provider_ttl(&ModelProvider::new("claude"), &config),
+            Some(3000)
+        );
+        // Zero-valued providers remain invalid rather than using the default TTL.
+        assert_eq!(provider_ttl(&ModelProvider::new("openai"), &config), None);
     }
 }

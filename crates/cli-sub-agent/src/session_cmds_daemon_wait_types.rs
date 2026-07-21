@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use anyhow::Result;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionWaitOutputMode {
     CompactText,
@@ -49,15 +53,42 @@ impl WaitBehavior {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct WaitExecutionOptions {
     pub(super) behavior: WaitBehavior,
     pub(super) output_mode: SessionWaitOutputMode,
     pub(super) caller_identity: super::WaitCallerIdentity,
+    pub(super) model_provider: Option<csa_config::ModelProvider>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WaitReconciliationOutcome {
     pub(crate) result_became_available: bool,
     pub(crate) synthetic: bool,
+}
+
+type ReconcileEmitter<'a> =
+    Box<dyn FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome> + 'a>;
+type CompletionSignalEmitter<'a> = Box<dyn FnMut(&str, &str, i32, bool, bool) + 'a>;
+type MemorySampler<'a> = Box<dyn FnMut(&Path, &str) -> std::io::Result<u64> + 'a>;
+type MemoryWarnEmitter<'a> = Box<dyn FnMut(&str, u64, u64) + 'a>;
+type TerminalOutputEmitter<'a> = Box<
+    dyn FnMut(
+            &Path,
+            &str,
+            Option<&csa_session::SessionResult>,
+            SessionWaitOutputMode,
+        ) -> Result<bool>
+        + 'a,
+>;
+type NextStepEmitter<'a> = Box<dyn FnMut(&Path) -> Result<()> + 'a>;
+
+/// Testable side effects and probes used by the session-wait polling loop.
+pub(crate) struct WaitEmitters<'a> {
+    pub(crate) reconcile_dead_active_session: ReconcileEmitter<'a>,
+    pub(crate) emit_completion_signal: CompletionSignalEmitter<'a>,
+    pub(crate) sample_session_tree_rss_mb: MemorySampler<'a>,
+    pub(crate) emit_memory_warn_marker: MemoryWarnEmitter<'a>,
+    pub(crate) emit_terminal_output: TerminalOutputEmitter<'a>,
+    pub(crate) emit_next_step: NextStepEmitter<'a>,
 }

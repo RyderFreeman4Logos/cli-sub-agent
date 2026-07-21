@@ -18,6 +18,11 @@ pub(crate) const SESSION_WAIT_KV_WARM_EXIT_CODE: i32 = 0;
 /// daemon is no longer alive and no result.toml was produced.
 pub(crate) const SESSION_WAIT_TIMEOUT_EXIT_CODE: i32 = 124;
 
+pub(crate) struct WaitCapContext<'a> {
+    pub(crate) project_root: &'a Path,
+    pub(crate) preferred_provider: Option<&'a csa_config::ModelProvider>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WaitProgressDigest {
     elapsed_secs: u64,
@@ -100,6 +105,7 @@ pub(crate) fn terminal_result_wait_exit_code(status: &str, exit_code: i32) -> i3
 pub(crate) fn emit_wait_cap_outcome(
     session_id: &str,
     cd: Option<&str>,
+    context: WaitCapContext<'_>,
     wait_timeout_secs: u64,
     elapsed: u64,
     session_dir: &Path,
@@ -109,24 +115,35 @@ pub(crate) fn emit_wait_cap_outcome(
         .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
         .unwrap_or_default();
     if session_alive {
-        let wait_cmd = format!("csa session wait --session {session_id}{cd_arg}");
-        let wait_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
+        let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
+            session_id,
+            context.project_root,
+            context.preferred_provider,
+        );
         eprintln!(
             "Session {session_id} still running after {wait_timeout_secs}s wait cap; returning so caller can warm its KV cache before re-waiting."
         );
         if let Some(progress) = WaitProgressDigest::from_session_dir(session_dir) {
             eprintln!("{}", progress.render());
         }
-        eprintln!(
-            "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=re-wait cmd=\"{wait_cmd_attr}\" -->"
-        );
-        eprintln!(
-            "<!-- CSA:CALLER_HINT action=\"retry_wait\" rule=\"Session alive; re-wait in a NEW Bash call: {wait_cmd}. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->",
-            wait_cmd = wait_cmd_attr,
-        );
-        let codex_hint = crate::process_tree::codex_yield_hint();
-        if !codex_hint.is_empty() {
-            eprint!("{codex_hint}");
+        if let Some(wait_cmd) = wait_command.command() {
+            let wait_cmd_attr =
+                crate::daemon_caller_hints::escape_structured_comment_attr(wait_cmd);
+            eprintln!(
+                "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=re-wait cmd=\"{wait_cmd_attr}\" -->"
+            );
+            eprintln!(
+                "<!-- CSA:CALLER_HINT action=\"retry_wait\" rule=\"Session alive; re-wait in a NEW Bash call: {wait_cmd_attr}. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->"
+            );
+            let codex_hint = crate::process_tree::codex_yield_hint(Some(wait_cmd));
+            if !codex_hint.is_empty() {
+                eprint!("{codex_hint}");
+            }
+        } else {
+            eprintln!(
+                "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=select_wait_provider -->"
+            );
+            eprintln!("{}", wait_command.provider_selection_hint());
         }
         SESSION_WAIT_KV_WARM_EXIT_CODE
     } else {

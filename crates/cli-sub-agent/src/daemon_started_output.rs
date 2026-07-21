@@ -14,27 +14,44 @@ pub(crate) fn prepare(
     project_root: &Path,
 ) -> Result<DaemonStartedOutput> {
     crate::run_cmd_daemon::verify_daemon_session_waitable(project_root, &result.session_id)?;
-    let wait_cmd =
-        crate::daemon_caller_hints::format_session_wait_command(&result.session_id, project_root);
+    let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
+        &result.session_id,
+        project_root,
+        None,
+    );
+    let wait_cmd_attr = wait_command
+        .command()
+        .map(crate::daemon_caller_hints::escape_structured_comment_attr)
+        .unwrap_or_default();
+    let wait_hint = match wait_command.command() {
+        Some(wait_cmd) => {
+            let wait_cmd = crate::daemon_caller_hints::escape_structured_comment_attr(wait_cmd);
+            format!(
+                "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->"
+            )
+        }
+        None => wait_command.provider_selection_hint(),
+    };
     let attach_cmd =
         crate::daemon_caller_hints::format_session_attach_command(&result.session_id, project_root);
     let session_dir_attr = crate::daemon_caller_hints::escape_structured_comment_attr(
         &result.session_dir.display().to_string(),
     );
-    let wait_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&wait_cmd);
     let attach_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&attach_cmd);
     let mut stderr = format!(
         "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
          wait_cmd=\"{wait_cmd}\" \
          attach_cmd=\"{attach_cmd}\" -->\n\
-         <!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->\n",
+         {wait_hint}\n",
         id = result.session_id,
         pid = result.pid,
         dir = session_dir_attr,
         wait_cmd = wait_cmd_attr,
         attach_cmd = attach_cmd_attr,
     );
-    stderr.push_str(&crate::process_tree::codex_yield_hint());
+    stderr.push_str(&crate::process_tree::codex_yield_hint(
+        wait_command.command(),
+    ));
     Ok(DaemonStartedOutput {
         stdout: format!("{}\n", result.session_id),
         stderr,
@@ -70,6 +87,39 @@ fn publish_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::remove_var(key) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe {
+                match self.original.as_deref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     fn plan_spawn_result(
         project_root: &Path,
@@ -116,6 +166,59 @@ mod tests {
         assert_eq!(output.stdout, format!("{session_id}\n"));
         assert_eq!(output.stderr.matches("CSA:SESSION_STARTED").count(), 1);
         assert!(output.stderr.contains("CSA:CALLER_HINT"));
+        let _ = std::fs::remove_dir_all(session_root);
+    }
+
+    #[test]
+    fn started_marker_fails_closed_when_no_configured_provider_matches_context() {
+        let _lock = crate::test_env_lock::TEST_ENV_LOCK
+            .clone()
+            .blocking_lock_owned();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("project");
+        let config_root = temp.path().join("xdg-config");
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+        let _provider_guard = EnvVarGuard::remove("HERMES_MODEL_PROVIDER");
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(config_path, "[kv_cache.provider_ttls]\ncustom = 17\n")
+            .expect("write provider config");
+        let (session_id, session_root, result) = plan_spawn_result(&project_root);
+        csa_session::create_session_with_daemon_env(
+            &project_root,
+            Some("plan: workflow.toml"),
+            None,
+            None,
+            Some(&session_id),
+            Some(&result.session_dir),
+            Some(&project_root),
+        )
+        .expect("plan placeholder should persist");
+
+        let output = prepare(&result, &project_root).expect("render started marker");
+
+        assert!(
+            output
+                .stderr
+                .contains("CSA:CALLER_HINT action=\"select_wait_provider\""),
+            "{:#?}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("legal_keys=\"custom\""),
+            "{:#?}",
+            output.stderr
+        );
+        assert!(
+            !output.stderr.contains("wait_cmd=\"csa session wait"),
+            "a providerless command must not be emitted: {:#?}",
+            output.stderr
+        );
         let _ = std::fs::remove_dir_all(session_root);
     }
 

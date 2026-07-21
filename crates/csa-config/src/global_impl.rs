@@ -70,11 +70,12 @@ impl GlobalConfig {
         Ok(config.sanitized(Some(path)))
     }
 
-    /// Resolve the `csa session wait` fallback TTL from the global config.
+    /// Resolve the general long-poll TTL from the global config.
     ///
     /// Missing or invalid config falls back to the documented KV cache default.
     /// Once `[kv_cache]` exists, `default_ttl_seconds` still defaults to 240 if omitted.
-    /// Deprecated `long_poll_seconds` remains a config-file alias.
+    /// Deprecated `long_poll_seconds` remains a config-file alias. This value is
+    /// not a providerless fallback for `csa session wait`.
     pub fn resolve_session_wait_long_poll_seconds() -> u64 {
         Self::resolve_session_wait_long_poll_seconds_with_source().seconds
     }

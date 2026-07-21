@@ -8,10 +8,8 @@ use anyhow::Result;
 use crate::cli::SessionCommands;
 use crate::session_cmds;
 use crate::startup_env::StartupSubtreeEnv;
-use csa_config::{
-    GlobalConfig, KvCacheValueSource, ModelProvider, ProjectConfig, detect_model_provider,
-    provider_ttl,
-};
+use csa_config::provider_detection::MAX_WAIT_TTL_SECONDS;
+use csa_config::{GlobalConfig, ModelProvider, ProjectConfig, detect_model_provider, provider_ttl};
 use csa_core::types::OutputFormat;
 
 /// Resolve session ID from positional arg or --session flag.
@@ -189,7 +187,8 @@ pub(crate) fn dispatch(
         } => {
             let wait_caller_identity = wait_caller_identity.validate_for_wait()?;
             let sid = resolve_session_id(session_id, session)?;
-            let wait_timeout = resolve_wait_ttl(model_provider, cd.as_deref());
+            let (wait_model_provider, wait_timeout) =
+                resolve_wait_provider_and_ttl(model_provider)?;
             let resolved_memory_warn_mb =
                 resolve_session_wait_memory_warn_mb(memory_warn_mb, cd.as_deref());
             let output_mode = session_cmds::SessionWaitOutputMode::from_flags(verbose, json);
@@ -200,6 +199,7 @@ pub(crate) fn dispatch(
                 resolved_memory_warn_mb,
                 output_mode,
                 wait_caller_identity,
+                Some(wait_model_provider),
             )?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
@@ -246,58 +246,126 @@ pub(crate) fn dispatch(
 
 /// Resolve the `csa session wait` cap from provider-aware KV cache config.
 ///
-/// CLI provider override wins over best-effort provider detection. If no provider
-/// can be detected, fall back to the global default TTL and then the deprecated
-/// project/user `session.daemon_wait_seconds` compatibility key.
-fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>, cd: Option<&str>) -> u64 {
-    if let Some(provider) = cli_model_provider.or_else(detect_model_provider) {
-        let config = match GlobalConfig::load() {
-            Ok(config) => config,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "Failed to load global config while resolving provider wait TTL; using defaults"
-                );
-                GlobalConfig::default()
-            }
-        };
-        return provider_ttl(&provider, &config.kv_cache);
-    }
-
-    resolve_daemon_wait_timeout(cd)
+/// CLI provider override wins over best-effort provider detection. Both paths
+/// must resolve to a configured `[kv_cache.provider_ttls]` key with TTL > 0.
+#[cfg(test)]
+fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>) -> Result<u64> {
+    Ok(resolve_wait_provider_and_ttl(cli_model_provider)?.1)
 }
 
-/// Resolve the `csa session wait` fallback cap from global KV cache config.
-///
-/// Use the global KV cache setting when it differs from the documented default.
-/// Deprecated `session.daemon_wait_seconds` remains a compatibility fallback.
-fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
-    let global_timeout = GlobalConfig::resolve_session_wait_long_poll_seconds_with_source();
-    if !matches!(global_timeout.source, KvCacheValueSource::DocumentedDefault) {
-        return global_timeout.seconds;
+fn resolve_wait_provider_and_ttl(
+    cli_model_provider: Option<ModelProvider>,
+) -> Result<(ModelProvider, u64)> {
+    let detected_provider = detect_model_provider();
+    let config = match GlobalConfig::load() {
+        Ok(config) => config,
+        Err(error) => {
+            return Err(wait_provider_error(
+                cli_model_provider.as_ref(),
+                detected_provider.as_ref(),
+                None,
+                Some(&error),
+            ));
+        }
+    };
+
+    if let Some(provider) = cli_model_provider.as_ref() {
+        return provider_ttl(provider, &config.kv_cache)
+            .map(|ttl| (provider.clone(), ttl))
+            .ok_or_else(|| {
+                wait_provider_error(
+                    Some(provider),
+                    detected_provider.as_ref(),
+                    Some(&config),
+                    None,
+                )
+            });
     }
 
-    resolve_legacy_session_wait_timeout(cd).unwrap_or(global_timeout.seconds)
-}
-
-fn resolve_legacy_session_wait_timeout(cd: Option<&str>) -> Option<u64> {
-    let project_root = crate::pipeline::determine_project_root(cd).ok();
-    let project_path = project_root
-        .as_deref()
-        .map(ProjectConfig::config_path)
-        .filter(|path| path.exists());
-    let user_path = ProjectConfig::user_config_path().filter(|path| path.exists());
-
-    if let Some(timeout) = project_path
-        .as_deref()
-        .and_then(|path| read_legacy_session_wait_timeout(path, "project"))
+    if let Some(provider) = detected_provider.as_ref()
+        && let Some(ttl) = provider_ttl(provider, &config.kv_cache)
     {
-        return Some(timeout);
+        return Ok((provider.clone(), ttl));
     }
 
-    user_path
-        .as_deref()
-        .and_then(|path| read_legacy_session_wait_timeout(path, "user"))
+    Err(wait_provider_error(
+        None,
+        detected_provider.as_ref(),
+        Some(&config),
+        None,
+    ))
+}
+
+fn wait_provider_error(
+    requested_provider: Option<&ModelProvider>,
+    detected_provider: Option<&ModelProvider>,
+    config: Option<&GlobalConfig>,
+    config_error: Option<&anyhow::Error>,
+) -> anyhow::Error {
+    use std::fmt::Write as _;
+
+    let config_path = ProjectConfig::user_config_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "unavailable global config path".to_string());
+    let mut message = format!(
+        "csa session wait requires --model-provider <key>.\n\
+         Configured keys (from {config_path} [kv_cache.provider_ttls]):\n"
+    );
+
+    let mut legal_key_count = 0;
+    let mut has_clamped_ttl = false;
+    if let Some(config) = config {
+        for (provider, ttl) in &config.kv_cache.provider_ttls.0 {
+            if *ttl > 0 {
+                let _ = writeln!(message, "  {provider}={ttl}");
+                legal_key_count += 1;
+                has_clamped_ttl |= *ttl > MAX_WAIT_TTL_SECONDS;
+            }
+        }
+    }
+    if legal_key_count == 0 {
+        message.push_str("  (none with TTL > 0)\n");
+    } else if has_clamped_ttl {
+        let _ = writeln!(
+            message,
+            "Effective wait TTL is capped at {MAX_WAIT_TTL_SECONDS} seconds."
+        );
+    }
+
+    if let Some(provider) = requested_provider {
+        let _ = writeln!(
+            message,
+            "Requested key: {} (missing from provider_ttls or TTL is not > 0).",
+            provider.as_str()
+        );
+    }
+    match detected_provider {
+        Some(provider) => {
+            let configured = config
+                .and_then(|config| provider_ttl(provider, &config.kv_cache))
+                .is_some();
+            let status = if configured {
+                "configured"
+            } else {
+                "not a configured key with TTL > 0"
+            };
+            let _ = writeln!(
+                message,
+                "Detected hints (best-effort, not authoritative): {} ({status}).",
+                provider.as_str()
+            );
+        }
+        None => message.push_str("Detected hints (best-effort, not authoritative): none.\n"),
+    }
+    if let Some(error) = config_error {
+        let _ = writeln!(message, "Config load error: {error:#}");
+    }
+    message.push_str(
+        "Action: re-run with --model-provider <one configured key> matching the caller model provider.\n\
+         Do not omit this flag; provider can change mid-session when the user switches models.\n\
+         <!-- CSA:CALLER_HINT action=\"select_wait_provider\" rule=\"Derive the caller model provider dynamically on every wait; pass --model-provider with a configured provider_ttls key.\" -->",
+    );
+    anyhow::anyhow!(message)
 }
 
 fn resolve_session_wait_memory_warn_mb(cli_override: Option<u64>, cd: Option<&str>) -> Option<u64> {
@@ -309,36 +377,9 @@ fn resolve_session_wait_memory_warn_mb(cli_override: Option<u64>, cd: Option<&st
     ProjectConfig::resolve_session_wait_memory_warn_mb(&project_root)
 }
 
-fn read_legacy_session_wait_timeout(path: &std::path::Path, source: &str) -> Option<u64> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let raw: toml::Value = toml::from_str(&content).ok()?;
-    let value = raw
-        .get("session")
-        .and_then(|session| session.get("daemon_wait_seconds"))
-        .and_then(toml::Value::as_integer)?;
-
-    if value <= 0 {
-        tracing::warn!(
-            path = %path.display(),
-            source,
-            "Ignoring deprecated session.daemon_wait_seconds because it is not > 0"
-        );
-        return None;
-    }
-
-    let timeout = value as u64;
-    tracing::warn!(
-        path = %path.display(),
-        source,
-        timeout,
-        "Using deprecated session.daemon_wait_seconds; migrate to global kv_cache.default_ttl_seconds"
-    );
-    Some(timeout)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{resolve_daemon_wait_timeout, resolve_wait_ttl};
+    use super::resolve_wait_ttl;
     use crate::test_env_lock::TEST_ENV_LOCK;
     use csa_config::ModelProvider;
 
@@ -402,13 +443,13 @@ openai = 1666
         );
 
         assert_eq!(
-            resolve_wait_ttl(Some(ModelProvider::new("openai")), None),
+            resolve_wait_ttl(Some(ModelProvider::new("openai"))).unwrap(),
             1666
         );
     }
 
     #[test]
-    fn resolve_wait_ttl_falls_back_to_default_ttl_without_provider() {
+    fn resolve_wait_ttl_fails_closed_without_provider() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
@@ -421,200 +462,90 @@ openai = 1666
             r#"
 [kv_cache]
 default_ttl_seconds = 555
+
+[kv_cache.provider_ttls]
+custom = 1666
 "#,
         );
 
-        assert_eq!(resolve_wait_ttl(None, None), 555);
+        let error = resolve_wait_ttl(None).expect_err("missing provider must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("requires --model-provider <key>"));
+        assert!(message.contains("custom=1666"));
+        assert!(
+            !message.contains("capped at 3000 seconds"),
+            "explicit-only provider_ttls must not inherit an implicit clamped default: {message}"
+        );
+        assert!(message.contains("CSA:CALLER_HINT"));
+        assert!(message.contains("dynamically on every wait"));
+        assert!(!message.contains("default_ttl_seconds = 555"));
     }
 
     #[test]
-    fn resolve_daemon_wait_timeout_uses_global_kv_cache_long_poll_seconds() {
+    fn resolve_wait_ttl_rejects_unconfigured_and_zero_ttl_providers() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
+        let _provider_guard = EnvVarGuard::remove("HERMES_MODEL_PROVIDER");
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
         write_user_config(
             r#"
-[kv_cache]
-long_poll_seconds = 3000
+[kv_cache.provider_ttls]
+custom = 1666
+disabled = 0
 "#,
         );
 
-        assert_eq!(resolve_daemon_wait_timeout(None), 3000);
+        for provider in ["missing", "disabled"] {
+            let error = resolve_wait_ttl(Some(ModelProvider::new(provider)))
+                .expect_err("provider must be configured with TTL > 0");
+            let message = error.to_string();
+            assert!(message.contains(&format!("Requested key: {provider}")));
+            assert!(message.contains("custom=1666"));
+            assert!(!message.contains("disabled=0"));
+        }
     }
 
     #[test]
-    fn resolve_daemon_wait_timeout_uses_documented_default_without_kv_cache_section() {
+    fn resolve_wait_ttl_accepts_only_a_detected_configured_provider() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
+        let _provider_guard = EnvVarGuard::set("HERMES_MODEL_PROVIDER", "custom");
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
         write_user_config(
             r#"
-[review]
-tool = "auto"
+[kv_cache.provider_ttls]
+custom = 1666
 "#,
         );
 
-        assert_eq!(resolve_daemon_wait_timeout(None), 240);
+        assert_eq!(resolve_wait_ttl(None).unwrap(), 1666);
     }
 
     #[test]
-    fn resolve_daemon_wait_timeout_prefers_global_kv_cache_over_legacy_session_key() {
+    fn resolve_wait_ttl_maps_openai_codex_hint_to_openai() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
         std::fs::create_dir_all(&config_root).unwrap();
+        let _provider_guard = EnvVarGuard::set("HERMES_MODEL_PROVIDER", "openai-codex");
         let _home_guard = EnvVarGuard::set("HOME", dir.path());
         let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
 
         write_user_config(
             r#"
-[kv_cache]
-long_poll_seconds = 3000
+[kv_cache.provider_ttls]
+openai = 1666
 "#,
         );
 
-        let csa_dir = dir.path().join(".csa");
-        std::fs::create_dir_all(&csa_dir).unwrap();
-        std::fs::write(
-            csa_dir.join("config.toml"),
-            r#"
-schema_version = 1
-[session]
-daemon_wait_seconds = 600
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
-            3000
-        );
-    }
-
-    #[test]
-    fn resolve_daemon_wait_timeout_treats_explicit_default_as_higher_priority_than_legacy_key() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config_root = dir.path().join("xdg-config");
-        std::fs::create_dir_all(&config_root).unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", dir.path());
-        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
-
-        write_user_config(
-            r#"
-[kv_cache]
-long_poll_seconds = 240
-"#,
-        );
-
-        let csa_dir = dir.path().join(".csa");
-        std::fs::create_dir_all(&csa_dir).unwrap();
-        std::fs::write(
-            csa_dir.join("config.toml"),
-            r#"
-schema_version = 1
-[session]
-daemon_wait_seconds = 600
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
-            240
-        );
-    }
-
-    #[test]
-    fn resolve_daemon_wait_timeout_treats_kv_cache_section_default_as_higher_priority_than_legacy_key()
-     {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config_root = dir.path().join("xdg-config");
-        std::fs::create_dir_all(&config_root).unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", dir.path());
-        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
-
-        write_user_config(
-            r#"
-[kv_cache]
-frequent_poll_seconds = 45
-"#,
-        );
-
-        let csa_dir = dir.path().join(".csa");
-        std::fs::create_dir_all(&csa_dir).unwrap();
-        std::fs::write(
-            csa_dir.join("config.toml"),
-            r#"
-schema_version = 1
-[session]
-daemon_wait_seconds = 600
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
-            240
-        );
-    }
-
-    #[test]
-    fn resolve_daemon_wait_timeout_honors_legacy_project_session_override_with_warning_path() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config_root = dir.path().join("xdg-config");
-        std::fs::create_dir_all(&config_root).unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", dir.path());
-        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
-
-        let csa_dir = dir.path().join(".csa");
-        std::fs::create_dir_all(&csa_dir).unwrap();
-        std::fs::write(
-            csa_dir.join("config.toml"),
-            r#"
-schema_version = 1
-[session]
-daemon_wait_seconds = 600
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
-            600
-        );
-    }
-
-    #[test]
-    fn resolve_daemon_wait_timeout_honors_legacy_user_session_override_when_project_missing() {
-        let _env_lock = TEST_ENV_LOCK.blocking_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let config_root = dir.path().join("xdg-config");
-        std::fs::create_dir_all(&config_root).unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", dir.path());
-        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
-
-        write_user_config(
-            r#"
-schema_version = 1
-[session]
-daemon_wait_seconds = 480
-"#,
-        );
-
-        assert_eq!(
-            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
-            480
-        );
+        assert_eq!(resolve_wait_ttl(None).unwrap(), 1666);
     }
 }
