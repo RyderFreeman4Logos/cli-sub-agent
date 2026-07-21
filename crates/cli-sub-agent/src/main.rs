@@ -167,7 +167,8 @@ use csa_core::types::OutputFormat;
 #[cfg(test)]
 use main_bootstrap::should_attempt_auto_weave_upgrade;
 use main_bootstrap::{
-    link_bug_class_pipeline, maybe_auto_weave_upgrade, resolve_effective_min_timeout,
+    check_weave_lock_version_alignment, link_bug_class_pipeline, maybe_auto_weave_upgrade,
+    migrate_legacy_xdg_paths_if_needed, resolve_effective_min_timeout,
 };
 pub(crate) use process_exit::exit_current_process;
 use process_exit::report_daemon_error_or_exit_code;
@@ -241,45 +242,11 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
         output_format,
     )?;
 
-    // Check weave.lock version alignment (non-fatal, read-only).
-    if let Ok(cwd) = std::env::current_dir() {
-        let registry = csa_config::default_registry();
-        match csa_config::check_version(
-            &cwd,
-            env!("CARGO_PKG_VERSION"),
-            env!("CARGO_PKG_VERSION"),
-            &registry,
-        ) {
-            Ok(result) => {
-                if let Some(warning) = csa_config::weave_lock::format_version_check_warning(&result)
-                {
-                    eprintln!("{warning}");
-                }
-            }
-            Err(e) => {
-                tracing::debug!("weave.lock version check failed: {e:#}");
-            }
-        }
-    }
+    check_weave_lock_version_alignment();
 
     maybe_auto_weave_upgrade(&command).await;
 
-    let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
-    if !legacy_xdg_paths.is_empty() {
-        match csa_config::migrate::run_xdg_migration() {
-            Ok(()) => {
-                tracing::debug!(
-                    "auto-migrated {} legacy XDG path(s)",
-                    legacy_xdg_paths.len()
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "WARNING: failed to auto-migrate legacy XDG paths: {e:#}. Run `csa migrate` manually."
-                );
-            }
-        }
-    }
+    migrate_legacy_xdg_paths_if_needed();
 
     match command {
         Commands::Run {
@@ -355,6 +322,25 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 exit_current_process(exit_code);
             }
             let effective_no_daemon = no_daemon || goal.is_some();
+            // The daemon preflight runs before `handle_run` resolves model inheritance,
+            // so mirror that trusted pin resolution here before deciding whether the
+            // direct-tool tier policy applies.
+            let inherited_model_pin_resolution = run_cmd_model_pin::apply_inherited_model_pin(
+                run_cmd_model_pin::RunModelPinInput {
+                    model_spec: model_spec.clone(),
+                    tier: tier.clone(),
+                    auto_route: auto_route.clone(),
+                    force_ignore_tier_setting,
+                    no_failover,
+                },
+                run_cmd_model_pin::inherited_model_pin_from_startup(&startup_env),
+            );
+            let inherited_model_pin_active = inherited_model_pin_resolution.inherited_pin.is_some();
+            run_cmd_model_pin::validate_inherited_model_pin_allows_explicit_tool(
+                tool.as_ref(),
+                inherited_model_pin_active,
+                inherited_model_pin_resolution.model_spec.as_deref(),
+            )?;
             run_cmd_daemon::validate_run_tier_policy_before_daemon_spawn(
                 run_cmd_daemon::RunDaemonTierPolicyPreflight {
                     no_daemon: effective_no_daemon,
@@ -368,6 +354,7 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                     model_spec: model_spec.as_deref(),
                     force,
                     force_ignore_tier_setting,
+                    inherited_model_pin_active,
                 },
             )?;
             run_cmd_preflight::run_before_daemon_spawn_if_needed(

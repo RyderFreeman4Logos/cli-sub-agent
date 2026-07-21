@@ -95,6 +95,49 @@ pub(crate) async fn maybe_auto_weave_upgrade(command: &Commands) {
     }
 }
 
+/// Check the local weave.lock version without preventing startup on failure.
+pub(crate) fn check_weave_lock_version_alignment() {
+    if let Ok(cwd) = std::env::current_dir() {
+        let registry = csa_config::default_registry();
+        match csa_config::check_version(
+            &cwd,
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION"),
+            &registry,
+        ) {
+            Ok(result) => {
+                if let Some(warning) = csa_config::weave_lock::format_version_check_warning(&result)
+                {
+                    eprintln!("{warning}");
+                }
+            }
+            Err(e) => {
+                tracing::debug!("weave.lock version check failed: {e:#}");
+            }
+        }
+    }
+}
+
+/// Migrate legacy XDG paths opportunistically, preserving the CLI's manual fallback.
+pub(crate) fn migrate_legacy_xdg_paths_if_needed() {
+    let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
+    if !legacy_xdg_paths.is_empty() {
+        match csa_config::migrate::run_xdg_migration() {
+            Ok(()) => {
+                tracing::debug!(
+                    "auto-migrated {} legacy XDG path(s)",
+                    legacy_xdg_paths.len()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "WARNING: failed to auto-migrate legacy XDG paths: {e:#}. Run `csa migrate` manually."
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn link_bug_class_pipeline() {
     let _ = crate::bug_class::BugClassCandidate::aggregate_from_review_artifacts(&[]);
     crate::bug_class::link_bug_class_pipeline_symbols();
