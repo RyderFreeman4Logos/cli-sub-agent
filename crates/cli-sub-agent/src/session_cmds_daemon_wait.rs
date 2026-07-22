@@ -462,61 +462,51 @@ fn emit_wait_completion_signal(
     }
 }
 
-/// Check if a session is stale before starting to wait.
-/// Returns Err if the session is stale (daemon not running, no recent progress).
+/// Check whether the session's last event remains within its configured
+/// liveness deadline while waiting. A live PID or diagnostic lock does not
+/// override a stale event: callers need a liveness failure instead of repeated
+/// `status=alive` outcomes for a stuck worker.
 fn check_session_stale_before_wait(
     project_root: &Path,
     session_id: &str,
     session_dir: &Path,
     wait_behavior: WaitBehavior,
+    liveness_dead_seconds: u64,
     worktree_lock_root: Option<&Path>,
     worktree_lock_session_ids: &[&str],
 ) -> anyhow::Result<()> {
-    // Load the session to check its phase and last_accessed time.
-    // Only flag truly stale sessions (Active phase, no daemon, no recent progress).
-    // Sessions with an existing result.toml are NOT stale — they completed, and the
-    // main polling loop will return the result correctly.
     match load_session_for_stale_precheck(project_root, session_id, session_dir, wait_behavior) {
         Ok(session) => {
-            // Only check Active sessions for staleness
             if matches!(session.phase, csa_session::SessionPhase::Active) {
-                // If there's already a terminal result (or a result file exists but
-                // fails to parse), let the main loop handle it rather than flagging
-                // as stale. The session completed normally; parse errors are handled
-                // downstream with better diagnostics.
+                // A durable terminal result or completion marker is authoritative.
+                // Otherwise, verify the event age before accepting a live PID or
+                // worktree lock as proof that the session is still healthy.
                 if super::daemon_completion_exists(session_dir)
                     && !session_has_terminal_process(session_dir)
                 {
                     return Ok(());
                 }
-                if csa_process::ToolLiveness::is_alive(session_dir) {
-                    return Ok(());
-                }
                 match csa_session::load_result(project_root, session_id) {
-                    Ok(Some(_)) => return Ok(()),
-                    Err(_) => return Ok(()), // result file exists but unparseable
-                    Ok(None) => {}           // no result yet
+                    Ok(Some(_)) | Err(_) => return Ok(()),
+                    Ok(None) => {}
                 }
 
-                let stale_threshold_seconds = wait_behavior.wait_timeout_secs.saturating_mul(2);
-                let now = Utc::now();
-                let elapsed = now.signed_duration_since(session.last_accessed);
-
-                if any_session_holds_worktree_write_lock(
-                    worktree_lock_root,
-                    worktree_lock_session_ids,
-                ) {
-                    return Ok(());
-                }
-                if elapsed > chrono::Duration::seconds(stale_threshold_seconds as i64) {
-                    if session_has_terminal_process(session_dir) {
-                        return Ok(());
-                    }
+                let elapsed = Utc::now().signed_duration_since(session.last_accessed);
+                if elapsed > chrono::Duration::seconds(liveness_dead_seconds as i64) {
                     return Err(anyhow::anyhow!(
-                        "daemon not running, no recent progress ({}s > {}s threshold)",
+                        "no new session event for {}s exceeds configured liveness_dead_seconds={}s",
                         elapsed.num_seconds(),
-                        stale_threshold_seconds
+                        liveness_dead_seconds
                     ));
+                }
+
+                if csa_process::ToolLiveness::is_alive(session_dir)
+                    || any_session_holds_worktree_write_lock(
+                        worktree_lock_root,
+                        worktree_lock_session_ids,
+                    )
+                {
+                    return Ok(());
                 }
             }
         }

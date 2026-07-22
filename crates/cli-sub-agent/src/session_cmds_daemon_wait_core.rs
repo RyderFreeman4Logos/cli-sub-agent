@@ -83,6 +83,9 @@ pub(crate) fn handle_session_wait_with_emitters(
     let is_cross_project = resolved.foreign_project_root.is_some();
     let mut wait_target = resolve_wait_target(effective_root, &resolved.session_id, &session_dir)?;
     let worktree_lock_root = super::resolve_session_wait_worktree_lock_root(effective_root);
+    let project_config = csa_config::ProjectConfig::load(effective_root)?;
+    let liveness_dead_seconds =
+        crate::pipeline::resolve_liveness_dead_seconds(project_config.as_ref());
     if wait_options.caller_identity.is_dead() {
         eprintln!(
             "ERROR: session wait caller output closed before lock acquisition; re-issue from the current caller."
@@ -110,45 +113,6 @@ pub(crate) fn handle_session_wait_with_emitters(
         .filter(|limit| *limit > 0);
     let mut next_memory_sample_at =
         memory_warn_mb.map(|_| start + wait_options.behavior.timing.memory_sample_interval);
-    let handoff_blocks_initial_stale_precheck = resume_handoff_blocks_target_reconcile(
-        wait_target.follows_resume_target,
-        &session_dir,
-        &wait_target.session_dir,
-    );
-
-    // Check if the session is Stale before entering the polling loop.
-    // This prevents indefinite polling of sessions that have no live daemon process
-    // and no progress for an extended period.
-    //
-    // A resume wrapper may write resume-target.toml before the target session has
-    // target-local liveness. While the wrapper daemon is still alive, its process
-    // owns that bootstrap window, so target-local silence is not stale yet.
-    if !handoff_blocks_initial_stale_precheck
-        && let Err(stale_err) = super::check_session_stale_before_wait(
-            effective_root,
-            &wait_target.session_id,
-            &wait_target.session_dir,
-            wait_options.behavior,
-            worktree_lock_root.as_deref(),
-            &[resolved.session_id.as_str(), &wait_target.session_id],
-        )
-    {
-        if !crate::session_observability::emit_session_registry_state_loss_diagnostic(
-            effective_root,
-            &wait_target.session_id,
-            &wait_target.session_dir,
-        ) {
-            eprintln!(
-                "Session {} appears stale: {}",
-                wait_target.session_id, stale_err
-            );
-            eprintln!(
-                "Run `csa session result --session {}` for diagnostics.",
-                wait_target.session_id
-            );
-        }
-        return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
-    }
 
     loop {
         if wait_options.caller_identity.is_dead() {
@@ -199,6 +163,29 @@ pub(crate) fn handle_session_wait_with_emitters(
             &session_dir,
             result_session_dir,
         );
+        if !handoff_blocks_target_reconcile
+            && let Err(stale_err) = super::check_session_stale_before_wait(
+                effective_root,
+                result_session_id,
+                result_session_dir,
+                wait_options.behavior,
+                liveness_dead_seconds,
+                worktree_lock_root.as_deref(),
+                &[resolved.session_id.as_str(), result_session_id],
+            )
+        {
+            if !crate::session_observability::emit_session_registry_state_loss_diagnostic(
+                effective_root,
+                result_session_id,
+                result_session_dir,
+            ) {
+                eprintln!("Session {result_session_id} liveness failure: {stale_err}");
+                eprintln!(
+                    "Run `csa session result --session {result_session_id}` for diagnostics."
+                );
+            }
+            return Ok(SESSION_WAIT_FAILURE_EXIT_CODE);
+        }
         let result_registry_state_loss =
             session_registry_state_loss(effective_root, result_session_id, result_session_dir);
         let result_uses_direct_session_dir = is_cross_project || result_registry_state_loss;
