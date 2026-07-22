@@ -20,12 +20,13 @@ mod timeout;
 mod cgroup;
 
 mod child_timeout;
+mod command_redactor;
 #[cfg(target_os = "linux")]
 use cgroup::read_session_cgroup_memory_events;
 use child_timeout::{
-    ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance, redact_command_text,
-    truncate_one_line,
+    ChildTimeoutKind, ChildTimeoutProvenance, detect_child_timeout_provenance, truncate_one_line,
 };
+pub(crate) use command_redactor::redact_command_text;
 use memory::read_memory_soft_limit_diagnostic;
 pub(crate) use timeout::TimeoutDiagnostics;
 
@@ -652,6 +653,10 @@ fn kb_to_mb(kb: u64) -> u64 {
 #[cfg(test)]
 #[path = "session_kill_diagnostics_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "session_kill_diagnostics_sanitizer_tests.rs"]
+mod sanitizer_tests;
 
 #[cfg(test)]
 #[path = "session_kill_diagnostics_timeout_tests.rs"]
