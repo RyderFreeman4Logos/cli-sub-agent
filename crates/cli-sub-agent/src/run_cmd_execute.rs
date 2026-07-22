@@ -35,6 +35,8 @@ use crate::run_helpers_branch_guard::{
 use crate::startup_env::StartupSubtreeEnv;
 #[path = "run_cmd_execute_post_exec_gate.rs"]
 mod post_exec_gate;
+#[path = "run_cmd_execute_resume_tier.rs"]
+mod resume_tier;
 #[path = "run_cmd_execute_reuse_hint.rs"]
 mod reuse_hint;
 #[path = "run_cmd_execute_routing.rs"]
@@ -53,6 +55,7 @@ use post_exec_gate::{
     PostExecGateApplyOptions, apply_post_exec_gate_after_success_with_runner,
     execute_post_exec_gate_command,
 };
+use resume_tier::infer_resume_tier_for_matching_tool;
 use reuse_hint::emit_reusable_session_hint;
 use routing::{
     RunModelSelectionFlags, resolve_primary_writer_spec_for_run, resolve_run_effective_tier,

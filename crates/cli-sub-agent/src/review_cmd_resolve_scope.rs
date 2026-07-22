@@ -35,6 +35,40 @@ pub(crate) fn derive_scope_for_project(args: &ReviewArgs, project_root: &Path) -
     derive_diff_scope_for_project(project_root)
 }
 
+pub(crate) fn validate_single_parent_commit_scope(
+    project_root: &Path,
+    commit: &str,
+) -> anyhow::Result<()> {
+    let output = git_output_with_timeout(
+        project_root,
+        &["rev-list", "--parents", "-n", "1", commit],
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not inspect --commit {commit}; use an explicit range such as --range main...HEAD"
+        )
+    })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "could not inspect --commit {commit}; use an explicit range such as --range main...HEAD"
+        );
+    }
+
+    let parent_count = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .skip(1)
+        .count();
+    if parent_count > 1 {
+        anyhow::bail!(
+            "--commit {commit} is a merge commit with {parent_count} parents. \
+             --commit reviews a single commit diff (<sha>^..<sha>), so its base would be ambiguous. \
+             Use an explicit range such as --range main...HEAD instead."
+        );
+    }
+
+    Ok(())
+}
+
 fn derive_diff_scope_for_project(project_root: &Path) -> String {
     if git_diff_has_output(project_root, &["diff", "HEAD"]).unwrap_or(true) {
         return "uncommitted".to_string();
@@ -157,6 +191,21 @@ pub(crate) fn review_scope_allows_auto_discovery(args: &ReviewArgs) -> bool {
 mod timeout_tests {
     use super::*;
 
+    fn run_git(project_root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(project_root)
+            .output()
+            .expect("git command should start");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     #[test]
     fn command_capture_returns_none_after_deadline() {
         let mut command = Command::new("sleep");
@@ -165,5 +214,38 @@ mod timeout_tests {
 
         assert!(run_command_with_timeout(&mut command, Duration::from_millis(20)).is_none());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn merge_commit_scope_is_rejected_with_explicit_range_guidance() {
+        let project = tempfile::tempdir().expect("tempdir");
+        run_git(project.path(), &["init", "-b", "main"]);
+        run_git(
+            project.path(),
+            &["config", "user.email", "test@example.com"],
+        );
+        run_git(project.path(), &["config", "user.name", "Test User"]);
+        std::fs::write(project.path().join("base.txt"), "base\n").expect("write base file");
+        run_git(project.path(), &["add", "base.txt"]);
+        run_git(project.path(), &["commit", "-m", "base"]);
+        run_git(project.path(), &["checkout", "-b", "topic"]);
+        std::fs::write(project.path().join("topic.txt"), "topic\n").expect("write topic file");
+        run_git(project.path(), &["add", "topic.txt"]);
+        run_git(project.path(), &["commit", "-m", "topic"]);
+        run_git(project.path(), &["checkout", "main"]);
+        std::fs::write(project.path().join("main.txt"), "main\n").expect("write main file");
+        run_git(project.path(), &["add", "main.txt"]);
+        run_git(project.path(), &["commit", "-m", "main"]);
+        run_git(
+            project.path(),
+            &["merge", "--no-ff", "topic", "-m", "merge topic"],
+        );
+        let merge_commit = run_git(project.path(), &["rev-parse", "HEAD"]);
+
+        let err = validate_single_parent_commit_scope(project.path(), &merge_commit)
+            .expect_err("merge commit scope must be rejected");
+        let message = err.to_string();
+        assert!(message.contains("merge commit"), "{message}");
+        assert!(message.contains("--range main...HEAD"), "{message}");
     }
 }

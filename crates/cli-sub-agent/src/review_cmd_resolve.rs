@@ -321,7 +321,10 @@ Reason: CSA enforces heterogeneity in auto mode and will not fall back."
 mod scope;
 #[cfg(test)]
 pub(crate) use scope::derive_scope;
-pub(crate) use scope::{derive_scope_for_project, review_scope_allows_auto_discovery};
+pub(crate) use scope::{
+    derive_scope_for_project, review_scope_allows_auto_discovery,
+    validate_single_parent_commit_scope,
+};
 
 /// Review-only safety preamble injected into every review subprocess prompt.
 ///

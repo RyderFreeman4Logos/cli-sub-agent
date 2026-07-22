@@ -200,7 +200,9 @@ pub struct ReviewArgs {
     #[arg(long, conflicts_with_all = ["diff", "commit", "range", "files"])]
     pub branch: Option<String>,
 
-    /// Review specific commit
+    /// Review one commit's diff (`<sha>^..<sha>`). `--base` is not accepted in this mode.
+    /// Merge commits are rejected because their base is ambiguous; use `--range main...HEAD`
+    /// (or another explicit range) when the desired base is not the commit's first parent.
     #[arg(long)]
     pub commit: Option<String>,
 

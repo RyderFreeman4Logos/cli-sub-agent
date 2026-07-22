@@ -17,6 +17,9 @@ async fn handle_review_inner(
         return review_convergence::emit_report_only(args.range.as_deref());
     }
     validate_review_prompt_file(args.prompt_file.as_deref())?;
+    if let Some(commit) = args.commit.as_deref() {
+        super::resolve::validate_single_parent_commit_scope(&project_root, commit)?;
+    }
     let project_root_for_hooks = project_root.display().to_string();
     let Some((config, global_config, model_catalog, project_completion_policy)) =
         crate::pipeline::load_and_validate(&project_root, current_depth)?

@@ -197,3 +197,151 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
     assert!(result.summary.contains("pre-exec:"));
     assert!(result.summary.contains("Direct --tool is blocked"));
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn handle_run_reuses_matching_session_tier_for_direct_tool() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project_dir = tempfile::Builder::new()
+        .prefix("csa-resume-tier-2811")
+        .tempdir()
+        .unwrap();
+    let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
+    sandbox.track_env("PATH");
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    }
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_codex = bin_dir.join("codex");
+    let execution_marker = bin_dir.join("codex.executed");
+    std::fs::write(&fake_codex, "#!/bin/sh\n: > \"$0.executed\"\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_codex, permissions).unwrap();
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
+    unsafe {
+        std::env::set_var("PATH", format!("{}:{inherited_path}", bin_dir.display()));
+    }
+
+    let config = run_config_with_tier(
+        "tier-3-complex",
+        vec!["codex/openai/gpt-5.5/high"],
+        &["codex"],
+    );
+    write_project_config(project_dir.path(), &config);
+    let mut resumed_session = csa_session::create_session(
+        project_dir.path(),
+        Some("tiered session"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    resumed_session.task_context = csa_session::TaskContext {
+        task_type: Some("run".to_string()),
+        tier_name: Some("tier-3-complex".to_string()),
+    };
+    resumed_session.tools.insert(
+        "codex".to_string(),
+        csa_session::ToolState {
+            provider_session_id: Some("prior-codex-session".to_string()),
+            last_action_summary: "prior tiered run".to_string(),
+            last_exit_code: 0,
+            updated_at: chrono::Utc::now(),
+            tool_version: None,
+            token_usage: None,
+        },
+    );
+    csa_session::save_session(&resumed_session).unwrap();
+
+    let lock_holder =
+        csa_session::create_session(project_dir.path(), Some("lock holder"), None, Some("codex"))
+            .unwrap();
+    let _holder_lock = csa_lock::acquire_worktree_write_lock(
+        project_dir.path(),
+        &lock_holder.meta_session_id,
+        &[],
+        |_| false,
+        |_| false,
+        |_| false,
+    )
+    .expect("holder worktree write lock should succeed");
+
+    let err = handle_run(
+        Some(ToolArg::Specific(ToolName::Codex)),
+        None,
+        None,
+        None,
+        Some("fix the repository".to_string()),
+        None,
+        None,
+        None,
+        Some(resumed_session.meta_session_id.clone()),
+        false,
+        None,
+        false,
+        false,
+        None,
+        false,
+        None,
+        None,
+        false,
+        true,
+        Some(project_dir.path().display().to_string()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
+        false,
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        0,
+        OutputFormat::Text,
+        csa_process::StreamMode::BufferOnly,
+        None,
+        false,
+        false,
+        false,
+        None,
+        false,
+        true,
+        false,
+        false,
+        false,
+        Vec::new(),
+        Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
+    )
+    .await
+    .expect_err("worktree lock should stop the resumed run before tool execution");
+    let message = err
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !execution_marker.exists(),
+        "Codex must not execute when worktree preflight fails: {}",
+        execution_marker.display()
+    );
+    assert!(
+        message.contains("concurrent write session blocked"),
+        "matching tiered session should bypass the direct-tool policy: {message}"
+    );
+    assert!(message.contains(&lock_holder.meta_session_id), "{message}");
+}
