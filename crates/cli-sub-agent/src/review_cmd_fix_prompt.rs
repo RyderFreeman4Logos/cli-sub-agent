@@ -61,6 +61,10 @@ pub(crate) fn build_codex_single_fix_prompt(
     )
 }
 
+pub(crate) fn render_fix_findings_summary_for_fix_finding(findings: &FindingsFile) -> String {
+    render_fix_findings_summary(findings)
+}
+
 fn render_fix_findings_summary(findings: &FindingsFile) -> String {
     let mut summary = String::new();
     for finding in &findings.findings {
@@ -140,6 +144,13 @@ fn longest_backtick_run(content: &str) -> usize {
         }
     }
     longest
+}
+
+pub(crate) fn load_fix_findings_toml_for_fix_finding(
+    project_root: &Path,
+    session_id: &str,
+) -> Option<FindingsFile> {
+    load_fix_findings_toml(project_root, session_id)
 }
 
 fn load_fix_findings_toml(project_root: &Path, session_id: &str) -> Option<FindingsFile> {

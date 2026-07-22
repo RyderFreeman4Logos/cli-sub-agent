@@ -221,6 +221,16 @@ pub struct ReviewArgs {
     pub fix: bool,
 
     /// Apply a caller-confirmed review finding by resuming the exact failed review session.
+    ///
+    /// Prompt sources (first match wins):
+    /// 1. `--prompt` / `--prompt-file` (use `-` or `/dev/stdin` for stdin)
+    /// 2. non-empty stdin body (plain-text confirmed fix instructions)
+    /// 3. when unambiguous: the single structured finding from the source review's
+    ///    `output/findings.toml`
+    ///
+    /// Stdin example:
+    ///   echo "Fix the confirmed HIGH finding in src/foo.rs: preserve error causes" \
+    ///     | csa review --fix-finding --session FAILED_REVIEW_SESSION_ID
     #[arg(long, conflicts_with_all = ["fix", "check_verdict"])]
     pub fix_finding: bool,
 
@@ -343,11 +353,16 @@ pub struct ReviewArgs {
     pub extra_readable: Vec<PathBuf>,
 
     /// Caller-confirmed fix prompt text for --fix-finding.
+    ///
+    /// Optional when the source review has exactly one structured finding in
+    /// `output/findings.toml` (derived automatically). Otherwise required via
+    /// this flag, `--prompt-file`, or stdin (plain-text confirmed instructions).
     #[arg(long, value_name = "PROMPT", conflicts_with = "prompt_file")]
     pub prompt: Option<String>,
 
     /// Read supplementary prompt/context from a file path (bypasses shell quoting issues).
     /// For --fix-finding, use `-` or `/dev/stdin` to read the caller-confirmed prompt from stdin.
+    /// When omitted for --fix-finding, CSA may derive a prompt from a single source finding.
     /// Regular review treats this as a path; stdin sentinels are not resolved.
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,

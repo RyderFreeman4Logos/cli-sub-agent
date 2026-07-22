@@ -43,6 +43,9 @@ use noop::{FixNoOpProbe, apply_fix_loop_noop_signal, is_fix_loop_noop_failure_re
 #[cfg(test)]
 pub(super) use prompt::build_codex_single_fix_prompt;
 use prompt::build_fix_prompt;
+pub(super) use prompt::{
+    load_fix_findings_toml_for_fix_finding, render_fix_findings_summary_for_fix_finding,
+};
 
 /// Context for review fix-loop execution.
 pub(crate) struct FixLoopContext<'a> {
