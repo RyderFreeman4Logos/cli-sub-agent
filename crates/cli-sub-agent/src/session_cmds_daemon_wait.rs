@@ -1,5 +1,4 @@
 use super::*;
-use chrono::Utc;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
@@ -22,6 +21,9 @@ mod result_loader;
 mod summary;
 #[path = "session_cmds_daemon_wait_target.rs"]
 mod target;
+#[cfg(test)]
+#[path = "session_cmds_daemon_wait_test_support.rs"]
+mod test_support;
 #[path = "session_cmds_daemon_wait_types.rs"]
 mod types;
 // Re-export the memory warning exit code constant for other modules
@@ -51,6 +53,8 @@ use result_loader::{
 #[cfg(test)]
 pub(crate) use summary::render_wait_result_summary;
 use summary::{emit_wait_terminal_output, render_wait_terminal_output};
+#[cfg(test)]
+pub(crate) use test_support::handle_session_wait_with_hooks_at;
 use types::WaitExecutionOptions;
 #[cfg(test)]
 pub(crate) use types::WaitLoopTiming;
@@ -109,6 +113,10 @@ pub(crate) fn handle_session_wait_with_options(
             output_mode,
             caller_identity,
             model_provider,
+            #[cfg(test)]
+            current_time_for_test: None,
+            #[cfg(test)]
+            session_live_for_test: None,
         },
         |project_root, session_id, trigger| {
             let reconciled = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
@@ -145,6 +153,10 @@ pub(crate) fn handle_session_wait_for_mcp(
             output_mode,
             caller_identity,
             model_provider: None,
+            #[cfg(test)]
+            current_time_for_test: None,
+            #[cfg(test)]
+            session_live_for_test: None,
         },
         core::WaitEmitters {
             reconcile_dead_active_session: Box::new(|project_root, session_id, trigger| {
@@ -315,6 +327,10 @@ where
             output_mode: SessionWaitOutputMode::from_flags(false, false),
             caller_identity: WaitCallerIdentity::capture(),
             model_provider: None,
+            #[cfg(test)]
+            current_time_for_test: None,
+            #[cfg(test)]
+            session_live_for_test: None,
         },
         reconcile_dead_active_session,
         emit_completion_signal,
@@ -379,6 +395,10 @@ where
             output_mode: SessionWaitOutputMode::from_flags(false, false),
             caller_identity: WaitCallerIdentity::capture(),
             model_provider: None,
+            #[cfg(test)]
+            current_time_for_test: None,
+            #[cfg(test)]
+            session_live_for_test: None,
         },
         reconcile_dead_active_session,
         emit_completion_signal,
@@ -470,19 +490,25 @@ fn check_session_stale_before_wait(
     project_root: &Path,
     session_id: &str,
     session_dir: &Path,
-    wait_behavior: WaitBehavior,
+    wait_options: &WaitExecutionOptions,
     liveness_dead_seconds: u64,
     worktree_lock_root: Option<&Path>,
     worktree_lock_session_ids: &[&str],
 ) -> anyhow::Result<()> {
-    match load_session_for_stale_precheck(project_root, session_id, session_dir, wait_behavior) {
+    match load_session_for_stale_precheck(
+        project_root,
+        session_id,
+        session_dir,
+        wait_options.behavior,
+    ) {
         Ok(session) => {
             if matches!(session.phase, csa_session::SessionPhase::Active) {
                 // A durable terminal result or completion marker is authoritative.
                 // Otherwise, verify the event age before accepting a live PID or
                 // worktree lock as proof that the session is still healthy.
-                if super::daemon_completion_exists(session_dir)
-                    && !session_has_terminal_process(session_dir)
+                if super::legacy_complete_marker_is_valid(session_dir)
+                    || (super::daemon_completion_exists(session_dir)
+                        && !session_has_terminal_process(session_dir))
                 {
                     return Ok(());
                 }
@@ -491,7 +517,9 @@ fn check_session_stale_before_wait(
                     Ok(None) => {}
                 }
 
-                let elapsed = Utc::now().signed_duration_since(session.last_accessed);
+                let elapsed = wait_options
+                    .current_time()
+                    .signed_duration_since(session.last_accessed);
                 if elapsed > chrono::Duration::seconds(liveness_dead_seconds as i64) {
                     return Err(anyhow::anyhow!(
                         "no new session event for {}s exceeds configured liveness_dead_seconds={}s",

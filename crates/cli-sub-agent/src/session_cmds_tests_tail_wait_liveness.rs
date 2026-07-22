@@ -1,6 +1,7 @@
 use super::*;
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
+    handle_session_wait_with_hooks_at,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use tempfile::tempdir;
@@ -144,6 +145,9 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
     )
     .expect("write liveness config");
 
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:02Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
     let mut session = create_session(
         project,
         Some("wait-stale-event-live-daemon"),
@@ -151,26 +155,11 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
         Some("codex"),
     )
     .expect("create session");
-    session.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(2);
-    save_session(&session).expect("backdate last event");
+    session.last_accessed = fixed_now - chrono::Duration::seconds(2);
+    save_session(&session).expect("persist stale event at fixed time");
     let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).expect("session dir");
 
-    let mut child = std::process::Command::new("sleep")
-        .arg("60")
-        .spawn()
-        .expect("spawn live daemon stand-in");
-    std::fs::write(
-        session_dir.join("daemon.pid"),
-        daemon_pid_record(child.id()),
-    )
-    .expect("write daemon pid");
-    assert!(
-        csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir),
-        "test setup requires a live daemon PID"
-    );
-
-    let wait_result = handle_session_wait_with_hooks(
+    let wait_result = handle_session_wait_with_hooks_at(
         session_id,
         Some(project.to_string_lossy().into_owned()),
         WaitBehavior {
@@ -181,6 +170,8 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
                 memory_sample_interval: std::time::Duration::from_secs(15),
             },
         },
+        fixed_now,
+        Some(true),
         |_project_root, _current_session_id, _trigger| {
             panic!("stale live session must fail liveness before reconciliation")
         },
@@ -188,9 +179,6 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
             panic!("stale live session must not emit a terminal completion")
         },
     );
-
-    child.kill().ok();
-    child.wait().ok();
 
     assert_eq!(
         wait_result.expect("wait should classify stale liveness"),

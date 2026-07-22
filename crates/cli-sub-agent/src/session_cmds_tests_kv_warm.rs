@@ -2,6 +2,7 @@ use super::*;
 use crate::session_cmds::{StructuredOutputOpts, handle_session_result};
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
+    handle_session_wait_with_hooks_at,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use tempfile::tempdir;
@@ -385,7 +386,7 @@ fn exact_id_wait_and_result_survive_repeated_kv_warm_after_registry_state_loss()
 
 #[cfg(target_os = "linux")]
 #[test]
-fn stale_precheck_does_not_fail_live_daemon_session() {
+fn stale_precheck_fails_live_daemon_after_liveness_deadline() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -394,6 +395,9 @@ fn stale_precheck_does_not_fail_live_daemon_session() {
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
 
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-01T02:00:00Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
     let session = create_session(
         project,
         Some("wait-stale-precheck-live-daemon"),
@@ -402,24 +406,12 @@ fn stale_precheck_does_not_fail_live_daemon_session() {
     )
     .expect("create");
     let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).expect("session dir");
     let mut state = load_session(project, &session_id).expect("load session");
     state.phase = SessionPhase::Active;
-    state.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(7_200);
-    save_session(&state).expect("save stale active session");
+    state.last_accessed = fixed_now - chrono::Duration::seconds(7_200);
+    save_session(&state).expect("save fixed-time stale active session");
 
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .expect("spawn child");
-    std::fs::write(
-        session_dir.join("daemon.pid"),
-        daemon_pid_record(child.id()),
-    )
-    .expect("write daemon pid");
-    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
-
-    let exit_code = handle_session_wait_with_hooks(
+    let exit_code = handle_session_wait_with_hooks_at(
         session_id,
         Some(project.to_string_lossy().into_owned()),
         WaitBehavior {
@@ -430,6 +422,8 @@ fn stale_precheck_does_not_fail_live_daemon_session() {
                 memory_sample_interval: std::time::Duration::from_secs(15),
             },
         },
+        fixed_now,
+        Some(true),
         |_project_root, _current_session_id, _trigger| {
             Ok(WaitReconciliationOutcome {
                 result_became_available: false,
@@ -440,14 +434,11 @@ fn stale_precheck_does_not_fail_live_daemon_session() {
             panic!("stale precheck must not emit a synthetic completion for a live daemon");
         },
     )
-    .expect("wait should skip stale precheck for live daemon");
-
-    let _ = child.kill();
-    let _ = child.wait();
+    .expect("wait should reject the stale event before accepting liveness");
 
     assert_eq!(
-        exit_code, 0,
-        "live daemon must not be pre-failed solely because last_accessed is stale"
+        exit_code, 1,
+        "a live daemon must not override the configured liveness deadline"
     );
 }
 

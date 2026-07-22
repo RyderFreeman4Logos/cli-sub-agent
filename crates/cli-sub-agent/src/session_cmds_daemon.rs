@@ -52,8 +52,9 @@ pub(crate) use wait::resolve_wait_completion_status_and_exit;
 pub(crate) use wait::{
     SESSION_WAIT_MEMORY_WARN_EXIT_CODE, WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait, handle_session_wait_with_hooks,
-    handle_session_wait_with_hooks_and_sampler, handle_session_wait_with_identity_for_test,
-    process_start_time_ticks, synthesized_wait_next_step, try_acquire_session_wait_lock,
+    handle_session_wait_with_hooks_and_sampler, handle_session_wait_with_hooks_at,
+    handle_session_wait_with_identity_for_test, process_start_time_ticks,
+    synthesized_wait_next_step, try_acquire_session_wait_lock,
     try_acquire_session_wait_lock_with_caller,
 };
 pub(crate) use wait::{

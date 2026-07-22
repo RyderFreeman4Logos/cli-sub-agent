@@ -152,6 +152,16 @@ pub(crate) fn handle_session_wait_with_emitters(
             result_session_id
         };
         let result_session_dir = &wait_target.session_dir;
+        #[cfg(test)]
+        let session_live = wait_options.session_live_for_test.unwrap_or_else(|| {
+            session_has_live_execution(
+                worktree_lock_root.as_deref(),
+                result_session_dir,
+                &resolved.session_id,
+                result_session_id,
+            )
+        });
+        #[cfg(not(test))]
         let session_live = session_has_live_execution(
             worktree_lock_root.as_deref(),
             result_session_dir,
@@ -168,7 +178,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 effective_root,
                 result_session_id,
                 result_session_dir,
-                wait_options.behavior,
+                &wait_options,
                 liveness_dead_seconds,
                 worktree_lock_root.as_deref(),
                 &[resolved.session_id.as_str(), result_session_id],
