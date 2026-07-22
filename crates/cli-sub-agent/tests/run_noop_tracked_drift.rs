@@ -3,6 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn csa_cmd(home: &Path) -> Command {
+    let cargo_home = home.join(".cargo");
+    let rustup_home = home.join(".rustup");
+    std::fs::create_dir_all(&cargo_home).expect("create isolated cargo home");
+    std::fs::create_dir_all(&rustup_home).expect("create isolated rustup home");
+
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("CSA_") {
@@ -12,6 +17,8 @@ fn csa_cmd(home: &Path) -> Command {
     cmd.env("HOME", home)
         .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("CARGO_HOME", cargo_home)
+        .env("RUSTUP_HOME", rustup_home)
         .env("TOKIO_WORKER_THREADS", "1")
         .env_remove("CI");
     cmd
@@ -46,6 +53,7 @@ fn init_tracked_project(project_root: &Path) {
 
 [resources]
 min_free_memory_mb = 0
+memory_max_mb = 9000
 soft_limit_percent = 100
 
 [filesystem_sandbox]
@@ -143,8 +151,6 @@ fn noop_writer_session_leaves_zero_tracked_lefthook_drift() {
             "true",
             "--tool",
             "codex",
-            "--memory-max-mb",
-            "9000",
             "--min-free-memory-mb",
             "0",
             "reply without tool calls",

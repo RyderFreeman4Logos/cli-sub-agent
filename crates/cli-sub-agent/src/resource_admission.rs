@@ -37,15 +37,11 @@ enum SessionMemorySample {
     Unavailable,
 }
 
-#[cfg(test)]
-pub(crate) fn spawn_memory_projection_mb(config: Option<&ProjectConfig>, tool_name: &str) -> u64 {
-    spawn_memory_projection_mb_with_overrides(config, tool_name, RunResourceOverrides::absent())
-}
-
-pub(crate) fn spawn_memory_projection_mb_with_overrides(
+fn spawn_memory_projection_mb_for_physical_available(
     config: Option<&ProjectConfig>,
     tool_name: &str,
     resource_overrides: RunResourceOverrides,
+    physical_available_mb: u64,
 ) -> u64 {
     let configured_projection_mb = resource_overrides
         .resolve_memory_max_mb(config, tool_name)
@@ -58,11 +54,32 @@ pub(crate) fn spawn_memory_projection_mb_with_overrides(
         return configured_projection_mb;
     }
 
-    let mut resource_guard = ResourceGuard::new(ResourceLimits::default());
     bound_default_spawn_projection_mb(
         configured_projection_mb,
-        resource_guard.available_physical_memory_mb(),
+        physical_available_mb,
         resource_overrides.resolve_min_free_memory_mb(config),
+    )
+}
+
+pub(crate) fn spawn_memory_projection_mb_with_overrides(
+    config: Option<&ProjectConfig>,
+    tool_name: &str,
+    resource_overrides: RunResourceOverrides,
+) -> u64 {
+    if resource_overrides.has_memory_max_override()
+        || config_has_explicit_memory_max_mb(config, tool_name)
+    {
+        return resource_overrides
+            .resolve_memory_max_mb(config, tool_name)
+            .unwrap_or(FALLBACK_SPAWN_PROJECTION_MB);
+    }
+
+    let mut resource_guard = ResourceGuard::new(ResourceLimits::default());
+    spawn_memory_projection_mb_for_physical_available(
+        config,
+        tool_name,
+        resource_overrides,
+        resource_guard.available_physical_memory_mb(),
     )
 }
 
@@ -391,7 +408,15 @@ mod tests {
         let cfg: ProjectConfig =
             toml::from_str("[resources]\nmemory_max_mb = 8192\n").expect("config should parse");
 
-        assert_eq!(spawn_memory_projection_mb(Some(&cfg), "codex"), 8192);
+        assert_eq!(
+            spawn_memory_projection_mb_for_physical_available(
+                Some(&cfg),
+                "codex",
+                RunResourceOverrides::absent(),
+                1,
+            ),
+            8192
+        );
     }
 
     #[test]
@@ -430,8 +455,15 @@ memory_max_mb = 16384
 
     #[test]
     fn spawn_projection_uses_tool_default_without_config() {
-        let projection_mb = spawn_memory_projection_mb(None, "codex");
-        assert!((MIN_DEFAULT_SPAWN_PROJECTION_MB..=16_384).contains(&projection_mb));
+        assert_eq!(
+            spawn_memory_projection_mb_for_physical_available(
+                None,
+                "codex",
+                RunResourceOverrides::absent(),
+                12_000,
+            ),
+            7904
+        );
     }
 
     #[test]
