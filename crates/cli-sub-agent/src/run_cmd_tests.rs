@@ -6,7 +6,7 @@ use crate::run_cmd_tool_selection::{
     take_next_runtime_fallback_tool,
 };
 use chrono::{TimeZone, Utc};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use csa_core::transport_events::SessionEvent;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_process::ExecutionResult;
@@ -164,6 +164,19 @@ fn run_cli_parses_allow_fallback_flag() {
         crate::cli::Commands::Run { allow_fallback, .. } => assert!(allow_fallback),
         _ => panic!("expected run command"),
     }
+}
+
+#[test]
+fn run_help_explains_tier_policy_for_direct_tool() {
+    let mut command = Cli::command();
+    let run = command
+        .find_subcommand_mut("run")
+        .expect("run subcommand should exist");
+    let help = run.render_long_help().to_string();
+
+    assert!(help.contains("Tier policy:"), "{help}");
+    assert!(help.contains("--tool alone is blocked"), "{help}");
+    assert!(help.contains("--tier <name>"), "{help}");
 }
 
 #[test]
