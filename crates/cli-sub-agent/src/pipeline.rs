@@ -528,10 +528,17 @@ fn resolved_filesystem_capability(
         })
 }
 
+/// Canonical primary-failure / status reason for pre-provider slot capacity exhaustion.
+pub(crate) const SLOT_UNAVAILABLE_REASON: &str = "slot_unavailable";
+
 /// Acquire global concurrency slot for the executor.
 ///
 /// Returns ToolSlot guard on success.
 /// Returns error if all slots occupied (no failover here).
+///
+/// Recovery guidance stays generic: callers may pin a tool with
+/// `--no-failover` / force-ignore, so the message must not imply that
+/// switching tools is always valid (#2718).
 #[tracing::instrument(skip_all, fields(tool = %executor.tool_name()))]
 pub(crate) fn acquire_slot(
     executor: &Executor,
@@ -544,7 +551,7 @@ pub(crate) fn acquire_slot(
         Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => Ok(slot),
         Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
             anyhow::bail!(
-                "All {} slots for '{}' occupied ({}/{}). Try again later or use --tool to switch.",
+                "All {} slots for '{}' occupied ({}/{}). Retry later, free slots with `csa gc`, or wait for an in-flight session to finish.",
                 max_concurrent,
                 executor.tool_name(),
                 status.occupied,
@@ -557,6 +564,18 @@ pub(crate) fn acquire_slot(
             e
         ),
     }
+}
+
+/// Detect local tool-slot capacity exhaustion in error text (pre-provider).
+pub(crate) fn is_slot_unavailable_error_text(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    if lower.contains(SLOT_UNAVAILABLE_REASON) {
+        return true;
+    }
+    let mentions_slots = lower.contains("slots for") || lower.contains("slot");
+    let exhausted =
+        lower.contains("occupied") || lower.contains("exhaust") || lower.contains("unavailable");
+    mentions_slots && exhausted && (lower.contains("all ") || lower.contains("slot_unavailable"))
 }
 
 /// Execution result with the resolved CSA meta session ID used by this run.

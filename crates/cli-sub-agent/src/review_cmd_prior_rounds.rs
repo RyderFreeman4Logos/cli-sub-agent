@@ -124,6 +124,8 @@ pub(super) fn persist_daemon_review_pre_exec_error(
 fn primary_failure_for_pre_exec_error(error_message: &str) -> &'static str {
     if error_message.contains("Direct --tool is restricted when tiers are configured") {
         "direct_tool_tier_restricted"
+    } else if crate::pipeline::is_slot_unavailable_error_text(error_message) {
+        crate::pipeline::SLOT_UNAVAILABLE_REASON
     } else {
         "review_pre_exec_error"
     }
