@@ -232,6 +232,7 @@ fn record_writer_uncommitted_changes_with_config(
                     commit_created,
                     result.csa_gate_failure.as_deref(),
                     clean_tree_verification_failure,
+                    Some(record.sa_mode),
                 )
             });
             let mut should_save = false;
@@ -307,6 +308,7 @@ pub(crate) fn apply_uncommitted_changes_to_result(
                 false,
                 None,
                 None,
+                None,
             )
         });
         apply_require_commit_contract_failure_to_result(result, recovery);
@@ -329,7 +331,14 @@ fn build_require_commit_recovery_diagnostic(
     result: &csa_session::SessionResult,
     changes: &csa_session::UncommittedChanges,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
-    build_require_commit_recovery_diagnostic_for_state(result, Some(changes), false, None, None)
+    build_require_commit_recovery_diagnostic_for_state(
+        result,
+        Some(changes),
+        false,
+        None,
+        None,
+        Some(false),
+    )
 }
 
 fn build_require_commit_recovery_diagnostic_for_state(
@@ -338,6 +347,7 @@ fn build_require_commit_recovery_diagnostic_for_state(
     commit_created: bool,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
+    sa_mode: Option<bool>,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
     let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
     let termination_status = result
@@ -346,6 +356,7 @@ fn build_require_commit_recovery_diagnostic_for_state(
         .unwrap_or_else(|| result.status.clone());
     csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
+        sa_mode,
         commit_created,
         dirty_worktree: changes.is_some(),
         changed_paths: changes

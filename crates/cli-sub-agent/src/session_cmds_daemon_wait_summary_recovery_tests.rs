@@ -16,6 +16,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
         completed_at: now + chrono::TimeDelta::seconds(65),
         require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
             require_commit: true,
+            sa_mode: Some(false),
             commit_created: false,
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
@@ -45,7 +46,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
         "Work was applied but not committed; use fork-from to continue from this session"
     ));
     assert!(summary.contains(
-        "Continuation command: csa run --fork-from 01TESTWAITRECOVER --require-commit --prompt-file CONTINUATION_PROMPT.md"
+        "Continuation command: csa run --fork-from 01TESTWAITRECOVER --require-commit --sa-mode false --prompt-file CONTINUATION_PROMPT.md"
     ));
     assert!(!summary.contains("Review verdict: PASS"));
 
@@ -72,7 +73,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
     assert_eq!(
         json["require_commit_recovery_guidance"]["continuation_command"],
         serde_json::json!(
-            "csa run --fork-from 01TESTWAITRECOVER --require-commit --prompt-file CONTINUATION_PROMPT.md"
+            "csa run --fork-from 01TESTWAITRECOVER --require-commit --sa-mode false --prompt-file CONTINUATION_PROMPT.md"
         )
     );
     assert!(

@@ -115,6 +115,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
         completed_at: now,
         require_commit_recovery: Some(RequireCommitRecoveryDiagnostic {
             require_commit: true,
+            sa_mode: Some(false),
             commit_created: false,
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
@@ -132,6 +133,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
     let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
     assert!(toml_str.contains("[require_commit_recovery]"));
     assert!(toml_str.contains("require_commit = true"));
+    assert!(toml_str.contains("sa_mode = false"));
     assert!(toml_str.contains("commit_created = false"));
     assert!(toml_str.contains("blocker_summary = \"gate=commit-policy-uncommitted\""));
     assert!(!toml_str.contains("file contents"));
@@ -141,6 +143,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
         .require_commit_recovery
         .expect("recovery diagnostic should roundtrip");
     assert!(recovery.require_commit);
+    assert_eq!(recovery.sa_mode, Some(false));
     assert!(!recovery.commit_created);
     assert!(recovery.dirty_worktree);
     assert_eq!(
