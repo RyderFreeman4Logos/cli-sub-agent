@@ -15,6 +15,7 @@ fn build_result_json_payload_includes_require_commit_recovery() {
             completed_at: now,
             require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
+                sa_mode: Some(false),
                 commit_created: false,
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string()],
@@ -68,6 +69,7 @@ fn build_result_json_payload_with_identity_includes_require_commit_recovery_guid
             completed_at: now,
             require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
+                sa_mode: Some(false),
                 commit_created: false,
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string()],
@@ -100,7 +102,7 @@ fn build_result_json_payload_with_identity_includes_require_commit_recovery_guid
     assert_eq!(
         payload["require_commit_recovery_guidance"]["continuation_command"],
         serde_json::json!(
-            "csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --prompt-file CONTINUATION_PROMPT.md"
+            "csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --sa-mode false --prompt-file CONTINUATION_PROMPT.md"
         )
     );
     assert!(

@@ -99,6 +99,10 @@ pub(crate) fn build_require_commit_recovery_guidance(
         "--fork-from".to_string(),
         shell_token(session_id),
         "--require-commit".to_string(),
+        "--sa-mode".to_string(),
+        diagnostic
+            .sa_mode
+            .map_or_else(|| "<true|false>".to_string(), |value| value.to_string()),
         "--prompt-file".to_string(),
         CONTINUATION_PROMPT_PLACEHOLDER.to_string(),
     ];
@@ -192,6 +196,7 @@ mod tests {
             "01KW641KP78VR43SCKJVN6HGDN",
             &csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
+                sa_mode: Some(false),
                 commit_created: false,
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
@@ -218,7 +223,7 @@ mod tests {
             "Work was applied but not committed; use fork-from to continue from this session"
         ));
         assert!(rendered.contains(
-            "Continuation command: csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --prompt-file CONTINUATION_PROMPT.md"
+            "Continuation command: csa run --fork-from 01KW641KP78VR43SCKJVN6HGDN --require-commit --sa-mode false --prompt-file CONTINUATION_PROMPT.md"
         ));
         assert!(rendered.contains("git status --short"));
         assert!(!rendered.contains("<continuation"));
@@ -232,8 +237,9 @@ mod tests {
         let worker_id = csa_session::new_session_id();
         let worker_dir = temp.path().join(&worker_id);
         std::fs::create_dir_all(&worker_dir).expect("worker dir");
-        let diagnostic = csa_session::RequireCommitRecoveryDiagnostic {
+        let mut diagnostic = csa_session::RequireCommitRecoveryDiagnostic {
             require_commit: true,
+            sa_mode: Some(false),
             commit_created: false,
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string()],
@@ -263,6 +269,14 @@ mod tests {
                 .continuation_command
                 .contains(&format!("--fork-from {wrapper_id}")),
             "continuation command must not target wrapper session: {guidance:?}"
+        );
+        assert!(guidance.continuation_command.contains("--sa-mode false"));
+
+        diagnostic.sa_mode = None;
+        assert!(
+            build_require_commit_recovery_guidance("01TESTLEGACY", &diagnostic)
+                .continuation_command
+                .contains("--sa-mode <true|false>")
         );
     }
 }

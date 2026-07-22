@@ -137,6 +137,7 @@ last_accessed = "2026-06-01T00:00:00Z"
     result.exit_code = 1;
     result.require_commit_recovery = Some(csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
+        sa_mode: Some(false),
         commit_created: false,
         dirty_worktree: true,
         changed_paths: vec!["crates/verbatim-daemon/src/main.rs".to_string()],

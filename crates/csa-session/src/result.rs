@@ -207,6 +207,12 @@ impl UncommittedChanges {
 pub struct RequireCommitRecoveryDiagnostic {
     /// The run was governed by the require-commit contract.
     pub require_commit: bool,
+    /// The autonomous-mode value from the failed invocation, when known.
+    ///
+    /// Legacy result files omit this field, so recovery guidance must ask the
+    /// caller to provide an explicit value rather than guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sa_mode: Option<bool>,
     /// Whether CSA observed a commit satisfying the contract.
     pub commit_created: bool,
     /// Whether dirty tracked worktree changes remained after the run.

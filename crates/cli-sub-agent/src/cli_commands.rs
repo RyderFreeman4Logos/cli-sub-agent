@@ -5,6 +5,9 @@ pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
         /// Tool selection: auto, any-available, or a specific tool.
+        ///
+        /// Tier policy: when tiers are configured, --tool alone is blocked. Use
+        /// --tier <name> (optionally with --tool as a preference).
         #[arg(long)]
         tool: Option<ToolArg>,
         /// Auto-route via `[tier_mapping]` while keeping tool choice automatic.
