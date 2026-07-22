@@ -689,6 +689,10 @@ fn review_help_shows_options() {
     assert!(stdout.contains("--diff"));
     assert!(stdout.contains("--branch"));
     assert!(stdout.contains("--commit"));
+    assert!(stdout.contains("<sha>^..<sha>"));
+    assert!(stdout.contains("--base"));
+    assert!(stdout.contains("not accepted"));
+    assert!(stdout.contains("--range main...HEAD"));
     assert!(stdout.contains("--model"));
 }
 
