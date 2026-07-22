@@ -500,8 +500,22 @@ fn read_daemon_prompt_input_if_needed_from_reader<R: Read>(
 
 fn read_daemon_prompt_file(path: &Path, forward_arg: PromptFileForwardArg) -> Result<String> {
     let flag = forward_arg.flag();
-    let prompt = std::fs::read_to_string(path)
-        .with_context(|| format!("{flag}: failed to read '{}'", path.display()))?;
+    // Filesystem validation first: never pass symlink-traversing paths through
+    // Git pathspec APIs. Accept readable files resolved through allowed symlinks.
+    crate::run_helpers::validate_prompt_file_path(Some(path)).map_err(|error| {
+        let message = error.to_string();
+        if flag == "--prompt-file" {
+            error
+        } else {
+            anyhow::anyhow!(message.replacen("--prompt-file", flag, 1))
+        }
+    })?;
+    let prompt = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "{flag}: prompt file not found or unreadable '{}'",
+            path.display()
+        )
+    })?;
     if prompt.trim().is_empty() {
         anyhow::bail!("{flag} '{}' is empty", path.display());
     }

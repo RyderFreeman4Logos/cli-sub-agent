@@ -311,60 +311,29 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
             daemon_child,
             session_id,
         } => {
-            if !no_daemon
-                && !daemon_child
-                && session_id.is_none()
-                && let Some(exit_code) = run_helpers_branch_guard::evaluate_run_refusal_for_cd(
+            run_cmd_preflight::run_early_pre_daemon_checks(
+                run_cmd_preflight::EarlyPreDaemonChecks {
+                    prompt_file: prompt_file.as_deref(),
                     allow_base_branch_working,
-                    cd.as_deref(),
-                )?
-            {
-                exit_current_process(exit_code);
-            }
-            let effective_no_daemon = no_daemon || goal.is_some();
-            // The daemon preflight runs before `handle_run` resolves model inheritance,
-            // so mirror that trusted pin resolution here before deciding whether the
-            // direct-tool tier policy applies.
-            let inherited_model_pin_resolution = run_cmd_model_pin::apply_inherited_model_pin(
-                run_cmd_model_pin::RunModelPinInput {
-                    model_spec: model_spec.clone(),
-                    tier: tier.clone(),
-                    auto_route: auto_route.clone(),
-                    force_ignore_tier_setting,
-                    no_failover,
-                },
-                run_cmd_model_pin::inherited_model_pin_from_startup(&startup_env),
-            );
-            let inherited_model_pin_active = inherited_model_pin_resolution.inherited_pin.is_some();
-            run_cmd_model_pin::validate_inherited_model_pin_allows_explicit_tool(
-                tool.as_ref(),
-                inherited_model_pin_active,
-                inherited_model_pin_resolution.model_spec.as_deref(),
-            )?;
-            run_cmd_daemon::validate_run_tier_policy_before_daemon_spawn(
-                run_cmd_daemon::RunDaemonTierPolicyPreflight {
-                    no_daemon: effective_no_daemon,
+                    cd: cd.as_deref(),
+                    no_daemon,
                     daemon_child,
                     session_id: session_id.as_deref(),
-                    cd: cd.as_deref(),
-                    direct_tool_requested: tool.is_some(),
+                    goal_present: goal.is_some(),
+                    tool: tool.as_ref(),
                     auto_route: auto_route.as_deref(),
                     hint_difficulty: hint_difficulty.as_deref(),
                     tier: tier.as_deref(),
                     model_spec: model_spec.as_deref(),
                     force,
                     force_ignore_tier_setting,
-                    inherited_model_pin_active,
+                    no_failover,
+                    no_preflight,
+                    is_resume: session.is_some() || last || fork_from.is_some() || fork_last,
+                    startup_env: &startup_env,
                 },
             )?;
-            run_cmd_preflight::run_before_daemon_spawn_if_needed(
-                cd.as_deref(),
-                no_preflight,
-                effective_no_daemon,
-                daemon_child,
-                session_id.is_some(),
-                session.is_some() || last || fork_from.is_some() || fork_last,
-            )?;
+            let effective_no_daemon = no_daemon || goal.is_some();
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 effective_no_daemon,

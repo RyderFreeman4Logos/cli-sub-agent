@@ -52,7 +52,7 @@ use model_spec_validation::enforce_model_spec_matches_tool_default;
 pub(crate) use prompt::{
     is_prompt_file_stdin_sentinel, read_prompt, read_prompt_from_reader,
     resolve_positional_stdin_sentinel, resolve_positional_stdin_sentinel_from_reader,
-    resolve_prompt_with_file, resolve_prompt_with_file_from_reader,
+    resolve_prompt_with_file, resolve_prompt_with_file_from_reader, validate_prompt_file_path,
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;
