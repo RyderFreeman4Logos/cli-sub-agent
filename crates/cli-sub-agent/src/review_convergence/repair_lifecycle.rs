@@ -331,6 +331,23 @@ mod tests {
         temp
     }
 
+    /// Isolate journal/state writes from the host `XDG_STATE_HOME` before
+    /// `ConvergenceLedgerStore::for_project` resolves secure state paths.
+    fn isolated_project_store(
+        repository: &Path,
+    ) -> (
+        crate::test_env_lock::ScopedTestEnvVar,
+        ConvergenceLedgerStore,
+    ) {
+        let state_home = repository.join("xdg-state");
+        fs::create_dir_all(&state_home).expect("create isolated XDG_STATE_HOME");
+        let state_guard =
+            crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", &state_home);
+        let store = ConvergenceLedgerStore::for_project(repository)
+            .expect("open project convergence store under isolated XDG_STATE_HOME");
+        (state_guard, store)
+    }
+
     fn head(root: &Path) -> csa_session::convergence::GitObjectId {
         let output = Command::new("git")
             .arg("-C")
@@ -353,8 +370,7 @@ mod tests {
         let expected = capture_epoch(repository.path(), &head(repository.path()))
             .expect("capture immutable expected epoch")
             .epoch;
-        let store = ConvergenceLedgerStore::for_project(repository.path())
-            .expect("open project convergence store");
+        let (_state_home, store) = isolated_project_store(repository.path());
         let campaign = CampaignId::generate();
         let policy = Sha256Digest::compute(b"repair lifecycle policy");
         store
@@ -427,8 +443,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let repository = repository();
-        let store = ConvergenceLedgerStore::for_project(repository.path())
-            .expect("open project convergence store");
+        let (_state_home, store) = isolated_project_store(repository.path());
         store
             .initialize_completion_action_journal(
                 campaign.id().clone(),
