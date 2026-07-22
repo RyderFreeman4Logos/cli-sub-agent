@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn records_core_hookspath_conflict_hint_in_session_result_warnings() {
         let mut execution = csa_process::ExecutionResult {
-            stderr_output: "Error: core.hooksPath is set locally to '/x/.git/hooks'\nhint: Unset it:\nhint:   git config --unset-all --local core.hooksPath\n".to_string(),
+            stderr_output: "Error: core.hooksPath is set locally to '/x/.git/hooks'\nhint: Unset it:\nhint:   git config --unset-all --local core.hooksPath\ngit commit failed\n".to_string(),
             exit_code: 1,
             summary: "git commit failed".to_string(),
             ..Default::default()
@@ -82,6 +82,25 @@ mod tests {
                 .contains("git config --unset-all --local core.hooksPath"),
             "stderr should include actionable hint: {}",
             execution.stderr_output
+        );
+    }
+
+    #[test]
+    fn ignores_hookspath_template_without_commit_attempt() {
+        let mut execution = csa_process::ExecutionResult {
+            stderr_output: "Error: core.hooksPath is set locally to '/x/.git/hooks'\nhint: Unset it:\nhint:   git config --unset-all --local core.hooksPath\n".to_string(),
+            exit_code: 0,
+            summary: "non-commit success".to_string(),
+            ..Default::default()
+        };
+        let mut result = session_result();
+
+        maybe_record_core_hookspath_conflict(&mut execution, &mut result);
+
+        assert!(
+            result.warnings.is_empty(),
+            "non-commit hooksPath template alone must not warn: {:?}",
+            result.warnings
         );
     }
 
