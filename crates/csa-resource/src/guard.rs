@@ -146,6 +146,13 @@ impl ResourceGuard {
         Self { sys, limits }
     }
 
+    /// Read effective physical memory available to this process, including an
+    /// enclosing cgroup limit when one is present.
+    pub fn available_physical_memory_mb(&mut self) -> u64 {
+        self.sys.refresh_memory();
+        effective_available_memory_bytes(self.sys.available_memory()) / 1024 / 1024
+    }
+
     /// Check if enough resources are available to launch a tool.
     ///
     /// Two-tier threshold:
