@@ -63,6 +63,7 @@ pub(crate) async fn handle_run(
     let mut tier = tier;
     let mut force_ignore_tier_setting = force_ignore_tier_setting;
     let mut no_failover = no_failover;
+    let explicit_session_requested = session_arg.is_some();
 
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
     let effective_repo =
@@ -153,6 +154,14 @@ pub(crate) async fn handle_run(
     )?;
     let pre_session_hook = csa_hooks::load_global_pre_session_hook_invocation();
     let cli_tool_arg = tool.clone();
+    if explicit_session_requested && !is_fork && tier.is_none() {
+        tier = infer_resume_tier_for_matching_tool(
+            &project_root,
+            config.as_ref(),
+            session_arg.as_deref(),
+            cli_tool_arg.as_ref(),
+        );
+    }
     let mut user_explicit_tool = tool.is_some();
     let prompt = resolve_positional_stdin_sentinel(prompt)?.or(prompt_flag);
 
