@@ -49,11 +49,10 @@ pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit
 pub(crate) use executor::{build_executor, model_name_for_tier_validation};
 pub(crate) use inline_review_context::prepend_review_context_to_prompt;
 use model_spec_validation::enforce_model_spec_matches_tool_default;
-#[cfg(test)]
-pub(crate) use prompt::resolve_prompt_with_file_from_reader;
 pub(crate) use prompt::{
-    is_prompt_file_stdin_sentinel, read_prompt, resolve_positional_stdin_sentinel,
-    resolve_prompt_with_file,
+    is_prompt_file_stdin_sentinel, read_prompt, read_prompt_from_reader,
+    resolve_positional_stdin_sentinel, resolve_positional_stdin_sentinel_from_reader,
+    resolve_prompt_with_file, resolve_prompt_with_file_from_reader,
 };
 pub(crate) use routing_conflict::{is_routing_conflict, routing_conflict_error};
 pub(crate) use routing_request::RoutingRequest;

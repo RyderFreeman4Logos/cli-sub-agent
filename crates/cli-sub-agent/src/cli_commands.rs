@@ -21,7 +21,7 @@ pub enum Commands {
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
-        /// Autonomous goal mode: loop until success criteria met or budget exhausted
+        /// Autonomous goal mode: loop until success criteria met or budget exhausted; used as the task prompt when no prompt source is provided.
         #[arg(long)]
         goal: Option<String>,
         /// Task prompt (flag form; same as the positional prompt)

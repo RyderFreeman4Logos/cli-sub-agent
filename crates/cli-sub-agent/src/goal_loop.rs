@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -267,25 +268,60 @@ async fn handle_goal_run(request: GoalRunRequest) -> Result<i32> {
 }
 
 fn resolve_goal_user_prompt(request: &GoalRunRequest) -> Result<String> {
-    let prompt = crate::run_helpers::resolve_positional_stdin_sentinel(request.prompt.clone())?
-        .or_else(|| request.prompt_flag.clone());
+    let mut stdin = std::io::stdin();
+    resolve_goal_user_prompt_from_reader(
+        request.prompt.clone(),
+        request.prompt_flag.clone(),
+        request.prompt_file.as_deref(),
+        request.skill.as_deref(),
+        request.goal_criteria.as_deref(),
+        stdin.is_terminal(),
+        &mut stdin,
+    )
+}
 
-    if request.prompt_file.is_some() {
-        return crate::run_helpers::resolve_prompt_with_file(
+fn resolve_goal_user_prompt_from_reader<R: Read>(
+    prompt: Option<String>,
+    prompt_flag: Option<String>,
+    prompt_file: Option<&Path>,
+    skill: Option<&str>,
+    goal_criteria: Option<&str>,
+    stdin_is_terminal: bool,
+    reader: &mut R,
+) -> Result<String> {
+    let prompt = crate::run_helpers::resolve_positional_stdin_sentinel_from_reader(
+        prompt,
+        stdin_is_terminal,
+        reader,
+    )?
+    .or(prompt_flag);
+
+    if prompt_file.is_some() {
+        return crate::run_helpers::resolve_prompt_with_file_from_reader(
             prompt,
-            request.prompt_file.as_deref(),
+            prompt_file,
+            stdin_is_terminal,
+            reader,
         );
     }
 
     if prompt.is_some() {
-        return crate::run_helpers::read_prompt(prompt);
+        return crate::run_helpers::read_prompt_from_reader(prompt, stdin_is_terminal, reader);
     }
 
-    if request.skill.is_some() {
+    if let Some(goal_criteria) = goal_criteria {
+        return crate::run_helpers::read_prompt_from_reader(
+            Some(goal_criteria.to_string()),
+            stdin_is_terminal,
+            reader,
+        );
+    }
+
+    if skill.is_some() {
         return Ok(String::new());
     }
 
-    crate::run_helpers::read_prompt(None)
+    crate::run_helpers::read_prompt_from_reader(None, stdin_is_terminal, reader)
 }
 
 fn build_goal_prompt(
@@ -481,5 +517,23 @@ mod tests {
         assert!(effective_require_commit(true, Some("review")));
         assert!(!effective_require_commit(false, Some("review")));
         assert!(!effective_require_commit(false, None));
+    }
+
+    #[test]
+    fn goal_only_uses_goal_as_task_prompt_without_reading_empty_stdin() {
+        let mut stdin = std::io::Cursor::new("");
+
+        let prompt = resolve_goal_user_prompt_from_reader(
+            None,
+            None,
+            None,
+            None,
+            Some("do something"),
+            true,
+            &mut stdin,
+        )
+        .expect("--goal alone must provide the task prompt");
+
+        assert_eq!(prompt, "do something");
     }
 }

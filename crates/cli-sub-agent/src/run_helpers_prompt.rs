@@ -7,20 +7,7 @@ pub(crate) fn resolve_positional_stdin_sentinel(prompt: Option<String>) -> Resul
     resolve_positional_stdin_sentinel_from_reader(prompt, stdin.is_terminal(), &mut stdin)
 }
 
-#[cfg(test)]
 pub(crate) fn resolve_positional_stdin_sentinel_from_reader<R: Read>(
-    prompt: Option<String>,
-    stdin_is_terminal: bool,
-    reader: &mut R,
-) -> Result<Option<String>> {
-    match prompt.as_deref() {
-        Some("-") => read_prompt_from_reader(None, stdin_is_terminal, reader).map(Some),
-        _ => Ok(prompt),
-    }
-}
-
-#[cfg(not(test))]
-fn resolve_positional_stdin_sentinel_from_reader<R: Read>(
     prompt: Option<String>,
     stdin_is_terminal: bool,
     reader: &mut R,
@@ -41,19 +28,8 @@ pub(crate) fn resolve_prompt_with_file(
     prompt: Option<String>,
     prompt_file: Option<&Path>,
 ) -> Result<String> {
-    if let Some(path) = prompt_file {
-        if is_prompt_file_stdin_sentinel(path) {
-            return read_prompt(None);
-        }
-
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
-        if content.trim().is_empty() {
-            anyhow::bail!("--prompt-file '{}' is empty", path.display());
-        }
-        return Ok(content);
-    }
-    read_prompt(prompt)
+    let mut stdin = std::io::stdin();
+    resolve_prompt_with_file_from_reader(prompt, prompt_file, stdin.is_terminal(), &mut stdin)
 }
 
 pub(crate) fn is_prompt_file_stdin_sentinel(path: &Path) -> bool {
@@ -63,7 +39,6 @@ pub(crate) fn is_prompt_file_stdin_sentinel(path: &Path) -> bool {
     )
 }
 
-#[cfg(test)]
 pub(crate) fn resolve_prompt_with_file_from_reader<R: Read>(
     prompt: Option<String>,
     prompt_file: Option<&Path>,
