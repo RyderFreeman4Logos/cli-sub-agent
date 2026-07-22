@@ -158,7 +158,10 @@ fn run_daemon_missing_prompt_file_fails_before_spawn() {
 
     let message = format!("{err:#}");
     assert!(
-        message.contains("--prompt-file: failed to read"),
+        message.contains("--prompt-file")
+            && (message.contains("failed to read")
+                || message.contains("not found")
+                || message.contains("unreadable")),
         "{message}"
     );
     assert!(message.contains("MISSING_RUN_PROMPT.md"), "{message}");

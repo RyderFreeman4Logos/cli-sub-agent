@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::io::{IsTerminal, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn resolve_positional_stdin_sentinel(prompt: Option<String>) -> Result<Option<String>> {
     let mut stdin = std::io::stdin();
@@ -39,6 +39,65 @@ pub(crate) fn is_prompt_file_stdin_sentinel(path: &Path) -> bool {
     )
 }
 
+/// Validate `--prompt-file` with filesystem semantics before any Git pathspec use.
+///
+/// Stdin sentinels are accepted without reading. Regular paths must resolve to a
+/// readable regular file (symlink targets allowed when the final canonical path
+/// is a readable file). Failures return a targeted CLI error and never invoke
+/// Git pathspec APIs.
+pub(crate) fn validate_prompt_file_path(path: Option<&Path>) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if is_prompt_file_stdin_sentinel(path) {
+        return Ok(());
+    }
+    resolve_readable_prompt_file(path).map(|_| ())
+}
+
+fn resolve_readable_prompt_file(path: &Path) -> Result<PathBuf> {
+    // Prefer canonicalize so symlink-traversing paths that resolve to a real
+    // file are accepted, while paths that traverse a repo symlink with a bad
+    // extra component fail as missing/unreadable without involving Git.
+    let resolved = match path.canonicalize() {
+        Ok(canonical) => canonical,
+        Err(error) => {
+            bail!(
+                "--prompt-file: prompt file not found or unreadable '{}': {error}",
+                path.display()
+            );
+        }
+    };
+
+    let metadata = std::fs::metadata(&resolved).with_context(|| {
+        format!(
+            "--prompt-file: prompt file not found or unreadable '{}'",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        bail!(
+            "--prompt-file: prompt file not found or unreadable '{}': not a regular file",
+            path.display()
+        );
+    }
+    Ok(resolved)
+}
+
+fn read_prompt_file_content(path: &Path) -> Result<String> {
+    let resolved = resolve_readable_prompt_file(path)?;
+    let content = std::fs::read_to_string(&resolved).with_context(|| {
+        format!(
+            "--prompt-file: prompt file not found or unreadable '{}'",
+            path.display()
+        )
+    })?;
+    if content.trim().is_empty() {
+        bail!("--prompt-file '{}' is empty", path.display());
+    }
+    Ok(content)
+}
+
 pub(crate) fn resolve_prompt_with_file_from_reader<R: Read>(
     prompt: Option<String>,
     prompt_file: Option<&Path>,
@@ -49,13 +108,7 @@ pub(crate) fn resolve_prompt_with_file_from_reader<R: Read>(
         if is_prompt_file_stdin_sentinel(path) {
             return read_prompt_from_reader(None, stdin_is_terminal, reader);
         }
-
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
-        if content.trim().is_empty() {
-            anyhow::bail!("--prompt-file '{}' is empty", path.display());
-        }
-        return Ok(content);
+        return read_prompt_file_content(path);
     }
     read_prompt_from_reader(prompt, stdin_is_terminal, reader)
 }
