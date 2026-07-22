@@ -734,9 +734,9 @@ fn test_codex_usage_limit_in_stderr_sets_quota_exhausted() {
 fn test_codex_bare_429_requires_http_status_context() {
     let path_error = detect_rate_limit("codex", "/tmp/csa-worktree-lock-429-probe", "", 1, None);
     assert!(path_error.is_none());
-    let detected =
-        detect_rate_limit("codex", "", "statusCode: 429", 1, None).expect("contextual 429");
-    assert_eq!(detected.matched_pattern, "statuscode 429");
+    let detected = detect_rate_limit("codex", "", "HTTP 429 Too Many Requests", 1, None)
+        .expect("contextual 429");
+    assert_eq!(detected.matched_pattern, "http 429");
     assert_eq!(detected.reason, "HTTP 429");
     assert!(!detected.quota_exhausted);
 }
