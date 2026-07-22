@@ -106,6 +106,9 @@ fn classify_memory_admission_error_text(error_text: &str) -> Option<&'static str
 }
 
 pub(super) fn classify_no_provider_launch_error_text(error_text: &str) -> Option<&'static str> {
+    if crate::pipeline::is_slot_unavailable_error_text(error_text) {
+        return Some(crate::pipeline::SLOT_UNAVAILABLE_REASON);
+    }
     classify_memory_admission_error_text(error_text)
 }
 

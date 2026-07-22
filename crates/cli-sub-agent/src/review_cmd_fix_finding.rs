@@ -16,7 +16,10 @@ use super::post_review::CONFIRM_THEN_FIX_FINDING_ACTION;
 
 #[path = "review_cmd_fix_finding_prompt.rs"]
 mod prompt;
-use prompt::{build_fix_finding_prompt, resolve_fix_finding_prompt};
+use prompt::{
+    build_fix_finding_prompt, ensure_fix_finding_prompt_available,
+    resolve_fix_finding_prompt_before_daemon,
+};
 
 const FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
 
@@ -66,6 +69,10 @@ pub(crate) fn validate_fix_finding_before_daemon(args: &ReviewArgs) -> Result<()
         project_config.as_ref(),
         &global_config,
     )?;
+    // Fail closed with documented prompt requirements before daemon spawn / SA
+    // guard. Prefer deriving an unambiguous source finding without consuming
+    // stdin (daemon children resolve the final prompt body themselves).
+    ensure_fix_finding_prompt_available(args, &project_root, &route.session_id)?;
     Ok(())
 }
 
@@ -87,7 +94,8 @@ pub(crate) async fn handle_fix_finding(
     let route = load_fix_finding_route(project_root, session_ref)?;
     validate_fix_finding_route(project_root, &route, config.as_ref(), &global_config)?;
 
-    let caller_prompt = resolve_fix_finding_prompt(&args)?;
+    let caller_prompt =
+        resolve_fix_finding_prompt_before_daemon(&args, project_root, &route.session_id)?;
     let prompt = build_fix_finding_prompt(&caller_prompt);
     let fix_session_id = create_fix_finding_session(project_root, &route)?;
     let stream_mode =

@@ -1,4 +1,5 @@
 use std::io::{IsTerminal, Read};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -6,19 +7,66 @@ use crate::cli::ReviewArgs;
 
 use super::super::resolve::ANTI_RECURSION_PREAMBLE;
 
-pub(super) fn resolve_fix_finding_prompt(args: &ReviewArgs) -> Result<String> {
+/// Resolve the caller-confirmed fix prompt for execution.
+///
+/// Prefer an explicit `--prompt` / `--prompt-file` / non-empty stdin body.
+/// When those are omitted and the source review has an unambiguous structured
+/// findings.toml, derive a confirmed-findings prompt from that artifact (#2654).
+pub(super) fn resolve_fix_finding_prompt_before_daemon(
+    args: &ReviewArgs,
+    project_root: &Path,
+    session_id: &str,
+) -> Result<String> {
     let mut stdin = std::io::stdin();
-    resolve_fix_finding_prompt_from_reader(args, stdin.is_terminal(), &mut stdin)
+    resolve_fix_finding_prompt_from_reader_with_session(
+        args,
+        stdin.is_terminal(),
+        &mut stdin,
+        Some((project_root, session_id)),
+    )
 }
 
-fn resolve_fix_finding_prompt_from_reader<R: Read>(
+/// Preflight check that does not consume stdin (so daemon spawn can still
+/// forward an explicit `--prompt-file -` body). When no explicit prompt is
+/// supplied, require an unambiguous source findings.toml so the child can
+/// derive the confirmed finding without undocumented empty-stdin failure.
+pub(super) fn ensure_fix_finding_prompt_available(
+    args: &ReviewArgs,
+    project_root: &Path,
+    session_id: &str,
+) -> Result<()> {
+    if let Some(path) = args.prompt_file.as_deref() {
+        if crate::run_helpers::is_prompt_file_stdin_sentinel(path) {
+            return Ok(());
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
+        if content.trim().is_empty() {
+            anyhow::bail!("--prompt-file '{}' is empty", path.display());
+        }
+        return Ok(());
+    }
+    if let Some(prompt) = args.prompt.as_deref() {
+        if prompt.trim().is_empty() {
+            anyhow::bail!("--fix-finding --prompt must not be empty.");
+        }
+        return Ok(());
+    }
+    if derive_prompt_from_source_findings(project_root, session_id).is_some() {
+        return Ok(());
+    }
+    Err(missing_fix_finding_prompt_error(false))
+}
+
+fn resolve_fix_finding_prompt_from_reader_with_session<R: Read>(
     args: &ReviewArgs,
     stdin_is_terminal: bool,
     reader: &mut R,
+    source_session: Option<(&Path, &str)>,
 ) -> Result<String> {
     if let Some(path) = args.prompt_file.as_deref() {
         if crate::run_helpers::is_prompt_file_stdin_sentinel(path) {
-            return read_fix_finding_stdin(stdin_is_terminal, reader);
+            return read_fix_finding_stdin(stdin_is_terminal, reader, source_session);
         }
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
@@ -33,22 +81,99 @@ fn resolve_fix_finding_prompt_from_reader<R: Read>(
         }
         return Ok(prompt.to_string());
     }
-    read_fix_finding_stdin(stdin_is_terminal, reader)
+    if !stdin_is_terminal {
+        match read_optional_fix_finding_stdin(reader)? {
+            Some(prompt) => return Ok(prompt),
+            None => {
+                if let Some((project_root, session_id)) = source_session
+                    && let Some(derived) =
+                        derive_prompt_from_source_findings(project_root, session_id)
+                {
+                    return Ok(derived);
+                }
+                return Err(missing_fix_finding_prompt_error(true));
+            }
+        }
+    }
+    if let Some((project_root, session_id)) = source_session
+        && let Some(derived) = derive_prompt_from_source_findings(project_root, session_id)
+    {
+        return Ok(derived);
+    }
+    Err(missing_fix_finding_prompt_error(false))
 }
 
-fn read_fix_finding_stdin<R: Read>(stdin_is_terminal: bool, reader: &mut R) -> Result<String> {
+fn read_fix_finding_stdin<R: Read>(
+    stdin_is_terminal: bool,
+    reader: &mut R,
+    source_session: Option<(&Path, &str)>,
+) -> Result<String> {
     if stdin_is_terminal {
-        anyhow::bail!(
-            "No fix prompt provided and stdin is a terminal.\n\n\
-             Usage:\n  csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt \"confirmed fix instructions\"\n  csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt-file FIX_PROMPT.md\n  echo \"confirmed fix instructions\" | csa review --fix-finding --session FAILED_REVIEW_SESSION_ID"
-        );
+        if let Some((project_root, session_id)) = source_session
+            && let Some(derived) = derive_prompt_from_source_findings(project_root, session_id)
+        {
+            return Ok(derived);
+        }
+        return Err(missing_fix_finding_prompt_error(false));
     }
+    match read_optional_fix_finding_stdin(reader)? {
+        Some(prompt) => Ok(prompt),
+        None => {
+            if let Some((project_root, session_id)) = source_session
+                && let Some(derived) = derive_prompt_from_source_findings(project_root, session_id)
+            {
+                return Ok(derived);
+            }
+            Err(missing_fix_finding_prompt_error(true))
+        }
+    }
+}
+
+fn read_optional_fix_finding_stdin<R: Read>(reader: &mut R) -> Result<Option<String>> {
     let mut buffer = String::new();
     reader.read_to_string(&mut buffer)?;
     if buffer.trim().is_empty() {
-        anyhow::bail!("Empty fix prompt from stdin. Provide a non-empty prompt.");
+        Ok(None)
+    } else {
+        Ok(Some(buffer))
     }
-    Ok(buffer)
+}
+
+fn derive_prompt_from_source_findings(project_root: &Path, session_id: &str) -> Option<String> {
+    let findings =
+        super::super::fix::load_fix_findings_toml_for_fix_finding(project_root, session_id)?;
+    if findings.findings.is_empty() {
+        return None;
+    }
+    // Unambiguous: a single structured finding can be applied without caller text.
+    // Multiple findings still require an explicit caller-confirmed selection.
+    if findings.findings.len() != 1 {
+        return None;
+    }
+    let summary = super::super::fix::render_fix_findings_summary_for_fix_finding(&findings);
+    Some(format!(
+        "Caller confirmed the single structured review finding below is not a false positive.\n\
+         Apply only that finding.\n\n\
+         {summary}"
+    ))
+}
+
+fn missing_fix_finding_prompt_error(empty_stdin: bool) -> anyhow::Error {
+    let header = if empty_stdin {
+        "Empty fix prompt from stdin."
+    } else {
+        "No fix prompt provided and stdin is a terminal."
+    };
+    anyhow::anyhow!(
+        "{header} Provide a non-empty caller-confirmed prompt, or rely on a single unambiguous finding in the source review's output/findings.toml.\n\n\
+         Usage:\n  \
+         csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt \"confirmed fix instructions\"\n  \
+         csa review --fix-finding --session FAILED_REVIEW_SESSION_ID --prompt-file FIX_PROMPT.md\n  \
+         echo \"confirmed fix instructions\" | csa review --fix-finding --session FAILED_REVIEW_SESSION_ID\n\n\
+         Stdin schema example (plain text):\n  \
+         Fix the confirmed HIGH finding in src/foo.rs: the retry loop must preserve the original error cause.\n\n\
+         When the source review has exactly one structured finding, `--fix-finding --session` may omit the prompt and will derive it from output/findings.toml."
+    )
 }
 
 pub(super) fn build_fix_finding_prompt(caller_prompt: &str) -> String {
@@ -166,7 +291,8 @@ mod tests {
         let mut input = "fix the confirmed finding\n".as_bytes();
 
         let prompt =
-            resolve_fix_finding_prompt_from_reader(&args, false, &mut input).expect("stdin prompt");
+            resolve_fix_finding_prompt_from_reader_with_session(&args, false, &mut input, None)
+                .expect("stdin prompt");
 
         assert_eq!(prompt, "fix the confirmed finding\n");
     }
@@ -177,11 +303,74 @@ mod tests {
         args.session = Some("01TESTFIXFINDINGPROMPT1".to_string());
         let mut input = "".as_bytes();
 
-        let err = resolve_fix_finding_prompt_from_reader(&args, true, &mut input)
-            .expect_err("terminal stdin requires explicit prompt");
+        let err =
+            resolve_fix_finding_prompt_from_reader_with_session(&args, true, &mut input, None)
+                .expect_err("terminal stdin requires explicit prompt");
         let msg = format!("{err:#}");
 
         assert!(msg.contains("No fix prompt provided"), "{msg}");
+        assert!(msg.contains("Stdin schema example"), "{msg}");
+        assert!(msg.contains("output/findings.toml"), "{msg}");
+    }
+
+    #[test]
+    fn fix_finding_prompt_rejects_empty_nonterminal_stdin_without_findings() {
+        let args = fix_finding_prompt_args();
+        let mut input = "".as_bytes();
+        let err =
+            resolve_fix_finding_prompt_from_reader_with_session(&args, false, &mut input, None)
+                .expect_err("empty stdin without findings must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Empty fix prompt from stdin"), "{msg}");
+        assert!(msg.contains("--prompt-file FIX_PROMPT.md"), "{msg}");
+    }
+
+    #[test]
+    fn fix_finding_prompt_derives_single_finding_from_source_session() {
+        let _config_home = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", "/tmp/csa-test-config");
+        let project = tempfile::tempdir().unwrap();
+        let session = csa_session::create_session_fresh(
+            project.path(),
+            Some("review: files:src/lib.rs"),
+            None,
+            Some("codex"),
+        )
+        .unwrap();
+        let session_dir =
+            csa_session::get_session_dir(project.path(), &session.meta_session_id).unwrap();
+        let output = session_dir.join("output");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(
+            output.join("findings.toml"),
+            r#"
+[[findings]]
+id = "F1"
+severity = "high"
+description = "retry loop drops the original error cause"
+file_ranges = [{ path = "src/lib.rs", start = 10, end = 20 }]
+"#,
+        )
+        .unwrap();
+
+        let mut args = fix_finding_prompt_args();
+        args.session = Some(session.meta_session_id.clone());
+        let mut input = "".as_bytes();
+        let prompt = resolve_fix_finding_prompt_from_reader_with_session(
+            &args,
+            true,
+            &mut input,
+            Some((project.path(), &session.meta_session_id)),
+        )
+        .expect("single finding should derive prompt");
+        assert!(
+            prompt.contains("single structured review finding"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("retry loop drops the original error cause"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("src/lib.rs"), "{prompt}");
     }
 
     #[test]

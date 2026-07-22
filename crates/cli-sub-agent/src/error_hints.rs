@@ -175,25 +175,23 @@ pub(crate) fn lefthook_core_hookspath_conflict_hint(
     stderr: &str,
     stdout: &str,
 ) -> Option<&'static str> {
-    // Only emit the hint when the session actually attempted a commit.
-    // Without commit context (e.g. a --fork-from session told not to commit),
-    // the hint is noise. Require both the marker and commit-related evidence.
+    // Only emit the hint when a commit was actually attempted and hooksPath
+    // is the concrete failure explanation (#2055, #2729).
+    //
+    // Do NOT treat `git config --unset-all --local core.hooksPath` alone as
+    // commit evidence: that string is part of lefthook's diagnostic template
+    // and can appear (or be paraphrased) without any commit attempt, producing
+    // false session-wait warnings on non-commit runs with empty hooksPath.
     let has_hookspath = stderr.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT)
         || stdout.contains(LEFTHOOK_CORE_HOOKSPATH_CONFLICT);
     if !has_hookspath {
         return None;
     }
-    // Require evidence of an actual commit attempt. The lefthook error message
-    // always includes `git config --unset-all` when it blocks a commit, so we
-    // match that specific command rather than the generic word "unset" which
-    // could appear in unrelated output. We also accept `git commit`,
-    // `lefthook run`, and standard hook names.
     let combined = format!("{}\n{}", stderr, stdout).to_ascii_lowercase();
     let has_commit_context = combined.contains("git commit")
         || combined.contains("lefthook run")
         || combined.contains("pre-commit")
-        || combined.contains("commit-msg")
-        || combined.contains("git config --unset-all --local core.hookspath");
+        || combined.contains("commit-msg");
     if has_commit_context {
         return Some(HINT_LEFTHOOK_CORE_HOOKSPATH_CONFLICT);
     }
@@ -376,6 +374,7 @@ mod tests {
 Error: core.hooksPath is set locally to '/x/.git/hooks'
 hint: Unset it:
 hint:   git config --unset-all --local core.hooksPath
+git commit failed during pre-commit
 "#;
         let hint = lefthook_core_hookspath_conflict_hint(stderr, "").unwrap();
         assert!(
@@ -407,25 +406,41 @@ hint:   git config --unset-all --local core.hooksPath
     }
 
     #[test]
-    fn lefthook_core_hookspath_conflict_hint_suppressed_with_generic_unset_text() {
-        // Lefthook diagnostic text contains "Unset it" and ".git/hooks" but no
-        // actual commit attempt — should NOT emit hint (#2055 R2)
+    fn lefthook_core_hookspath_conflict_hint_suppressed_with_unset_template_only() {
+        // Lefthook diagnostic text includes the unset-all template without any
+        // actual commit attempt — must NOT emit the session-wait hint (#2729).
         let stderr = "Error: core.hooksPath is set locally to '/x/.git/hooks'\nhint: Unset it:\nhint:   git config --unset-all --local core.hooksPath\n";
-        // This stderr DOES contain the unset-all command, so it DOES match.
-        // Verify the hint fires correctly here (this is a real commit failure).
         let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
         assert!(
-            hint.is_some(),
-            "hint should fire when git config --unset-all appears"
+            hint.is_none(),
+            "hint must not fire for hooksPath diagnostic template alone (#2729)"
         );
 
-        // But stderr with just "Unset it" without the full command should NOT fire
+        // And stderr with just "Unset it" without commit context should still not fire
         let stderr2 = "core.hooksPath is set locally\nhint: Unset it\nsome other output";
         let hint2 = lefthook_core_hookspath_conflict_hint(stderr2, "");
         assert!(
             hint2.is_none(),
             "hint should be suppressed for generic 'Unset it' without commit command"
         );
+    }
+
+    #[test]
+    fn lefthook_core_hookspath_conflict_hint_suppressed_on_non_commit_run_noise() {
+        // Non-commit run: hooksPath diagnostic phrase with zero staged work and
+        // no commit/hook invocation evidence — session wait must stay quiet (#2729).
+        let stderr = "core.hooksPath is set locally\noutput generated successfully\n0 staged paths";
+        let hint = lefthook_core_hookspath_conflict_hint(stderr, "");
+        assert!(
+            hint.is_none(),
+            "non-commit noise must not force a false positive"
+        );
+        // Positive control: real commit attempt still fires.
+        let real = lefthook_core_hookspath_conflict_hint(
+            "Error: core.hooksPath is set locally to '/x/.git/hooks'\npre-commit hook failed\n",
+            "",
+        );
+        assert!(real.is_some(), "pre-commit context should emit the hint");
     }
 
     #[test]

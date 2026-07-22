@@ -90,6 +90,26 @@ fn classify_review_failover_error_detects_memory_soft_limit_admission() {
 }
 
 #[test]
+fn classify_no_provider_launch_error_text_detects_slot_unavailable() {
+    assert_eq!(
+        classify_no_provider_launch_error_text(
+            "All 5 slots for 'codex' occupied (5/5). Retry later, free slots with `csa gc`, or wait for an in-flight session to finish."
+        ),
+        Some(crate::pipeline::SLOT_UNAVAILABLE_REASON)
+    );
+    assert_eq!(
+        classify_no_provider_launch_error_text(
+            "All 5 slots for 'codex' occupied (5/5). Try again later or use --tool to switch."
+        ),
+        Some(crate::pipeline::SLOT_UNAVAILABLE_REASON)
+    );
+    assert_ne!(
+        classify_no_provider_launch_error_text("tool launch metadata missing"),
+        Some(crate::pipeline::SLOT_UNAVAILABLE_REASON)
+    );
+}
+
+#[test]
 fn classify_review_failover_error_detects_host_memory_admission() {
     let failure = classify_review_failover_error(
         ToolName::Codex,
