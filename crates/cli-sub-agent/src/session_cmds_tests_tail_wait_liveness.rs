@@ -1,6 +1,7 @@
 use super::*;
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
+    handle_session_wait_with_hooks_at,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use tempfile::tempdir;
@@ -122,6 +123,67 @@ fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_p
     assert_eq!(
         exit_code, 0,
         "wait must emit the KV-warm exit (0), not report failure (1), when liveness signals exist"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_deadline() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+    let config_path = csa_config::ProjectConfig::config_path(project);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        config_path,
+        "schema_version = 1\n[resources]\nliveness_dead_seconds = 1\n",
+    )
+    .expect("write liveness config");
+
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:02Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
+    let mut session = create_session(
+        project,
+        Some("wait-stale-event-live-daemon"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    session.last_accessed = fixed_now - chrono::Duration::seconds(2);
+    save_session(&session).expect("persist stale event at fixed time");
+    let session_id = session.meta_session_id;
+
+    let wait_result = handle_session_wait_with_hooks_at(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        fixed_now,
+        Some(true),
+        |_project_root, _current_session_id, _trigger| {
+            panic!("stale live session must fail liveness before reconciliation")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("stale live session must not emit a terminal completion")
+        },
+    );
+
+    assert_eq!(
+        wait_result.expect("wait should classify stale liveness"),
+        1,
+        "a live PID with no new session event past liveness_dead_seconds must not return alive"
     );
 }
 

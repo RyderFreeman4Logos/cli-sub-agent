@@ -1,33 +1,7 @@
 use super::*;
+use crate::session_cmds_daemon::{WaitBehavior, WaitLoopTiming, handle_session_wait_with_hooks_at};
 use crate::test_env_lock::ScopedEnvVarRestore;
-use std::process::Command;
 
-#[cfg(target_os = "linux")]
-fn read_process_start_time_ticks(pid: u32) -> u64 {
-    let stat_path = format!("/proc/{pid}/stat");
-    let content = std::fs::read_to_string(stat_path).expect("read /proc stat");
-    let close_paren = content.rfind(')').expect("stat comm terminator");
-    let after_comm = &content[close_paren + 1..];
-    let mut parts = after_comm.split_whitespace();
-    parts.next().expect("state");
-    parts.next().expect("ppid");
-    parts.next().expect("pgrp");
-    for _ in 0..16 {
-        parts.next().expect("intermediate stat field");
-    }
-    parts
-        .next()
-        .expect("starttime")
-        .parse::<u64>()
-        .expect("starttime parse")
-}
-
-#[cfg(target_os = "linux")]
-fn daemon_pid_record(pid: u32) -> String {
-    format!("{pid} {}\n", read_process_start_time_ticks(pid))
-}
-
-#[cfg(target_os = "linux")]
 #[test]
 fn handle_session_wait_retires_active_session_after_legacy_complete_marker_143_even_with_live_daemon_pid()
  {
@@ -49,21 +23,29 @@ fn handle_session_wait_retires_active_session_after_legacy_complete_marker_143_e
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).unwrap();
     let mut stale_session = load_session(project, &session_id).unwrap();
-    stale_session.last_accessed = chrono::Utc::now() - chrono::Duration::seconds(7_200);
+    stale_session.last_accessed = chrono::DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+        .expect("fixed stale event")
+        .with_timezone(&chrono::Utc);
     save_session(&stale_session).unwrap();
     std::fs::write(session_dir.join(".complete"), "143\n").unwrap();
-    let mut child = Command::new("sleep").arg("5").spawn().unwrap();
-    std::fs::write(
-        session_dir.join("daemon.pid"),
-        daemon_pid_record(child.id()),
-    )
-    .unwrap();
-    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
 
-    let exit_code = handle_session_wait(
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
+    let exit_code = handle_session_wait_with_hooks_at(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
-        1,
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        fixed_now,
+        Some(true),
+        |_project_root, _current_session_id, _trigger| {
+            panic!("legacy complete marker must resolve before dead-session reconciliation")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {},
     )
     .unwrap();
 
@@ -81,12 +63,8 @@ fn handle_session_wait_retires_active_session_after_legacy_complete_marker_143_e
         persisted.termination_reason.as_deref(),
         Some("legacy_complete_marker")
     );
-
-    child.kill().ok();
-    let _ = child.wait();
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn handle_session_wait_retires_existing_result_after_legacy_complete_marker_with_live_daemon_pid() {
     let td = tempdir().unwrap();
@@ -108,18 +86,24 @@ fn handle_session_wait_retires_existing_result_after_legacy_complete_marker_with
     let session_dir = get_session_dir(project, &session_id).unwrap();
     save_result(project, &session_id, &make_result("success", 0)).unwrap();
     std::fs::write(session_dir.join(".complete"), "143\n").unwrap();
-    let mut child = Command::new("sleep").arg("5").spawn().unwrap();
-    std::fs::write(
-        session_dir.join("daemon.pid"),
-        daemon_pid_record(child.id()),
-    )
-    .unwrap();
-    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
 
-    let exit_code = handle_session_wait(
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
+    let exit_code = handle_session_wait_with_hooks_at(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
-        1,
+        WaitBehavior {
+            wait_timeout_secs: 1,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        fixed_now,
+        Some(true),
+        |_project_root, _current_session_id, _trigger| {
+            panic!("legacy complete marker must resolve before dead-session reconciliation")
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {},
     )
     .unwrap();
 
@@ -133,7 +117,4 @@ fn handle_session_wait_retires_existing_result_after_legacy_complete_marker_with
     let persisted = load_session(project, &session_id).unwrap();
     assert_eq!(persisted.phase, SessionPhase::Retired);
     assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
-
-    child.kill().ok();
-    let _ = child.wait();
 }

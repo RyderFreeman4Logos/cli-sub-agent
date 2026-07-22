@@ -1,8 +1,9 @@
 use super::*;
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitCallerIdentity, WaitLoopTiming, WaitReconciliationOutcome,
-    handle_session_wait_with_hooks, handle_session_wait_with_identity_for_test,
-    try_acquire_session_wait_lock, try_acquire_session_wait_lock_with_caller,
+    handle_session_wait_with_hooks, handle_session_wait_with_hooks_at,
+    handle_session_wait_with_identity_for_test, try_acquire_session_wait_lock,
+    try_acquire_session_wait_lock_with_caller,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
 use std::io::Write;
@@ -320,7 +321,7 @@ fn handle_session_wait_rejects_duplicate_wait_before_entering_loop() {
 }
 
 #[test]
-fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_precheck() {
+fn handle_session_wait_fails_stale_session_despite_live_worktree_lock() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -329,6 +330,9 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
     let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = td.path();
 
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-02T00:00:00Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
     let mut session = create_session(
         project,
         Some("wait-live-lock-not-stale"),
@@ -336,7 +340,7 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
         Some("codex"),
     )
     .expect("create session");
-    session.last_accessed = chrono::Utc::now() - chrono::Duration::hours(24);
+    session.last_accessed = fixed_now - chrono::Duration::hours(24);
     let session_id = session.meta_session_id.clone();
     save_session(&session).expect("save stale active session");
     let _worktree_lock = csa_lock::acquire_worktree_write_lock(
@@ -350,7 +354,7 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
     .expect("worktree write lock should be held by session");
 
     let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
+    let exit_code = handle_session_wait_with_hooks_at(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
         WaitBehavior {
@@ -358,19 +362,21 @@ fn handle_session_wait_treats_live_worktree_lock_as_progress_during_stale_preche
             memory_warn_mb: None,
             timing: WaitLoopTiming::default(),
         },
+        fixed_now,
+        None,
         |_project_root, _current_session_id, _trigger| {
-            panic!("live worktree lock should keep stale precheck from reconciling")
+            panic!("stale liveness failure must happen before reconciliation")
         },
         |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
             emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
         },
     )
-    .expect("wait should not classify a live worktree lock as stale");
+    .expect("wait should fail the stale session despite its live lock");
 
-    assert_eq!(exit_code, 0);
+    assert_eq!(exit_code, 1);
     assert_eq!(
         emitted_completion, None,
-        "live lock should produce a healthy wait cap, not a stale failure"
+        "live lock must not override the configured liveness deadline"
     );
 }
 
@@ -387,6 +393,9 @@ fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
     std::fs::create_dir_all(&project).expect("create nested project dir");
     init_git_repo(&repo_root);
 
+    let fixed_now = chrono::DateTime::parse_from_rfc3339("2030-01-02T00:00:00Z")
+        .expect("fixed liveness clock")
+        .with_timezone(&chrono::Utc);
     let mut session = create_session(
         &project,
         Some("wait-subdir-live-lock-not-stale"),
@@ -394,9 +403,9 @@ fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
         Some("codex"),
     )
     .expect("create session");
-    session.last_accessed = chrono::Utc::now() - chrono::Duration::hours(24);
+    session.last_accessed = fixed_now - chrono::Duration::seconds(1);
     let session_id = session.meta_session_id.clone();
-    save_session(&session).expect("save stale active session");
+    save_session(&session).expect("save fixed-time fresh active session");
     let _worktree_lock = csa_lock::acquire_worktree_write_lock(
         &repo_root,
         &session_id,
@@ -418,7 +427,7 @@ fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
     );
 
     let mut emitted_completion: Option<(String, String, i32, bool)> = None;
-    let exit_code = handle_session_wait_with_hooks(
+    let exit_code = handle_session_wait_with_hooks_at(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
         WaitBehavior {
@@ -426,6 +435,8 @@ fn handle_session_wait_sees_git_toplevel_worktree_lock_from_subdirectory() {
             memory_warn_mb: None,
             timing: WaitLoopTiming::default(),
         },
+        fixed_now,
+        None,
         |_project_root, _current_session_id, _trigger| {
             panic!("live git-toplevel worktree lock should keep session nonterminal")
         },

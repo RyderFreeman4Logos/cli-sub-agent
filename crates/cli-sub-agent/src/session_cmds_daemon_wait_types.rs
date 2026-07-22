@@ -59,6 +59,21 @@ pub(super) struct WaitExecutionOptions {
     pub(super) output_mode: SessionWaitOutputMode,
     pub(super) caller_identity: super::WaitCallerIdentity,
     pub(super) model_provider: Option<csa_config::ModelProvider>,
+    #[cfg(test)]
+    pub(super) current_time_for_test: Option<chrono::DateTime<chrono::Utc>>,
+    #[cfg(test)]
+    pub(super) session_live_for_test: Option<bool>,
+}
+
+impl WaitExecutionOptions {
+    pub(super) fn current_time(&self) -> chrono::DateTime<chrono::Utc> {
+        #[cfg(test)]
+        if let Some(current_time) = self.current_time_for_test {
+            return current_time;
+        }
+
+        chrono::Utc::now()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
