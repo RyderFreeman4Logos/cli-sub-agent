@@ -4,7 +4,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::SystemTime;
 use tracing::{debug, info, warn};
 
 /// Handle setup for Claude Code MCP integration
@@ -200,11 +199,6 @@ const REVIEW_CHECK_TEMPLATE: &str = include_str!("setup_cmds/review-check.sh");
 
 const REVIEW_GATE_INSTALL_MARKER: &str = "Installed by: csa setup review-gate";
 
-/// Rate-limit interval for auto-setup checks (1 hour).
-const REVIEW_GATE_CHECK_INTERVAL_SECS: u64 = 3600;
-/// Timestamp file name stored in the project state dir.
-const REVIEW_GATE_TIMESTAMP_FILE: &str = "review-gate-check-ts";
-
 /// Handle `csa setup review-gate [--check]`.
 pub(crate) fn handle_setup_review_gate(project_root: &Path, check: bool) -> Result<()> {
     if check {
@@ -242,39 +236,21 @@ pub(crate) fn spawn_review_gate_setup_if_needed(
         }
     }
 
-    let project_root = project_root.to_path_buf();
-    tokio::spawn(async move {
-        if let Err(e) = check_and_setup_review_gate_bg(&project_root).await {
-            debug!("review-gate auto-setup: background task failed: {e:#}");
-        }
-    });
+    auto_setup_review_gate(project_root);
 }
 
-/// Background async task: rate-limited auto-setup of the review gate.
-async fn check_and_setup_review_gate_bg(project_root: &Path) -> anyhow::Result<()> {
+/// Check launcher eligibility for the review gate without changing the repository.
+fn auto_setup_review_gate(project_root: &Path) {
     match review_gate_opt_in_signal(project_root) {
         Some(signal) => debug!("review-gate auto-setup: opt-in detected ({signal})"),
         None => {
             debug!("review-gate auto-setup: skipping (repo is not CSA-managed / opted in)");
-            return Ok(());
+            return;
         }
     }
-
-    let state_dir = csa_session::get_session_root(project_root)?;
-    let ts_path = state_dir.join(REVIEW_GATE_TIMESTAMP_FILE);
-
-    if !needs_review_gate_check(&ts_path)? {
-        debug!(
-            "review-gate auto-setup: skipped (checked < {REVIEW_GATE_CHECK_INTERVAL_SECS}s ago)"
-        );
-        return Ok(());
-    }
-    write_review_gate_timestamp(&ts_path)?;
-
-    info!("review-gate auto-setup: running setup");
-    install_review_gate(project_root, /*verbose=*/ false)?;
-    info!("review-gate auto-setup: complete");
-    Ok(())
+    // Launcher-to-provider handoff must not change the worktree. Explicit setup
+    // remains available for users who intentionally want repository hook changes.
+    info!("review-gate auto-setup: skipped; run `csa setup review-gate` explicitly");
 }
 
 pub(crate) fn review_gate_opt_in_signal(project_root: &Path) -> Option<&'static str> {
@@ -371,29 +347,6 @@ fn should_install_hook(
             }
         },
     }
-}
-
-/// Returns true when the timestamp file is absent or older than CHECK_INTERVAL_SECS.
-fn needs_review_gate_check(ts_path: &Path) -> anyhow::Result<bool> {
-    let metadata = match std::fs::metadata(ts_path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-        Err(e) => return Err(e.into()),
-    };
-    let modified = metadata.modified()?;
-    let age = SystemTime::now()
-        .duration_since(modified)
-        .unwrap_or(std::time::Duration::MAX);
-    Ok(age.as_secs() >= REVIEW_GATE_CHECK_INTERVAL_SECS)
-}
-
-/// Write (or touch) the rate-limit timestamp file.
-fn write_review_gate_timestamp(ts_path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = ts_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(ts_path, b"")?;
-    Ok(())
 }
 
 /// Install all review gate components in `project_root`.

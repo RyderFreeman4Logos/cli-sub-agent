@@ -110,33 +110,6 @@ where
     buffer.contents()
 }
 
-#[cfg(unix)]
-fn install_fake_lefthook(bin_dir: &Path, log_path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::create_dir_all(bin_dir).expect("create fake bin dir");
-    let fake = bin_dir.join("lefthook");
-    fs::write(
-        &fake,
-        format!(
-            "#!/bin/sh\n\
-printf '%s\\n' \"$PWD $*\" >> '{}'\n\
-mkdir -p .git/hooks\n\
-cat > .git/hooks/pre-push <<'HOOK'\n\
-#!/bin/sh\n\
-# lefthook test stub\n\
-HOOK\n",
-            log_path.display()
-        ),
-    )
-    .expect("write fake lefthook");
-    let mut perms = fs::metadata(&fake)
-        .expect("fake lefthook metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(fake, perms).expect("chmod fake lefthook");
-}
-
 #[test]
 fn adds_branch_protection_when_review_check_already_present() {
     let input =
@@ -491,29 +464,11 @@ fn untracked_different_branch_protection_without_marker_is_not_overwritten_and_w
 }
 
 #[test]
-fn needs_check_true_when_no_file() {
-    let td = TempDir::new().unwrap();
-    let ts = td.path().join(REVIEW_GATE_TIMESTAMP_FILE);
-    assert!(needs_review_gate_check(&ts).unwrap());
-}
-
-#[test]
-fn needs_check_false_after_recent_write() {
-    let td = TempDir::new().unwrap();
-    let ts = td.path().join(REVIEW_GATE_TIMESTAMP_FILE);
-    fs::write(&ts, b"").unwrap();
-    assert!(!needs_review_gate_check(&ts).unwrap());
-}
-
-#[tokio::test]
-async fn auto_setup_skips_repo_without_review_gate_opt_in() {
-    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+fn auto_setup_skips_repo_without_review_gate_opt_in() {
     let td = TempDir::new().expect("create tempdir");
     init_git_repo(td.path());
 
-    check_and_setup_review_gate_bg(td.path())
-        .await
-        .expect("skip should not fail");
+    auto_setup_review_gate(td.path());
 
     assert!(
         !td.path().join("lefthook.yml").exists(),
@@ -535,52 +490,37 @@ async fn auto_setup_skips_repo_without_review_gate_opt_in() {
     );
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn auto_setup_installs_when_lefthook_yml_is_tracked() {
-    let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.lock().await;
+#[test]
+fn auto_setup_leaves_tracked_lefthook_yml_clean() {
     let td = TempDir::new().expect("create tempdir");
     init_git_repo(td.path());
-    track_file(td.path(), "lefthook.yml", "pre-commit:\n");
+    let original_lefthook = "pre-commit:\n";
+    track_file(td.path(), "lefthook.yml", original_lefthook);
 
-    let bin_dir = td.path().join("bin");
-    let log_path = td.path().join("lefthook.log");
-    install_fake_lefthook(&bin_dir, &log_path);
-    let inherited_path = std::env::var("PATH").unwrap_or_default();
-    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
-    let _path_guard = crate::test_env_lock::ScopedEnvVarRestore::set("PATH", &patched_path);
+    auto_setup_review_gate(td.path());
 
-    check_and_setup_review_gate_bg(td.path())
-        .await
-        .expect("opted-in repo should install review gate");
-
-    let lefthook_yml =
-        fs::read_to_string(td.path().join("lefthook.yml")).expect("read updated lefthook.yml");
-    assert!(
-        lefthook_yml.contains("review-check:"),
-        "opted-in repo keeps existing merge behavior"
+    assert_eq!(
+        fs::read_to_string(td.path().join("lefthook.yml")).expect("read lefthook.yml"),
+        original_lefthook,
+        "launcher auto-setup must leave tracked lefthook.yml byte-for-byte unchanged"
+    );
+    assert_eq!(
+        git_status_short(td.path()),
+        "",
+        "launcher auto-setup must leave no tracked worktree drift"
     );
     assert!(
-        lefthook_yml.contains("branch-protection:"),
-        "opted-in repo receives pre-push branch protection"
-    );
-    assert!(
-        td.path()
+        !td.path()
             .join("scripts/hooks/branch-protection.sh")
             .exists(),
-        "opted-in repo receives branch-protection.sh"
+        "launcher auto-setup must not write a tracked branch-protection hook"
     );
     assert!(
-        td.path().join("scripts/hooks/review-check.sh").exists(),
-        "opted-in repo receives review-check.sh"
+        !td.path().join("scripts/hooks/review-check.sh").exists(),
+        "launcher auto-setup must not write a tracked review-check hook"
     );
     assert!(
-        td.path().join(".git/hooks/pre-push").exists(),
-        "opted-in repo receives installed pre-push hook"
-    );
-    let lefthook_log = fs::read_to_string(log_path).expect("read fake lefthook log");
-    assert!(
-        lefthook_log.contains("install"),
-        "opted-in repo should invoke lefthook install"
+        !td.path().join(".git/hooks/pre-push").exists(),
+        "launcher auto-setup must not install a repository hook"
     );
 }
