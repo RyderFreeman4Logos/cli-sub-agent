@@ -20,6 +20,10 @@ pub(crate) fn classify_execution_outcome(
     session_state: Option<&MetaSessionState>,
     session_dir: &Path,
 ) -> DebateErrorKind {
+    if has_persisted_pre_exec_failure(session_dir) {
+        return DebateErrorKind::Deterministic("persisted pre-exec failure".to_string());
+    }
+
     if ToolLiveness::is_alive(session_dir) {
         return DebateErrorKind::StillWorking;
     }
@@ -80,10 +84,28 @@ pub(crate) fn classify_execution_outcome(
     DebateErrorKind::Deterministic(format!("exit code {}", execution.exit_code))
 }
 
+/// A pre-exec failure result is terminal evidence for this attempt. Its diagnostic
+/// lock may retain the launching test/process PID after release, so it must win
+/// over lock-based liveness and prevent an endless StillWorking retry.
+fn has_persisted_pre_exec_failure(session_dir: &Path) -> bool {
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    let Ok(contents) = std::fs::read_to_string(result_path) else {
+        return false;
+    };
+    let Ok(result) = toml::from_str::<csa_session::SessionResult>(&contents) else {
+        return false;
+    };
+    result.status == "failure" && result.summary.trim_start().starts_with("pre-exec:")
+}
+
 pub(crate) fn classify_execution_error(
     error: &anyhow::Error,
     session_dir: Option<&Path>,
 ) -> DebateErrorKind {
+    if session_dir.is_some_and(has_persisted_pre_exec_failure) {
+        return DebateErrorKind::Deterministic(error.to_string());
+    }
+
     if session_dir.is_some_and(ToolLiveness::is_alive) {
         return DebateErrorKind::StillWorking;
     }

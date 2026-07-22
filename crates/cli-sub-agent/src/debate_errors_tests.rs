@@ -91,6 +91,67 @@ fn classify_timeout_error_with_alive_pid_as_still_working() {
 }
 
 #[test]
+fn classify_pre_exec_failure_with_persisted_result_before_live_lock_as_deterministic() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks");
+    let lock_path = locks_dir.join("codex.lock");
+    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id())).expect("write");
+
+    let result = csa_session::SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "pre-exec: provider rejected".to_string(),
+        ..Default::default()
+    };
+    std::fs::write(
+        tmp.path().join(csa_session::result::RESULT_FILE_NAME),
+        toml::to_string_pretty(&result).expect("serialize result"),
+    )
+    .expect("persist terminal result");
+
+    let classified = classify_execution_error(
+        &anyhow::anyhow!("pre-exec: provider rejected"),
+        Some(tmp.path()),
+    );
+    assert!(
+        matches!(classified, DebateErrorKind::Deterministic(_)),
+        "persisted terminal result must win over a live released-lock PID, got {classified:?}"
+    );
+}
+
+#[test]
+fn classify_pre_exec_result_before_live_lock_as_deterministic_outcome() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks");
+    let lock_path = locks_dir.join("codex.lock");
+    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id())).expect("write");
+
+    let result = csa_session::SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "pre-exec: provider rejected".to_string(),
+        ..Default::default()
+    };
+    std::fs::write(
+        tmp.path().join(csa_session::result::RESULT_FILE_NAME),
+        toml::to_string_pretty(&result).expect("serialize result"),
+    )
+    .expect("persist terminal result");
+
+    let execution = ExecutionResult {
+        exit_code: 1,
+        ..Default::default()
+    };
+    let classified = classify_execution_outcome(&execution, None, tmp.path());
+    assert!(
+        matches!(classified, DebateErrorKind::Deterministic(_)),
+        "persisted terminal result must win over a live released-lock PID, got {classified:?}"
+    );
+}
+
+#[test]
 fn classify_exit_144_sigstkflt_as_transient() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let execution = ExecutionResult {
