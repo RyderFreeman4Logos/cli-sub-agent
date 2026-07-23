@@ -67,6 +67,30 @@ fn test_bwrap_command_with_writable_paths() {
 }
 
 #[test]
+fn test_bwrap_non_tmp_writable_path_creates_parent_dir_before_bind() {
+    let path = "/home/user/.local/state/cli-sub-agent/project/sessions/session-id";
+    let parent = "/home/user/.local/state/cli-sub-agent/project/sessions";
+
+    let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+    builder.with_writable_path(Path::new(path));
+    let args = command_args(&builder.build());
+
+    let dir_pos = args
+        .windows(2)
+        .position(|window| window == ["--dir", parent])
+        .expect("--dir writable path parent must be present");
+    let bind_pos = args
+        .windows(3)
+        .position(|window| window == ["--bind", path, path])
+        .expect("--bind writable path must be present");
+
+    assert!(
+        dir_pos < bind_pos,
+        "--dir parent must precede --bind; args: {args:?}"
+    );
+}
+
+#[test]
 fn test_bwrap_from_isolation_plan_bwrap() {
     let plan = IsolationPlan {
         resource: ResourceCapability::None,
