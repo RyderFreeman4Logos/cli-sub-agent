@@ -81,6 +81,13 @@ pub(crate) fn format_session_wait_command(
     )
 }
 
+pub(crate) fn format_session_kill_command(session_id: &str, project_root: &Path) -> String {
+    format!(
+        "csa session kill --session {session_id}{}",
+        format_cd_arg(project_root)
+    )
+}
+
 pub(crate) fn format_session_attach_command(session_id: &str, project_root: &Path) -> String {
     format!(
         "csa session attach --session {}{}",
