@@ -214,6 +214,7 @@ pub(crate) fn handle_session_result(
             &resolved_id,
             result,
             json,
+            effective_root,
         );
         return Ok(());
     }
