@@ -107,6 +107,14 @@ impl BwrapCommandBuilder {
                 }
                 cmd.args(["--bind", &s, &dest]);
             } else {
+                // Ensure destination parent exists inside the sandbox. When the
+                // writable path involves symlinks or nested state directories,
+                // the logical destination may not exist under the read-only root.
+                if let Some(parent) = path.parent()
+                    && parent != Path::new("/")
+                {
+                    cmd.args(["--dir", &parent.to_string_lossy()]);
+                }
                 cmd.args(["--bind", &s, &dest]);
             }
         }
