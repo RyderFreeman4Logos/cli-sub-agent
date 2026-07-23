@@ -334,6 +334,11 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 },
             )?;
             let effective_no_daemon = no_daemon || goal.is_some();
+            let wait_hint_provider =
+                daemon_caller_hints::explicit_wait_provider_from_launch_routing(
+                    model_spec.as_deref(),
+                    &startup_env,
+                );
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 effective_no_daemon,
@@ -349,7 +354,8 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                     no_fs_sandbox,
                     &extra_writable,
                     wait,
-                ),
+                )
+                .with_wait_hint_provider(wait_hint_provider),
             )?;
 
             let stream_mode = if no_stream_stdout {
@@ -523,6 +529,11 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
             if !args.daemon_child && args.session_id.is_none() {
                 review_cmd::preflight::validate_before_session(&args, &startup_env)?;
             }
+            let wait_hint_provider =
+                daemon_caller_hints::explicit_wait_provider_from_launch_routing(
+                    args.model_spec.as_deref(),
+                    &startup_env,
+                );
             let review_daemon_options = if args.fix_finding {
                 run_cmd_daemon::DaemonSpawnOptions::for_review_fix_finding(
                     args.prompt.as_deref(),
@@ -530,7 +541,8 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 )
             } else {
                 run_cmd_daemon::DaemonSpawnOptions::default()
-            };
+            }
+            .with_wait_hint_provider(wait_hint_provider);
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
                 args.no_daemon || args.check_verdict,
@@ -551,6 +563,11 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
             exit_current_process(exit_code);
         }
         Commands::Debate(args) => {
+            let wait_hint_provider =
+                daemon_caller_hints::explicit_wait_provider_from_launch_routing(
+                    args.model_spec.as_deref(),
+                    &startup_env,
+                );
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "debate",
                 args.no_daemon || args.dry_run,
@@ -562,7 +579,8 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                     args.question.as_deref(),
                     args.topic.as_deref(),
                     args.question_file.as_deref(),
-                ),
+                )
+                .with_wait_hint_provider(wait_hint_provider),
             )?;
             let result =
                 debate_cmd::handle_debate(args, current_depth, output_format, &startup_env).await;

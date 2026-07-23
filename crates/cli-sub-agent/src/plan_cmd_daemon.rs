@@ -252,6 +252,10 @@ pub(crate) fn spawn_and_exit(
     args: &PlanRunArgs,
     forwarded_args: Option<Vec<String>>,
 ) -> Result<()> {
+    let wait_hint_provider = crate::daemon_caller_hints::explicit_wait_provider_from_launch_routing(
+        args.model_spec_override.as_deref(),
+        &args.startup_env,
+    );
     let session_id = csa_session::new_session_id();
     let project_root = determine_project_root(args.cd.as_deref())?;
     let session_root = csa_session::get_session_root(&project_root)?;
@@ -294,7 +298,13 @@ pub(crate) fn spawn_and_exit(
 
     let spawn_result = csa_process::daemon::spawn_daemon_verified_and_publish(
         config,
-        |result| crate::daemon_started_output::prepare(result, &project_root),
+        |result| {
+            crate::daemon_started_output::prepare(
+                result,
+                &project_root,
+                wait_hint_provider.as_ref(),
+            )
+        },
         |_, output| crate::daemon_started_output::publish(output),
     );
     if let Err(error) = spawn_result {

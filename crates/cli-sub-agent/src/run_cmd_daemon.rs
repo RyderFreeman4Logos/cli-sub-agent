@@ -31,6 +31,7 @@ pub(crate) struct DaemonSpawnOptions {
     no_fs_sandbox: bool,
     extra_writable: Vec<PathBuf>,
     wait_for_pre_spawn_memory_admission: bool,
+    wait_hint_provider: Option<csa_config::ModelProvider>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -67,6 +68,14 @@ impl PromptFileForwardArg {
 }
 
 impl DaemonSpawnOptions {
+    pub(crate) fn with_wait_hint_provider(
+        mut self,
+        wait_hint_provider: Option<csa_config::ModelProvider>,
+    ) -> Self {
+        self.wait_hint_provider = wait_hint_provider;
+        self
+    }
+
     pub(crate) fn for_run(
         skill: Option<&str>,
         prompt: Option<&str>,
@@ -365,6 +374,7 @@ pub(crate) fn spawn_and_exit(
         args: forwarded_args,
         env: daemon_env,
     };
+    let wait_hint_provider = spawn_options.wait_hint_provider.clone();
 
     let spawn_result = csa_process::daemon::spawn_daemon_verified_and_publish(
         config,
@@ -376,7 +386,11 @@ pub(crate) fn spawn_and_exit(
                     &result.session_dir,
                 )?;
             }
-            crate::daemon_started_output::prepare(result, &project_root)
+            crate::daemon_started_output::prepare(
+                result,
+                &project_root,
+                wait_hint_provider.as_ref(),
+            )
         },
         |_, output| crate::daemon_started_output::publish(output),
     );
