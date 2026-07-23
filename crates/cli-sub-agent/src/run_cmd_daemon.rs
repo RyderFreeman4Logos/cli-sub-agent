@@ -11,10 +11,13 @@ use crate::startup_env::StartupSubtreeEnv;
 
 const STDIN_PROMPT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
+#[path = "run_cmd_daemon_debate_init.rs"]
+mod debate_init;
 #[path = "run_cmd_daemon_review.rs"]
 mod review;
 #[path = "run_cmd_daemon_tier_policy.rs"]
 mod tier_policy;
+use debate_init::prepare_detached_debate_initialization;
 pub(crate) use tier_policy::{
     RunDaemonTierPolicyPreflight, validate_run_tier_policy_before_daemon_spawn,
 };
@@ -319,6 +322,9 @@ pub(crate) fn spawn_and_exit(
     spawn_options: DaemonSpawnOptions,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd)?;
+    if subcommand == "debate" {
+        prepare_detached_debate_initialization(&project_root)?;
+    }
     if subcommand == "run" {
         validate_run_daemon_writable_sources(&project_root, &spawn_options)?;
     }
@@ -647,6 +653,9 @@ fn remove_prompt_file_arg(args: &mut Vec<String>, flags: &[&str], sentinel_only:
     }
 }
 
+#[cfg(test)]
+#[path = "run_cmd_daemon_debate_init_tests.rs"]
+mod debate_init_tests;
 #[cfg(test)]
 #[path = "run_cmd_daemon_tests.rs"]
 mod tests;
