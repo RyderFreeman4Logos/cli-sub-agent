@@ -8,7 +8,6 @@ use anyhow::Result;
 use crate::cli::SessionCommands;
 use crate::session_cmds;
 use crate::startup_env::StartupSubtreeEnv;
-use csa_config::provider_detection::MAX_WAIT_TTL_SECONDS;
 use csa_config::{GlobalConfig, ModelProvider, ProjectConfig, detect_model_provider, provider_ttl};
 use csa_core::types::OutputFormat;
 
@@ -313,23 +312,16 @@ fn wait_provider_error(
     );
 
     let mut legal_key_count = 0;
-    let mut has_clamped_ttl = false;
     if let Some(config) = config {
         for (provider, ttl) in &config.kv_cache.provider_ttls.0 {
             if *ttl > 0 {
                 let _ = writeln!(message, "  {provider}={ttl}");
                 legal_key_count += 1;
-                has_clamped_ttl |= *ttl > MAX_WAIT_TTL_SECONDS;
             }
         }
     }
     if legal_key_count == 0 {
         message.push_str("  (none with TTL > 0)\n");
-    } else if has_clamped_ttl {
-        let _ = writeln!(
-            message,
-            "Effective wait TTL is capped at {MAX_WAIT_TTL_SECONDS} seconds."
-        );
     }
 
     if let Some(provider) = requested_provider {
