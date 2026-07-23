@@ -24,15 +24,9 @@ pub(crate) fn prepare(
         .command()
         .map(crate::daemon_caller_hints::escape_structured_comment_attr)
         .unwrap_or_default();
-    let wait_hint = match wait_command.command() {
-        Some(wait_cmd) => {
-            let wait_cmd = crate::daemon_caller_hints::escape_structured_comment_attr(wait_cmd);
-            format!(
-                "<!-- CSA:CALLER_HINT action=\"wait\" rule=\"Call {wait_cmd} with run_in_background: true. Task-notification is your wake signal — no polling, no loops, one wait per Bash call.\" -->"
-            )
-        }
-        None => wait_command.provider_selection_hint(),
-    };
+    let wait_hint = wait_command
+        .caller_hint("wait")
+        .unwrap_or_else(|| wait_command.provider_selection_hint());
     let attach_cmd =
         crate::daemon_caller_hints::format_session_attach_command(&result.session_id, project_root);
     let kill_cmd =
