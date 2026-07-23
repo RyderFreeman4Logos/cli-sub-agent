@@ -228,6 +228,29 @@ fn rendered_session_wait_caller_hints_stay_under_size_budget() {
 }
 
 #[test]
+fn rendered_session_wait_caller_hint_falls_back_when_provider_exceeds_budget() {
+    let provider = "x".repeat(200);
+    for action in ["wait", "retry_wait"] {
+        let marker = crate::daemon_caller_hints::render_session_wait_caller_hint(action, &provider);
+        let rendered_bytes = marker.len();
+        assert!(
+            rendered_bytes <= CALLER_HINT_MAX_BYTES,
+            "fallback {action} CALLER_HINT is {rendered_bytes} bytes, exceeds \
+             {CALLER_HINT_MAX_BYTES} byte budget: {marker}",
+        );
+        assert_eq!(
+            marker,
+            format!(
+                "<!-- CSA:CALLER_HINT action=\"{action}\" \
+                 forbid=\"process.wait,process.poll,manual_status_loops,short_wrapper_timeouts\" \
+                 note=\"budget_exceeded\" -->"
+            ),
+            "long provider names must use the minimal budget fallback"
+        );
+    }
+}
+
+#[test]
 fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     assert_eq!(
         RUN_CMD_DAEMON_SRC

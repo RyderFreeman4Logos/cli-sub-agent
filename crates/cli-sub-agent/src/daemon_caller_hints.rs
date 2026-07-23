@@ -2,6 +2,10 @@ use std::path::Path;
 
 use csa_config::{GlobalConfig, ModelProvider, provider_ttl};
 
+const MAX_CALLER_HINT_BODY_BYTES: usize = 300;
+const SESSION_WAIT_CALLER_HINT_FORBID: &str =
+    "process.wait,process.poll,manual_status_loops,short_wrapper_timeouts";
+
 pub(crate) struct SessionWaitCommand {
     command: Option<String>,
     provider: Option<String>,
@@ -81,18 +85,27 @@ pub(crate) fn resolve_session_wait_command(
 ///
 /// The command itself remains in the adjacent durable `CSA:SESSION_STARTED`
 /// or `CSA:SESSION_WAIT_KV_WARM` carrier marker, keeping this repeated hint
-/// within the caller-context budget.
+/// within the caller-context budget. When a provider name would exceed that
+/// budget, retain the action and forbidden APIs in a minimal fail-safe marker.
 pub(crate) fn render_session_wait_caller_hint(action: &str, provider: &str) -> String {
     assert!(
         matches!(action, "wait" | "retry_wait"),
         "session wait caller hints only support wait actions"
     );
     let provider = escape_structured_comment_attr(provider);
-    format!(
+    let marker = format!(
         "<!-- CSA:CALLER_HINT action=\"{action}\" provider=\"{provider}\" \
          background=true timeout_min_sec=7200 notify_on_complete=true \
          checkin_owner=CSA checkin_policy=provider_ttl \
-         forbid=\"process.wait,process.poll,manual_status_loops,short_wrapper_timeouts\" -->"
+         forbid=\"{SESSION_WAIT_CALLER_HINT_FORBID}\" -->"
+    );
+    if marker.len() <= MAX_CALLER_HINT_BODY_BYTES {
+        return marker;
+    }
+
+    format!(
+        "<!-- CSA:CALLER_HINT action=\"{action}\" \
+         forbid=\"{SESSION_WAIT_CALLER_HINT_FORBID}\" note=\"budget_exceeded\" -->"
     )
 }
 
