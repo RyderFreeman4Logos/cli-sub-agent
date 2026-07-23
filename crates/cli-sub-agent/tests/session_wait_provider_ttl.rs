@@ -231,7 +231,7 @@ fn wait_uses_only_explicitly_configured_provider_ttl_keys() {
 }
 
 #[test]
-fn session_wait_help_requires_a_configured_provider_ttl() {
+fn session_wait_help_requires_an_explicit_configured_provider_ttl() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())
         .args(["session", "wait", "--help"])
@@ -241,8 +241,24 @@ fn session_wait_help_requires_a_configured_provider_ttl() {
 
     assert!(output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("configured [kv_cache.provider_ttls] key"),
+        stdout.contains("Every wait requires an explicit normalized `--model-provider`"),
         "{stdout}"
+    );
+    assert!(
+        stdout.contains("configured `[kv_cache.provider_ttls]` entry is > 0"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Its TTL is resolved exactly from that entry"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("missing, unconfigured, or zero values fail closed"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("best-effort detection"),
+        "obsolete ambient-provider wording must not appear: {stdout}"
     );
     assert!(!stdout.contains("default_ttl_seconds"), "{stdout}");
 }
