@@ -12,12 +12,13 @@ pub(crate) struct DaemonStartedOutput {
 pub(crate) fn prepare(
     result: &csa_process::daemon::DaemonSpawnResult,
     project_root: &Path,
+    wait_provider: Option<&csa_config::ModelProvider>,
 ) -> Result<DaemonStartedOutput> {
     crate::run_cmd_daemon::verify_daemon_session_waitable(project_root, &result.session_id)?;
     let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
         &result.session_id,
         project_root,
-        None,
+        wait_provider,
     );
     let wait_cmd_attr = wait_command
         .command()
@@ -164,7 +165,7 @@ mod tests {
         )
         .expect("plan placeholder should persist");
 
-        let output = prepare(&result, &project_root)
+        let output = prepare(&result, &project_root, None)
             .expect("waitable plan placeholder should permit marker rendering");
         assert_eq!(output.stdout, format!("{session_id}\n"));
         assert_eq!(
@@ -173,6 +174,60 @@ mod tests {
             "exactly one structured session-start marker must be emitted"
         );
         assert!(output.stderr.contains("CSA:CALLER_HINT"));
+        let _ = std::fs::remove_dir_all(session_root);
+    }
+
+    #[test]
+    fn root_initial_wait_hint_propagates_normalized_explicit_provider() {
+        let _lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        let (_home_guard, _config_guard, _state_guard, _provider_guard) =
+            isolate_daemon_started_env(&temp);
+        let _ambient_provider = ScopedEnvVarRestore::set("HERMES_MODEL_PROVIDER", "custom");
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(config_path, "[kv_cache.provider_ttls]\nxai = 17\n")
+            .expect("write provider config");
+        let startup_env =
+            crate::startup_env::StartupSubtreeEnv::from_values(std::collections::HashMap::new());
+        let provider = crate::daemon_caller_hints::explicit_wait_provider_from_launch_routing(
+            Some("codex/XAI/gpt-5.5/xhigh"),
+            &startup_env,
+        )
+        .expect("explicit root model spec must carry a provider");
+        let (session_id, session_root, result) = plan_spawn_result(&project_root);
+        csa_session::create_session_with_daemon_env(
+            &project_root,
+            Some("run: explicit provider"),
+            None,
+            None,
+            Some(&session_id),
+            Some(&result.session_dir),
+            Some(&project_root),
+        )
+        .expect("run placeholder should persist");
+
+        let output =
+            prepare(&result, &project_root, Some(&provider)).expect("render root started marker");
+
+        let expected_wait_command = format!(
+            "wait_cmd=\"csa session wait --session {session_id} --model-provider xai --cd '{}'\"",
+            project_root.display(),
+        );
+        assert!(
+            output.stderr.contains(&expected_wait_command),
+            "root initial wait hint must preserve its normalized launch provider: {:#?}",
+            output.stderr
+        );
+        assert!(
+            !output.stderr.contains("--model-provider custom"),
+            "root initial wait hint must not use the ambient provider: {:#?}",
+            output.stderr
+        );
         let _ = std::fs::remove_dir_all(session_root);
     }
 
@@ -242,6 +297,7 @@ mod tests {
         std::fs::create_dir_all(&project_root).expect("create project root");
         let (_home_guard, _config_guard, _state_guard, _provider_guard) =
             isolate_daemon_started_env(&temp);
+        let _ambient_provider = ScopedEnvVarRestore::set("HERMES_MODEL_PROVIDER", "custom");
         let config_path =
             csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
         std::fs::create_dir_all(config_path.parent().expect("config parent"))
@@ -260,7 +316,7 @@ mod tests {
         )
         .expect("plan placeholder should persist");
 
-        let output = prepare(&result, &project_root).expect("render started marker");
+        let output = prepare(&result, &project_root, None).expect("render started marker");
 
         assert!(
             output
@@ -294,7 +350,7 @@ mod tests {
         std::fs::create_dir_all(&result.session_dir)
             .expect("session dir should exist without state.toml");
 
-        prepare(&result, &project_root)
+        prepare(&result, &project_root, None)
             .expect_err("unreadable placeholder must block marker rendering");
         let _ = std::fs::remove_dir_all(session_root);
     }

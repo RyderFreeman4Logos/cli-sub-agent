@@ -613,6 +613,7 @@ frequent_poll_seconds = 60
 # General long-poll TTL; not a providerless `csa session wait` fallback.
 default_ttl_seconds = 240
 # `csa session wait` requires a positive-TTL key passed via --model-provider.
+# The configured value is used exactly as the wait cap; no source fallback or maximum applies.
 [kv_cache.provider_ttls]
 claude = 3300
 openai = 1700

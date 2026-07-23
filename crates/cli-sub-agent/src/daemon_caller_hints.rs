@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use csa_config::{GlobalConfig, ModelProvider, detect_model_provider, provider_ttl};
+use csa_config::{GlobalConfig, ModelProvider, provider_ttl};
 
 pub(crate) struct SessionWaitCommand {
     command: Option<String>,
@@ -28,10 +28,10 @@ impl SessionWaitCommand {
 
 /// Resolve a provider-qualified `csa session wait` command for caller hints.
 ///
-/// Explicit caller context takes precedence over best-effort current-process
-/// detection. A command is emitted only when its provider has a positive TTL
-/// in the active user configuration; otherwise the caller must choose from the
-/// legal keys carried by [`SessionWaitCommand::provider_selection_hint`].
+/// A command is emitted only for the explicit launch or wait provider when it
+/// has a positive TTL in the active user configuration. Otherwise the caller
+/// must choose from the legal keys carried by
+/// [`SessionWaitCommand::provider_selection_hint`].
 pub(crate) fn resolve_session_wait_command(
     session_id: &str,
     project_root: &Path,
@@ -51,22 +51,38 @@ pub(crate) fn resolve_session_wait_command(
                 .collect()
         })
         .unwrap_or_default();
-    let provider = preferred_provider
-        .cloned()
-        .or_else(detect_model_provider)
-        .filter(|provider| {
-            config
-                .as_ref()
-                .and_then(|config| provider_ttl(provider, &config.kv_cache))
-                .is_some()
-        });
+    let provider = preferred_provider.filter(|provider| {
+        config
+            .as_ref()
+            .and_then(|config| provider_ttl(provider, &config.kv_cache))
+            .is_some()
+    });
 
     SessionWaitCommand {
-        command: provider.as_ref().map(|provider| {
+        command: provider.map(|provider| {
             format_session_wait_command(session_id, project_root, provider.as_str())
         }),
         legal_provider_keys,
     }
+}
+
+/// Return the normalized provider carried by explicit launch routing only.
+///
+/// A direct `--model-spec` wins. Otherwise, a trusted inherited subtree pin
+/// may carry the launch identity for a nested CSA process. This intentionally
+/// does not inspect ambient provider configuration or environment variables:
+/// an unknown launch provider produces an actionable, non-runnable hint.
+pub(crate) fn explicit_wait_provider_from_launch_routing(
+    model_spec: Option<&str>,
+    startup_env: &crate::startup_env::StartupSubtreeEnv,
+) -> Option<ModelProvider> {
+    let inherited_pin = crate::run_cmd_model_pin::inherited_model_pin_from_startup(startup_env);
+    let model_spec =
+        model_spec.or_else(|| inherited_pin.as_ref().map(|pin| pin.model_spec.as_str()))?;
+    csa_executor::ModelSpec::parse(model_spec)
+        .ok()
+        .map(|spec| ModelProvider::new(&spec.provider))
+        .filter(|provider| !provider.as_str().is_empty())
 }
 
 /// Format every emitted shell wait command in one provider-aware form.
@@ -146,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_command_includes_detected_configured_model_provider() {
+    fn wait_command_rejects_ambient_provider_detection_without_explicit_routing_context() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().expect("tempdir");
         let config_root = dir.path().join("xdg-config");
@@ -161,16 +177,68 @@ mod tests {
         std::fs::write(config_path, "[kv_cache.provider_ttls]\nopenai = 17\n")
             .expect("write provider config");
 
+        let command = resolve_session_wait_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            None,
+        );
+        assert!(
+            command.command().is_none(),
+            "an initial or retry hint must not infer its provider from HERMES_MODEL_PROVIDER"
+        );
+        assert!(
+            command
+                .provider_selection_hint()
+                .contains("legal_keys=\"openai\""),
+            "missing explicit routing must fail closed with actionable legal keys"
+        );
+    }
+
+    #[test]
+    fn retry_command_reloads_provider_ttl_config_and_preserves_explicit_provider() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+        let _provider_guard = EnvVarGuard::set("HERMES_MODEL_PROVIDER", "other");
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 3300\n")
+            .expect("write provider config");
+
+        let provider = csa_config::ModelProvider::new(" XAI ");
+        let command = resolve_session_wait_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            Some(&provider),
+        );
         assert_eq!(
-            resolve_session_wait_command(
-                "01KAS6M5XG7V4M4M6YDRS7P8R9",
-                Path::new("/tmp/repo"),
-                None,
-            )
-            .command(),
+            command.command(),
             Some(
-                "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider openai --cd '/tmp/repo'"
+                "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai --cd '/tmp/repo'"
             )
+        );
+
+        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")
+            .expect("invalidate provider config");
+        let reloaded = resolve_session_wait_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            Some(&provider),
+        );
+        assert!(
+            reloaded.command().is_none(),
+            "each retry must re-read current provider TTL configuration"
+        );
+        assert!(
+            reloaded
+                .provider_selection_hint()
+                .contains("legal_keys=\"none\""),
+            "an invalidated explicit provider must fail closed"
         );
     }
 }

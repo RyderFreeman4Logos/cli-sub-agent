@@ -564,6 +564,8 @@ fn daemon_child_startup_env_preserves_trusted_pin_for_run_review_debate() {
     }
 }
 
+include!("run_cmd_daemon_wait_hint_tests.rs");
+
 #[test]
 fn daemon_child_startup_env_does_not_trust_ambient_pin_without_sidecar() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK

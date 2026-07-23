@@ -8,8 +8,7 @@ use anyhow::Result;
 use crate::cli::SessionCommands;
 use crate::session_cmds;
 use crate::startup_env::StartupSubtreeEnv;
-use csa_config::provider_detection::MAX_WAIT_TTL_SECONDS;
-use csa_config::{GlobalConfig, ModelProvider, ProjectConfig, detect_model_provider, provider_ttl};
+use csa_config::{GlobalConfig, ModelProvider, ProjectConfig, provider_ttl};
 use csa_core::types::OutputFormat;
 
 /// Resolve session ID from positional arg or --session flag.
@@ -246,8 +245,10 @@ pub(crate) fn dispatch(
 
 /// Resolve the `csa session wait` cap from provider-aware KV cache config.
 ///
-/// CLI provider override wins over best-effort provider detection. Both paths
-/// must resolve to a configured `[kv_cache.provider_ttls]` key with TTL > 0.
+/// Every invocation reloads the active user configuration and requires an
+/// explicit provider that resolves to a configured `[kv_cache.provider_ttls]`
+/// key with TTL > 0. A retry command therefore observes the latest config,
+/// while an in-flight wait retains its invocation's cap.
 #[cfg(test)]
 fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>) -> Result<u64> {
     Ok(resolve_wait_provider_and_ttl(cli_model_provider)?.1)
@@ -256,49 +257,27 @@ fn resolve_wait_ttl(cli_model_provider: Option<ModelProvider>) -> Result<u64> {
 fn resolve_wait_provider_and_ttl(
     cli_model_provider: Option<ModelProvider>,
 ) -> Result<(ModelProvider, u64)> {
-    let detected_provider = detect_model_provider();
     let config = match GlobalConfig::load() {
         Ok(config) => config,
         Err(error) => {
             return Err(wait_provider_error(
                 cli_model_provider.as_ref(),
-                detected_provider.as_ref(),
                 None,
                 Some(&error),
             ));
         }
     };
 
-    if let Some(provider) = cli_model_provider.as_ref() {
-        return provider_ttl(provider, &config.kv_cache)
-            .map(|ttl| (provider.clone(), ttl))
-            .ok_or_else(|| {
-                wait_provider_error(
-                    Some(provider),
-                    detected_provider.as_ref(),
-                    Some(&config),
-                    None,
-                )
-            });
-    }
-
-    if let Some(provider) = detected_provider.as_ref()
-        && let Some(ttl) = provider_ttl(provider, &config.kv_cache)
-    {
-        return Ok((provider.clone(), ttl));
-    }
-
-    Err(wait_provider_error(
-        None,
-        detected_provider.as_ref(),
-        Some(&config),
-        None,
-    ))
+    let provider = cli_model_provider
+        .as_ref()
+        .ok_or_else(|| wait_provider_error(None, Some(&config), None))?;
+    provider_ttl(provider, &config.kv_cache)
+        .map(|ttl| (provider.clone(), ttl))
+        .ok_or_else(|| wait_provider_error(Some(provider), Some(&config), None))
 }
 
 fn wait_provider_error(
     requested_provider: Option<&ModelProvider>,
-    detected_provider: Option<&ModelProvider>,
     config: Option<&GlobalConfig>,
     config_error: Option<&anyhow::Error>,
 ) -> anyhow::Error {
@@ -313,23 +292,16 @@ fn wait_provider_error(
     );
 
     let mut legal_key_count = 0;
-    let mut has_clamped_ttl = false;
     if let Some(config) = config {
         for (provider, ttl) in &config.kv_cache.provider_ttls.0 {
             if *ttl > 0 {
                 let _ = writeln!(message, "  {provider}={ttl}");
                 legal_key_count += 1;
-                has_clamped_ttl |= *ttl > MAX_WAIT_TTL_SECONDS;
             }
         }
     }
     if legal_key_count == 0 {
         message.push_str("  (none with TTL > 0)\n");
-    } else if has_clamped_ttl {
-        let _ = writeln!(
-            message,
-            "Effective wait TTL is capped at {MAX_WAIT_TTL_SECONDS} seconds."
-        );
     }
 
     if let Some(provider) = requested_provider {
@@ -338,24 +310,6 @@ fn wait_provider_error(
             "Requested key: {} (missing from provider_ttls or TTL is not > 0).",
             provider.as_str()
         );
-    }
-    match detected_provider {
-        Some(provider) => {
-            let configured = config
-                .and_then(|config| provider_ttl(provider, &config.kv_cache))
-                .is_some();
-            let status = if configured {
-                "configured"
-            } else {
-                "not a configured key with TTL > 0"
-            };
-            let _ = writeln!(
-                message,
-                "Detected hints (best-effort, not authoritative): {} ({status}).",
-                provider.as_str()
-            );
-        }
-        None => message.push_str("Detected hints (best-effort, not authoritative): none.\n"),
     }
     if let Some(error) = config_error {
         let _ = writeln!(message, "Config load error: {error:#}");
@@ -510,7 +464,7 @@ disabled = 0
     }
 
     #[test]
-    fn resolve_wait_ttl_accepts_only_a_detected_configured_provider() {
+    fn resolve_wait_ttl_requires_cli_provider_even_when_environment_is_configured() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
@@ -526,11 +480,22 @@ custom = 1666
 "#,
         );
 
-        assert_eq!(resolve_wait_ttl(None).unwrap(), 1666);
+        let error = resolve_wait_ttl(None)
+            .expect_err("configured ambient provider must not bypass --model-provider");
+        let message = error.to_string();
+        assert!(
+            message.contains("requires --model-provider <key>"),
+            "{message}"
+        );
+        assert!(message.contains("custom=1666"), "{message}");
+        assert!(
+            !message.contains("Detected hints"),
+            "ambient provider detection must not affect session waits: {message}"
+        );
     }
 
     #[test]
-    fn resolve_wait_ttl_maps_openai_codex_hint_to_openai() {
+    fn resolve_wait_ttl_requires_cli_provider_even_when_openai_codex_environment_is_configured() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
@@ -546,6 +511,13 @@ openai = 1666
 "#,
         );
 
-        assert_eq!(resolve_wait_ttl(None).unwrap(), 1666);
+        let error = resolve_wait_ttl(None)
+            .expect_err("provider aliases from ambient configuration must not select a wait TTL");
+        assert!(
+            error
+                .to_string()
+                .contains("requires --model-provider <key>"),
+            "{error:#}"
+        );
     }
 }

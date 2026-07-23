@@ -293,9 +293,9 @@ pub enum SessionCommands {
     },
 
     /// Wait for a daemon session to report a terminal result.
-    /// Requires a configured `[kv_cache.provider_ttls]` key with TTL > 0. Pass
-    /// `--model-provider` on every wait; best-effort detection is accepted only
-    /// when it resolves to a configured positive-TTL key.
+    /// Every wait requires an explicit normalized `--model-provider` whose configured
+    /// `[kv_cache.provider_ttls]` entry is > 0. Its TTL is resolved exactly from that
+    /// entry; missing, unconfigured, or zero values fail closed.
     ///
     /// Optional memory early-exit: `--memory-warn-mb <N>` (or config
     /// `[session_wait].memory_warn_mb`) samples the watched session's process-tree RSS

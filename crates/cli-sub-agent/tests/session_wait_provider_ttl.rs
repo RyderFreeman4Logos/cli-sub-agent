@@ -87,29 +87,31 @@ fn wait_without_provider_fails_closed_before_session_lookup() {
 }
 
 #[test]
-fn wait_with_detected_but_unconfigured_provider_fails_closed() {
+fn wait_requires_explicit_provider_even_when_environment_provider_is_configured() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_wait_config(tmp.path());
 
     let output = csa_cmd(tmp.path())
-        .env("HERMES_MODEL_PROVIDER", "not-configured")
+        .env("HERMES_MODEL_PROVIDER", "custom")
         .args(["session", "wait", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])
         .output()
         .expect("run csa session wait");
 
-    assert!(!output.status.success());
     let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("requires --model-provider <key>"),
         "{stderr}"
     );
-    assert!(stderr.contains("not-configured"), "{stderr}");
+    assert!(stderr.contains("custom=17"), "{stderr}");
     assert!(
-        stderr.contains("not a configured key with TTL > 0"),
+        !stderr.contains("Detected hints"),
+        "ambient provider detection must not affect the wait contract: {stderr}"
+    );
+    assert!(
+        !stderr.contains("session registry lookup failed"),
         "{stderr}"
     );
-    assert!(stderr.contains("CSA:CALLER_HINT"), "{stderr}");
-    assert!(!stderr.contains("Session registry entry"), "{stderr}");
 }
 
 #[test]
@@ -131,6 +133,48 @@ fn wait_with_unconfigured_provider_lists_only_positive_legal_keys() {
             "{stderr}"
         );
     }
+}
+
+#[test]
+fn wait_with_explicit_provider_fails_closed_when_config_is_missing_or_invalid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let missing = run_wait(tmp.path(), &["--model-provider", "xai"]);
+    let missing_stderr = stderr(&missing);
+    assert_eq!(missing.status.code(), Some(1), "{missing_stderr}");
+    assert!(
+        missing_stderr.contains("requires --model-provider <key>"),
+        "{missing_stderr}"
+    );
+    assert!(
+        !missing_stderr.contains("session registry lookup failed"),
+        "{missing_stderr}"
+    );
+
+    let config_path = global_config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config dir");
+    std::fs::write(
+        &config_path,
+        "[kv_cache.provider_ttls]\nxai = \"invalid\"\n",
+    )
+    .expect("write invalid provider config");
+
+    let invalid = run_wait(tmp.path(), &["--model-provider", "xai"]);
+    let invalid_stderr = stderr(&invalid);
+    assert_eq!(invalid.status.code(), Some(1), "{invalid_stderr}");
+    assert!(
+        invalid_stderr.contains("requires --model-provider <key>"),
+        "{invalid_stderr}"
+    );
+    assert!(
+        invalid_stderr.contains("Config load error"),
+        "{invalid_stderr}"
+    );
+    assert!(
+        !invalid_stderr.contains("session registry lookup failed"),
+        "{invalid_stderr}"
+    );
 }
 
 #[test]
@@ -187,7 +231,7 @@ fn wait_uses_only_explicitly_configured_provider_ttl_keys() {
 }
 
 #[test]
-fn session_wait_help_requires_a_configured_provider_ttl() {
+fn session_wait_help_requires_an_explicit_configured_provider_ttl() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())
         .args(["session", "wait", "--help"])
@@ -197,8 +241,24 @@ fn session_wait_help_requires_a_configured_provider_ttl() {
 
     assert!(output.status.success(), "{stdout}");
     assert!(
-        stdout.contains("configured [kv_cache.provider_ttls] key"),
+        stdout.contains("Every wait requires an explicit normalized `--model-provider`"),
         "{stdout}"
+    );
+    assert!(
+        stdout.contains("configured `[kv_cache.provider_ttls]` entry is > 0"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Its TTL is resolved exactly from that entry"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("missing, unconfigured, or zero values fail closed"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("best-effort detection"),
+        "obsolete ambient-provider wording must not appear: {stdout}"
     );
     assert!(!stdout.contains("default_ttl_seconds"), "{stdout}");
 }
