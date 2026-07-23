@@ -2,14 +2,26 @@ use std::path::Path;
 
 use csa_config::{GlobalConfig, ModelProvider, provider_ttl};
 
+const MAX_CALLER_HINT_BODY_BYTES: usize = 300;
+const SESSION_WAIT_CALLER_HINT_FORBID: &str =
+    "process.wait,process.poll,manual_status_loops,short_wrapper_timeouts";
+
 pub(crate) struct SessionWaitCommand {
     command: Option<String>,
+    provider: Option<String>,
     legal_provider_keys: Vec<String>,
 }
 
 impl SessionWaitCommand {
     pub(crate) fn command(&self) -> Option<&str> {
         self.command.as_deref()
+    }
+
+    /// Render the structured host contract for a validated session-wait command.
+    pub(crate) fn caller_hint(&self, action: &str) -> Option<String> {
+        self.provider
+            .as_deref()
+            .map(|provider| render_session_wait_caller_hint(action, provider))
     }
 
     pub(crate) fn provider_selection_hint(&self) -> String {
@@ -51,19 +63,50 @@ pub(crate) fn resolve_session_wait_command(
                 .collect()
         })
         .unwrap_or_default();
-    let provider = preferred_provider.filter(|provider| {
-        config
-            .as_ref()
-            .and_then(|config| provider_ttl(provider, &config.kv_cache))
-            .is_some()
-    });
+    let provider = preferred_provider
+        .filter(|provider| {
+            config
+                .as_ref()
+                .and_then(|config| provider_ttl(provider, &config.kv_cache))
+                .is_some()
+        })
+        .map(|provider| provider.as_str().to_string());
 
     SessionWaitCommand {
-        command: provider.map(|provider| {
-            format_session_wait_command(session_id, project_root, provider.as_str())
-        }),
+        command: provider
+            .as_deref()
+            .map(|provider| format_session_wait_command(session_id, project_root, provider)),
+        provider,
         legal_provider_keys,
     }
+}
+
+/// Render the compact structured contract required to wait for a CSA session.
+///
+/// The command itself remains in the adjacent durable `CSA:SESSION_STARTED`
+/// or `CSA:SESSION_WAIT_KV_WARM` carrier marker, keeping this repeated hint
+/// within the caller-context budget. When a provider name would exceed that
+/// budget, retain the action and forbidden APIs in a minimal fail-safe marker.
+pub(crate) fn render_session_wait_caller_hint(action: &str, provider: &str) -> String {
+    assert!(
+        matches!(action, "wait" | "retry_wait"),
+        "session wait caller hints only support wait actions"
+    );
+    let provider = escape_structured_comment_attr(provider);
+    let marker = format!(
+        "<!-- CSA:CALLER_HINT action=\"{action}\" provider=\"{provider}\" \
+         background=true timeout_min_sec=7200 notify_on_complete=true \
+         checkin_owner=CSA checkin_policy=provider_ttl \
+         forbid=\"{SESSION_WAIT_CALLER_HINT_FORBID}\" -->"
+    );
+    if marker.len() <= MAX_CALLER_HINT_BODY_BYTES {
+        return marker;
+    }
+
+    format!(
+        "<!-- CSA:CALLER_HINT action=\"{action}\" \
+         forbid=\"{SESSION_WAIT_CALLER_HINT_FORBID}\" note=\"budget_exceeded\" -->"
+    )
 }
 
 /// Return the normalized provider carried by explicit launch routing only.
@@ -221,6 +264,13 @@ mod tests {
             Some(
                 "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai --cd '/tmp/repo'"
             )
+        );
+        assert!(
+            command
+                .caller_hint("retry_wait")
+                .expect("validated provider must be retained for the caller hint")
+                .contains("provider=\"xai\""),
+            "caller hint must retain the validated normalized provider"
         );
 
         std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")

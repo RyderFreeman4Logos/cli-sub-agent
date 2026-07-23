@@ -1,12 +1,13 @@
 //! Tests asserting `CSA:CALLER_HINT` emissions are compact and carry
-//! the essential wait and cancellation guidance.
+//! the structured session-wait host contract plus cancellation guidance.
 //!
 //! After #2591, CALLER_HINT markers are compact (≤300 bytes) instead of
 //! the previous ~1KB verbose rules. The core contract is:
 //!   1. Each daemon entry point emits a wait hint plus a cancellation handle
 //!   2. The wait hint contains the re-wait command
 //!   3. The cancellation handle contains the exact kill command
-//!   4. The hints warn against polling and loops
+//!   4. Session-wait hints state the host execution contract in structured
+//!      attributes, including explicit check-in ownership and forbidden APIs
 #![cfg(test)]
 
 use std::path::Path;
@@ -40,23 +41,34 @@ fn caller_hint_blocks(src: &str) -> Vec<&str> {
         .collect()
 }
 
-fn assert_wait_hint_contract(block: &str, site: &str) {
-    assert!(
-        block.contains("action=\\\"wait\\\""),
-        "{site} emits action=\"wait\""
-    );
-    assert!(
-        block.contains("run_in_background"),
-        "{site} CALLER_HINT must recommend backgrounding session wait"
-    );
-    assert!(
-        block.contains(NO_POLLING_WARNING),
-        "{site} CALLER_HINT must warn against polling"
-    );
-    assert!(
-        block.contains(NO_LOOPS_WARNING),
-        "{site} CALLER_HINT must warn against loops"
-    );
+fn assert_structured_session_wait_hint(marker: &str, action: &str, site: &str) {
+    for required_field in [
+        format!("action=\"{action}\""),
+        "provider=\"xai\"".to_string(),
+        "background=true".to_string(),
+        "timeout_min_sec=7200".to_string(),
+        "notify_on_complete=true".to_string(),
+        "checkin_owner=CSA".to_string(),
+        "checkin_policy=provider_ttl".to_string(),
+        "forbid=\"process.wait,process.poll,manual_status_loops,short_wrapper_timeouts\""
+            .to_string(),
+    ] {
+        assert!(
+            marker.contains(&required_field),
+            "{site} CALLER_HINT missing required field {required_field}: {marker}"
+        );
+    }
+    for forbidden_pattern in [
+        "process.wait",
+        "process.poll",
+        "manual_status_loops",
+        "short_wrapper_timeouts",
+    ] {
+        assert!(
+            marker.contains(forbidden_pattern),
+            "{site} CALLER_HINT forbid list omits {forbidden_pattern}: {marker}"
+        );
+    }
 }
 
 #[test]
@@ -192,21 +204,49 @@ fn codex_yield_hint_prefers_mcp_wait_and_keeps_shell_fallback_yield() {
 const CALLER_HINT_MAX_BYTES: usize = 300;
 
 #[test]
-fn caller_hint_blocks_stay_under_size_budget() {
-    let all_sources = [
-        ("daemon_started_output", DAEMON_STARTED_OUTPUT_SRC),
-        ("session_cmds_daemon_wait", SESSION_CMDS_DAEMON_WAIT_SRC),
-    ];
-    for (site, src) in &all_sources {
-        for block in caller_hint_blocks(src) {
-            assert!(
-                block.len() <= CALLER_HINT_MAX_BYTES,
-                "{site} CALLER_HINT block is {} bytes, exceeds {} byte budget \
-                 (context flooding guard from #2591). Block: {block}",
-                block.len(),
-                CALLER_HINT_MAX_BYTES,
-            );
-        }
+fn rendered_session_wait_caller_hints_have_required_host_contract_at_both_sites() {
+    for (site, action) in [
+        ("daemon_started_output", "wait"),
+        ("session_cmds_daemon_wait_completion", "retry_wait"),
+    ] {
+        let marker = crate::daemon_caller_hints::render_session_wait_caller_hint(action, "xai");
+        assert_structured_session_wait_hint(&marker, action, site);
+    }
+}
+
+#[test]
+fn rendered_session_wait_caller_hints_stay_under_size_budget() {
+    for action in ["wait", "retry_wait"] {
+        let marker = crate::daemon_caller_hints::render_session_wait_caller_hint(action, "xai");
+        let rendered_bytes = marker.len();
+        assert!(
+            rendered_bytes <= CALLER_HINT_MAX_BYTES,
+            "rendered {action} CALLER_HINT is {rendered_bytes} bytes, exceeds \
+             {CALLER_HINT_MAX_BYTES} byte budget (context flooding guard from #2591): {marker}",
+        );
+    }
+}
+
+#[test]
+fn rendered_session_wait_caller_hint_falls_back_when_provider_exceeds_budget() {
+    let provider = "x".repeat(200);
+    for action in ["wait", "retry_wait"] {
+        let marker = crate::daemon_caller_hints::render_session_wait_caller_hint(action, &provider);
+        let rendered_bytes = marker.len();
+        assert!(
+            rendered_bytes <= CALLER_HINT_MAX_BYTES,
+            "fallback {action} CALLER_HINT is {rendered_bytes} bytes, exceeds \
+             {CALLER_HINT_MAX_BYTES} byte budget: {marker}",
+        );
+        assert_eq!(
+            marker,
+            format!(
+                "<!-- CSA:CALLER_HINT action=\"{action}\" \
+                 forbid=\"process.wait,process.poll,manual_status_loops,short_wrapper_timeouts\" \
+                 note=\"budget_exceeded\" -->"
+            ),
+            "long provider names must use the minimal budget fallback"
+        );
     }
 }
 
@@ -226,22 +266,10 @@ fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
         1,
         "run_cmd_daemon publishes one shared daemon-start output"
     );
-    let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
-    assert_eq!(
-        blocks.len(),
-        2,
-        "shared daemon output emits wait and cancellation CALLER_HINTs"
+    assert!(
+        DAEMON_STARTED_OUTPUT_SRC.contains(".caller_hint(\"wait\")"),
+        "shared daemon output must render its wait CALLER_HINT through the structured renderer"
     );
-    let wait_blocks = blocks
-        .iter()
-        .filter(|block| block.contains("action=\\\"wait\\\""))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        wait_blocks.len(),
-        1,
-        "shared daemon output emits one wait hint"
-    );
-    assert_wait_hint_contract(wait_blocks[0], "run_cmd_daemon");
 }
 
 #[test]
@@ -288,49 +316,17 @@ fn plan_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
         1,
         "plan_cmd_daemon publishes one shared daemon-start output"
     );
-    let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
-    assert_eq!(
-        blocks.len(),
-        2,
-        "shared daemon output emits wait and cancellation CALLER_HINTs"
+    assert!(
+        DAEMON_STARTED_OUTPUT_SRC.contains(".caller_hint(\"wait\")"),
+        "shared daemon output must render its wait CALLER_HINT through the structured renderer"
     );
-    let wait_blocks = blocks
-        .iter()
-        .filter(|block| block.contains("action=\\\"wait\\\""))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        wait_blocks.len(),
-        1,
-        "shared daemon output emits one wait hint"
-    );
-    assert_wait_hint_contract(wait_blocks[0], "plan_cmd_daemon");
 }
 
 #[test]
 fn session_cmds_daemon_wait_retry_wait_hint_warns_no_stack_wakeup() {
-    let blocks = caller_hint_blocks(SESSION_CMDS_DAEMON_WAIT_SRC);
     assert!(
-        blocks.len() >= 2,
-        "session_cmds_daemon_wait emits both retry_wait and next_session hints; got {} blocks",
-        blocks.len()
-    );
-    let retry_blocks = blocks
-        .iter()
-        .filter(|b| b.contains("action=\\\"retry_wait\\\""))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        retry_blocks.len(),
-        1,
-        "session_cmds_daemon_wait emits exactly one retry_wait CALLER_HINT"
-    );
-    let retry = retry_blocks[0];
-    assert!(
-        retry.contains(NO_POLLING_WARNING),
-        "retry_wait CALLER_HINT must warn against polling"
-    );
-    assert!(
-        retry.contains(NO_LOOPS_WARNING),
-        "retry_wait CALLER_HINT must warn against loops"
+        SESSION_CMDS_DAEMON_WAIT_SRC.contains(".caller_hint(\"retry_wait\")"),
+        "retry wait output must render its CALLER_HINT through the structured renderer"
     );
 }
 

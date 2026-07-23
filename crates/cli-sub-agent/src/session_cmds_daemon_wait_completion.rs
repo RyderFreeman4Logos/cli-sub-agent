@@ -166,7 +166,10 @@ fn render_wait_cap_outcome(
             );
             let _ = writeln!(
                 text,
-                "<!-- CSA:CALLER_HINT action=\"retry_wait\" rule=\"Session alive; re-wait in a NEW Bash call: {wait_cmd_attr}. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->"
+                "{}",
+                wait_command
+                    .caller_hint("retry_wait")
+                    .expect("validated wait command must retain its normalized provider")
             );
             let codex_hint = crate::process_tree::codex_yield_hint(Some(wait_cmd));
             if !codex_hint.is_empty() {
