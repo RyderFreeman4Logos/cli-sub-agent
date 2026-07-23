@@ -128,6 +128,7 @@ default_ttl_seconds = 240
 
 # `csa session wait` requires one positive-TTL key from this table. Calling agents
 # should derive the current provider dynamically and pass `--model-provider` every time.
+# The configured value is used exactly as the wait cap; no source fallback or maximum applies.
 [kv_cache.provider_ttls]
 claude = 3300
 openai = 1700

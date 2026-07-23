@@ -3,6 +3,7 @@
 //! Extracted from `session_cmds_daemon_wait.rs` to reduce module complexity.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -102,6 +103,12 @@ pub(crate) fn terminal_result_wait_exit_code(status: &str, exit_code: i32) -> i3
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RenderedWaitCapOutcome {
+    exit_code: i32,
+    text: String,
+}
+
 pub(crate) fn emit_wait_cap_outcome(
     session_id: &str,
     cd: Option<&str>,
@@ -111,6 +118,29 @@ pub(crate) fn emit_wait_cap_outcome(
     session_dir: &Path,
     session_alive: bool,
 ) -> i32 {
+    let outcome = render_wait_cap_outcome(
+        session_id,
+        cd,
+        context,
+        wait_timeout_secs,
+        elapsed,
+        session_dir,
+        session_alive,
+    );
+    eprint!("{}", outcome.text);
+    outcome.exit_code
+}
+
+fn render_wait_cap_outcome(
+    session_id: &str,
+    cd: Option<&str>,
+    context: WaitCapContext<'_>,
+    wait_timeout_secs: u64,
+    elapsed: u64,
+    session_dir: &Path,
+    session_alive: bool,
+) -> RenderedWaitCapOutcome {
+    let mut text = String::new();
     let cd_arg = cd
         .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
         .unwrap_or_default();
@@ -120,43 +150,55 @@ pub(crate) fn emit_wait_cap_outcome(
             context.project_root,
             context.preferred_provider,
         );
-        eprintln!(
+        let _ = writeln!(
+            text,
             "Session {session_id} still running after {wait_timeout_secs}s wait cap; returning so caller can warm its KV cache before re-waiting."
         );
         if let Some(progress) = WaitProgressDigest::from_session_dir(session_dir) {
-            eprintln!("{}", progress.render());
+            let _ = writeln!(text, "{}", progress.render());
         }
         if let Some(wait_cmd) = wait_command.command() {
             let wait_cmd_attr =
                 crate::daemon_caller_hints::escape_structured_comment_attr(wait_cmd);
-            eprintln!(
+            let _ = writeln!(
+                text,
                 "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=re-wait cmd=\"{wait_cmd_attr}\" -->"
             );
-            eprintln!(
+            let _ = writeln!(
+                text,
                 "<!-- CSA:CALLER_HINT action=\"retry_wait\" rule=\"Session alive; re-wait in a NEW Bash call: {wait_cmd_attr}. Backgrounded? Task-notification is your wake signal — no polling, no loops.\" -->"
             );
             let codex_hint = crate::process_tree::codex_yield_hint(Some(wait_cmd));
             if !codex_hint.is_empty() {
-                eprint!("{codex_hint}");
+                text.push_str(&codex_hint);
             }
         } else {
-            eprintln!(
+            let _ = writeln!(
+                text,
                 "<!-- CSA:SESSION_WAIT_KV_WARM session={session_id} status=alive elapsed={elapsed}s action=select_wait_provider -->"
             );
-            eprintln!("{}", wait_command.provider_selection_hint());
+            let _ = writeln!(text, "{}", wait_command.provider_selection_hint());
         }
-        SESSION_WAIT_KV_WARM_EXIT_CODE
+        RenderedWaitCapOutcome {
+            exit_code: SESSION_WAIT_KV_WARM_EXIT_CODE,
+            text,
+        }
     } else {
-        eprintln!(
+        let _ = writeln!(
+            text,
             "Timeout: session {session_id} did not complete within {wait_timeout_secs}s and no live daemon process remains."
         );
         let result_cmd = format!("csa session result --session {session_id}{cd_arg}");
         let result_cmd_attr =
             crate::daemon_caller_hints::escape_structured_comment_attr(&result_cmd);
-        eprintln!(
+        let _ = writeln!(
+            text,
             "<!-- CSA:SESSION_WAIT_TIMEOUT session={session_id} elapsed={elapsed}s status=dead cmd=\"{result_cmd_attr}\" -->"
         );
-        SESSION_WAIT_TIMEOUT_EXIT_CODE
+        RenderedWaitCapOutcome {
+            exit_code: SESSION_WAIT_TIMEOUT_EXIT_CODE,
+            text,
+        }
     }
 }
 
@@ -218,7 +260,61 @@ fn format_elapsed_compact(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
     use chrono::TimeZone;
+
+    #[test]
+    fn wait_cap_and_retry_hint_preserve_exact_configured_xai_ttl() {
+        let _lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_home = temp.path().join("xdg-config");
+        std::fs::create_dir_all(&config_home).expect("create config home");
+        let _home = ScopedEnvVarRestore::set("HOME", temp.path());
+        let _config = ScopedEnvVarRestore::set("XDG_CONFIG_HOME", &config_home);
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(config_path, "[kv_cache.provider_ttls]\nxai = 3300\n")
+            .expect("write config");
+
+        let provider = csa_config::ModelProvider::new(" XAI ");
+        let outcome = render_wait_cap_outcome(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            None,
+            WaitCapContext {
+                project_root: temp.path(),
+                preferred_provider: Some(&provider),
+            },
+            3300,
+            3300,
+            temp.path(),
+            true,
+        );
+
+        assert_eq!(outcome.exit_code, SESSION_WAIT_KV_WARM_EXIT_CODE);
+        assert!(
+            outcome.text.contains("after 3300s wait cap"),
+            "{}",
+            outcome.text
+        );
+        assert!(
+            outcome.text.contains(
+                "cmd=\"csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai"
+            ),
+            "{}",
+            outcome.text
+        );
+        assert!(
+            outcome
+                .text
+                .contains("CSA:CALLER_HINT action=\"retry_wait\""),
+            "{}",
+            outcome.text
+        );
+        assert!(!outcome.text.contains("240"), "{}", outcome.text);
+        assert!(!outcome.text.contains("3000"), "{}", outcome.text);
+    }
 
     #[test]
     fn progress_digest_renders_elapsed_tool_and_last_event() {

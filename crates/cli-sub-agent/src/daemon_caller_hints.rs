@@ -173,4 +173,52 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn retry_command_reloads_provider_ttl_config_and_preserves_explicit_provider() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+        let _provider_guard = EnvVarGuard::set("HERMES_MODEL_PROVIDER", "other");
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 3300\n")
+            .expect("write provider config");
+
+        let provider = csa_config::ModelProvider::new(" XAI ");
+        let command = resolve_session_wait_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            Some(&provider),
+        );
+        assert_eq!(
+            command.command(),
+            Some(
+                "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai --cd '/tmp/repo'"
+            )
+        );
+
+        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")
+            .expect("invalidate provider config");
+        let reloaded = resolve_session_wait_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            Some(&provider),
+        );
+        assert!(
+            reloaded.command().is_none(),
+            "each retry must re-read current provider TTL configuration"
+        );
+        assert!(
+            reloaded
+                .provider_selection_hint()
+                .contains("legal_keys=\"none\""),
+            "an invalidated explicit provider must fail closed"
+        );
+    }
 }
