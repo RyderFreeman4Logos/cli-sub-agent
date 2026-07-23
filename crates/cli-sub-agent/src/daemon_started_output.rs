@@ -34,20 +34,27 @@ pub(crate) fn prepare(
     };
     let attach_cmd =
         crate::daemon_caller_hints::format_session_attach_command(&result.session_id, project_root);
+    let kill_cmd =
+        crate::daemon_caller_hints::format_session_kill_command(&result.session_id, project_root);
     let session_dir_attr = crate::daemon_caller_hints::escape_structured_comment_attr(
         &result.session_dir.display().to_string(),
     );
     let attach_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&attach_cmd);
+    let kill_cmd_attr = crate::daemon_caller_hints::escape_structured_comment_attr(&kill_cmd);
+    let cancellation_hint = render_wait_cancellation_hint(&result.session_id, &kill_cmd);
     let mut stderr = format!(
         "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
          wait_cmd=\"{wait_cmd}\" \
-         attach_cmd=\"{attach_cmd}\" -->\n\
-         {wait_hint}\n",
+         attach_cmd=\"{attach_cmd}\" \
+         kill_cmd=\"{kill_cmd}\" -->\n\
+         {wait_hint}\n\
+         {cancellation_hint}\n",
         id = result.session_id,
         pid = result.pid,
         dir = session_dir_attr,
         wait_cmd = wait_cmd_attr,
         attach_cmd = attach_cmd_attr,
+        kill_cmd = kill_cmd_attr,
     );
     stderr.push_str(&crate::process_tree::codex_yield_hint(
         wait_command.command(),
@@ -56,6 +63,15 @@ pub(crate) fn prepare(
         stdout: format!("{}\n", result.session_id),
         stderr,
     })
+}
+
+fn render_wait_cancellation_hint(session_id: &str, kill_cmd: &str) -> String {
+    let session_id = crate::daemon_caller_hints::escape_structured_comment_attr(session_id);
+    let kill_cmd = crate::daemon_caller_hints::escape_structured_comment_attr(kill_cmd);
+    format!(
+        "<!-- CSA:CALLER_HINT action=\"cancel_session\" session=\"{session_id}\" kill_cmd=\"{kill_cmd}\" \
+         rule=\"IMPORTANT: stopping a background wait does NOT stop the session. On task cancellation, run kill_cmd.\" -->"
+    )
 }
 
 pub(crate) fn publish(output: DaemonStartedOutput) -> Result<()> {
@@ -167,6 +183,26 @@ mod tests {
         assert_eq!(output.stderr.matches("CSA:SESSION_STARTED").count(), 1);
         assert!(output.stderr.contains("CSA:CALLER_HINT"));
         let _ = std::fs::remove_dir_all(session_root);
+    }
+
+    #[test]
+    fn wait_cancellation_hint_names_the_exact_kill_command() {
+        let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R9";
+        let kill_cmd = crate::daemon_caller_hints::format_session_kill_command(
+            session_id,
+            Path::new("/receipt-sandbox/project"),
+        );
+
+        let hint = render_wait_cancellation_hint(session_id, &kill_cmd);
+
+        assert!(hint.contains("action=\"cancel_session\""), "{hint}");
+        assert!(
+            hint.contains(&format!("session=\"{session_id}\"")),
+            "{hint}"
+        );
+        assert!(hint.contains(&kill_cmd), "{hint}");
+        assert!(hint.contains("does NOT stop the session"), "{hint}");
+        assert!(hint.contains("task cancellation"), "{hint}");
     }
 
     #[test]

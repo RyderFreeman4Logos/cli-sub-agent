@@ -1,11 +1,12 @@
 //! Tests asserting `CSA:CALLER_HINT` emissions are compact and carry
-//! the essential action/re-wait guidance.
+//! the essential wait and cancellation guidance.
 //!
-//! After #2591, CALLER_HINT markers are compact (≤200 bytes) instead of
+//! After #2591, CALLER_HINT markers are compact (≤300 bytes) instead of
 //! the previous ~1KB verbose rules. The core contract is:
-//!   1. Each daemon entry point emits exactly one CALLER_HINT
-//!   2. The hint contains the re-wait command or action
-//!   3. The hint warns against polling and loops
+//!   1. Each daemon entry point emits a wait hint plus a cancellation handle
+//!   2. The wait hint contains the re-wait command
+//!   3. The cancellation handle contains the exact kill command
+//!   4. The hints warn against polling and loops
 #![cfg(test)]
 
 use std::path::Path;
@@ -79,6 +80,19 @@ fn daemon_wait_command_places_cd_after_single_session_id() {
     assert!(
         !command.contains(&format!("--cd '{session_id}")),
         "session id must not be duplicated into the --cd argument"
+    );
+}
+
+#[test]
+fn daemon_kill_command_keeps_session_and_project_scope() {
+    let command = crate::daemon_caller_hints::format_session_kill_command(
+        "01KAS6M5XG7V4M4M6YDRS7P8R9",
+        Path::new("/receipt-sandbox/project"),
+    );
+
+    assert_eq!(
+        command,
+        "csa session kill --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --cd '/receipt-sandbox/project'"
     );
 }
 
@@ -215,10 +229,41 @@ fn run_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
     assert_eq!(
         blocks.len(),
-        1,
-        "shared daemon output emits one CALLER_HINT"
+        2,
+        "shared daemon output emits wait and cancellation CALLER_HINTs"
     );
-    assert_wait_hint_contract(blocks[0], "run_cmd_daemon");
+    let wait_blocks = blocks
+        .iter()
+        .filter(|block| block.contains("action=\\\"wait\\\""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wait_blocks.len(),
+        1,
+        "shared daemon output emits one wait hint"
+    );
+    assert_wait_hint_contract(wait_blocks[0], "run_cmd_daemon");
+}
+
+#[test]
+fn daemon_started_output_includes_a_durable_wait_cancellation_handle() {
+    let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
+    let cancellation_blocks = blocks
+        .iter()
+        .filter(|block| block.contains("action=\\\"cancel_session\\\""))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        cancellation_blocks.len(),
+        1,
+        "daemon start output must emit one cancellation handle for a background wait"
+    );
+    let cancellation = cancellation_blocks[0];
+    assert!(cancellation.contains("kill_cmd=\\\""), "{cancellation}");
+    assert!(
+        cancellation.contains("does NOT stop the session"),
+        "{cancellation}"
+    );
+    assert!(cancellation.contains("task cancellation"), "{cancellation}");
 }
 
 #[test]
@@ -240,10 +285,19 @@ fn plan_cmd_daemon_wait_hint_warns_no_stack_wakeup() {
     let blocks = caller_hint_blocks(DAEMON_STARTED_OUTPUT_SRC);
     assert_eq!(
         blocks.len(),
-        1,
-        "shared daemon output emits one CALLER_HINT"
+        2,
+        "shared daemon output emits wait and cancellation CALLER_HINTs"
     );
-    assert_wait_hint_contract(blocks[0], "plan_cmd_daemon");
+    let wait_blocks = blocks
+        .iter()
+        .filter(|block| block.contains("action=\\\"wait\\\""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wait_blocks.len(),
+        1,
+        "shared daemon output emits one wait hint"
+    );
+    assert_wait_hint_contract(wait_blocks[0], "plan_cmd_daemon");
 }
 
 #[test]
