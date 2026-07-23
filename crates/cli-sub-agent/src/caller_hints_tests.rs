@@ -258,12 +258,18 @@ fn daemon_started_output_includes_a_durable_wait_cancellation_handle() {
         "daemon start output must emit one cancellation handle for a background wait"
     );
     let cancellation = cancellation_blocks[0];
-    assert!(cancellation.contains("kill_cmd=\\\""), "{cancellation}");
+    assert!(
+        !cancellation.contains("session=\\\"") && !cancellation.contains("kill_cmd=\\\""),
+        "cancellation hint must not duplicate the session or kill command already in CSA:SESSION_STARTED: {cancellation}"
+    );
     assert!(
         cancellation.contains("does NOT stop the session"),
         "{cancellation}"
     );
-    assert!(cancellation.contains("task cancellation"), "{cancellation}");
+    assert!(
+        cancellation.contains("CSA:SESSION_STARTED"),
+        "cancellation hint must direct callers to the durable kill command: {cancellation}"
+    );
 }
 
 #[test]

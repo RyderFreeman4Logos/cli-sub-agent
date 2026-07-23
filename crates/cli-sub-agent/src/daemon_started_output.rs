@@ -65,13 +65,12 @@ pub(crate) fn prepare(
     })
 }
 
-fn render_wait_cancellation_hint(session_id: &str, kill_cmd: &str) -> String {
-    let session_id = crate::daemon_caller_hints::escape_structured_comment_attr(session_id);
-    let kill_cmd = crate::daemon_caller_hints::escape_structured_comment_attr(kill_cmd);
-    format!(
-        "<!-- CSA:CALLER_HINT action=\"cancel_session\" session=\"{session_id}\" kill_cmd=\"{kill_cmd}\" \
-         rule=\"IMPORTANT: stopping a background wait does NOT stop the session. On task cancellation, run kill_cmd.\" -->"
-    )
+fn render_wait_cancellation_hint(_session_id: &str, _kill_cmd: &str) -> String {
+    // SESSION_STARTED immediately precedes this hint and holds the exact,
+    // project-scoped kill command. Keep this repeat warning path-independent.
+    "<!-- CSA:CALLER_HINT action=\"cancel_session\" \
+     rule=\"IMPORTANT: stopping a background wait does NOT stop the session. To cancel it, explicitly run CSA:SESSION_STARTED kill_cmd.\" -->"
+        .to_string()
 }
 
 pub(crate) fn publish(output: DaemonStartedOutput) -> Result<()> {
@@ -185,24 +184,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(session_root);
     }
 
+    const CALLER_HINT_MAX_BYTES: usize = 300;
+
     #[test]
-    fn wait_cancellation_hint_names_the_exact_kill_command() {
+    fn wait_cancellation_hint_uses_started_marker_kill_command_within_budget() {
         let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R9";
         let kill_cmd = crate::daemon_caller_hints::format_session_kill_command(
             session_id,
-            Path::new("/receipt-sandbox/project"),
+            Path::new("/home/obj/project/github/RyderFreeman4Logos/cli-sub-agent"),
         );
 
         let hint = render_wait_cancellation_hint(session_id, &kill_cmd);
 
         assert!(hint.contains("action=\"cancel_session\""), "{hint}");
-        assert!(
-            hint.contains(&format!("session=\"{session_id}\"")),
-            "{hint}"
-        );
-        assert!(hint.contains(&kill_cmd), "{hint}");
+        assert!(!hint.contains(session_id), "{hint}");
+        assert!(!hint.contains(&kill_cmd), "{hint}");
         assert!(hint.contains("does NOT stop the session"), "{hint}");
-        assert!(hint.contains("task cancellation"), "{hint}");
+        assert!(hint.contains("CSA:SESSION_STARTED"), "{hint}");
+        let rendered_bytes = hint.as_bytes().len();
+        assert!(
+            rendered_bytes <= CALLER_HINT_MAX_BYTES,
+            "rendered cancellation hint is {} bytes, exceeds the {} byte budget: {hint}",
+            rendered_bytes,
+            CALLER_HINT_MAX_BYTES,
+        );
+    }
+
+    #[test]
+    fn wait_cancellation_hint_excludes_escaped_special_project_path_within_budget() {
+        let session_id = "01KAS6M5XG7V4M4M6YDRS7P8R9";
+        let kill_cmd = crate::daemon_caller_hints::format_session_kill_command(
+            session_id,
+            Path::new(
+                "/home/obj/project/github/RyderFreeman4Logos/cli-sub-agent/it's-\"quoted\"&<special>",
+            ),
+        );
+        let escaped_kill_cmd =
+            crate::daemon_caller_hints::escape_structured_comment_attr(&kill_cmd);
+
+        let hint = render_wait_cancellation_hint(session_id, &kill_cmd);
+
+        assert!(
+            escaped_kill_cmd.contains("&quot;")
+                && escaped_kill_cmd.contains("&amp;")
+                && escaped_kill_cmd.contains("&lt;")
+                && escaped_kill_cmd.contains("&gt;"),
+            "special project path must be escaped in the durable started marker: {escaped_kill_cmd}"
+        );
+        assert!(!hint.contains(&escaped_kill_cmd), "{hint}");
+        assert!(hint.contains("does NOT stop the session"), "{hint}");
+        let rendered_bytes = hint.as_bytes().len();
+        assert!(
+            rendered_bytes <= CALLER_HINT_MAX_BYTES,
+            "rendered cancellation hint is {} bytes, exceeds the {} byte budget: {hint}",
+            rendered_bytes,
+            CALLER_HINT_MAX_BYTES,
+        );
     }
 
     #[test]
