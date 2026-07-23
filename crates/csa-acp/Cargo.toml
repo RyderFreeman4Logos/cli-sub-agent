@@ -10,7 +10,7 @@ agent-client-protocol = { version = "0.10", features = ["unstable_session_usage"
 csa-core.workspace = true
 csa-process.workspace = true
 csa-resource.workspace = true
-tokio = { version = "1.36", features = ["rt", "process", "io-util", "macros"] }
+tokio = { version = "1.36", features = ["rt", "process", "io-util", "macros", "net"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 anyhow = "1.0"
 thiserror = "2.0"

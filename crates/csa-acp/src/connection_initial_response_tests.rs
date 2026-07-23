@@ -1,8 +1,12 @@
 use std::{
     cell::{Cell, RefCell},
+    ops::Deref,
     rc::Rc,
     time::Duration,
 };
+
+#[cfg(target_os = "linux")]
+use std::path::Path;
 
 use agent_client_protocol::{
     AgentSideConnection, AvailableCommand, AvailableCommandsUpdate, Client as _,
@@ -12,7 +16,8 @@ use agent_client_protocol::{
     SessionUpdate, StopReason, TextContent,
 };
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{UnixListener, UnixStream},
     process::{Child, Command},
     task::LocalSet,
 };
@@ -85,12 +90,149 @@ impl agent_client_protocol::Agent for HangingTestAgent {
 
 fn spawn_test_child(shell_script: &str) -> Child {
     let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(shell_script)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    cmd.arg("-c").arg(shell_script);
+    configure_test_child(&mut cmd);
     cmd.spawn().expect("spawn test child")
+}
+
+fn configure_test_child(cmd: &mut Command) {
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        // The test connection owns the child. Ensure an assertion panic cannot
+        // leave its direct child behind while the nextest worker stays alive.
+        .kill_on_drop(true);
+
+    #[cfg(unix)]
+    {
+        // AcpConnection::kill targets -PID, so fixtures must be process-group
+        // leaders for descendant cleanup to be meaningful.
+        cmd.process_group(0);
+    }
+}
+
+struct TestConnectionGuard {
+    connection: AcpConnection,
+    #[cfg(unix)]
+    process_group_leader: Option<u32>,
+}
+
+impl TestConnectionGuard {
+    fn new(connection: AcpConnection) -> Self {
+        #[cfg(unix)]
+        let process_group_leader = connection.child_pid();
+
+        Self {
+            connection,
+            #[cfg(unix)]
+            process_group_leader,
+        }
+    }
+}
+
+impl Deref for TestConnectionGuard {
+    type Target = AcpConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
+impl Drop for TestConnectionGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if self
+            .process_group_leader
+            .is_some_and(|pid| self.connection.child_pid() == Some(pid))
+        {
+            // SAFETY: the unreaped child still owns this process-group ID. This
+            // is test-only panic cleanup; normal timeout cleanup remains in
+            // AcpConnection::kill.
+            unsafe {
+                libc::kill(
+                    -(self.process_group_leader.expect("stored process group") as i32),
+                    libc::SIGKILL,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct CpuBoundChildFixture {
+    _temp_dir: tempfile::TempDir,
+    control: Option<UnixStream>,
+}
+
+#[cfg(target_os = "linux")]
+impl CpuBoundChildFixture {
+    async fn spawn() -> (Self, Child) {
+        let temp_dir = tempfile::tempdir().expect("create CPU-bound child fixture directory");
+        let control_path = temp_dir.path().join("control.sock");
+        let listener = UnixListener::bind(&control_path).expect("bind CPU-bound child control socket");
+
+        let child = spawn_cpu_bound_test_child(&control_path);
+        let control = wait_for_cpu_fixture_connection(&listener).await;
+
+        (
+            Self {
+                _temp_dir: temp_dir,
+                control: Some(control),
+            },
+            child,
+        )
+    }
+
+    async fn begin_cpu_load(&mut self) {
+        let mut control = self
+            .control
+            .take()
+            .expect("CPU-bound fixture control connection");
+        control
+            .write_all(&[1])
+            .await
+            .expect("release CPU-bound child into its load loop");
+
+        let mut started = [0];
+        tokio::time::timeout(Duration::from_secs(5), control.read_exact(&mut started))
+            .await
+            .expect("CPU-bound child did not begin its load loop")
+            .expect("read CPU-bound child load-loop acknowledgement");
+        assert_eq!(started, [1], "unexpected CPU-bound child load-loop acknowledgement");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_cpu_bound_test_child(control_path: &Path) -> Child {
+    const CPU_LOAD_FIXTURE: &str = r#"
+import socket
+import sys
+
+control_path = sys.argv[1]
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
+    control.connect(control_path)
+    if control.recv(1) != b"\x01":
+        raise RuntimeError("CPU-bound fixture was released without its control byte")
+    for _ in range(1_000_000):
+        pass
+    control.sendall(b"\x01")
+    while True:
+        pass
+"#;
+
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg(CPU_LOAD_FIXTURE).arg(control_path);
+    configure_test_child(&mut cmd);
+    cmd.spawn().expect("spawn CPU-bound test child")
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_cpu_fixture_connection(listener: &UnixListener) -> UnixStream {
+    tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .expect("CPU-bound child did not reach its control handshake")
+        .expect("accept CPU-bound child control connection")
+        .0
 }
 
 fn append_test_stderr_tail(stderr_buf: &mut String, chunk: &str) {
@@ -106,7 +248,7 @@ async fn build_test_connection(
     mut child: Child,
     prompt_delay: Duration,
     prompt_behavior: PromptBehavior,
-) -> AcpConnection {
+) -> TestConnectionGuard {
     let stdin = child.stdin.take().expect("child stdin");
     let stdout = child.stdout.take().expect("child stdout");
     let stderr = child.stderr.take().expect("child stderr");
@@ -202,7 +344,7 @@ async fn build_test_connection(
         })
         .await;
 
-    AcpConnection::new_from_parts(
+    TestConnectionGuard::new(AcpConnection::new_from_parts(
         local_set,
         connection,
         child,
@@ -216,7 +358,7 @@ async fn build_test_connection(
             termination_grace_period: Duration::ZERO,
             ..AcpConnectionOptions::default()
         },
-    )
+    ))
 }
 
 #[test]
@@ -396,10 +538,9 @@ async fn idle_timeout_stays_alive_while_child_process_tree_consumes_cpu() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() {
+    let (mut cpu_fixture, child) = CpuBoundChildFixture::spawn().await;
     let connection = build_test_connection(
-        spawn_test_child(
-            "python3 -c 'import time\nend=time.monotonic()+2\nwhile time.monotonic()<end:\n pass'",
-        ),
+        child,
         Duration::from_secs(5),
         PromptBehavior::Silent,
     )
@@ -411,6 +552,8 @@ async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() 
         .new_session(None, Some(cwd.as_path()), None)
         .await
         .expect("new session");
+
+    cpu_fixture.begin_cpu_load().await;
 
     let result = tokio::time::timeout(
         Duration::from_millis(700),
