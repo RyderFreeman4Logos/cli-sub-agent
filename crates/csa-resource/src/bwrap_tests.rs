@@ -15,6 +15,9 @@ fn command_args(cmd: &Command) -> Vec<String> {
         .collect()
 }
 
+#[path = "bwrap_tests_virtual.rs"]
+mod virtual_filesystem;
+
 #[test]
 fn test_bwrap_command_basic() {
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &["--flag".into(), "arg".into()]);
@@ -657,36 +660,5 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
                 && window[2] == gh_aider.to_string_lossy()
         }),
         "~/.config/gh-aider should be explicitly re-bound read-only so sandboxed gh commands can still read the aider auth config; args: {args:?}"
-    );
-}
-
-#[test]
-fn test_bwrap_binds_non_tmp_symlink_writable_path_at_canonical_destination() {
-    use std::os::unix::fs::symlink;
-
-    let workspace = std::env::current_dir().expect("test working directory");
-    let tmp = tempfile::tempdir_in(workspace).expect("tempdir");
-    let real = tmp.path().join("real-claude");
-    std::fs::create_dir(&real).expect("create real dir");
-    let link = tmp.path().join("link-claude");
-    symlink(&real, &link).expect("create symlink");
-
-    let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
-    builder.with_writable_path(&link);
-
-    let cmd = builder.build();
-    let args = command_args(&cmd);
-
-    let bind_idx = args
-        .iter()
-        .position(|a| a == "--bind")
-        .expect("--bind not found");
-    let src = &args[bind_idx + 1];
-    let dest = &args[bind_idx + 2];
-    let canonical = real.to_string_lossy().to_string();
-    assert_eq!(src, &canonical, "bind source should be canonicalized");
-    assert_eq!(
-        dest, &canonical,
-        "bind destination should be canonicalized so bwrap does not need to create parents through an unresolved state symlink"
     );
 }

@@ -87,26 +87,31 @@ impl BwrapCommandBuilder {
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
 
-        // Bind after tmpfs. /tmp itself is an explicit host tmpdir grant.
+        // Bind after the fresh virtual filesystems. A writable path below a
+        // replaced mount must keep its logical destination; otherwise its
+        // canonical destination is hidden once the mount is installed.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let resolved = resolve_for_bind(path);
             let s = resolved.to_string_lossy();
-            // `/tmp` is replaced with a fresh tmpfs before writable binds, so
-            // paths beneath it must keep their logical destination. Elsewhere,
-            // bind at the resolved destination: bwrap cannot create a mount
-            // target by walking a state-path symlink into an autofs mount.
-            let dest_path = if path.starts_with(tmp_prefix) {
+            let fresh_mount_root = fresh_writable_mount_root(path);
+            // Elsewhere, bind at the resolved destination: bwrap cannot
+            // create a mount target by walking a state-path symlink into an
+            // autofs-backed CSA session-state root.
+            let dest_path = if fresh_mount_root.is_some() {
                 path.as_path()
             } else {
                 resolved.as_path()
             };
             let dest = dest_path.to_string_lossy();
-            if path == tmp_prefix {
-                cmd.args(["--bind", &s, &dest]);
-            } else if path.starts_with(tmp_prefix) {
+            if let Some(mount_root) = fresh_mount_root {
+                let mount_root = Path::new(mount_root);
+                if path == mount_root {
+                    cmd.args(["--bind", &s, &dest]);
+                    continue;
+                }
                 if let Some(parent) = path.parent()
-                    && parent != tmp_prefix
+                    && parent != mount_root
                 {
                     let p = parent.to_string_lossy();
                     cmd.args(["--dir", &p]);
@@ -286,6 +291,16 @@ pub fn from_isolation_plan(
 /// is a symlink to `/ssd/.../.claude`, bwrap needs the resolved target.
 fn resolve_for_bind(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Return the fresh writable virtual filesystem containing `path`.
+///
+/// `/proc` is deliberately excluded: it is a read-only process virtual
+/// filesystem and cannot host writable bind destinations.
+fn fresh_writable_mount_root(path: &Path) -> Option<&'static str> {
+    ["/tmp", "/dev"]
+        .into_iter()
+        .find(|mount_root| path.starts_with(Path::new(mount_root)))
 }
 
 #[cfg(all(test, target_os = "linux"))]
