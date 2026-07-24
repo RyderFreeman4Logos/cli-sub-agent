@@ -2,6 +2,11 @@
 # Mutable/current quality checks that must execute on every direct or hook call.
 set -euo pipefail
 
+# Live tests may import local Python gate helpers. Keep their bytecode out of
+# the checkout so the later receipt-contract assertion sees the exact clean
+# source surface.
+export PYTHONDONTWRITEBYTECODE=1
+
 live_cargo_build_jobs=
 live_cargo_build_jobs_resolved=0
 live_partition_validator=scripts/hooks/quality-gates-live-partition.py

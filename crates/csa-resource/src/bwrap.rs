@@ -87,17 +87,31 @@ impl BwrapCommandBuilder {
         cmd.args(["--dev", "/dev"]);
         cmd.args(["--proc", "/proc"]);
 
-        // Bind after tmpfs. /tmp itself is an explicit host tmpdir grant.
+        // Bind after the fresh virtual filesystems. A writable path below a
+        // replaced mount must keep its logical destination; otherwise its
+        // canonical destination is hidden once the mount is installed.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let resolved = resolve_for_bind(path);
             let s = resolved.to_string_lossy();
-            let dest = path.to_string_lossy();
-            if path == tmp_prefix {
-                cmd.args(["--bind", &s, &dest]);
-            } else if path.starts_with(tmp_prefix) {
+            let fresh_mount_root = fresh_writable_mount_root(path);
+            // Elsewhere, bind at the resolved destination: bwrap cannot
+            // create a mount target by walking a state-path symlink into an
+            // autofs-backed CSA session-state root.
+            let dest_path = if fresh_mount_root.is_some() {
+                path.as_path()
+            } else {
+                resolved.as_path()
+            };
+            let dest = dest_path.to_string_lossy();
+            if let Some(mount_root) = fresh_mount_root {
+                let mount_root = Path::new(mount_root);
+                if path == mount_root {
+                    cmd.args(["--bind", &s, &dest]);
+                    continue;
+                }
                 if let Some(parent) = path.parent()
-                    && parent != tmp_prefix
+                    && parent != mount_root
                 {
                     let p = parent.to_string_lossy();
                     cmd.args(["--dir", &p]);
@@ -107,10 +121,10 @@ impl BwrapCommandBuilder {
                 }
                 cmd.args(["--bind", &s, &dest]);
             } else {
-                // Ensure destination parent exists inside the sandbox. When the
-                // writable path involves symlinks or nested state directories,
-                // the logical destination may not exist under the read-only root.
-                if let Some(parent) = path.parent()
+                // Ensure the resolved destination parent exists inside the
+                // sandbox. Creating the logical parent can fail when it is a
+                // symlink into an autofs-backed CSA session-state root.
+                if let Some(parent) = dest_path.parent()
                     && parent != Path::new("/")
                 {
                     cmd.args(["--dir", &parent.to_string_lossy()]);
@@ -277,6 +291,16 @@ pub fn from_isolation_plan(
 /// is a symlink to `/ssd/.../.claude`, bwrap needs the resolved target.
 fn resolve_for_bind(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Return the fresh writable virtual filesystem containing `path`.
+///
+/// `/proc` is deliberately excluded: it is a read-only process virtual
+/// filesystem and cannot host writable bind destinations.
+fn fresh_writable_mount_root(path: &Path) -> Option<&'static str> {
+    ["/tmp", "/dev"]
+        .into_iter()
+        .find(|mount_root| path.starts_with(Path::new(mount_root)))
 }
 
 #[cfg(all(test, target_os = "linux"))]
