@@ -130,6 +130,13 @@ pub struct ReviewVerdictArtifact {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub prior_round_refs: Vec<String>,
+    /// Review iteration that produced this verdict.  It binds the verdict to
+    /// the current metadata generation when both review sidecars are read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_iterations: Option<u32>,
+    /// Number of fix retries completed before this verdict was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_rounds: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_size: Option<ReviewDiffSize>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -179,6 +186,8 @@ impl ReviewVerdictArtifact {
             primary_failure: None,
             failure_reason: None,
             prior_round_refs,
+            review_iterations: None,
+            fix_rounds: None,
             diff_size: None,
             large_diff_warning: false,
             large_diff_warning_threshold: None,

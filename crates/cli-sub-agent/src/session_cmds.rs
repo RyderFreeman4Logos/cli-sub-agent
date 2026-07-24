@@ -581,5 +581,5 @@ pub(crate) use crate::session_cmds_daemon::{
 };
 
 #[cfg(test)]
-#[path = "session_cmds_tests.rs"]
+#[path = "session_cmds_tests_root.rs"]
 mod tests;

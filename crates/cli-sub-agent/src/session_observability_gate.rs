@@ -43,6 +43,28 @@ pub(super) fn infer_post_exec_gate_failure_from_log(
     Ok(true)
 }
 
+pub(crate) fn sync_persisted_post_exec_gate_failure(result: &mut SessionResult) -> bool {
+    let Some(report) = result.post_exec_gate.as_ref() else {
+        return false;
+    };
+    let exit_code = if report.exit_code == 0 {
+        1
+    } else {
+        report.exit_code
+    };
+    let status = SessionResult::status_from_exit_code(exit_code);
+    let summary = csa_session::post_exec_gate_failure_summary(report);
+    if result.exit_code == exit_code && result.status == status && result.summary == summary {
+        return false;
+    }
+
+    result.exit_code = exit_code;
+    result.status = status;
+    result.summary = summary;
+    ensure_gate_failure_artifact(result);
+    true
+}
+
 fn gate_log_matches_current_failure(
     result: &SessionResult,
     log_path: &Path,

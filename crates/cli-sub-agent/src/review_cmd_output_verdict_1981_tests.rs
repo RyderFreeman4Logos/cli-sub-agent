@@ -111,6 +111,7 @@ fn persist_pass_meta_review(
     persist_summary(&session_dir, summary);
 
     let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     (env_lock, project_root, session_dir)
@@ -284,6 +285,7 @@ fn issue_2002_extracted_empty_findings_with_descriptive_summary_preserves_pass()
     persist_summary(&session_dir, summary);
 
     let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict = read_verdict(&session_dir);
@@ -320,6 +322,7 @@ fn issue_2002_synthetic_empty_findings_with_pass_summary_preserves_pass() {
     persist_summary(&session_dir, summary);
 
     let meta = make_review_meta_with_decision(session_id, ReviewDecision::Pass, "CLEAN");
+    csa_session::state::write_review_meta(&session_dir, &meta).expect("write review meta");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
 
     let verdict = read_verdict(&session_dir);

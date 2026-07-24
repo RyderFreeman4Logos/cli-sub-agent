@@ -556,6 +556,8 @@ fn build_review_verdict_artifact(
         failure_reason,
         review_mode: None,
         prior_round_refs,
+        review_iterations: None,
+        fix_rounds: None,
         diff_size: None,
         large_diff_warning: false,
         large_diff_warning_threshold: None,

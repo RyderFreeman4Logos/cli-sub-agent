@@ -11,6 +11,7 @@ fn write_review_sidecars(
     failure_reason: Option<&str>,
 ) {
     std::fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+    let timestamp = Utc::now();
     csa_session::write_review_meta(
         session_dir,
         &csa_session::ReviewSessionMeta {
@@ -33,7 +34,7 @@ fn write_review_sidecars(
             fix_attempted: false,
             fix_rounds: 0,
             review_iterations: 1,
-            timestamp: Utc::now(),
+            timestamp,
             diff_fingerprint: None,
             fix_convergence: None,
         },
@@ -46,6 +47,9 @@ fn write_review_sidecars(
         &[],
         Vec::new(),
     );
+    artifact.timestamp = timestamp;
+    artifact.review_iterations = Some(1);
+    artifact.fix_rounds = Some(0);
     artifact.failure_reason = failure_reason.map(str::to_string);
     csa_session::write_review_verdict(session_dir, &artifact).expect("write review verdict");
 }
@@ -207,9 +211,12 @@ fn issue_2425_observability_refresh_flips_repaired_empty_findings_result_to_succ
         ),
     )
     .expect("write synthetic fix suggestion");
-    let result = failure_result(
+    let mut result = failure_result(
         r#"{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}"#,
     );
+    let stale_completed_at = Utc::now() - chrono::TimeDelta::seconds(1);
+    result.started_at = stale_completed_at;
+    result.completed_at = stale_completed_at;
     std::fs::write(
         temp.path().join(csa_session::result::RESULT_FILE_NAME),
         toml::to_string_pretty(&result).expect("serialize result"),

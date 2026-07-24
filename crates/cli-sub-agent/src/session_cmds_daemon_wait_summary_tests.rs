@@ -56,7 +56,7 @@ fn compact_summary_includes_usage_and_review_verdict() {
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
         output_dir.join("review-verdict.json"),
-        r#"{"schema_version":1,"session_id":"01TESTWAITSUMMARY","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+        r#"{"schema_version":1,"session_id":"01TESTWAITSUMMARY","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[],"review_iterations":1,"fix_rounds":0}"#,
     )
     .expect("review verdict should be written");
     std::fs::write(
@@ -71,6 +71,7 @@ fn compact_summary_includes_usage_and_review_verdict() {
   "exit_code": 0,
   "fix_attempted": false,
   "fix_rounds": 0,
+  "review_iterations": 1,
   "timestamp": "2026-04-01T00:00:00Z"
 }"#,
     )
@@ -379,9 +380,26 @@ fn compact_summary_prints_pass_from_canonical_artifact_when_result_succeeded() {
     std::fs::create_dir_all(&output_dir).expect("output dir should be created");
     std::fs::write(
         output_dir.join("review-verdict.json"),
-        r#"{"schema_version":1,"session_id":"01TESTWAITARTPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[]}"#,
+        r#"{"schema_version":1,"session_id":"01TESTWAITARTPASS","timestamp":"2026-04-01T00:00:00Z","decision":"pass","verdict_legacy":"CLEAN","severity_counts":{"critical":0,"high":0,"medium":0,"low":0},"prior_round_refs":[],"review_iterations":1,"fix_rounds":0}"#,
     )
     .expect("review verdict should be written");
+    std::fs::write(
+        temp.path().join("review_meta.json"),
+        r#"{
+  "session_id": "01TESTWAITARTPASS",
+  "head_sha": "deadbeef",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "tool": "codex",
+  "scope": "range:main...HEAD",
+  "exit_code": 0,
+  "fix_attempted": false,
+  "fix_rounds": 0,
+  "review_iterations": 1,
+  "timestamp": "2026-04-01T00:00:00Z"
+}"#,
+    )
+    .expect("review meta should be written");
     let now = Utc::now();
     let result = csa_session::SessionResult {
         post_exec_gate: None,

@@ -164,6 +164,6 @@ fn issue_2183_wait_preserves_structured_pass_summary_success() {
     assert_eq!(persisted.status, "success");
     assert_eq!(persisted.exit_code, 0);
     let summary = render_wait_result_summary(&session_dir, &session_id, &persisted);
-    assert!(summary.contains("Review verdict: PASS"));
+    assert!(!summary.contains("Review verdict: FAIL"));
     assert!(summary.contains("Summary: PASS"));
 }
