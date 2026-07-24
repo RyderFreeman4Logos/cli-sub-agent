@@ -7,6 +7,7 @@ use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact, SessionResult};
 
 enum ReviewSidecarAuthority {
     Absent,
+    LegacyCleanMetaWithoutArtifact,
     Invalid,
     Valid {
         meta: Box<ReviewSessionMeta>,
@@ -21,12 +22,17 @@ pub(super) fn sync_review_verdict_exit_code(
 ) -> Result<bool> {
     let authority = read_review_sidecar_authority(session_dir)?;
     let exit_code = match authority {
-        ReviewSidecarAuthority::Absent if !force_review_failure => None,
+        ReviewSidecarAuthority::Absent | ReviewSidecarAuthority::LegacyCleanMetaWithoutArtifact
+            if !force_review_failure =>
+        {
+            None
+        }
         ReviewSidecarAuthority::Valid {
             ref meta,
             ref artifact,
         } if !force_review_failure && sidecars_allow_clean_pass(meta, artifact) => None,
         ReviewSidecarAuthority::Absent
+        | ReviewSidecarAuthority::LegacyCleanMetaWithoutArtifact
         | ReviewSidecarAuthority::Invalid
         | ReviewSidecarAuthority::Valid { .. } => Some(1),
     };
@@ -81,6 +87,12 @@ fn read_review_sidecar_authority(session_dir: &Path) -> Result<ReviewSidecarAuth
     let meta = read_review_meta(session_dir)?;
     match (meta, artifact) {
         (None, None) => Ok(ReviewSidecarAuthority::Absent),
+        // Legacy review flows wrote clean metadata but no separate verdict artifact.
+        // Treat only independently clean metadata as neutral; every non-pass,
+        // incomplete, or malformed metadata result remains fail-closed.
+        (Some(meta), None) if meta_allows_clean_pass(&meta) => {
+            Ok(ReviewSidecarAuthority::LegacyCleanMetaWithoutArtifact)
+        }
         (Some(meta), Some(artifact)) if sidecars_match(&meta, &artifact) => {
             Ok(ReviewSidecarAuthority::Valid {
                 meta: Box::new(meta),

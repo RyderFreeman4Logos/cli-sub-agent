@@ -249,7 +249,7 @@ fn issue_2825_wait_forces_persisted_post_exec_gate_failure_over_matching_pass_si
 }
 
 #[test]
-fn issue_2825_wait_fails_clean_meta_without_current_verdict_artifact() {
+fn issue_2825_wait_preserves_clean_meta_without_legacy_verdict_artifact() {
     let temp = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = temp.path().join("xdg-state");
@@ -262,7 +262,7 @@ fn issue_2825_wait_fails_clean_meta_without_current_verdict_artifact() {
     std::fs::remove_file(session_dir.join("output").join("review-verdict.json"))
         .expect("remove verdict artifact");
 
-    wait_fails(project, &session_id);
+    wait_succeeds(project, &session_id);
 }
 
 #[test]
