@@ -661,10 +661,11 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
 }
 
 #[test]
-fn test_bwrap_canonicalizes_symlink_writable_path() {
+fn test_bwrap_binds_non_tmp_symlink_writable_path_at_canonical_destination() {
     use std::os::unix::fs::symlink;
 
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let workspace = std::env::current_dir().expect("test working directory");
+    let tmp = tempfile::tempdir_in(workspace).expect("tempdir");
     let real = tmp.path().join("real-claude");
     std::fs::create_dir(&real).expect("create real dir");
     let link = tmp.path().join("link-claude");
@@ -676,20 +677,16 @@ fn test_bwrap_canonicalizes_symlink_writable_path() {
     let cmd = builder.build();
     let args = command_args(&cmd);
 
-    // The --bind source should be the resolved (canonical) path, not the symlink
     let bind_idx = args
         .iter()
         .position(|a| a == "--bind")
         .expect("--bind not found");
     let src = &args[bind_idx + 1];
     let dest = &args[bind_idx + 2];
-    assert!(
-        src.contains("real-claude"),
-        "bind source should be canonicalized real path, got: {src}"
-    );
+    let canonical = real.to_string_lossy().to_string();
+    assert_eq!(src, &canonical, "bind source should be canonicalized");
     assert_eq!(
-        dest,
-        &link.to_string_lossy().to_string(),
-        "bind destination should preserve original logical path"
+        dest, &canonical,
+        "bind destination should be canonicalized so bwrap does not need to create parents through an unresolved state symlink"
     );
 }

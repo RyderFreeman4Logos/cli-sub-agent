@@ -92,7 +92,16 @@ impl BwrapCommandBuilder {
         for path in &self.writable_paths {
             let resolved = resolve_for_bind(path);
             let s = resolved.to_string_lossy();
-            let dest = path.to_string_lossy();
+            // `/tmp` is replaced with a fresh tmpfs before writable binds, so
+            // paths beneath it must keep their logical destination. Elsewhere,
+            // bind at the resolved destination: bwrap cannot create a mount
+            // target by walking a state-path symlink into an autofs mount.
+            let dest_path = if path.starts_with(tmp_prefix) {
+                path.as_path()
+            } else {
+                resolved.as_path()
+            };
+            let dest = dest_path.to_string_lossy();
             if path == tmp_prefix {
                 cmd.args(["--bind", &s, &dest]);
             } else if path.starts_with(tmp_prefix) {
@@ -107,10 +116,10 @@ impl BwrapCommandBuilder {
                 }
                 cmd.args(["--bind", &s, &dest]);
             } else {
-                // Ensure destination parent exists inside the sandbox. When the
-                // writable path involves symlinks or nested state directories,
-                // the logical destination may not exist under the read-only root.
-                if let Some(parent) = path.parent()
+                // Ensure the resolved destination parent exists inside the
+                // sandbox. Creating the logical parent can fail when it is a
+                // symlink into an autofs-backed CSA session-state root.
+                if let Some(parent) = dest_path.parent()
                     && parent != Path::new("/")
                 {
                     cmd.args(["--dir", &parent.to_string_lossy()]);
