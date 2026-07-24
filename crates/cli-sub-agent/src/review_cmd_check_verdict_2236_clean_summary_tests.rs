@@ -414,7 +414,7 @@ fn issue_2405_check_verdict_repairs_empty_fail_artifact_for_clean_summaries() {
 }
 
 #[test]
-fn issue_2393_existing_fail_meta_without_artifact_recovers_exact_head_pass_summary() {
+fn issue_2393_existing_fail_meta_without_artifact_remains_authoritative_failure() {
     let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
     let state_home = TempDir::new().unwrap();
     let _xdg = ScopedEnvVarRestore::set("XDG_STATE_HOME", state_home.path());
@@ -484,8 +484,8 @@ fn issue_2393_existing_fail_meta_without_artifact_recovers_exact_head_pass_summa
     let args = parse_review_args(&["csa", "review", "--check-verdict"]);
     let exit = handle_check_verdict(project.path(), &args).unwrap();
     assert_eq!(
-        exit, 0,
-        "check-verdict should recover the exact-head PASS artifact"
+        exit, 1,
+        "check-verdict must not promote a stale FAIL meta from clean prose alone"
     );
 
     let found = check_review_verdict_for_target(
@@ -496,39 +496,35 @@ fn issue_2393_existing_fail_meta_without_artifact_recovers_exact_head_pass_summa
         Some(expected_diff_fingerprint.as_str()),
         None,
     )
-    .unwrap()
-    .expect("recovered PASS should satisfy check-verdict");
-    assert_eq!(found.session_id, session_id);
+    .unwrap();
+    assert!(
+        found.is_none(),
+        "stale FAIL meta must not satisfy check-verdict"
+    );
 
     let meta = read_review_meta(&session_dir)
         .unwrap()
         .expect("review_meta.json should remain present");
-    assert_eq!(meta.decision, ReviewDecision::Pass.as_str());
-    assert_eq!(meta.verdict, "CLEAN");
-    assert_eq!(meta.exit_code, 0);
-    assert_eq!(
-        meta.diff_fingerprint.as_deref(),
-        Some(expected_diff_fingerprint.as_str())
+    assert_eq!(meta.decision, ReviewDecision::Fail.as_str());
+    assert_eq!(meta.verdict, "HAS_ISSUES");
+    assert_eq!(meta.exit_code, 1);
+    assert!(
+        !session_dir
+            .join("output")
+            .join("review-verdict.json")
+            .exists(),
+        "stale FAIL meta must not be overwritten by a derived PASS artifact"
     );
-
-    let artifact: ReviewVerdictArtifact = serde_json::from_str(
-        &std::fs::read_to_string(session_dir.join("output").join("review-verdict.json"))
-            .expect("review-verdict.json should be recovered"),
-    )
-    .expect("recovered review-verdict.json should parse");
-    assert_eq!(artifact.decision, ReviewDecision::Pass);
-    assert_eq!(artifact.verdict_legacy, "CLEAN");
 
     let repaired = csa_session::load_result(project.path(), &session_id)
         .unwrap()
         .expect("result should remain loadable");
-    assert_eq!(repaired.exit_code, 0);
-    assert_eq!(repaired.status, SessionResult::status_from_exit_code(0));
+    assert_eq!(repaired.exit_code, 1);
+    assert_eq!(repaired.status, SessionResult::status_from_exit_code(1));
     let wait_summary = crate::session_cmds_daemon::render_wait_result_summary(
         &session_dir,
         &session_id,
         &repaired,
     );
-    assert!(wait_summary.contains("Review verdict: PASS"));
-    assert!(!wait_summary.contains("Review verdict: FAIL"));
+    assert!(!wait_summary.contains("Review verdict: PASS"));
 }

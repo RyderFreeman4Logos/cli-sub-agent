@@ -97,7 +97,7 @@ fn recover_legacy_plain_pass_review_sidecars_for_session(
     if decision == ReviewDecision::Pass
         && existing_meta
             .as_ref()
-            .is_some_and(csa_session::ReviewSessionMeta::requires_fail_closed_verdict)
+            .is_some_and(|meta| !meta.accepts_clean_review_verdict(ReviewDecision::Pass))
     {
         return Ok(false);
     }
@@ -126,6 +126,8 @@ fn recover_legacy_plain_pass_review_sidecars_for_session(
         Vec::new(),
     );
     verdict.timestamp = timestamp;
+    verdict.review_iterations = Some(1);
+    verdict.fix_rounds = Some(0);
     csa_session::write_review_verdict(session_dir, &verdict)?;
 
     let meta = csa_session::ReviewSessionMeta {
