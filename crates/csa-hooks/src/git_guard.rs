@@ -160,8 +160,105 @@ done
 
 strip_hook_bypass_env
 
-if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
-  echo "CSA git-guard: git push blocked for leaf-worker sessions." >&2
+push_destination() {
+  PUSH_COMMAND_SEEN=false
+  PUSH_EXPECT_VALUE=""
+  for arg do
+    if [ "${PUSH_COMMAND_SEEN}" = "false" ]; then
+      if [ -n "${PUSH_EXPECT_VALUE}" ]; then
+        PUSH_EXPECT_VALUE=""
+        continue
+      fi
+
+      case "${arg}" in
+        -c|--config|-C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
+          PUSH_EXPECT_VALUE="global-option"
+          continue
+          ;;
+        --config=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--super-prefix=*|--config-env=*)
+          continue
+          ;;
+        --help|-h|--*|-*)
+          continue
+          ;;
+        *)
+          [ "${arg}" = "push" ] || return 1
+          PUSH_COMMAND_SEEN=true
+          continue
+          ;;
+      esac
+    fi
+
+    # The narrow local-fixture exception intentionally permits only the plain
+    # `git push <destination> <refspec...>` form. Any push option, including
+    # --force, remains behind CSA's explicit push authorization.
+    case "${arg}" in
+      --|-*) return 1 ;;
+      *) printf '%s\n' "${arg}"; return 0 ;;
+    esac
+  done
+
+  return 1
+}
+
+canonical_directory() {
+  CDPATH= cd "${1}" 2>/dev/null && pwd -P
+}
+
+is_descendant_of() {
+  case "${1}" in
+    "${2}"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_hermetic_local_bare_push() {
+  destination="$(push_destination "$@")" || return 1
+
+  # Accept only an explicit filesystem path or a local file URL without a
+  # hostname. Colons otherwise admit scp-style and named Git transports.
+  case "${destination}" in
+    file:///*) destination_path="${destination#file://}" ;;
+    *://*|*:*) return 1 ;;
+    *) destination_path="${destination}" ;;
+  esac
+
+  session_dir="${CSA_SESSION_DIR:-}"
+  [ -n "${session_dir}" ] || return 1
+  session_dir="$(canonical_directory "${session_dir}")" || return 1
+  guard_dir="$(canonical_directory "$(dirname "$0")")" || return 1
+  expected_guard_dir="$(canonical_directory "${session_dir}/bin")" || return 1
+  [ "${guard_dir}" = "${expected_guard_dir}" ] || return 1
+
+  fixture_root="$(canonical_directory "${session_dir}/git-fixtures")" || return 1
+  is_descendant_of "${fixture_root}" "${session_dir}" || return 1
+  destination_path="$(canonical_directory "${destination_path}")" || return 1
+  is_descendant_of "${destination_path}" "${fixture_root}" || return 1
+
+  # A fixture must never be a ref/remote location inside the worktree that is
+  # being guarded. Check both the executing worktree and CSA's session root.
+  if worktree="$("${REAL_GIT}" rev-parse --show-toplevel 2>/dev/null)"; then
+    worktree="$(canonical_directory "${worktree}")" || return 1
+    is_descendant_of "${destination_path}" "${worktree}" && return 1
+  fi
+  if [ -n "${CSA_PROJECT_ROOT:-}" ]     && project_root="$(canonical_directory "${CSA_PROJECT_ROOT}")"; then
+    is_descendant_of "${destination_path}" "${project_root}" && return 1
+  fi
+
+  [ "$("${REAL_GIT}" -C "${destination_path}" rev-parse --is-bare-repository 2>/dev/null)" = "true" ]
+}
+
+format_git_command() {
+  printf 'git'
+  for arg do
+    printf ' %s' "${arg}"
+  done
+}
+
+if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]   && ! is_hermetic_local_bare_push "$@"; then
+  rejected_command="$(format_git_command "$@")"
+  echo "CSA git-guard: blocked command: ${rejected_command}" >&2
+  echo "Use a hermetic local bare fixture under \$CSA_SESSION_DIR/git-fixtures and push to its direct canonical path or file:// URL." >&2
   exit 128
 fi
 

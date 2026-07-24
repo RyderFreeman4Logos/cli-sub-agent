@@ -50,6 +50,47 @@ printf '%s\n' "$*"
     );
 }
 
+#[cfg(unix)]
+fn run_git(current_dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("run git fixture command");
+    assert!(
+        output.status.success(),
+        "git {} failed:\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[cfg(unix)]
+fn init_worktree_repo(repo: &Path) {
+    std::fs::create_dir_all(repo).expect("create worktree fixture");
+    run_git(repo, &["init", "--initial-branch=main"]);
+    run_git(repo, &["config", "user.name", "CSA Test"]);
+    run_git(repo, &["config", "user.email", "csa-test@example.invalid"]);
+    std::fs::write(repo.join("fixture.txt"), "fixture\n").expect("write fixture file");
+    run_git(repo, &["add", "fixture.txt"]);
+    run_git(repo, &["commit", "-m", "fixture commit"]);
+}
+
+#[cfg(unix)]
+fn init_bare_repo(parent: &Path, bare: &Path) {
+    std::fs::create_dir_all(parent).expect("create bare fixture parent");
+    run_git(
+        parent,
+        &[
+            "init",
+            "--bare",
+            bare.to_str().expect("UTF-8 bare fixture path"),
+        ],
+    );
+}
+
 #[test]
 fn inject_git_guard_env_sets_real_git_and_path() {
     let mut env = HashMap::new();
@@ -265,10 +306,9 @@ fn wrapper_blocks_push_without_permission() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(128));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr).trim(),
-        "CSA git-guard: git push blocked for leaf-worker sessions."
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("blocked command: git push"), "{stderr}");
+    assert!(stderr.contains("hermetic local bare fixture"), "{stderr}");
     assert!(String::from_utf8_lossy(&output.stdout).trim().is_empty());
 }
 
@@ -294,6 +334,7 @@ fn wrapper_allows_push_with_permission() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "push");
 }
 
+include!("git_guard_tests_hermetic_push.rs");
 #[cfg(unix)]
 #[test]
 fn wrapper_allows_pre_push_only_lefthook_config_without_pre_commit() {
