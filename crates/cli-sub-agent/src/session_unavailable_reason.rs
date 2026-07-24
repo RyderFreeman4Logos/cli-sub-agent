@@ -207,6 +207,8 @@ mod tests {
             primary_failure: primary_failure.map(str::to_string),
             failure_reason: failure_reason.map(str::to_string),
             prior_round_refs: Vec::new(),
+            review_iterations: None,
+            fix_rounds: None,
             diff_size: None,
             large_diff_warning: false,
             large_diff_warning_threshold: None,

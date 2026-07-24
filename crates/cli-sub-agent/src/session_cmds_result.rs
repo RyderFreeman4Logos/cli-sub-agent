@@ -181,29 +181,9 @@ pub(crate) fn handle_session_result(
     }
 
     let repaired_result = if is_cross_project || registry_state_loss {
-        match crate::session_observability::refresh_and_repair_result_from_dir(&session_dir) {
-            Ok(result) => result,
-            Err(err) => {
-                tracing::warn!(
-                    session_id = %resolved_id,
-                    error = %err,
-                    "Failed to refresh cross-project session result"
-                );
-                None
-            }
-        }
+        crate::session_observability::refresh_and_repair_result_from_dir(&session_dir)?
     } else {
-        match crate::session_observability::refresh_and_repair_result(&project_root, &resolved_id) {
-            Ok(result) => result,
-            Err(err) => {
-                tracing::warn!(
-                    session_id = %resolved_id,
-                    error = %err,
-                    "Failed to refresh session result contract in session result"
-                );
-                None
-            }
-        }
+        crate::session_observability::refresh_and_repair_result(&project_root, &resolved_id)?
     };
     let repaired_result = repaired_result.or(daemon_completion_result);
 

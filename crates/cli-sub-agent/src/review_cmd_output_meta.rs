@@ -14,6 +14,8 @@ pub(super) fn apply_review_meta_to_artifact(
         .or_else(|| meta.status_reason.clone())
         .or_else(|| artifact.failure_reason.take());
     artifact.review_mode = meta.review_mode.clone();
+    artifact.review_iterations = Some(meta.review_iterations);
+    artifact.fix_rounds = Some(meta.fix_rounds);
 }
 
 pub(in crate::review_cmd) fn review_meta_for_verdict_artifact(

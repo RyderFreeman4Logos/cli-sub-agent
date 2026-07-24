@@ -97,6 +97,9 @@ pub(crate) fn refresh_and_repair_result_from_dir(
     {
         changed = true;
     }
+    if gate::sync_persisted_post_exec_gate_failure(&mut result) {
+        changed = true;
+    }
     if sync_require_commit_contract_failure(&mut result) {
         changed = true;
     }
@@ -158,6 +161,9 @@ pub(crate) fn enrich_result_from_session_dir(
     {
         changed = true;
     }
+    if gate::sync_persisted_post_exec_gate_failure(result) {
+        changed = true;
+    }
     if sync_require_commit_contract_failure(result) {
         changed = true;
     }
@@ -174,9 +180,15 @@ pub(crate) fn require_commit_contract_failed(result: &SessionResult) -> bool {
     result
         .require_commit_recovery
         .as_ref()
-        .is_some_and(|recovery| {
-            recovery.require_commit && !recovery.commit_created && recovery.dirty_worktree
-        })
+        .is_some_and(|recovery| recovery.require_commit)
+}
+
+pub(crate) fn sync_persisted_post_exec_gate_failure(result: &mut SessionResult) -> bool {
+    gate::sync_persisted_post_exec_gate_failure(result)
+}
+
+pub(crate) fn review_sidecars_allow_clean_pass(session_dir: &Path) -> Result<bool> {
+    review_verdict::review_sidecars_allow_clean_pass(session_dir)
 }
 
 fn sync_require_commit_contract_failure(result: &mut SessionResult) -> bool {

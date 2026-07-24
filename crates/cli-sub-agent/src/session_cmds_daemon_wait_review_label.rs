@@ -2,7 +2,6 @@ use std::path::Path;
 
 use csa_core::types::ReviewDecision;
 use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact};
-use tracing::warn;
 
 pub(super) fn read_review_verdict_label(
     session_dir: &Path,
@@ -17,6 +16,11 @@ pub(super) fn read_review_verdict_label(
         );
     if let Some(artifact) = read_review_verdict_artifact(session_dir) {
         let meta = read_review_meta_for_label(session_dir);
+        let decision = if artifact.severity_counts.values().any(|count| *count > 0) {
+            ReviewDecision::Fail
+        } else {
+            artifact.decision
+        };
         if let Some(label) = meta
             .as_ref()
             .and_then(|meta| format_fix_loop_noop_label(meta.failure_reason.as_deref()))
@@ -27,34 +31,15 @@ pub(super) fn read_review_verdict_label(
         if summary_requires_failed_gate {
             return Some("FAIL".to_string());
         }
-        if artifact.decision == ReviewDecision::Fail
-            && human_summary_is_exact_pass(session_dir, result)
-            && !review_artifact_or_meta_has_failure_diagnostic(meta.as_ref(), &artifact)
-        {
-            warn!(
-                session_dir = %session_dir.display(),
-                "Review verdict artifact is FAIL but the human summary is exactly PASS; showing PASS label"
-            );
-            return Some("PASS".to_string());
-        }
-        if artifact.decision == ReviewDecision::Pass {
-            if meta
-                .as_ref()
-                .is_some_and(|meta| meta.accepts_clean_review_verdict(artifact.decision))
+        if decision == ReviewDecision::Pass {
+            if crate::session_observability::review_sidecars_allow_clean_pass(session_dir)
+                .unwrap_or(false)
             {
                 return Some("PASS".to_string());
             }
-            if !wait_result_allows_pass_verdict(result) {
-                return Some("UNAVAILABLE".to_string());
-            }
-            if meta.as_ref().is_some_and(|meta| {
-                meta.requires_fail_closed_verdict() || !meta.fix_clean_converged()
-            }) {
-                return Some("UNAVAILABLE".to_string());
-            }
-            return Some("PASS".to_string());
+            return Some("UNAVAILABLE".to_string());
         }
-        if artifact.decision == ReviewDecision::Unavailable
+        if decision == ReviewDecision::Unavailable
             && let Some(primary_failure) = artifact.primary_failure.as_deref()
             && !primary_failure.trim().is_empty()
         {
@@ -63,9 +48,9 @@ pub(super) fn read_review_verdict_label(
             let label = compacted.unwrap_or_else(|| redacted.clone());
             return Some(format!("UNAVAILABLE ({label})"));
         }
-        let normalized = normalize_review_verdict_label(artifact.decision.as_str(), result);
+        let normalized = normalize_review_verdict_label(decision.as_str(), result);
         if matches!(
-            artifact.decision,
+            decision,
             ReviewDecision::Fail | ReviewDecision::Uncertain | ReviewDecision::Unavailable
         ) && let Some(reason) = review_failure_reason_label(meta.as_ref(), &artifact)
         {
@@ -86,6 +71,9 @@ pub(super) fn read_review_verdict_label(
             return Some("FAIL".to_string());
         }
         if meta.fix_attempted && !meta.fix_clean_converged() {
+            return Some("UNAVAILABLE".to_string());
+        }
+        if matches!(meta.decision.parse(), Ok(ReviewDecision::Pass)) {
             return Some("UNAVAILABLE".to_string());
         }
         let normalized = normalize_review_verdict_label(&meta.decision, result);
@@ -125,15 +113,20 @@ pub(super) fn review_failure_summary_override(
         return None;
     }
     let artifact = read_review_verdict_artifact(session_dir)?;
-    if artifact.decision == ReviewDecision::Pass {
+    if artifact.decision == ReviewDecision::Pass
+        && !artifact.severity_counts.values().any(|count| *count > 0)
+    {
         return None;
     }
     let meta = read_review_meta_for_label(session_dir);
     let reason = review_failure_reason_label(meta.as_ref(), &artifact)?;
-    let label = normalize_review_verdict_label(
-        artifact.decision.as_str(),
-        &csa_session::SessionResult::default(),
-    );
+    let decision = if artifact.severity_counts.values().any(|count| *count > 0) {
+        ReviewDecision::Fail
+    } else {
+        artifact.decision
+    };
+    let label =
+        normalize_review_verdict_label(decision.as_str(), &csa_session::SessionResult::default());
     Some(format!("Review {label}: {reason}"))
 }
 
@@ -169,8 +162,7 @@ pub(super) fn read_review_verdict_artifact(session_dir: &Path) -> Option<ReviewV
 }
 
 fn review_verdict_artifact_is_pass(session_dir: &Path) -> bool {
-    read_review_verdict_artifact(session_dir)
-        .is_some_and(|artifact| artifact.decision == ReviewDecision::Pass)
+    crate::session_observability::review_sidecars_allow_clean_pass(session_dir).unwrap_or(false)
 }
 
 fn format_fix_loop_noop_label(reason: Option<&str>) -> Option<String> {
@@ -188,29 +180,6 @@ fn read_review_meta_for_label(session_dir: &Path) -> Option<ReviewSessionMeta> {
     }
     let raw = std::fs::read_to_string(&meta_path).ok()?;
     serde_json::from_str::<ReviewSessionMeta>(&raw).ok()
-}
-
-fn human_summary_is_exact_pass(session_dir: &Path, result: &csa_session::SessionResult) -> bool {
-    crate::session_summary_text::human_session_summary(session_dir, &result.summary)
-        .is_some_and(|summary| summary.trim() == "PASS")
-}
-
-fn review_artifact_or_meta_has_failure_diagnostic(
-    meta: Option<&ReviewSessionMeta>,
-    artifact: &ReviewVerdictArtifact,
-) -> bool {
-    artifact.no_provider_launch.is_some()
-        || non_empty_label(artifact.primary_failure.as_deref())
-        || non_empty_label(artifact.failure_reason.as_deref())
-        || meta.is_some_and(|meta| {
-            non_empty_label(meta.status_reason.as_deref())
-                || non_empty_label(meta.primary_failure.as_deref())
-                || non_empty_label(meta.failure_reason.as_deref())
-        })
-}
-
-fn non_empty_label(value: Option<&str>) -> bool {
-    value.is_some_and(|value| !value.trim().is_empty())
 }
 
 fn review_failure_reason_label(
@@ -301,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_2601_review_label_exact_pass_summary_overrides_failed_prose_artifact() {
+    fn issue_2825_review_label_keeps_structured_failure_over_exact_pass_prose() {
         let temp = tempfile::tempdir().expect("tempdir");
         csa_session::persist_structured_output(
             temp.path(),
@@ -336,7 +305,7 @@ mod tests {
 
         let label = read_review_verdict_label(temp.path(), &terminal_result("failure", 1, "PASS"));
 
-        assert_eq!(label.as_deref(), Some("PASS"));
+        assert_eq!(label.as_deref(), Some("FAIL"));
     }
 
     #[test]
