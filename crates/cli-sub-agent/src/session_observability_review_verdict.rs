@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use csa_core::types::ReviewDecision;
-use csa_session::{ReviewVerdictArtifact, SessionResult};
+use csa_session::{ReviewSessionMeta, ReviewVerdictArtifact, SessionResult};
 
 pub(super) fn sync_review_verdict_exit_code(
     session_dir: &Path,
@@ -25,12 +25,17 @@ pub(crate) fn sync_clean_pass_result_status_from_sidecars(
     session_dir: &Path,
     result: &mut SessionResult,
 ) -> Result<bool> {
-    if result.post_exec_gate.is_some() {
+    if result.post_exec_gate.is_some()
+        || crate::session_observability::require_commit_contract_failed(result)
+    {
         return Ok(false);
     }
     let Some(artifact) = read_review_verdict_artifact(session_dir)? else {
         return Ok(false);
     };
+    if read_review_meta(session_dir)?.is_some_and(|meta| !meta_allows_clean_pass(&meta)) {
+        return Ok(false);
+    }
     if artifact.decision != ReviewDecision::Pass
         || !result_has_clean_review_summary(session_dir, result)
     {
@@ -51,12 +56,18 @@ fn sync_result_exit_code(result: &mut SessionResult, exit_code: i32) -> bool {
 }
 
 fn read_review_verdict_exit_code(session_dir: &Path) -> Result<Option<i32>> {
-    let Some(artifact) = read_review_verdict_artifact(session_dir)? else {
-        return Ok(None);
-    };
-    Ok(Some(
-        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision),
-    ))
+    let artifact = read_review_verdict_artifact(session_dir)?;
+    let review_meta = read_review_meta(session_dir)?;
+    if review_meta
+        .as_ref()
+        .is_some_and(|meta| !meta_allows_clean_pass(meta))
+    {
+        return Ok(Some(1));
+    }
+
+    Ok(artifact.map(|artifact| {
+        crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision)
+    }))
 }
 
 fn read_review_verdict_artifact(session_dir: &Path) -> Result<Option<ReviewVerdictArtifact>> {
@@ -67,6 +78,23 @@ fn read_review_verdict_artifact(session_dir: &Path) -> Result<Option<ReviewVerdi
 
     let raw = fs::read_to_string(&verdict_path)?;
     serde_json::from_str(&raw).map(Some).map_err(Into::into)
+}
+
+fn read_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
+    let meta_path = session_dir.join("review_meta.json");
+    if !meta_path.is_file() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&meta_path)?;
+    serde_json::from_str(&raw).map(Some).map_err(Into::into)
+}
+
+fn meta_allows_clean_pass(meta: &ReviewSessionMeta) -> bool {
+    matches!(meta.decision.parse(), Ok(ReviewDecision::Pass))
+        && meta.exit_code == 0
+        && !meta.requires_fail_closed_verdict()
+        && meta.fix_clean_converged()
 }
 
 fn result_has_clean_review_summary(session_dir: &Path, result: &SessionResult) -> bool {

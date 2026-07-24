@@ -329,7 +329,9 @@ pub(super) fn reconcile_repaired_review_pass_result_status(
     session_dir: &Path,
     result: &mut csa_session::SessionResult,
 ) -> bool {
-    if result.post_exec_gate.is_some() {
+    if result.post_exec_gate.is_some()
+        || crate::session_observability::require_commit_contract_failed(result)
+    {
         return false;
     }
     if review_label::read_review_verdict_label(session_dir, result).as_deref() != Some("PASS") {
