@@ -7,8 +7,10 @@ use super::command_args;
 fn test_bwrap_binds_non_tmp_symlink_writable_path_at_canonical_destination() {
     use std::os::unix::fs::symlink;
 
-    let workspace = std::env::current_dir().expect("test working directory");
-    let tmp = tempfile::tempdir_in(workspace).expect("tempdir");
+    // The quality gate read-only-binds the checkout. Use a writable fixture
+    // outside the builder's fresh /tmp and /dev virtual mount roots so this
+    // remains a non-virtual-destination regression test.
+    let tmp = tempfile::tempdir_in("/var/tmp").expect("tempdir");
     let real = tmp.path().join("real-state");
     std::fs::create_dir(&real).expect("create real dir");
     let canonical_writable = real.join("claude");
@@ -57,8 +59,7 @@ fn test_bwrap_binds_non_tmp_symlink_writable_path_at_canonical_destination() {
 fn test_bwrap_keeps_dev_shm_symlink_writable_path_at_logical_destination() {
     use std::os::unix::fs::symlink;
 
-    let workspace = std::env::current_dir().expect("test working directory");
-    let source = tempfile::tempdir_in(workspace).expect("source tempdir");
+    let source = tempfile::tempdir().expect("source tempdir");
     let dev_shm = tempfile::tempdir_in("/dev/shm").expect("/dev/shm tempdir");
     let link = dev_shm.path().join("writable-state");
     symlink(source.path(), &link).expect("create /dev/shm symlink");
