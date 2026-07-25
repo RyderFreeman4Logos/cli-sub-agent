@@ -2,9 +2,46 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use std::os::unix::fs::{PermissionsExt, symlink};
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn output_with_timeout(command: &mut Command, description: &str) -> Output {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn {description}: {error}"));
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .unwrap_or_else(|error| panic!("collect {description} output: {error}"));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "{description} did not finish within {} seconds",
+                    COMMAND_TIMEOUT.as_secs()
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("inspect {description}: {error}");
+            }
+        }
+    }
+}
 
 fn csa_cmd(home: &Path) -> Command {
     let cargo_home = home.join(".cargo");
@@ -30,11 +67,9 @@ fn csa_cmd(home: &Path) -> Command {
 }
 
 fn run_git(project_root: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .args(args)
-        .current_dir(project_root)
-        .output()
-        .expect("git should run")
+    let mut command = Command::new("git");
+    command.args(args).current_dir(project_root);
+    output_with_timeout(&mut command, "git test fixture command")
 }
 
 fn require_git(project_root: &Path, args: &[&str]) {
@@ -125,7 +160,8 @@ fn broken_external_target_fails_before_unmet_done_work_can_dirty_the_repo() {
     symlink(&resolved_target, &lexical_target).expect("create broken external target symlink");
     let fake_bin = install_editing_codex(&home.path().join("bin"));
 
-    let output = csa_cmd(home.path())
+    let mut command = csa_cmd(home.path());
+    command
         .current_dir(&project)
         .env("PATH", prepend_path(&fake_bin))
         .args([
@@ -139,9 +175,8 @@ fn broken_external_target_fails_before_unmet_done_work_can_dirty_the_repo() {
             "0",
             "--no-post-exec-gate",
             "DONE WHEN: just test, build, and commit have a confirmed PASS.",
-        ])
-        .output()
-        .expect("run CSA with broken canonical target");
+        ]);
+    let output = output_with_timeout(&mut command, "CSA with broken canonical target");
 
     let combined = format!(
         "stdout:\n{}\nstderr:\n{}",
@@ -185,15 +220,13 @@ fn unconfirmed_zsh_gate_wrapper_is_terminal_failure_after_dirty_edit() {
         r#"#!/bin/sh
 printf 'provider reached\n' > provider-ran.txt
 printf 'dirty edit\n' > dirty-edit.txt
-printf '%s\n' \
-  '{"type":"thread.started","thread_id":"unconfirmed-zsh-gate"}' \
-  '{"type":"item.completed","item":{"type":"agent_message","text":"zsh: read-only variable: status; unable to confirm gate PASS"}}' \
-  '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+printf '%s\n' '{"type":"thread.started","thread_id":"unconfirmed-zsh-gate"}' '{"type":"item.completed","item":{"type":"agent_message","text":"zsh: read-only variable: status"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 "#,
     )
     .expect("write unconfirmed-gate fake codex");
 
-    let output = csa_cmd(home.path())
+    let mut command = csa_cmd(home.path());
+    command
         .current_dir(&project)
         .env("PATH", prepend_path(&fake_bin))
         .args([
@@ -207,9 +240,8 @@ printf '%s\n' \
             "0",
             "--no-post-exec-gate",
             "DONE WHEN: the gate has a confirmed PASS.",
-        ])
-        .output()
-        .expect("run CSA with unconfirmed zsh gate");
+        ]);
+    let output = output_with_timeout(&mut command, "CSA with unconfirmed zsh gate");
 
     let combined = format!(
         "stdout:\n{}\nstderr:\n{}",

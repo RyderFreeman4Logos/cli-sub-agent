@@ -25,12 +25,17 @@ fn line_indicates_blocked(line: &str) -> bool {
 
 fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
+    let lost_status = lower.contains("unknown")
+        || lower.contains("unavailable")
+        || lower.contains("lost")
+        || lower.contains("not available");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
-        || ((lower.contains("gate exit") || lower.contains("gate status"))
-            && (lower.contains("unknown")
-                || lower.contains("unavailable")
-                || lower.contains("lost")))
+        || lower.contains("zsh: read-only variable: status")
+        || ((lower.contains("gate exit")
+            || lower.contains("gate status")
+            || lower.contains("exit status"))
+            && lost_status)
         || (line.contains("\u{65e0}\u{6cd5}\u{786e}\u{8ba4}\u{95e8}\u{7981}")
             && lower.contains("pass"))
 }
@@ -92,19 +97,19 @@ mod tests {
     }
 
     #[test]
-    fn bash_gate_wrapper_with_lost_exit_is_blocked() {
-        assert!(worker_output_indicates_blocked(
-            "",
-            "bash gate wrapper: gate exit status unavailable; unable to confirm gate PASS"
-        ));
-    }
-
-    #[test]
-    fn zsh_gate_wrapper_with_readonly_status_is_blocked() {
-        assert!(worker_output_indicates_blocked(
-            "",
-            "zsh: read-only variable: status; unable to confirm gate PASS"
-        ));
+    fn raw_shell_lost_gate_diagnostics_are_blocked() {
+        for diagnostic in [
+            "zsh: read-only variable: status",
+            "bash: exit status unavailable",
+            "bash: exit status unknown",
+            "bash: exit status lost",
+            "bash: exit status not available",
+        ] {
+            assert!(
+                worker_output_indicates_blocked("", diagnostic),
+                "raw lost-gate diagnostic must block: {diagnostic}"
+            );
+        }
     }
 
     #[test]
