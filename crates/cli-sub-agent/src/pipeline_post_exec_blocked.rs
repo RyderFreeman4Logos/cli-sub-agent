@@ -3,16 +3,29 @@
 //! Detects sessions that exit 0 but output a "STATUS: BLOCKED" marker,
 //! indicating the worker could not complete the task.
 
-/// Returns true when the tool output or summary contains a hard-blocker marker
-/// or reports that a required gate did not produce a confirmed PASS. Either
-/// condition means the worker could not finish the task.
+#[cfg(test)]
 pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bool {
-    if line_indicates_blocked(summary) || line_indicates_unconfirmed_gate(summary) {
+    worker_output_indicates_blocked_with_receipt(output, summary, false)
+}
+
+/// Returns true when the tool output or summary contains a hard-blocker marker
+/// or reports that a required gate did not produce a confirmed PASS. A current
+/// structured success receipt suppresses only the historical-prose
+/// omitted-work heuristic; explicit blockers still fail the worker.
+pub(super) fn worker_output_indicates_blocked_with_receipt(
+    output: &str,
+    summary: &str,
+    has_positive_structured_completion: bool,
+) -> bool {
+    if line_indicates_blocked(summary)
+        || line_indicates_unconfirmed_gate(summary, has_positive_structured_completion)
+    {
         return true;
     }
-    output
-        .lines()
-        .any(|line| line_indicates_blocked(line) || line_indicates_unconfirmed_gate(line))
+    output.lines().any(|line| {
+        line_indicates_blocked(line)
+            || line_indicates_unconfirmed_gate(line, has_positive_structured_completion)
+    })
 }
 
 fn line_indicates_blocked(line: &str) -> bool {
@@ -23,7 +36,7 @@ fn line_indicates_blocked(line: &str) -> bool {
         || upper.starts_with("BLOCKED:")
 }
 
-fn line_indicates_unconfirmed_gate(line: &str) -> bool {
+fn line_indicates_unconfirmed_gate(line: &str, has_positive_structured_completion: bool) -> bool {
     let lower = line.to_ascii_lowercase();
     let lost_status = lower.contains("unknown")
         || lower.contains("unavailable")
@@ -35,8 +48,10 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let shell_lost_status = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
         && lower.contains("status")
         && lost_status;
-    let required_work_omitted =
-        lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
+    let required_work_omitted = !has_positive_structured_completion
+        && lower.contains("omitted")
+        && lower.contains("test")
+        && lower.contains("commit");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
         || readonly_status_variable
@@ -52,7 +67,7 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::worker_output_indicates_blocked;
+    use super::{worker_output_indicates_blocked, worker_output_indicates_blocked_with_receipt};
 
     #[test]
     fn blocked_summary_exact_match() {
@@ -130,6 +145,20 @@ mod tests {
         assert!(worker_output_indicates_blocked(
             "",
             "\u{95e8}\u{7981}\u{5df2}\u{6267}\u{884c}\u{4e00}\u{6b21}\u{ff0c}\u{4f46}\u{65e0}\u{6cd5}\u{786e}\u{8ba4}\u{95e8}\u{7981} PASS\u{ff1b}\u{672a}\u{91cd}\u{8dd1}\u{3002}"
+        ));
+    }
+
+    #[test]
+    fn current_receipt_suppresses_only_historical_omitted_work_prose() {
+        assert!(!worker_output_indicates_blocked_with_receipt(
+            "",
+            "The previous turn omitted tests and commit; this turn completed both.",
+            true,
+        ));
+        assert!(worker_output_indicates_blocked_with_receipt(
+            "",
+            "STATUS: BLOCKED",
+            true,
         ));
     }
 }

@@ -322,7 +322,11 @@ pub(crate) async fn process_execution_result(
     // Worker-blocked gate (#1483): rewrite to failure when output/summary
     // contains "STATUS: BLOCKED" or an unconfirmed gate receipt.
     if result.exit_code == 0
-        && blocked::worker_output_indicates_blocked(&result.output, &result.summary)
+        && blocked::worker_output_indicates_blocked_with_receipt(
+            &result.output,
+            &result.summary,
+            has_positive_structured_completion,
+        )
     {
         let blocked_summary = format!(
             "worker blocked: STATUS: BLOCKED detected; task was not completed. \

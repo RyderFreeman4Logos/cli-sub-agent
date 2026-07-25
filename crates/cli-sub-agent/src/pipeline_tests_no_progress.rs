@@ -58,8 +58,12 @@ fn build_codex_executor() -> Executor {
     }
 }
 
-fn write_result_sidecar(session_dir: &std::path::Path, contents: &str) {
-    let path = session_dir.join(csa_session::CONTRACT_RESULT_ARTIFACT_PATH);
+fn write_current_turn_result_sidecar(
+    session_dir: &std::path::Path,
+    completed_turn_count: u32,
+    contents: &str,
+) {
+    let path = csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
     std::fs::create_dir_all(path.parent().expect("sidecar parent")).expect("create output dir");
     std::fs::write(path, contents).expect("write result sidecar");
 }
@@ -133,8 +137,9 @@ async fn run_success_with_success_sidecar_and_no_git_progress_remains_success() 
     let (project_root, mut session) = setup_session_repo(&tmp);
     let session_dir =
         csa_session::get_session_dir(&project_root, &session.meta_session_id).expect("dir");
-    write_result_sidecar(
+    write_current_turn_result_sidecar(
         &session_dir,
+        session.turn_count,
         r#"[result]
 status = "success"
 summary = "external orchestration passed"

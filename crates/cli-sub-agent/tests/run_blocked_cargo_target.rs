@@ -52,6 +52,25 @@ fn terminate_process_group(pid: u32) {
     }
 }
 
+fn process_is_running(pid: u32) -> bool {
+    let stat_path = format!("/proc/{pid}/stat");
+    let Ok(stat) = std::fs::read_to_string(stat_path) else {
+        return false;
+    };
+    // A killed-but-not-yet-reaped process is not a surviving workload.
+    stat.split_whitespace().nth(2) != Some("Z")
+}
+
+fn wait_for_process_exit(pid: u32) -> bool {
+    for _ in 0..100 {
+        if !process_is_running(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
 fn output_with_timeout(command: &mut Command, description: &str) -> Output {
     output_with_deadline(command, description, COMMAND_TIMEOUT)
 }
@@ -92,6 +111,11 @@ fn output_with_deadline(
         }
     };
 
+    // `try_wait` reaped the direct child, but a background descendant can
+    // remain in the process group after closing its inherited pipes. Kill the
+    // owned group before the bounded drains so every normal return reaps it.
+    terminate_process_group(process_group);
+
     let Some(stdout) = receive_pipe_before_deadline(&stdout, deadline, description) else {
         terminate_process_group(process_group);
         let _ = child.wait();
@@ -117,22 +141,41 @@ fn output_with_deadline(
 }
 
 #[test]
-fn output_timeout_bounds_pipe_drain_after_direct_child_exits() {
+fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
     let mut command = Command::new("sh");
-    command.args(["-c", "sleep 30 & exit 0"]);
+    command.args([
+        "-c",
+        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s\\n' \"$descendant\"; exit 0",
+    ]);
     let started = Instant::now();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        output_with_deadline(
-            &mut command,
-            "direct child exited but descendant retained pipes",
-            Duration::from_millis(100),
-        )
-    }));
+    let output = output_with_deadline(
+        &mut command,
+        "direct child exited but descendant survived with closed pipes",
+        Duration::from_millis(100),
+    );
+    let descendant_pid = String::from_utf8(output.stdout)
+        .expect("descendant pid is utf-8")
+        .trim()
+        .parse::<u32>()
+        .expect("parse descendant pid");
+    let exited = wait_for_process_exit(descendant_pid);
+    if !exited {
+        // Keep the RED test hygienic: the unfixed helper intentionally leaks
+        // this descendant, so clean it up before asserting the failure.
+        unsafe {
+            libc::kill(descendant_pid as i32, libc::SIGKILL);
+        }
+        let _ = wait_for_process_exit(descendant_pid);
+    }
 
-    assert!(result.is_err(), "retained pipes must trip the deadline");
+    assert!(
+        output.status.success(),
+        "direct child should exit successfully"
+    );
+    assert!(exited, "owned descendant must not survive a normal return");
     assert!(
         started.elapsed() < Duration::from_secs(2),
-        "pipe drain timeout must remain bounded after direct-child exit"
+        "normal direct-child completion must remain bounded"
     );
 }
 

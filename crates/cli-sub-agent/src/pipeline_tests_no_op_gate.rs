@@ -71,6 +71,19 @@ fn write_result_sidecar(session_dir: &std::path::Path, contents: &str) {
     std::fs::write(path, contents).expect("write output/result.toml");
 }
 
+fn write_current_turn_result_sidecar(
+    session_dir: &std::path::Path,
+    completed_turn_count: u32,
+    contents: &str,
+) {
+    let path = csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
+    std::fs::create_dir_all(path.parent().expect("turn result sidecar parent"))
+        .expect("create turn output dir");
+    std::fs::write(path, contents).expect("write current turn result.toml");
+}
+
+#[path = "pipeline_tests_no_op_gate_2806.rs"]
+mod issue_2806_tests;
 #[path = "pipeline_tests_no_op_gate_task_type.rs"]
 mod task_type_tests;
 
@@ -179,8 +192,9 @@ async fn no_op_gate_preserves_success_when_result_sidecar_reports_success() {
         create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
     let session_dir =
         csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
-    write_result_sidecar(
+    write_current_turn_result_sidecar(
         &session_dir,
+        session.turn_count,
         r#"[result]
 status = "success"
 summary = "PASS"
@@ -498,8 +512,9 @@ async fn no_op_gate_does_not_trigger_when_changed_paths_present() {
         create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
     let session_dir =
         csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
-    write_result_sidecar(
+    write_current_turn_result_sidecar(
         &session_dir,
+        session.turn_count,
         r#"[result]
 status = "success"
 summary = "PASS"

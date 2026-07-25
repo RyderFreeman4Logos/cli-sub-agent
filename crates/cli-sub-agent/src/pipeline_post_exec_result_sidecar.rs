@@ -56,11 +56,10 @@ fn ensure_owned_manager_result_artifact(
 pub(super) fn status_is_success(session_dir: &Path, completed_turn_count: u32) -> bool {
     let turn_scoped_path =
         csa_session::turn_contract_result_path(session_dir, completed_turn_count);
-    if path_status_is_success(&turn_scoped_path) {
-        return true;
-    }
-
-    path_status_is_success(&csa_session::contract_result_path(session_dir))
+    // A root `output/result.toml` has no turn identity and can survive from a
+    // prior invocation. Only the current turn's contract path proves that the
+    // receipt was emitted for this invocation.
+    path_status_is_success(&turn_scoped_path)
 }
 
 fn path_status_is_success(path: &Path) -> bool {
