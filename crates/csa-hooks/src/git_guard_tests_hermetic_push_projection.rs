@@ -18,7 +18,7 @@ fn wrapper_redacts_credentials_and_control_bytes_in_blocked_push_diagnostic() {
             "-c",
             "http.extraHeader=Authorization: Bearer configuration-secret",
             "push",
-            "https://alice:url-secret@example.invalid/publication.git\nforged-log-line",
+            "git@scm.invalid:private/path?token=query-secret\nforged-log-line",
             "HEAD:refs/heads/main",
         ])
         .env("CSA_SESSION_DIR", &session_dir)
@@ -29,10 +29,15 @@ fn wrapper_redacts_credentials_and_control_bytes_in_blocked_push_diagnostic() {
     assert_eq!(output.status.code(), Some(128));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("blocked command: git"), "{stderr}");
-    assert!(!stderr.contains("configuration-secret"), "{stderr}");
-    assert!(!stderr.contains("url-secret"), "{stderr}");
-    assert!(!stderr.contains("alice:"), "{stderr}");
-    assert!(!stderr.contains("\nforged-log-line"), "{stderr}");
+    for secret in [
+        "configuration-secret",
+        "private/path",
+        "query-secret",
+        "git@scm.invalid",
+        "\nforged-log-line",
+    ] {
+        assert!(!stderr.contains(secret), "diagnostic leaked {secret:?}: {stderr}");
+    }
 }
 
 #[cfg(unix)]
@@ -267,7 +272,7 @@ fn wrapper_blocks_invocation_scoped_url_rewrites_without_touching_outside_sentin
 
 #[cfg(unix)]
 #[test]
-fn wrapper_blocks_push_instead_of_rewrite_without_touching_outside_sentinel() {
+fn wrapper_ignores_source_push_instead_of_rewrite_for_projected_fixture_push() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();
     let session_dir = temp.path().join("session");
@@ -305,10 +310,9 @@ fn wrapper_blocks_push_instead_of_rewrite_without_touching_outside_sentinel() {
         .output_with_timeout()
         .expect("pushInsteadOf rewrite push through guard");
 
-    assert_eq!(
-        output.status.code(),
-        Some(128),
-        "pushInsteadOf rewrite was not blocked:\nstdout:\n{}\nstderr:\n{}",
+    assert!(
+        output.status.success(),
+        "source pushInsteadOf rewrite escaped projection:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -323,10 +327,297 @@ fn wrapper_blocks_push_instead_of_rewrite_without_touching_outside_sentinel() {
             reference,
         ])
         .output_with_timeout()
-        .expect("inspect blocked pushInsteadOf rewrite sentinel");
+        .expect("inspect pushInsteadOf outside sentinel");
     assert_eq!(
         received.status.code(),
         Some(1),
-        "pushInsteadOf rewrite unexpectedly updated outside sentinel",
+        "source pushInsteadOf rewrite unexpectedly updated outside sentinel",
     );
+    let fixture_ref = std::process::Command::new("git")
+        .args([
+            "-C",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output_with_timeout()
+        .expect("inspect projected fixture ref");
+    assert!(
+        fixture_ref.status.success(),
+        "projected fixture did not receive {reference}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_blocks_alias_and_publication_plumbing_surfaces() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let fixture = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &fixture);
+    let reference = "refs/heads/alias-or-plumbing-must-not-publish";
+    let refspec = format!("HEAD:{reference}");
+    run_git(&source, &["config", "alias.publish", "push"]);
+
+    for args in [
+        vec![
+            "publish".to_owned(),
+            fixture.display().to_string(),
+            refspec.clone(),
+        ],
+        vec![
+            "-c".to_owned(),
+            "alias.publish=push".to_owned(),
+            "publish".to_owned(),
+            fixture.display().to_string(),
+            refspec.clone(),
+        ],
+        vec!["send-pack".to_owned(), fixture.display().to_string()],
+        vec!["receive-pack".to_owned(), fixture.display().to_string()],
+        vec!["remote".to_owned(), "update".to_owned()],
+    ] {
+        let output = std::process::Command::new(&wrapper)
+            .args(&args)
+            .current_dir(&source)
+            .env("CSA_SESSION_DIR", &session_dir)
+            .env_remove("CSA_GIT_PUSH_ALLOWED")
+            .output_with_timeout()
+            .expect("publication-capable command through guard");
+        assert_eq!(
+            output.status.code(),
+            Some(128),
+            "publication-capable command escaped guard: {args:?}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let fixture_ref = std::process::Command::new("git")
+        .args([
+            "-C",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output_with_timeout()
+        .expect("inspect alias fixture sentinel");
+    assert_eq!(fixture_ref.status.code(), Some(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_ignores_path_named_remote_pushurl_and_spaced_rewrite_config() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let fixture = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &fixture);
+    let outside_bare = temp.path().join("outside rewrite.git");
+    init_bare_repo(temp.path(), &outside_bare);
+
+    let pushurl_key = format!(r#"remote."{}".pushurl"#, fixture.display());
+    run_git(
+        &source,
+        &[
+            "config",
+            pushurl_key.as_str(),
+            outside_bare.to_str().expect("UTF-8 outside bare path"),
+        ],
+    );
+    let rewrite_key = format!(r#"url."{}".insteadOf"#, outside_bare.display());
+    run_git(
+        &source,
+        &[
+            "config",
+            rewrite_key.as_str(),
+            fixture.to_str().expect("UTF-8 fixture path"),
+        ],
+    );
+
+    let reference = "refs/heads/configless-projection";
+    let refspec = format!("HEAD:{reference}");
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "push",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            refspec.as_str(),
+        ])
+        .current_dir(&source)
+        .env("CSA_SESSION_DIR", &session_dir)
+        .env_remove("CSA_GIT_PUSH_ALLOWED")
+        .output_with_timeout()
+        .expect("configured fixture push through guard");
+    assert!(
+        output.status.success(),
+        "projection used source remote/rewrite config:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    for (repository, expected, label) in [
+        (&fixture, true, "fixture"),
+        (&outside_bare, false, "outside sentinel"),
+    ] {
+        let ref_check = std::process::Command::new("git")
+            .args([
+                "-C",
+                repository.to_str().expect("UTF-8 bare path"),
+                "show-ref",
+                "--verify",
+                "--quiet",
+                reference,
+            ])
+            .output_with_timeout()
+            .expect("inspect config projection destination");
+        assert_eq!(
+            ref_check.status.success(),
+            expected,
+            "unexpected ref state in {label}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_pins_trusted_git_exec_path_for_projected_push() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let fixture = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &fixture);
+    let hostile_exec_path = temp.path().join("hostile-git-exec-path");
+    std::fs::create_dir_all(&hostile_exec_path).expect("create hostile git exec path");
+    let hostile_marker = temp.path().join("hostile-helper-ran");
+    write_executable(
+        &hostile_exec_path.join("git-receive-pack"),
+        "#!/bin/sh\nprintf hostile > \"$CSA_GIT_GUARD_HOSTILE_MARKER\"\nexit 91\n",
+    );
+
+    let reference = "refs/heads/trusted-exec-path";
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "push",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "HEAD:refs/heads/trusted-exec-path",
+        ])
+        .current_dir(&source)
+        .env("CSA_SESSION_DIR", &session_dir)
+        .env("GIT_EXEC_PATH", &hostile_exec_path)
+        .env("CSA_GIT_GUARD_HOSTILE_MARKER", &hostile_marker)
+        .env_remove("CSA_GIT_PUSH_ALLOWED")
+        .output_with_timeout()
+        .expect("hostile helper fixture push through guard");
+    assert!(
+        output.status.success(),
+        "hostile GIT_EXEC_PATH controlled projected push:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !hostile_marker.exists(),
+        "hostile git-receive-pack helper was invoked"
+    );
+    let fixture_ref = std::process::Command::new("git")
+        .args([
+            "-C",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output_with_timeout()
+        .expect("inspect trusted exec path fixture ref");
+    assert!(fixture_ref.status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_keeps_descriptor_pinned_across_final_destination_swap() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let fixture = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &fixture);
+    let held_fixture = fixture_root.join("held.git");
+    let outside_bare = temp.path().join("outside.git");
+    init_bare_repo(temp.path(), &outside_bare);
+    let swapping_git = temp.path().join("swapping-real-git");
+    write_executable(
+        &swapping_git,
+        "#!/bin/sh\nif [ \"${2:-}\" = push ] && [ -n \"${CSA_GIT_GUARD_SWAP_FROM:-}\" ]; then\n  mv \"$CSA_GIT_GUARD_SWAP_FROM\" \"$CSA_GIT_GUARD_HELD\"\n  ln -s \"$CSA_GIT_GUARD_OUTSIDE\" \"$CSA_GIT_GUARD_SWAP_FROM\"\nfi\nexec /usr/bin/git \"$@\"\n",
+    );
+
+    let reference = "refs/heads/descriptor-pinned";
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "push",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "HEAD:refs/heads/descriptor-pinned",
+        ])
+        .current_dir(&source)
+        .env("CSA_REAL_GIT", &swapping_git)
+        .env("CSA_SESSION_DIR", &session_dir)
+        .env("CSA_GIT_GUARD_SWAP_FROM", &fixture)
+        .env("CSA_GIT_GUARD_HELD", &held_fixture)
+        .env("CSA_GIT_GUARD_OUTSIDE", &outside_bare)
+        .env_remove("CSA_GIT_PUSH_ALLOWED")
+        .output_with_timeout()
+        .expect("racing fixture push through guard");
+    assert!(
+        output.status.success(),
+        "descriptor-pinned push failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    for (repository, expected, label) in [
+        (&held_fixture, true, "descriptor-pinned fixture"),
+        (&outside_bare, false, "outside swap target"),
+    ] {
+        let ref_check = std::process::Command::new("git")
+            .args([
+                "-C",
+                repository.to_str().expect("UTF-8 bare path"),
+                "show-ref",
+                "--verify",
+                "--quiet",
+                reference,
+            ])
+            .output_with_timeout()
+            .expect("inspect post-swap destination");
+        assert_eq!(
+            ref_check.status.success(),
+            expected,
+            "unexpected ref state in {label}"
+        );
+    }
 }

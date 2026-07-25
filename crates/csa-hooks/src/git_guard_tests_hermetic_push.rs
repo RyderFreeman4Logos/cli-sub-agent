@@ -82,7 +82,11 @@ fn wrapper_blocks_remote_push_with_hermetic_fixture_diagnostic() {
     assert_eq!(output.status.code(), Some(128));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("blocked command: git push https://example.invalid/publication.git HEAD:main"),
+        stderr.contains("blocked command: git push <argument> <argument>"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("https://example.invalid/publication.git"),
         "{stderr}"
     );
     assert!(stderr.contains("hermetic local bare fixture"), "{stderr}");
@@ -361,7 +365,7 @@ fn wrapper_blocks_named_remote_even_when_a_fixture_directory_matches_it() {
 
 #[cfg(unix)]
 #[test]
-fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
+fn wrapper_ignores_source_url_instead_of_rewrite_for_projected_fixture_push() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();
     let session_dir = temp.path().join("session");
@@ -403,17 +407,11 @@ fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
         .output_with_timeout()
         .expect("rewrite push through guard");
 
-    assert_eq!(
-        output.status.code(),
-        Some(128),
-        "url.insteadOf rewrite was not blocked:\nstdout:\n{}\nstderr:\n{}",
+    assert!(
+        output.status.success(),
+        "source url.insteadOf rewrite escaped projection:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("blocked: git URL rewrite detected for hermetic fixture push"),
-        "{stderr}"
     );
 
     let received = std::process::Command::new("git")
@@ -426,10 +424,25 @@ fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
             reference,
         ])
         .output_with_timeout()
-        .expect("inspect rejected rewrite destination ref");
+        .expect("inspect rewrite outside sentinel ref");
     assert_eq!(
         received.status.code(),
         Some(1),
-        "url.insteadOf rewrite unexpectedly updated external ref {reference}",
+        "source url.insteadOf rewrite unexpectedly updated external ref {reference}",
+    );
+    let fixture_ref = std::process::Command::new("git")
+        .args([
+            "-C",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output_with_timeout()
+        .expect("inspect projected fixture ref");
+    assert!(
+        fixture_ref.status.success(),
+        "projected fixture did not receive {reference}"
     );
 }

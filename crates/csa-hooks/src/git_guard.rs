@@ -51,6 +51,13 @@ is_hooks_path_config() {
   esac
 }
 
+is_alias_config() {
+  case "${1%%=*}" in
+    [Aa][Ll][Ii][Aa][Ss].*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 strip_hook_bypass_env() {
   unset LEFTHOOK || true
   unset LEFTHOOK_DISABLED || true
@@ -109,11 +116,17 @@ strip_commit_short_arg() {
 
 COMMAND=""
 BLOCK_HOOKS_PATH_OVERRIDE=false
+ALIAS_CONFIG_OVERRIDE=false
 EXPECT_VALUE=""
 for arg do
   if [ -n "${EXPECT_VALUE}" ]; then
-    if [ "${EXPECT_VALUE}" = "config" ] && is_hooks_path_config "${arg}"; then
-      BLOCK_HOOKS_PATH_OVERRIDE=true
+    if [ "${EXPECT_VALUE}" = "config" ]; then
+      if is_hooks_path_config "${arg}"; then
+        BLOCK_HOOKS_PATH_OVERRIDE=true
+      fi
+      if is_alias_config "${arg}"; then
+        ALIAS_CONFIG_OVERRIDE=true
+      fi
     fi
     EXPECT_VALUE=""
     continue
@@ -132,10 +145,17 @@ for arg do
       if is_hooks_path_config "${value}"; then
         BLOCK_HOOKS_PATH_OVERRIDE=true
       fi
+      if is_alias_config "${value}"; then
+        ALIAS_CONFIG_OVERRIDE=true
+      fi
       continue
       ;;
     -ccore.hooksPath=*|-ccore.hookspath=*)
       BLOCK_HOOKS_PATH_OVERRIDE=true
+      continue
+      ;;
+    -calias.*=-*|-calias.*=*|-c[Aa][Ll][Ii][Aa][Ss].*=*)
+      ALIAS_CONFIG_OVERRIDE=true
       continue
       ;;
     -C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
@@ -178,39 +198,81 @@ has_control_bytes() {
   esac
 }
 
+descriptor_path_for() {
+  descriptor_number="${1}"
+  for descriptor_root in /proc/self/fd /dev/fd; do
+    if [ -d "${descriptor_root}/${descriptor_number}" ]; then
+      printf '%s\n' "${descriptor_root}/${descriptor_number}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 reset_hermetic_git_environment() {
-  # The projected local transport must not inherit invocation-scoped config
-  # injected through Git's environment protocol, nor a caller-selected Git
-  # directory/worktree. The remaining repository-local config is inspected
-  # explicitly for destination rewrites before execution.
-  unset GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
+  # The projected local transport must not inherit caller-selected repository,
+  # config, protocol, or helper-routing inputs. The final push runs from an
+  # empty temporary Git directory, so repository-local remotes and URL
+  # rewrites never enter the transport decision.
+  unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
+  unset GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_TEMPLATE_DIR || true
+  unset GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES || true
+  unset GIT_EXEC_PATH GIT_SSH GIT_SSH_COMMAND GIT_SSH_VARIANT GIT_PROXY_COMMAND || true
+  unset GIT_ASKPASS SSH_ASKPASS GIT_TRANSPORT_HELPER_DIR GIT_REMOTE_HELPER_DIR || true
   for env_name in $(env | sed -n -e 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do
     unset "${env_name}" || true
   done
+
+  trusted_exec_path="$("${REAL_GIT}" --exec-path 2>/dev/null)" || return 1
+  case "${trusted_exec_path}" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  trusted_exec_path="$(canonical_directory "${trusted_exec_path}")" || return 1
+
   export GIT_CONFIG_NOSYSTEM=1
   export GIT_CONFIG_SYSTEM=/dev/null
   export GIT_CONFIG_GLOBAL=/dev/null
   export XDG_CONFIG_HOME=/dev/null
   export GIT_ALLOW_PROTOCOL=file
+  export GIT_PROTOCOL_FROM_USER=0
+  export GIT_EXEC_PATH="${trusted_exec_path}"
 }
 
-url_rewrite_applies() {
-  rewrite_destination="${1}"
-  for rewrite_key in $("${REAL_GIT}" config --name-only --get-regexp '^url\..*\.(insteadof|pushinsteadof)$' 2>/dev/null || true); do
-    if "${REAL_GIT}" config --get-all "${rewrite_key}" 2>/dev/null | (
-      while IFS= read -r rewrite_prefix || [ -n "${rewrite_prefix}" ]; do
-        # An empty prefix rewrites every URL/path. The shell pattern is quoted
-        # so configuration values are compared as literal prefixes.
-        case "${rewrite_destination}" in
-          "${rewrite_prefix}"*) exit 0 ;;
-        esac
-      done
-      exit 1
-    ); then
-      return 0
-    fi
-  done
-  return 1
+create_hermetic_push_projection() {
+  # Git has no switch to ignore only the source repository's config. Build a
+  # minimal, configless source snapshot instead: object alternates plus copied
+  # refs give real pack negotiation without allowing local remote/pushurl or
+  # URL-rewrite settings into the final invocation.
+  source_common_dir="$("${REAL_GIT}" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  source_common_dir="$(canonical_directory "${source_common_dir}")" || return 1
+  source_objects="${source_common_dir}/objects"
+  [ -d "${source_objects}" ] || return 1
+  source_head="$("${REAL_GIT}" rev-parse --verify HEAD 2>/dev/null)" || return 1
+
+  umask 077
+  HERMETIC_PUSH_PROJECTION="$(mktemp -d "${session_dir}/.git-guard-projection.XXXXXX")" || return 1
+  mkdir -p "${HERMETIC_PUSH_PROJECTION}/objects/info" "${HERMETIC_PUSH_PROJECTION}/refs" || return 1
+  : > "${HERMETIC_PUSH_PROJECTION}/config" || return 1
+  printf '%s\n' "${source_objects}" > "${HERMETIC_PUSH_PROJECTION}/objects/info/alternates" || return 1
+  printf '%s\n' "${source_head}" > "${HERMETIC_PUSH_PROJECTION}/HEAD" || return 1
+
+  refs_snapshot="${HERMETIC_PUSH_PROJECTION}/refs.snapshot"
+  "${REAL_GIT}" for-each-ref --format='%(refname) %(objectname)' > "${refs_snapshot}" || return 1
+  while IFS=' ' read -r refname object_id remainder || [ -n "${refname:-}" ]; do
+    [ -n "${refname:-}" ] || continue
+    [ -n "${object_id:-}" ] || return 1
+    [ -z "${remainder:-}" ] || return 1
+    "${REAL_GIT}" --git-dir="${HERMETIC_PUSH_PROJECTION}" update-ref "${refname}" "${object_id}" || return 1
+  done < "${refs_snapshot}"
+  rm -f "${refs_snapshot}"
+}
+
+cleanup_hermetic_push_projection() {
+  if [ -n "${HERMETIC_PUSH_PROJECTION:-}" ]; then
+    rm -rf "${HERMETIC_PUSH_PROJECTION}"
+    HERMETIC_PUSH_PROJECTION=""
+  fi
 }
 
 is_hermetic_local_bare_push() {
@@ -234,7 +296,7 @@ is_hermetic_local_bare_push() {
     esac
   done
 
-  reset_hermetic_git_environment
+  reset_hermetic_git_environment || return 1
 
   session_dir="${CSA_SESSION_DIR:-}"
   [ -n "${session_dir}" ] || return 1
@@ -258,76 +320,117 @@ is_hermetic_local_bare_push() {
     is_descendant_of "${destination_path}" "${project_root}" && return 1
   fi
 
-  [ "$("${REAL_GIT}" -C "${destination_path}" rev-parse --is-bare-repository 2>/dev/null)" = "true" ] || return 1
-  HERMETIC_PUSH_DESTINATION="${destination_path}"
+  # Keep both the fixture root and bare destination open. Re-canonicalizing
+  # their descriptor paths after open makes a concurrent symlink/rename swap
+  # fail closed; the transfer receives the pinned destination descriptor.
+  exec 8<"${fixture_root}" || return 1
+  exec 9<"${destination_path}" || return 1
+  fixture_root_descriptor="$(descriptor_path_for 8)" || return 1
+  destination_descriptor="$(descriptor_path_for 9)" || return 1
+  fixture_root="$(canonical_directory "${fixture_root_descriptor}")" || return 1
+  destination_path="$(canonical_directory "${destination_descriptor}")" || return 1
+  is_descendant_of "${fixture_root}" "${session_dir}" || return 1
+  is_descendant_of "${destination_path}" "${fixture_root}" || return 1
+  [ "$("${REAL_GIT}" -C "${destination_descriptor}" rev-parse --is-bare-repository 2>/dev/null)" = "true" ] || return 1
+
+  HERMETIC_PUSH_DESTINATION="${destination_descriptor}"
+  create_hermetic_push_projection || return 1
   return 0
 }
 
-format_git_argument() {
-  case "${1}" in
-    *[!\ -~]*)
-      printf '%s' '<escaped-control-argument>'
-      ;;
-    *://*@*)
-      url_scheme="${1%%://*}://"
-      url_remainder="${1#*://}"
-      url_userinfo="${url_remainder%%@*}"
-      url_after_at="${url_remainder#*@}"
-      case "${url_userinfo}" in
-        */*) printf '%s' "${1}" ;;
-        *) printf '%s<redacted>@%s' "${url_scheme}" "${url_after_at}" ;;
-      esac
-      ;;
-    *) printf '%s' "${1}" ;;
-  esac
-}
-
 format_git_command() {
-  REDACT_CONFIG_VALUE=false
+  # Diagnostics are intentionally structural: a blocked command must never
+  # echo user-controlled destination, refspec, path, query, or config values.
+  command_seen=false
+  expected_value=false
   printf 'git'
   for arg do
-    if [ "${REDACT_CONFIG_VALUE}" = "true" ]; then
-      printf ' %s' '<redacted-config>'
-      REDACT_CONFIG_VALUE=false
+    if [ "${expected_value}" = "true" ]; then
+      printf ' <value>'
+      expected_value=false
       continue
     fi
     case "${arg}" in
-      -c|--config|--config-env)
+      -c|--config|--config-env|-C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix)
         printf ' %s' "${arg}"
-        REDACT_CONFIG_VALUE=true
+        expected_value=true
         ;;
-      --config=*|--config-env=*)
-        printf ' %s=<redacted-config>' "${arg%%=*}"
+      --config=*|--config-env=*|--git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--super-prefix=*)
+        printf ' %s=<value>' "${arg%%=*}"
         ;;
-      -c?*)
-        printf ' %s' '-c<redacted-config>'
+      --help|-h)
+        printf ' %s' "${arg}"
+        ;;
+      --*)
+        printf ' <option>'
+        ;;
+      -*)
+        printf ' <option>'
         ;;
       *)
-        printf ' '
-        format_git_argument "${arg}"
+        if [ "${command_seen}" = "false" ]; then
+          case "${arg}" in
+            push|send-pack|receive-pack|status|add|diff|log|commit) printf ' %s' "${arg}" ;;
+            *) printf ' <command>' ;;
+          esac
+          command_seen=true
+        else
+          printf ' <argument>'
+        fi
         ;;
     esac
   done
 }
 
-if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
-  if ! is_hermetic_local_bare_push "$@"; then
-    rejected_command="$(format_git_command "$@")"
-    echo "CSA git-guard: blocked command: ${rejected_command}" >&2
-    echo "Use a hermetic local bare fixture under \$CSA_SESSION_DIR/git-fixtures and push to its direct canonical path or file:// URL." >&2
-    exit 128
+is_safe_local_command() {
+  case "${1}" in
+    ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+block_untrusted_git_command() {
+  rejected_command="$(format_git_command "$@")"
+  echo "CSA git-guard: blocked command: ${rejected_command}" >&2
+  echo "Use a hermetic local bare fixture under \$CSA_SESSION_DIR/git-fixtures and push to its direct canonical path or file:// URL." >&2
+  exit 128
+}
+
+if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
+  # Aliases are expanded by Git after this wrapper chooses a command. Reject
+  # caller-supplied alias definitions and fail closed for unknown subcommands,
+  # so `git -c alias.publish=push publish …` cannot re-enter publication.
+  if [ "${ALIAS_CONFIG_OVERRIDE}" = "true" ]; then
+    block_untrusted_git_command "$@"
   fi
 
-  if url_rewrite_applies "${HERMETIC_PUSH_DESTINATION}"; then
-    echo "CSA git-guard: blocked: git URL rewrite detected for hermetic fixture push" >&2
-    exit 128
+  if [ "${COMMAND}" = "push" ]; then
+    if ! is_hermetic_local_bare_push "$@"; then
+      cleanup_hermetic_push_projection
+      block_untrusted_git_command "$@"
+    fi
+
+    # Execute only the pinned, configless projection. The original destination,
+    # global options, source config, and helper routing are absent from this
+    # invocation; refspecs are from the closed grammar above.
+    shift 2
+    if "${REAL_GIT}" --git-dir="${HERMETIC_PUSH_PROJECTION}" push "${HERMETIC_PUSH_DESTINATION}" "$@"; then
+      push_status=0
+    else
+      push_status=$?
+    fi
+    cleanup_hermetic_push_projection
+    exit "${push_status}"
   fi
 
-  # Execute only the validated projection: the original destination token and
-  # all global options are discarded, while the closed, validated refspec tail
-  # is preserved exactly. The environment was reset before rewrite inspection.
-  shift 2
-  exec "${REAL_GIT}" push "${HERMETIC_PUSH_DESTINATION}" "$@"
+  # A publication-capable plumbing command or unknown external subcommand can
+  # bypass literal `push` interception. Permit only common local-only Git
+  # commands; all other command surfaces are denied while leaf pushes are off.
+  if ! is_safe_local_command "${COMMAND}"; then
+    block_untrusted_git_command "$@"
+  fi
 fi
 
 if [ "${COMMAND}" != "commit" ]; then
@@ -539,10 +642,9 @@ pub fn inject_git_guard_env(env: &mut HashMap<String, String>) {
 }
 
 fn real_git_binary(guard_dir: &Path) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("CSA_REAL_GIT").filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(path));
-    }
-
+    // The guard's child environment is attacker-controlled. Resolve a known
+    // host Git rather than inheriting an ambient CSA_REAL_GIT override; this
+    // is the trust anchor used to pin the projected transfer's libexec path.
     let guard_dir_str = guard_dir.to_string_lossy();
     let is_not_guard = |path: &Path| !path.to_string_lossy().starts_with(guard_dir_str.as_ref());
 
