@@ -169,30 +169,9 @@ fn apply_run_target_dir_guard_inner(
             ))
         }
         WorkspaceTargetWriteability::Unavailable { status, error }
-        | WorkspaceTargetWriteability::Unwritable { status, error } => {
-            let managed_target = prepare_managed_cargo_target_dir(project_root)?;
-            merged_env.insert(
-                csa_core::env::CARGO_TARGET_DIR_ENV_KEY.to_string(),
-                managed_target.to_string_lossy().into_owned(),
-            );
-            info!(
-                project_target = %workspace_target.display(),
-                selected_cargo_target = %managed_target.display(),
-                workspace_target_status = status,
-                workspace_target_error = error.as_deref().unwrap_or(""),
-                tool = tool_name,
-                "Run session: selected CSA-managed Cargo target because workspace target is not writable"
-            );
-            Ok(CargoTargetPolicyReport::new(
-                &workspace_target,
-                &managed_target,
-                "managed_target_selected",
-                status,
-                error,
-                false,
-                true,
-            ))
-        }
+        | WorkspaceTargetWriteability::Unwritable { status, error } => Err(
+            cargo_target_preflight_error(&workspace_target, status, error.as_deref()),
+        ),
     }
 }
 
@@ -306,31 +285,62 @@ fn workspace_target_writeability(workspace_target: &Path) -> WorkspaceTargetWrit
     }
 }
 
-fn prepare_managed_cargo_target_dir(project_root: &Path) -> Result<PathBuf, String> {
-    let session_root = csa_session::manager::get_session_root(project_root).map_err(|error| {
-        format!(
-            "Failed to resolve CSA-managed Cargo target directory for project '{}': {error}",
-            project_root.display()
-        )
-    })?;
-    let managed_target = session_root.join("cargo-target");
-    std::fs::create_dir_all(&managed_target).map_err(|error| {
-        format!(
-            "Failed to create CSA-managed Cargo target directory '{}': {error}. \
-             CSA will not try fallback Cargo target directories; set CARGO_TARGET_DIR explicitly \
-             or fix state directory permissions.",
-            managed_target.display()
-        )
-    })?;
-    writable_directory_probe(&managed_target).map_err(|error| {
-        format!(
-            "CSA-managed Cargo target directory '{}' is not writable: {error}. \
-             CSA will not try fallback Cargo target directories; set CARGO_TARGET_DIR explicitly \
-             or fix state directory permissions.",
-            managed_target.display()
-        )
-    })?;
-    Ok(managed_target)
+fn cargo_target_preflight_error(
+    workspace_target: &Path,
+    status: &str,
+    error: Option<&str>,
+) -> String {
+    let resolved_target = resolved_target_path_for_diagnostics(workspace_target);
+    let detail = error.map(|error| format!(": {error}")).unwrap_or_default();
+    format!(
+        "Cargo target preflight blocked before provider execution: configured target lexical path \
+         '{}' resolves to '{}'; status '{status}'{detail}. CSA will not substitute an alternate \
+         CARGO_TARGET_DIR. Restore the configured target directory or symlink destination and make \
+         it writable; when filesystem sandboxing is enabled, grant the resolved path write access \
+         through filesystem_sandbox.extra_writable before retrying.",
+        workspace_target.display(),
+        resolved_target.display(),
+    )
+}
+
+fn resolved_target_path_for_diagnostics(workspace_target: &Path) -> PathBuf {
+    let candidate = match std::fs::symlink_metadata(workspace_target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => std::fs::read_link(workspace_target)
+            .map(|target| {
+                if target.is_absolute() {
+                    target
+                } else {
+                    workspace_target
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .join(target)
+                }
+            })
+            .unwrap_or_else(|_| workspace_target.to_path_buf()),
+        _ => workspace_target.to_path_buf(),
+    };
+    canonicalize_existing_prefix(&candidate)
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    let mut candidate = path.to_path_buf();
+    let mut missing_components = Vec::new();
+    loop {
+        if let Ok(mut resolved) = candidate.canonicalize() {
+            for component in missing_components.iter().rev() {
+                resolved.push(component);
+            }
+            return resolved;
+        }
+
+        let Some(component) = candidate.file_name().map(std::ffi::OsStr::to_os_string) else {
+            return path.to_path_buf();
+        };
+        missing_components.push(component);
+        if !candidate.pop() {
+            return path.to_path_buf();
+        }
+    }
 }
 
 fn writable_directory_probe(dir: &Path) -> Result<(), String> {
