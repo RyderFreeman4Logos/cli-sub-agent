@@ -189,3 +189,172 @@ fn wrapper_blocks_fixture_path_that_canonicalizes_outside_session() {
         .expect("inspect rejected escaped-fixture ref");
     assert_eq!(ref_check.status.code(), Some(1));
 }
+
+#[cfg(unix)]
+#[test]
+fn wrapper_blocks_forced_push_variants_to_session_owned_local_bare_fixture() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let bare = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &bare);
+    let destination = bare.to_str().expect("UTF-8 bare fixture path");
+
+    for (refspec, force_flag, reference) in [
+        (
+            "HEAD:refs/heads/force-long",
+            Some("--force"),
+            "refs/heads/force-long",
+        ),
+        (
+            "HEAD:refs/heads/force-short",
+            Some("-f"),
+            "refs/heads/force-short",
+        ),
+        (
+            "HEAD:refs/heads/force-with-lease",
+            Some("--force-with-lease"),
+            "refs/heads/force-with-lease",
+        ),
+        (
+            "+HEAD:refs/heads/force-refspec",
+            None,
+            "refs/heads/force-refspec",
+        ),
+    ] {
+        let mut command = std::process::Command::new(&wrapper);
+        command
+            .args(["push", destination, refspec])
+            .current_dir(&source)
+            .env("CSA_SESSION_DIR", &session_dir)
+            .env_remove("CSA_GIT_PUSH_ALLOWED");
+        if let Some(force_flag) = force_flag {
+            command.arg(force_flag);
+        }
+        let output = command
+            .output()
+            .expect("forced push to local bare fixture through guard");
+
+        assert_eq!(
+            output.status.code(),
+            Some(128),
+            "forced push variant {refspec} {force_flag:?} was not blocked:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let received = std::process::Command::new("git")
+            .args([
+                "-C",
+                destination,
+                "show-ref",
+                "--verify",
+                "--quiet",
+                reference,
+            ])
+            .output()
+            .expect("inspect rejected force-push ref");
+        assert_eq!(
+            received.status.code(),
+            Some(1),
+            "force-push variant unexpectedly updated {reference}",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_blocks_named_remote_even_when_a_fixture_directory_matches_it() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    std::fs::create_dir_all(&fixture_root).unwrap();
+    let configured_fixture = fixture_root.join("configured.git");
+    run_git(
+        &fixture_root,
+        &[
+            "clone",
+            "--bare",
+            source.to_str().expect("UTF-8 source path"),
+            configured_fixture
+                .to_str()
+                .expect("UTF-8 configured fixture path"),
+        ],
+    );
+
+    // This decoy makes the old guard canonicalize "origin" as a valid local
+    // fixture path, even though Git resolves the configured remote instead.
+    let decoy_origin = fixture_root.join("origin");
+    init_bare_repo(&fixture_root, &decoy_origin);
+    let outside_bare = temp.path().join("outside.git");
+    init_bare_repo(temp.path(), &outside_bare);
+    run_git(
+        &fixture_root,
+        &[
+            "--git-dir",
+            configured_fixture
+                .to_str()
+                .expect("UTF-8 configured fixture path"),
+            "remote",
+            "set-url",
+            "origin",
+            outside_bare.to_str().expect("UTF-8 outside bare path"),
+        ],
+    );
+
+    let reference = "refs/heads/should-not-publish";
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "--git-dir",
+            configured_fixture
+                .to_str()
+                .expect("UTF-8 configured fixture path"),
+            "push",
+            "origin",
+            "refs/heads/main:refs/heads/should-not-publish",
+        ])
+        .current_dir(&fixture_root)
+        .env("CSA_SESSION_DIR", &session_dir)
+        .env_remove("CSA_GIT_PUSH_ALLOWED")
+        .output()
+        .expect("configured remote push through guard");
+
+    assert_eq!(
+        output.status.code(),
+        Some(128),
+        "configured named remote was not blocked:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let received = std::process::Command::new("git")
+        .args([
+            "-C",
+            outside_bare.to_str().expect("UTF-8 outside bare path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output()
+        .expect("inspect rejected configured-remote ref");
+    assert_eq!(
+        received.status.code(),
+        Some(1),
+        "configured named remote unexpectedly updated {reference}",
+    );
+}

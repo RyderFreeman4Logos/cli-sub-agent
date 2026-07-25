@@ -163,6 +163,7 @@ strip_hook_bypass_env
 push_destination() {
   PUSH_COMMAND_SEEN=false
   PUSH_EXPECT_VALUE=""
+  PUSH_DESTINATION=""
   for arg do
     if [ "${PUSH_COMMAND_SEEN}" = "false" ]; then
       if [ -n "${PUSH_EXPECT_VALUE}" ]; then
@@ -189,16 +190,25 @@ push_destination() {
       esac
     fi
 
-    # The narrow local-fixture exception intentionally permits only the plain
-    # `git push <destination> <refspec...>` form. Any push option, including
-    # --force, remains behind CSA's explicit push authorization.
+    if [ -z "${PUSH_DESTINATION}" ]; then
+      # The narrow local-fixture exception intentionally permits only the
+      # `git push <destination> <refspec...>` form.
+      case "${arg}" in
+        --|-*) return 1 ;;
+        *) PUSH_DESTINATION="${arg}" ;;
+      esac
+      continue
+    fi
+
+    # Forced updates remain behind CSA's explicit push authorization, even
+    # when their option or refspec follows an otherwise valid destination.
     case "${arg}" in
-      --|-*) return 1 ;;
-      *) printf '%s\n' "${arg}"; return 0 ;;
+      --force|-f|--force-with-lease|--force-with-lease=*|+*) return 1 ;;
     esac
   done
 
-  return 1
+  [ -n "${PUSH_DESTINATION}" ] || return 1
+  printf '%s\n' "${PUSH_DESTINATION}"
 }
 
 canonical_directory() {
@@ -220,7 +230,8 @@ is_hermetic_local_bare_push() {
   case "${destination}" in
     file:///*) destination_path="${destination#file://}" ;;
     *://*|*:*) return 1 ;;
-    *) destination_path="${destination}" ;;
+    /*|.*|*/*) destination_path="${destination}" ;;
+    *) return 1 ;;
   esac
 
   session_dir="${CSA_SESSION_DIR:-}"
