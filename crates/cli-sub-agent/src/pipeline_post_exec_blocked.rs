@@ -29,9 +29,19 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
         || lower.contains("unavailable")
         || lower.contains("lost")
         || lower.contains("not available");
+    let readonly_status_variable = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
+        && lower.contains("status")
+        && (lower.contains("readonly variable") || lower.contains("read-only variable"));
+    let shell_lost_status = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
+        && lower.contains("status")
+        && lost_status;
+    let required_work_omitted =
+        lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
-        || lower.contains("zsh: read-only variable: status")
+        || readonly_status_variable
+        || shell_lost_status
+        || required_work_omitted
         || ((lower.contains("gate exit")
             || lower.contains("gate status")
             || lower.contains("exit status"))
@@ -100,6 +110,9 @@ mod tests {
     fn raw_shell_lost_gate_diagnostics_are_blocked() {
         for diagnostic in [
             "zsh: read-only variable: status",
+            "zsh: status: readonly variable",
+            "zsh: status unknown",
+            "bash: status: readonly variable",
             "bash: exit status unavailable",
             "bash: exit status unknown",
             "bash: exit status lost",

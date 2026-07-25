@@ -175,6 +175,42 @@ fn apply_run_target_dir_guard_inner(
     }
 }
 
+pub(crate) fn ensure_cargo_target_sandbox_writable(
+    report: &CargoTargetPolicyReport,
+    project_root: &Path,
+    isolation_plan: Option<&csa_resource::isolation_plan::IsolationPlan>,
+) -> Result<(), String> {
+    let Some(plan) =
+        isolation_plan.filter(|plan| plan.filesystem != csa_resource::FilesystemCapability::None)
+    else {
+        return Ok(());
+    };
+    let selected_target = PathBuf::from(&report.selected_cargo_target);
+    let lexical_target = if selected_target.is_absolute() {
+        selected_target
+    } else {
+        project_root.join(selected_target)
+    };
+    let resolved_target = resolved_target_path_for_diagnostics(&lexical_target);
+    let is_granted = plan.writable_paths.iter().any(|writable_path| {
+        csa_resource::isolation_plan::canonicalize_through_existing_ancestors(writable_path)
+            .is_ok_and(|resolved_writable_path| resolved_target.starts_with(resolved_writable_path))
+    });
+    if is_granted {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Cargo target preflight blocked before provider execution: configured target lexical path \
+         '{}' resolves to '{}'; status 'workspace_target_not_granted_by_sandbox'. The resolved \
+         target is writable on the host but is not granted by the final filesystem sandbox plan. \
+         Add the resolved path to filesystem_sandbox.extra_writable or the tool's writable_paths \
+         before retrying.",
+        lexical_target.display(),
+        resolved_target.display(),
+    ))
+}
+
 pub(crate) fn persist_cargo_target_policy_artifact(
     session_dir: &Path,
     report: &CargoTargetPolicyReport,

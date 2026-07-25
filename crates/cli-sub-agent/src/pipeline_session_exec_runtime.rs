@@ -299,6 +299,15 @@ async fn prepare_session_runtime_inner(
             return Err(anyhow::anyhow!(msg));
         }
     };
+    crate::pipeline_cargo_target::ensure_cargo_target_sandbox_writable(
+        &cargo_target_policy,
+        input.project_root,
+        execute_options
+            .sandbox
+            .as_ref()
+            .map(|sandbox| &sandbox.isolation_plan),
+    )
+    .map_err(anyhow::Error::msg)?;
     crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
         input.task_type,
         input.executor.tool_name(),

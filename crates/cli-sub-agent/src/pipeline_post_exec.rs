@@ -26,6 +26,7 @@ use crate::session_outcome::{
 };
 
 const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
 #[path = "pipeline_post_exec_context.rs"]
 mod context;
 pub(crate) use context::{PostExecContext, PreExecutionSnapshot};
@@ -41,12 +42,17 @@ pub(crate) use fallback::{
     ensure_terminal_result_for_session_on_post_exec_error,
     ensure_terminal_result_on_post_exec_error,
 };
+#[path = "pipeline_post_exec_dirty_sa.rs"]
+mod dirty_sa;
 #[path = "pipeline_post_exec_helpers.rs"]
 mod helpers;
 #[path = "pipeline_post_exec_lefthook.rs"]
 mod lefthook;
 #[path = "pipeline_post_exec_no_op.rs"]
 mod no_op;
+#[cfg(test)]
+use dirty_sa::dirty_sa_run_lacks_completion_receipt;
+use dirty_sa::maybe_mark_dirty_sa_run_without_receipt;
 #[path = "pipeline_post_exec_progress.rs"]
 mod progress;
 #[path = "pipeline_post_exec_result_sidecar.rs"]
@@ -267,10 +273,12 @@ pub(crate) async fn process_execution_result(
     }
     // No-op gate: fail short successful SA-mode runs with no tool calls/output.
     let elapsed_secs = (execution_end_time - ctx.execution_start_time).num_seconds();
+    let has_positive_structured_completion =
+        result_sidecar::status_is_success(&ctx.session_dir, session.turn_count);
     if ctx.sa_mode
         && ctx.task_type.is_none_or(|t| t == "run")
         && result.exit_code == 0
-        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
+        && !has_positive_structured_completion
         && session.turn_count <= 1
         && !ctx.has_tool_calls
         && !has_meaningful_reasoning_output
@@ -304,8 +312,15 @@ pub(crate) async fn process_execution_result(
             tool_state.last_action_summary = no_op_summary;
         }
     }
+    maybe_mark_dirty_sa_run_without_receipt(
+        &ctx,
+        session,
+        result,
+        &mut session_result,
+        has_positive_structured_completion,
+    );
     // Worker-blocked gate (#1483): rewrite to failure when output/summary
-    // contains "STATUS: BLOCKED" (Bash unavailable, EROFS, missing tooling).
+    // contains "STATUS: BLOCKED" or an unconfirmed gate receipt.
     if result.exit_code == 0
         && blocked::worker_output_indicates_blocked(&result.output, &result.summary)
     {
@@ -332,7 +347,7 @@ pub(crate) async fn process_execution_result(
     }
     if result.exit_code == 0
         && ctx.task_type == Some("run")
-        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
+        && !has_positive_structured_completion
         && session.turn_count <= 1
         && !ctx.has_tool_calls
         && !has_meaningful_reasoning_output

@@ -10,6 +10,23 @@ use std::process::Command;
 mod signal;
 
 #[test]
+fn dirty_sa_needs_receipt() {
+    let paths = vec![String::new()];
+    assert!(dirty_sa_run_lacks_completion_receipt(
+        true,
+        Some("run"),
+        &paths,
+        false
+    ));
+    assert!(!dirty_sa_run_lacks_completion_receipt(
+        true,
+        Some("run"),
+        &paths,
+        true
+    ));
+}
+
+#[test]
 fn ensure_terminal_result_on_post_exec_error_writes_missing_result() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);

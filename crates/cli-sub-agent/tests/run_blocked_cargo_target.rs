@@ -1,46 +1,139 @@
 #![cfg(unix)]
 
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::{
+    fs::{PermissionsExt, symlink},
+    process::CommandExt,
+};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+type DrainedPipe = Receiver<std::io::Result<Vec<u8>>>;
+
+fn drain_pipe<R>(mut reader: R) -> DrainedPipe
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = sender.send(reader.read_to_end(&mut bytes).map(|_| bytes));
+    });
+    receiver
+}
+
+fn receive_pipe_before_deadline(
+    receiver: &DrainedPipe,
+    deadline: Instant,
+    description: &str,
+) -> Option<Vec<u8>> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(Ok(bytes)) => Some(bytes),
+        Ok(Err(error)) => panic!("drain {description} output: {error}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => None,
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("drain {description} output: pipe reader disconnected")
+        }
+    }
+}
+
+fn terminate_process_group(pid: u32) {
+    // SAFETY: `output_with_timeout` places the direct child in a process group
+    // led by `pid`, and this test harness owns that process group.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
 fn output_with_timeout(command: &mut Command, description: &str) -> Output {
+    output_with_deadline(command, description, COMMAND_TIMEOUT)
+}
+
+fn output_with_deadline(
+    command: &mut Command,
+    description: &str,
+    command_timeout: Duration,
+) -> Output {
+    command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|error| panic!("spawn {description}: {error}"));
-    let deadline = Instant::now() + COMMAND_TIMEOUT;
-
-    loop {
+    let process_group = child.id();
+    let stdout = drain_pipe(child.stdout.take().expect("piped stdout"));
+    let stderr = drain_pipe(child.stderr.take().expect("piped stderr"));
+    let deadline = Instant::now() + command_timeout;
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .unwrap_or_else(|error| panic!("collect {description} output: {error}"));
-            }
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
-                let _ = child.kill();
+                terminate_process_group(process_group);
                 let _ = child.wait();
                 panic!(
                     "{description} did not finish within {} seconds",
-                    COMMAND_TIMEOUT.as_secs()
+                    command_timeout.as_secs()
                 );
             }
             Err(error) => {
-                let _ = child.kill();
+                terminate_process_group(process_group);
                 let _ = child.wait();
                 panic!("inspect {description}: {error}");
             }
         }
+    };
+
+    let Some(stdout) = receive_pipe_before_deadline(&stdout, deadline, description) else {
+        terminate_process_group(process_group);
+        let _ = child.wait();
+        panic!(
+            "{description} did not drain stdout within {} seconds",
+            command_timeout.as_secs()
+        );
+    };
+    let Some(stderr) = receive_pipe_before_deadline(&stderr, deadline, description) else {
+        terminate_process_group(process_group);
+        let _ = child.wait();
+        panic!(
+            "{description} did not drain stderr within {} seconds",
+            command_timeout.as_secs()
+        );
+    };
+
+    Output {
+        status,
+        stdout,
+        stderr,
     }
+}
+
+#[test]
+fn output_timeout_bounds_pipe_drain_after_direct_child_exits() {
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 30 & exit 0"]);
+    let started = Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        output_with_deadline(
+            &mut command,
+            "direct child exited but descendant retained pipes",
+            Duration::from_millis(100),
+        )
+    }));
+
+    assert!(result.is_err(), "retained pipes must trip the deadline");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "pipe drain timeout must remain bounded after direct-child exit"
+    );
 }
 
 fn csa_cmd(home: &Path) -> Command {
@@ -251,6 +344,58 @@ printf '%s\n' '{"type":"thread.started","thread_id":"unconfirmed-zsh-gate"}' '{"
     assert!(
         !output.status.success(),
         "an unconfirmed gate exit must be terminal failure, not success: {combined}"
+    );
+    assert!(
+        project.join("dirty-edit.txt").exists(),
+        "fake writer must have edited"
+    );
+}
+
+#[test]
+fn unmet_done_summary_is_terminal_failure_after_dirty_edit_without_blocked_marker() {
+    let home = tempfile::tempdir().expect("create temporary home");
+    let project = home.path().join("project");
+    std::fs::create_dir_all(&project).expect("create project");
+    init_project(&project);
+
+    let fake_bin = install_editing_codex(&home.path().join("bin"));
+    let codex = fake_bin.join("codex");
+    std::fs::write(
+        &codex,
+        r#"#!/bin/sh
+printf 'provider reached\n' > provider-ran.txt
+printf 'dirty edit\n' > dirty-edit.txt
+printf '%s\n' '{"type":"thread.started","thread_id":"unmet-done"}' '{"type":"item.completed","item":{"type":"agent_message","text":"tests and commit omitted"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+"#,
+    )
+    .expect("write unmet-DONE fake codex");
+
+    let mut command = csa_cmd(home.path());
+    command
+        .current_dir(&project)
+        .env("PATH", prepend_path(&fake_bin))
+        .args([
+            "run",
+            "--no-daemon",
+            "--sa-mode",
+            "true",
+            "--tool",
+            "codex",
+            "--min-free-memory-mb",
+            "0",
+            "--no-post-exec-gate",
+            "DONE WHEN: tests, build, and commit have a confirmed PASS.",
+        ]);
+    let output = output_with_timeout(&mut command, "CSA with unmet DONE summary");
+
+    let combined = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "dirty SA-mode work without a completion receipt must fail: {combined}"
     );
     assert!(
         project.join("dirty-edit.txt").exists(),
