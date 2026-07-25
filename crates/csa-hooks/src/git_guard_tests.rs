@@ -4,13 +4,80 @@ use crate::test_support::ENV_LOCK;
 use crate::{git_wrapper_script, inject_git_guard_env};
 use std::collections::HashMap;
 #[cfg(unix)]
+use std::io;
+#[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::path::Path;
 #[cfg(unix)]
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+const GIT_CHILD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run a fixture child with a bounded lifetime and a configuration surface
+/// that is independent of the developer's global, system, and XDG Git state.
+#[cfg(unix)]
+trait CommandOutputWithTimeout {
+    fn output_with_timeout(&mut self) -> io::Result<Output>;
+}
+
+#[cfg(unix)]
+impl CommandOutputWithTimeout for Command {
+    fn output_with_timeout(&mut self) -> io::Result<Output> {
+        for (name, _) in std::env::vars_os() {
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name == "GIT_CONFIG_PARAMETERS" || name.starts_with("GIT_CONFIG_") {
+                self.env_remove(name);
+            }
+        }
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_TEMPLATE_DIR",
+            "GIT_EXEC_PATH",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            self.env_remove(name);
+        }
+        self.env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("XDG_CONFIG_HOME", "/dev/null")
+            .env("GIT_ALLOW_PROTOCOL", "file")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = self.spawn()?;
+        let deadline = Instant::now() + GIT_CHILD_TIMEOUT;
+        loop {
+            if child.try_wait()?.is_some() {
+                return child.wait_with_output();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "fixture child exceeded bounded Git test timeout",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
 
 #[cfg(unix)]
 fn write_executable(path: &Path, contents: impl AsRef<[u8]>) {
@@ -52,11 +119,10 @@ printf '%s\n' "$*"
 
 #[cfg(unix)]
 fn run_git(current_dir: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = Command::new("git")
         .args(args)
         .current_dir(current_dir)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
+        .output_with_timeout()
         .expect("run git fixture command");
     assert!(
         output.status.success(),
@@ -144,7 +210,7 @@ fn wrapper_script_parses_with_sh_n() {
     let output = std::process::Command::new("sh")
         .arg("-n")
         .arg(&wrapper)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(
@@ -171,7 +237,7 @@ fn wrapper_strips_no_verify_before_real_git() {
         .arg("-m")
         .arg("test")
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -202,7 +268,7 @@ fn wrapper_strips_short_no_verify_before_real_git() {
         .arg("-m")
         .arg("test")
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -230,7 +296,7 @@ fn wrapper_strips_combined_short_no_verify_before_real_git() {
             .arg(flag)
             .arg("test")
             .env("CSA_REAL_GIT", &fake_git)
-            .output()
+            .output_with_timeout()
             .unwrap();
 
         assert!(output.status.success());
@@ -276,7 +342,7 @@ echo "$@"
         .env("SKIP_GIT_HOOKS", "1")
         .env("PRE_COMMIT_ALLOW_NO_CONFIG", "1")
         .env("LEFTHOOK_SKIP_PRE_COMMIT", "1")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(
@@ -302,7 +368,7 @@ fn wrapper_blocks_push_without_permission() {
         .arg("push")
         .env("CSA_REAL_GIT", &fake_git)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(128));
@@ -327,7 +393,7 @@ fn wrapper_allows_push_with_permission() {
         .arg("push")
         .env("CSA_REAL_GIT", &fake_git)
         .env("CSA_GIT_PUSH_ALLOWED", "true")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -335,6 +401,7 @@ fn wrapper_allows_push_with_permission() {
 }
 
 include!("git_guard_tests_hermetic_push.rs");
+include!("git_guard_tests_hermetic_push_projection.rs");
 #[cfg(unix)]
 #[test]
 fn wrapper_allows_pre_push_only_lefthook_config_without_pre_commit() {
@@ -365,7 +432,7 @@ fn wrapper_allows_pre_push_only_lefthook_config_without_pre_commit() {
         .current_dir(&repo)
         .env("CSA_REAL_GIT", &fake_git)
         .env("FAKE_TOP", &repo)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(
@@ -401,7 +468,7 @@ fn wrapper_blocks_missing_defined_pre_push_lefthook_hook() {
         .current_dir(&repo)
         .env("CSA_REAL_GIT", &fake_git)
         .env("FAKE_TOP", &repo)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -436,7 +503,7 @@ fn wrapper_requires_pre_commit_when_lefthook_config_defines_it() {
         .current_dir(&repo)
         .env("CSA_REAL_GIT", &fake_git)
         .env("FAKE_TOP", &repo)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -459,7 +526,7 @@ fn wrapper_allows_long_commit_options_containing_n() {
         .arg("commit")
         .arg("--amend")
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -491,7 +558,7 @@ fn wrapper_allows_markdown_bullet_after_long_message_option() {
         .arg("--message")
         .arg(body_msg)
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -520,7 +587,7 @@ fn wrapper_allows_leading_dash_after_short_message_option() {
         .arg("-m")
         .arg(msg)
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -546,7 +613,7 @@ fn wrapper_allows_leading_dash_after_file_option() {
         .arg("-F")
         .arg("-")
         .env("CSA_REAL_GIT", &fake_git)
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert!(output.status.success());
@@ -571,7 +638,7 @@ fn wrapper_forwards_non_commit_commands() {
         let output = std::process::Command::new(&wrapper)
             .arg(subcommand)
             .env("CSA_REAL_GIT", &fake_git)
-            .output()
+            .output_with_timeout()
             .unwrap();
 
         assert!(output.status.success());

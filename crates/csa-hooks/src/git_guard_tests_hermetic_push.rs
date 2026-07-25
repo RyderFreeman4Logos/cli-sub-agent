@@ -30,7 +30,7 @@ fn wrapper_allows_real_push_to_session_owned_local_bare_fixture() {
             .current_dir(&source)
             .env("CSA_SESSION_DIR", &session_dir)
             .env_remove("CSA_GIT_PUSH_ALLOWED")
-            .output()
+            .output_with_timeout()
             .expect("push to local bare fixture through guard");
         assert!(
             output.status.success(),
@@ -47,7 +47,7 @@ fn wrapper_allows_real_push_to_session_owned_local_bare_fixture() {
                 "--verify",
                 reference,
             ])
-            .output()
+            .output_with_timeout()
             .expect("inspect received fixture ref");
         assert!(
             received.status.success(),
@@ -76,7 +76,7 @@ fn wrapper_blocks_remote_push_with_hermetic_fixture_diagnostic() {
         .env("CSA_REAL_GIT", &fake_git)
         .env("CSA_SESSION_DIR", &session_dir)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(128));
@@ -122,7 +122,7 @@ fn wrapper_blocks_push_to_working_repository_git_dir() {
         .current_dir(&source)
         .env("CSA_SESSION_DIR", &session_dir)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(128));
@@ -139,7 +139,7 @@ fn wrapper_blocks_push_to_working_repository_git_dir() {
             "--quiet",
             "refs/heads/should-not-publish",
         ])
-        .output()
+        .output_with_timeout()
         .expect("inspect rejected working-repository ref");
     assert_eq!(ref_check.status.code(), Some(1));
 }
@@ -172,7 +172,7 @@ fn wrapper_blocks_fixture_path_that_canonicalizes_outside_session() {
         .current_dir(&source)
         .env("CSA_SESSION_DIR", &session_dir)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .unwrap();
 
     assert_eq!(output.status.code(), Some(128));
@@ -185,7 +185,7 @@ fn wrapper_blocks_fixture_path_that_canonicalizes_outside_session() {
             "--quiet",
             "refs/heads/should-not-publish",
         ])
-        .output()
+        .output_with_timeout()
         .expect("inspect rejected escaped-fixture ref");
     assert_eq!(ref_check.status.code(), Some(1));
 }
@@ -239,7 +239,7 @@ fn wrapper_blocks_forced_push_variants_to_session_owned_local_bare_fixture() {
             command.arg(force_flag);
         }
         let output = command
-            .output()
+            .output_with_timeout()
             .expect("forced push to local bare fixture through guard");
 
         assert_eq!(
@@ -259,7 +259,7 @@ fn wrapper_blocks_forced_push_variants_to_session_owned_local_bare_fixture() {
                 "--quiet",
                 reference,
             ])
-            .output()
+            .output_with_timeout()
             .expect("inspect rejected force-push ref");
         assert_eq!(
             received.status.code(),
@@ -330,7 +330,7 @@ fn wrapper_blocks_named_remote_even_when_a_fixture_directory_matches_it() {
         .current_dir(&fixture_root)
         .env("CSA_SESSION_DIR", &session_dir)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .expect("configured remote push through guard");
 
     assert_eq!(
@@ -350,7 +350,7 @@ fn wrapper_blocks_named_remote_even_when_a_fixture_directory_matches_it() {
             "--quiet",
             reference,
         ])
-        .output()
+        .output_with_timeout()
         .expect("inspect rejected configured-remote ref");
     assert_eq!(
         received.status.code(),
@@ -400,7 +400,7 @@ fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", &empty_global_config)
         .env_remove("CSA_GIT_PUSH_ALLOWED")
-        .output()
+        .output_with_timeout()
         .expect("rewrite push through guard");
 
     assert_eq!(
@@ -412,9 +412,7 @@ fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(
-            "blocked: git url.insteadOf rewrite detected; remove url.*.insteadOf config for hermetic fixture pushes"
-        ),
+        stderr.contains("blocked: git URL rewrite detected for hermetic fixture push"),
         "{stderr}"
     );
 
@@ -427,7 +425,7 @@ fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
             "--quiet",
             reference,
         ])
-        .output()
+        .output_with_timeout()
         .expect("inspect rejected rewrite destination ref");
     assert_eq!(
         received.status.code(),
