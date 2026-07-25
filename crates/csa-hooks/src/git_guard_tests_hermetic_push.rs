@@ -358,3 +358,80 @@ fn wrapper_blocks_named_remote_even_when_a_fixture_directory_matches_it() {
         "configured named remote unexpectedly updated {reference}",
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn wrapper_blocks_fixture_push_when_url_instead_of_rewrites_destination() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().expect("wrapper parent")).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+
+    let source = temp.path().join("source");
+    init_worktree_repo(&source);
+    let fixture_root = session_dir.join("git-fixtures");
+    let fixture = fixture_root.join("transport.git");
+    init_bare_repo(&fixture_root, &fixture);
+    let outside_bare = temp.path().join("outside.git");
+    init_bare_repo(temp.path(), &outside_bare);
+
+    let rewrite_config = format!("url.{}.insteadOf", outside_bare.display());
+    run_git(
+        &source,
+        &[
+            "config",
+            rewrite_config.as_str(),
+            fixture.to_str().expect("UTF-8 fixture path"),
+        ],
+    );
+
+    let reference = "refs/heads/should-not-publish";
+    let empty_global_config = temp.path().join("empty-global-config");
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "push",
+            fixture.to_str().expect("UTF-8 fixture path"),
+            "HEAD:refs/heads/should-not-publish",
+        ])
+        .current_dir(&source)
+        .env("CSA_SESSION_DIR", &session_dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", &empty_global_config)
+        .env_remove("CSA_GIT_PUSH_ALLOWED")
+        .output()
+        .expect("rewrite push through guard");
+
+    assert_eq!(
+        output.status.code(),
+        Some(128),
+        "url.insteadOf rewrite was not blocked:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "blocked: git url.insteadOf rewrite detected; remove url.*.insteadOf config for hermetic fixture pushes"
+        ),
+        "{stderr}"
+    );
+
+    let received = std::process::Command::new("git")
+        .args([
+            "-C",
+            outside_bare.to_str().expect("UTF-8 outside bare path"),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            reference,
+        ])
+        .output()
+        .expect("inspect rejected rewrite destination ref");
+    assert_eq!(
+        received.status.code(),
+        Some(1),
+        "url.insteadOf rewrite unexpectedly updated external ref {reference}",
+    );
+}

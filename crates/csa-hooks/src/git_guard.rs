@@ -266,11 +266,18 @@ format_git_command() {
   done
 }
 
-if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]   && ! is_hermetic_local_bare_push "$@"; then
-  rejected_command="$(format_git_command "$@")"
-  echo "CSA git-guard: blocked command: ${rejected_command}" >&2
-  echo "Use a hermetic local bare fixture under \$CSA_SESSION_DIR/git-fixtures and push to its direct canonical path or file:// URL." >&2
-  exit 128
+if [ "${COMMAND}" = "push" ] && [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
+  if ! is_hermetic_local_bare_push "$@"; then
+    rejected_command="$(format_git_command "$@")"
+    echo "CSA git-guard: blocked command: ${rejected_command}" >&2
+    echo "Use a hermetic local bare fixture under \$CSA_SESSION_DIR/git-fixtures and push to its direct canonical path or file:// URL." >&2
+    exit 128
+  fi
+
+  if "${REAL_GIT}" config --get-regexp '^url\..*\.insteadof$' >/dev/null 2>&1; then
+    echo "CSA git-guard: blocked: git url.insteadOf rewrite detected; remove url.*.insteadOf config for hermetic fixture pushes" >&2
+    exit 128
+  fi
 fi
 
 if [ "${COMMAND}" != "commit" ]; then
