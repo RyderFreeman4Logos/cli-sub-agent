@@ -498,6 +498,13 @@ async fn no_op_gate_does_not_trigger_when_changed_paths_present() {
         create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
     let session_dir =
         csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_result_sidecar(
+        &session_dir,
+        r#"[result]
+status = "success"
+summary = "PASS"
+"#,
+    );
 
     let executor = Executor::ClaudeCode {
         model_override: None,
