@@ -58,7 +58,7 @@ summary = "previous turn passed"
 }
 
 #[tokio::test]
-async fn current_structured_success_suppresses_historical_resolved_completion_prose() {
+async fn current_receipt_suppresses_historical_agent_stdout_prose() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
@@ -92,10 +92,13 @@ summary = "current turn completed"
         true,
     );
     ctx.changed_paths = vec!["src/fixed.rs".to_string()];
-    let mut result = build_test_result(
-        "Initial gate status was unknown; this turn reran the gate and it now reports PASS. \
-         This turn also fixed the previously omitted tests and commit; all current work is complete.",
-    );
+    let mut result = build_test_result("Current-turn completion receipt reports success.");
+    result.output = [
+        r#"{"type":"thread.started","thread_id":"current-success"}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; this turn reran the gate and it now reports PASS. This turn also fixed the previously omitted tests and commit; all current work is complete."}}"#,
+        r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#,
+    ]
+    .join("\n");
 
     process_execution_result(ctx, &mut session, &mut result)
         .await
@@ -104,8 +107,18 @@ summary = "current turn completed"
     let persisted = load_result(project_root, &session.meta_session_id)
         .expect("load")
         .expect("result exists");
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.csa_gate_failure.is_none(),
+        "fresh success receipt and resolved agent prose must not trigger a CSA gate"
+    );
     assert_eq!(persisted.exit_code, 0);
     assert_eq!(persisted.status, SessionResult::status_from_exit_code(0));
+    assert!(
+        !persisted.summary.starts_with("worker blocked:"),
+        "resolved historical stdout must not rewrite the result as blocked: {}",
+        persisted.summary
+    );
 }
 
 #[tokio::test]

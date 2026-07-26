@@ -10,8 +10,9 @@ pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bo
 
 /// Returns true when the tool output, stderr, or summary contains a hard-blocker
 /// marker or reports that a required gate did not produce a confirmed PASS. A
-/// current structured success receipt suppresses summary prose that can be
-/// historical; raw output and stderr blockers still fail the worker.
+/// current structured success receipt suppresses historical summary and
+/// agent-message prose; raw shell/tool output and stderr blockers still fail
+/// the worker.
 pub(super) fn worker_output_indicates_blocked_with_receipt(
     output: &str,
     stderr_output: &str,
@@ -25,8 +26,32 @@ pub(super) fn worker_output_indicates_blocked_with_receipt(
     }
     output
         .lines()
-        .chain(stderr_output.lines())
-        .any(|line| line_indicates_blocked(line) || line_indicates_unconfirmed_gate(line))
+        .any(|line| stdout_line_indicates_blocked(line, has_positive_structured_completion))
+        || stderr_output
+            .lines()
+            .any(|line| line_indicates_blocked(line) || line_indicates_unconfirmed_gate(line))
+}
+
+fn stdout_line_indicates_blocked(line: &str, has_positive_structured_completion: bool) -> bool {
+    line_indicates_blocked(line)
+        || (line_indicates_unconfirmed_gate(line)
+            && (!has_positive_structured_completion || !is_agent_message_event(line)))
+}
+
+fn is_agent_message_event(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .is_some_and(|event| {
+            event
+                .get("agent_message")
+                .is_some_and(|message| message.is_string() || message.is_object())
+                || (event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed")
+                    && event
+                        .get("item")
+                        .and_then(|item| item.get("type"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("agent_message"))
+        })
 }
 
 fn line_indicates_blocked(line: &str) -> bool {
@@ -148,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn current_receipt_suppresses_historical_summary_prose_but_not_raw_diagnostics() {
+    fn current_receipt_suppresses_historical_agent_stdout_prose_but_not_raw_diagnostics() {
         assert!(!worker_output_indicates_blocked_with_receipt(
             "",
             "",
@@ -159,6 +184,18 @@ mod tests {
             "",
             "",
             "Initial gate status was unknown; reran the gate and it now PASSes.",
+            true,
+        ));
+        assert!(!worker_output_indicates_blocked_with_receipt(
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
+            "",
+            "The retry succeeded.",
+            true,
+        ));
+        assert!(worker_output_indicates_blocked_with_receipt(
+            r#"{"type":"item.completed","item":{"type":"tool_result","text":"zsh: status unknown"}}"#,
+            "",
+            "The retry succeeded.",
             true,
         ));
         assert!(worker_output_indicates_blocked_with_receipt(
