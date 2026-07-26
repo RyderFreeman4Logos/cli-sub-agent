@@ -7,6 +7,8 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::{
     fs::{PermissionsExt, symlink},
     process::CommandExt,
@@ -44,21 +46,154 @@ fn receive_pipe_before_deadline(
     }
 }
 
-fn terminate_process_group(pid: u32) {
-    // SAFETY: `output_with_timeout` places the direct child in a process group
-    // led by `pid`, and this test harness owns that process group.
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
+struct ProcessIdentity {
+    pid: u32,
+    start_time: u64,
+    #[cfg(target_os = "linux")]
+    pidfd: Option<OwnedFd>,
+}
+
+impl ProcessIdentity {
+    fn capture(pid: u32) -> Option<Self> {
+        let (_, start_time) = process_state_and_start_time(pid)?;
+        Self::capture_with_start_time(pid, start_time)
+    }
+
+    fn capture_with_start_time(pid: u32, expected_start_time: u64) -> Option<Self> {
+        let (_, start_time) = process_state_and_start_time(pid)?;
+        if start_time != expected_start_time {
+            return None;
+        }
+        Some(Self {
+            pid,
+            start_time,
+            #[cfg(target_os = "linux")]
+            pidfd: open_pidfd(pid),
+        })
+    }
+
+    fn still_matches(&self) -> bool {
+        process_state_and_start_time(self.pid)
+            .is_some_and(|(_, start_time)| start_time == self.start_time)
+    }
+
+    fn signal_direct_if_current(&self, signal: libc::c_int) -> bool {
+        if !self.still_matches() {
+            return false;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(pidfd) = &self.pidfd {
+            // SAFETY: `pidfd` is bound to this verified process identity, so
+            // pidfd_send_signal cannot target a reused numeric PID.
+            return unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    pidfd.as_raw_fd(),
+                    signal,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                ) == 0
+            };
+        }
+        // SAFETY: start time was verified immediately before this fallback
+        // signal, and the helper never signals an identity it has reaped.
+        unsafe { libc::kill(self.pid as i32, signal) == 0 }
     }
 }
 
-fn process_is_running(pid: u32) -> bool {
+#[cfg(target_os = "linux")]
+fn open_pidfd(pid: u32) -> Option<OwnedFd> {
+    // SAFETY: pidfd_open receives a valid pid and flags=0; its successful file
+    // descriptor is immediately owned by `OwnedFd` and closed on drop.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+    (fd >= 0).then(|| {
+        // SAFETY: this descriptor was returned by pidfd_open above.
+        unsafe { OwnedFd::from_raw_fd(fd as i32) }
+    })
+}
+
+struct ChildProcessGroupGuard {
+    child: std::process::Child,
+    leader: ProcessIdentity,
+    reaped: bool,
+}
+
+impl ChildProcessGroupGuard {
+    fn new(child: std::process::Child) -> Self {
+        let leader = ProcessIdentity::capture(child.id())
+            .expect("capture direct child process identity before cleanup");
+        Self {
+            child,
+            leader,
+            reaped: false,
+        }
+    }
+
+    fn exited_without_reaping(&self) -> std::io::Result<bool> {
+        // SAFETY: all-zero bytes are a valid initialized baseline for the C
+        // siginfo_t output buffer before waitid writes its observed status.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is writable initialized storage; the direct child is
+        // still unreaped, and WNOWAIT observes it without losing group authority.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                self.leader.pid,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: successful waitid initialized `info`; si_pid is zero for a
+        // WNOHANG miss and is the observed child PID otherwise.
+        Ok(unsafe { info.si_pid() } == self.leader.pid as libc::pid_t)
+    }
+
+    fn fence_group_if_owned(&self) -> bool {
+        if !self.leader.still_matches() {
+            return false;
+        }
+        // SAFETY: process_group(0) makes the direct child the group leader. The
+        // guard retains that child unreaped and verifies its start time before
+        // signalling, preventing this negative PGID from being reused first.
+        unsafe { libc::kill(-(self.leader.pid as i32), libc::SIGKILL) == 0 }
+    }
+
+    fn reap(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.wait();
+        self.reaped = true;
+        status
+    }
+
+    fn cleanup(&mut self) {
+        if !self.reaped {
+            let _ = self.fence_group_if_owned();
+            let _ = self.reap();
+        }
+    }
+}
+
+impl Drop for ChildProcessGroupGuard {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+fn process_state_and_start_time(pid: u32) -> Option<(char, u64)> {
     let stat_path = format!("/proc/{pid}/stat");
-    let Ok(stat) = std::fs::read_to_string(stat_path) else {
-        return false;
-    };
+    let stat = std::fs::read_to_string(stat_path).ok()?;
+    let close_paren = stat.rfind(')')?;
+    let mut fields = stat.get(close_paren + 2..)?.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let start_time = fields.nth(18)?.parse().ok()?;
+    Some((state, start_time))
+}
+
+fn process_is_running(pid: u32) -> bool {
     // A killed-but-not-yet-reaped process is not a surviving workload.
-    stat.split_whitespace().nth(2) != Some("Z")
+    process_state_and_start_time(pid).is_some_and(|(state, _)| state != 'Z')
 }
 
 fn wait_for_process_exit(pid: u32) -> bool {
@@ -87,46 +222,40 @@ fn output_with_deadline(
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|error| panic!("spawn {description}: {error}"));
-    let process_group = child.id();
     let stdout = drain_pipe(child.stdout.take().expect("piped stdout"));
     let stderr = drain_pipe(child.stderr.take().expect("piped stderr"));
+    let mut child = ChildProcessGroupGuard::new(child);
     let deadline = Instant::now() + command_timeout;
     let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                terminate_process_group(process_group);
-                let _ = child.wait();
+        match child.exited_without_reaping() {
+            Ok(true) => {
+                let _ = child.fence_group_if_owned();
+                break child
+                    .reap()
+                    .unwrap_or_else(|error| panic!("reap {description}: {error}"));
+            }
+            Ok(false) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(false) => {
+                child.cleanup();
                 panic!(
                     "{description} did not finish within {} seconds",
                     command_timeout.as_secs()
                 );
             }
             Err(error) => {
-                terminate_process_group(process_group);
-                let _ = child.wait();
+                child.cleanup();
                 panic!("inspect {description}: {error}");
             }
         }
     };
 
-    // `try_wait` reaped the direct child, but a background descendant can
-    // remain in the process group after closing its inherited pipes. Kill the
-    // owned group before the bounded drains so every normal return reaps it.
-    terminate_process_group(process_group);
-
     let Some(stdout) = receive_pipe_before_deadline(&stdout, deadline, description) else {
-        terminate_process_group(process_group);
-        let _ = child.wait();
         panic!(
             "{description} did not drain stdout within {} seconds",
             command_timeout.as_secs()
         );
     };
     let Some(stderr) = receive_pipe_before_deadline(&stderr, deadline, description) else {
-        terminate_process_group(process_group);
-        let _ = child.wait();
         panic!(
             "{description} did not drain stderr within {} seconds",
             command_timeout.as_secs()
@@ -145,7 +274,7 @@ fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
     let mut command = Command::new("sh");
     command.args([
         "-c",
-        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s\\n' \"$descendant\"; exit 0",
+        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; start_time=$(awk '{print $22}' \"/proc/$descendant/stat\"); printf '%s %s\\n' \"$descendant\" \"$start_time\"; exit 0",
     ]);
     let started = Instant::now();
     let output = output_with_deadline(
@@ -153,18 +282,26 @@ fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
         "direct child exited but descendant survived with closed pipes",
         Duration::from_millis(100),
     );
-    let descendant_pid = String::from_utf8(output.stdout)
-        .expect("descendant pid is utf-8")
-        .trim()
+    let descendant_output = String::from_utf8(output.stdout).expect("descendant pid is utf-8");
+    let descendant_identity = descendant_output.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(descendant_identity.len(), 2, "descendant identity fields");
+    let descendant_pid = descendant_identity[0]
         .parse::<u32>()
         .expect("parse descendant pid");
+    let descendant_start_time = descendant_identity[1]
+        .parse::<u64>()
+        .expect("parse descendant start time");
+    let descendant =
+        ProcessIdentity::capture_with_start_time(descendant_pid, descendant_start_time)
+            .expect("capture the spawned descendant identity before checking cleanup");
     let exited = wait_for_process_exit(descendant_pid);
     if !exited {
         // Keep the RED test hygienic: the unfixed helper intentionally leaks
         // this descendant, so clean it up before asserting the failure.
-        unsafe {
-            libc::kill(descendant_pid as i32, libc::SIGKILL);
-        }
+        assert!(
+            descendant.signal_direct_if_current(libc::SIGKILL),
+            "cleanup must signal only the captured descendant identity"
+        );
         let _ = wait_for_process_exit(descendant_pid);
     }
 

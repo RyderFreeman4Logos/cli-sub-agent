@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use tempfile::tempdir;
 
@@ -73,4 +73,34 @@ fn apply_review_target_dir_leaves_non_review_sessions_unchanged() {
         Some(explicit_target.as_str())
     );
     assert!(report.explicit_override_preserved);
+}
+
+#[test]
+fn non_run_policies_skip_target_probe_during_sandbox_revalidation() {
+    for task_type in ["review", "debate", "plan", "plan-step"] {
+        let mut env = HashMap::new();
+        let report = crate::pipeline_cargo_target::apply_task_target_dir_guards(
+            Some(task_type),
+            "codex",
+            Path::new("/must-not-probe"),
+            &mut env,
+        )
+        .unwrap_or_else(|error| {
+            panic!("{task_type} must not perform a run Cargo preflight: {error}")
+        });
+        assert_eq!(report.policy_reason, "not_applicable");
+        assert!(
+            !report.requires_sandbox_writeability_validation(),
+            "{task_type} must not schedule the run-only sandbox revalidation"
+        );
+
+        crate::pipeline_cargo_target::ensure_cargo_target_sandbox_writable(
+            &report,
+            Path::new("/must-not-probe"),
+            None,
+        )
+        .unwrap_or_else(|error| {
+            panic!("{task_type} must not probe a Cargo target during sandbox revalidation: {error}")
+        });
+    }
 }

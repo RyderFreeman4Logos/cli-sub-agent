@@ -741,6 +741,40 @@ fn enforce_result_toml_contract_now(
     session_dir: &std::path::Path,
     result: &mut ExecutionResult,
 ) {
+    let attempt_nonce = "current-test-attempt";
+    let artifact_path = csa_session::next_turn_contract_result_artifact_path(0);
+    std::fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir),
+        format!("artifact_path = \"{artifact_path}\"\nattempt_nonce = \"{attempt_nonce}\"\n"),
+    )
+    .expect("bind test result receipt to current attempt");
+    for path in [
+        csa_session::next_turn_contract_result_path(session_dir, 0),
+        session_dir.join("result.toml"),
+        csa_session::contract_result_path(session_dir),
+        csa_session::legacy_user_result_path(session_dir),
+    ] {
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(toml::Value::Table(mut table)) = toml::from_str::<toml::Value>(&contents) else {
+            continue;
+        };
+        table
+            .entry("result".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .expect("test result table")
+            .insert(
+                "attempt_nonce".to_string(),
+                toml::Value::String(attempt_nonce.to_string()),
+            );
+        std::fs::write(
+            &path,
+            toml::to_string_pretty(&table).expect("serialize test receipt"),
+        )
+        .expect("write test receipt nonce");
+    }
     enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, 0, true, result);
 }
 

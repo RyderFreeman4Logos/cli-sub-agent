@@ -70,10 +70,21 @@ pub(crate) fn enforce_result_toml_path_contract(
         csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
     let expected_contract_output_path = csa_session::contract_result_path(session_dir);
     let expected_user_result_path = csa_session::legacy_user_result_path(session_dir);
+    let attempt_nonce = current_result_attempt_nonce(session_dir);
     if path_matches_expected_contract_result(path_candidate, &expected_turn_path)
+        && current_attempt_receipt_is_valid(&expected_turn_path, attempt_nonce.as_deref())
         || path_matches_expected_contract_result(path_candidate, &expected_path)
+            && current_attempt_receipt_is_valid(&expected_path, attempt_nonce.as_deref())
         || path_matches_expected_contract_result(path_candidate, &expected_contract_output_path)
+            && current_attempt_receipt_is_valid(
+                &expected_contract_output_path,
+                attempt_nonce.as_deref(),
+            )
         || path_matches_expected_contract_result(path_candidate, &expected_user_result_path)
+            && current_attempt_receipt_is_valid(
+                &expected_user_result_path,
+                attempt_nonce.as_deref(),
+            )
     {
         return;
     }
@@ -84,7 +95,7 @@ pub(crate) fn enforce_result_toml_path_contract(
     // emits a more specific diagnostic than the generic TOML-validity fallback
     // below so post-mortem readers can distinguish "trusted because status was
     // success" from "trusted because TOML parsed".
-    if result_artifact_status_is_success(&expected_turn_path) {
+    if result_artifact_status_is_success(&expected_turn_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted artifact with [result] status=\"success\" at '{}'",
             expected_turn_path.display()
@@ -103,7 +114,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
-    if result_artifact_status_is_success(&expected_contract_output_path) {
+    if result_artifact_status_is_success(&expected_contract_output_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted legacy artifact with [result] status=\"success\" at '{}'",
             expected_contract_output_path.display()
@@ -122,7 +133,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
-    if sidecar_result_fallback_is_valid(&expected_turn_path) {
+    if sidecar_result_fallback_is_valid(&expected_turn_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
             expected_turn_path.display()
@@ -141,7 +152,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
-    if sidecar_result_fallback_is_valid(&expected_contract_output_path) {
+    if sidecar_result_fallback_is_valid(&expected_contract_output_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted legacy fallback artifact '{}'",
             expected_contract_output_path.display()
@@ -160,7 +171,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
-    if sidecar_result_fallback_is_valid(&expected_user_result_path) {
+    if sidecar_result_fallback_is_valid(&expected_user_result_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
             expected_user_result_path.display()
@@ -183,7 +194,7 @@ pub(crate) fn enforce_result_toml_path_contract(
     // path was not found in output/summary (e.g. verbose output truncated the
     // path, or ACP message boundaries split it). Accept the file if it exists,
     // passes validation, and contains valid TOML.
-    if session_result_fallback_is_valid(&expected_path) {
+    if session_result_fallback_is_valid(&expected_path, attempt_nonce.as_deref()) {
         let warning = format!(
             "contract warning: output/summary path not found; accepted verified session result '{}'",
             expected_path.display()
@@ -411,19 +422,29 @@ fn expected_contract_file_is_valid(path: &Path) -> bool {
     true
 }
 
-fn sidecar_result_fallback_is_valid(path: &Path) -> bool {
+fn current_attempt_receipt_is_valid(path: &Path, attempt_nonce: Option<&str>) -> bool {
+    current_attempt_receipt(path, attempt_nonce).is_some()
+}
+
+fn current_attempt_receipt(path: &Path, attempt_nonce: Option<&str>) -> Option<toml::Table> {
+    let attempt_nonce = attempt_nonce?;
     if !expected_contract_file_is_valid(path) {
-        return false;
+        return None;
     }
-
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
+    let contents = std::fs::read_to_string(path).ok()?;
+    let toml::Value::Table(table) = toml::from_str::<toml::Value>(&contents).ok()? else {
+        return None;
     };
+    let receipt_nonce = table
+        .get("result")
+        .and_then(toml::Value::as_table)
+        .and_then(|result| result.get("attempt_nonce"))
+        .and_then(toml::Value::as_str);
+    (receipt_nonce == Some(attempt_nonce)).then_some(table)
+}
 
-    matches!(
-        toml::from_str::<toml::Value>(&contents),
-        Ok(toml::Value::Table(table)) if !table.is_empty()
-    )
+fn sidecar_result_fallback_is_valid(path: &Path, attempt_nonce: Option<&str>) -> bool {
+    current_attempt_receipt_is_valid(path, attempt_nonce)
 }
 
 /// Returns true when the artifact at `path` is a valid result.toml whose
@@ -433,14 +454,8 @@ fn sidecar_result_fallback_is_valid(path: &Path) -> bool {
 ///
 /// Accepts both the legacy flat schema (`status = "success"` at top level) and
 /// the canonical nested schema (`[result] status = "success"`).
-fn result_artifact_status_is_success(path: &Path) -> bool {
-    if !expected_contract_file_is_valid(path) {
-        return false;
-    }
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(toml::Value::Table(table)) = toml::from_str::<toml::Value>(&contents) else {
+fn result_artifact_status_is_success(path: &Path, attempt_nonce: Option<&str>) -> bool {
+    let Some(table) = current_attempt_receipt(path, attempt_nonce) else {
         return false;
     };
     let nested = table
@@ -456,19 +471,8 @@ fn result_artifact_status_is_success(path: &Path) -> bool {
 /// could not be extracted from output/summary. Applies the same validation as
 /// user-result fallback: file must exist, not be a symlink, have nlink==1,
 /// and contain valid non-empty TOML.
-fn session_result_fallback_is_valid(path: &Path) -> bool {
-    if !expected_contract_file_is_valid(path) {
-        return false;
-    }
-
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return false;
-    };
-
-    matches!(
-        toml::from_str::<toml::Value>(&contents),
-        Ok(toml::Value::Table(table)) if !table.is_empty()
-    )
+fn session_result_fallback_is_valid(path: &Path, attempt_nonce: Option<&str>) -> bool {
+    current_attempt_receipt_is_valid(path, attempt_nonce)
 }
 
 fn line_looks_like_result_toml_path(line: &str) -> bool {

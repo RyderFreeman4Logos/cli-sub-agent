@@ -61,10 +61,17 @@ pub(super) fn status_is_success(session_dir: &Path, completed_turn_count: u32) -
     else {
         return false;
     };
-    // A root `output/result.toml` has no turn identity and can survive from a
-    // prior invocation. The current turn path plus an attempt nonce proves that
-    // the receipt was emitted for this provider attempt.
-    path_status_is_success(&turn_scoped_path, &attempt_nonce)
+    // Every documented receipt path requires the current attempt nonce. That
+    // lets legacy fallback paths remain compatible without accepting a prior
+    // invocation's success receipt.
+    [
+        turn_scoped_path,
+        session_dir.join("result.toml"),
+        csa_session::contract_result_path(session_dir),
+        csa_session::legacy_user_result_path(session_dir),
+    ]
+    .iter()
+    .any(|path| path_status_is_success(path, &attempt_nonce))
 }
 
 fn path_status_is_success(path: &Path, attempt_nonce: &str) -> bool {

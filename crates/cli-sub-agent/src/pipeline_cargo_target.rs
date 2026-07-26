@@ -45,6 +45,10 @@ impl CargoTargetPolicyReport {
     pub(crate) fn should_persist_artifact(&self) -> bool {
         self.explicit_override_preserved || self.automatic_substitution_applied
     }
+
+    pub(crate) fn requires_sandbox_writeability_validation(&self) -> bool {
+        self.policy_reason != "not_applicable"
+    }
 }
 
 pub(crate) fn apply_review_target_dir(project_root: &Path, tool_name: &str) {
@@ -196,6 +200,9 @@ pub(crate) fn ensure_cargo_target_sandbox_writable(
     project_root: &Path,
     isolation_plan: Option<&csa_resource::isolation_plan::IsolationPlan>,
 ) -> Result<(), String> {
+    if !report.requires_sandbox_writeability_validation() {
+        return Ok(());
+    }
     let lexical_target = cargo_target_lexical_path(&report.selected_cargo_target, project_root);
     let source = if report.explicit_override_preserved {
         CargoTargetSource::Explicit
@@ -220,9 +227,23 @@ pub(crate) fn ensure_cargo_target_sandbox_writable(
         return Ok(());
     };
     let resolved_target = resolved_target_path_for_diagnostics(&lexical_target);
+    let resolved_project_root = plan
+        .readonly_project_root
+        .then(|| {
+            csa_resource::isolation_plan::canonicalize_through_existing_ancestors(project_root).ok()
+        })
+        .flatten();
     let is_granted = plan.writable_paths.iter().any(|writable_path| {
         csa_resource::isolation_plan::canonicalize_through_existing_ancestors(writable_path)
-            .is_ok_and(|resolved_writable_path| resolved_target.starts_with(resolved_writable_path))
+            .is_ok_and(|resolved_writable_path| {
+                let generic_readonly_project_root = plan.readonly_project_root
+                    && (writable_path == project_root
+                        || resolved_project_root
+                            .as_ref()
+                            .is_some_and(|root| root == &resolved_writable_path));
+                !generic_readonly_project_root
+                    && resolved_target.starts_with(resolved_writable_path)
+            })
     });
     if is_granted {
         return Ok(());

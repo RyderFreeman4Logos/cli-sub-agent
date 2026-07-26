@@ -58,7 +58,7 @@ summary = "previous turn passed"
 }
 
 #[tokio::test]
-async fn current_structured_success_suppresses_historical_omitted_work_prose() {
+async fn current_structured_success_suppresses_historical_resolved_completion_prose() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
@@ -93,7 +93,8 @@ summary = "current turn completed"
     );
     ctx.changed_paths = vec!["src/fixed.rs".to_string()];
     let mut result = build_test_result(
-        "This turn fixed the previously omitted tests and commit; all current work is complete.",
+        "Initial gate status was unknown; this turn reran the gate and it now reports PASS. \
+         This turn also fixed the previously omitted tests and commit; all current work is complete.",
     );
 
     process_execution_result(ctx, &mut session, &mut result)

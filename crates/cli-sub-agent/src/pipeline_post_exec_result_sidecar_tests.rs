@@ -131,3 +131,35 @@ what_was_done = "historical diagnostic report"
         "historical sidecar remains visible but diagnostics-only after save/load"
     );
 }
+
+#[test]
+fn current_nonce_success_receipt_accepts_every_documented_fallback_path() {
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let nonce = "current-attempt";
+    fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir.path()),
+        format!("attempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write current attempt marker");
+
+    let documented_paths = [
+        csa_session::turn_contract_result_path(session_dir.path(), 0),
+        session_dir.path().join("result.toml"),
+        csa_session::contract_result_path(session_dir.path()),
+        csa_session::legacy_user_result_path(session_dir.path()),
+    ];
+    for path in documented_paths {
+        fs::create_dir_all(path.parent().expect("receipt parent")).expect("create receipt parent");
+        fs::write(
+            &path,
+            format!("[result]\nstatus = \"success\"\nattempt_nonce = \"{nonce}\"\n"),
+        )
+        .expect("write current receipt");
+        assert!(
+            status_is_success(session_dir.path(), 0),
+            "documented current receipt path must satisfy dirty-SA completion: {}",
+            path.display()
+        );
+        fs::remove_file(path).expect("remove receipt before next path");
+    }
+}

@@ -10,8 +10,8 @@ pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bo
 
 /// Returns true when the tool output, stderr, or summary contains a hard-blocker
 /// marker or reports that a required gate did not produce a confirmed PASS. A
-/// current structured success receipt suppresses only the historical-prose
-/// omitted-work heuristic; explicit blockers still fail the worker.
+/// current structured success receipt suppresses summary prose that can be
+/// historical; raw output and stderr blockers still fail the worker.
 pub(super) fn worker_output_indicates_blocked_with_receipt(
     output: &str,
     stderr_output: &str,
@@ -19,14 +19,14 @@ pub(super) fn worker_output_indicates_blocked_with_receipt(
     has_positive_structured_completion: bool,
 ) -> bool {
     if line_indicates_blocked(summary)
-        || line_indicates_unconfirmed_gate(summary, has_positive_structured_completion)
+        || (!has_positive_structured_completion && line_indicates_unconfirmed_gate(summary))
     {
         return true;
     }
-    output.lines().chain(stderr_output.lines()).any(|line| {
-        line_indicates_blocked(line)
-            || line_indicates_unconfirmed_gate(line, has_positive_structured_completion)
-    })
+    output
+        .lines()
+        .chain(stderr_output.lines())
+        .any(|line| line_indicates_blocked(line) || line_indicates_unconfirmed_gate(line))
 }
 
 fn line_indicates_blocked(line: &str) -> bool {
@@ -37,7 +37,7 @@ fn line_indicates_blocked(line: &str) -> bool {
         || upper.starts_with("BLOCKED:")
 }
 
-fn line_indicates_unconfirmed_gate(line: &str, has_positive_structured_completion: bool) -> bool {
+fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     let lost_status = lower.contains("unknown")
         || lower.contains("unavailable")
@@ -49,10 +49,8 @@ fn line_indicates_unconfirmed_gate(line: &str, has_positive_structured_completio
     let shell_lost_status = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
         && lower.contains("status")
         && lost_status;
-    let required_work_omitted = !has_positive_structured_completion
-        && lower.contains("omitted")
-        && lower.contains("test")
-        && lower.contains("commit");
+    let required_work_omitted =
+        lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
         || readonly_status_variable
@@ -150,17 +148,23 @@ mod tests {
     }
 
     #[test]
-    fn current_receipt_suppresses_only_historical_omitted_work_prose() {
+    fn current_receipt_suppresses_historical_summary_prose_but_not_raw_diagnostics() {
         assert!(!worker_output_indicates_blocked_with_receipt(
             "",
             "",
             "The previous turn omitted tests and commit; this turn completed both.",
             true,
         ));
+        assert!(!worker_output_indicates_blocked_with_receipt(
+            "",
+            "",
+            "Initial gate status was unknown; reran the gate and it now PASSes.",
+            true,
+        ));
         assert!(worker_output_indicates_blocked_with_receipt(
             "",
-            "",
-            "STATUS: BLOCKED",
+            "zsh: status unknown",
+            "The retry succeeded.",
             true,
         ));
     }
