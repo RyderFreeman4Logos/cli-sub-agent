@@ -11,8 +11,8 @@ pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bo
 /// Returns true when the tool output, stderr, or summary contains a hard-blocker
 /// marker or reports that a required gate did not produce a confirmed PASS. A
 /// current structured success receipt suppresses historical summary and
-/// agent-message prose; raw shell/tool output and stderr blockers still fail
-/// the worker.
+/// resolved agent-message prose; raw shell/tool output and stderr blockers
+/// still fail the worker.
 pub(super) fn worker_output_indicates_blocked_with_receipt(
     output: &str,
     stderr_output: &str,
@@ -34,24 +34,68 @@ pub(super) fn worker_output_indicates_blocked_with_receipt(
 
 fn stdout_line_indicates_blocked(line: &str, has_positive_structured_completion: bool) -> bool {
     line_indicates_blocked(line)
+        || agent_message_event_text(line).is_some_and(|message| line_indicates_blocked(&message))
         || (line_indicates_unconfirmed_gate(line)
-            && (!has_positive_structured_completion || !is_agent_message_event(line)))
+            && (!has_positive_structured_completion
+                || !agent_message_describes_resolved_historical_gate(line)))
 }
 
-fn is_agent_message_event(line: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(line)
-        .ok()
-        .is_some_and(|event| {
-            event
-                .get("agent_message")
-                .is_some_and(|message| message.is_string() || message.is_object())
-                || (event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed")
-                    && event
-                        .get("item")
-                        .and_then(|item| item.get("type"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("agent_message"))
-        })
+fn agent_message_describes_resolved_historical_gate(line: &str) -> bool {
+    agent_message_event_text(line).is_some_and(|message| {
+        line_indicates_unconfirmed_gate(&message) && message_reports_gate_resolution(&message)
+    })
+}
+
+fn agent_message_event_text(line: &str) -> Option<String> {
+    let event = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if let Some(message) = event.get("agent_message") {
+        return agent_message_value_text(message);
+    }
+
+    (event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed"))
+        .then_some(())?;
+    let item = event.get("item")?;
+    (item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message")).then_some(())?;
+    item.get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+fn agent_message_value_text(message: &serde_json::Value) -> Option<String> {
+    match message {
+        serde_json::Value::String(text) => Some(text.to_owned()),
+        serde_json::Value::Object(_) => message
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    }
+}
+
+fn message_reports_gate_resolution(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let explicit_resolution = [
+        "reran",
+        "rerun",
+        "re-ran",
+        "re-run",
+        "retried",
+        "retry succeeded",
+        "fixed",
+        "resolved",
+        "completed both",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal));
+    let positive_pass = lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|word| matches!(word, "pass" | "passed" | "passes"));
+    let unconfirmed_pass = lower.contains("unable to confirm gate pass")
+        || lower.contains("cannot confirm gate pass")
+        || lower.contains("did not pass")
+        || lower.contains("not pass");
+
+    explicit_resolution || (positive_pass && !unconfirmed_pass)
 }
 
 fn line_indicates_blocked(line: &str) -> bool {
@@ -188,6 +232,42 @@ mod tests {
         ));
         assert!(!worker_output_indicates_blocked_with_receipt(
             r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
+            "",
+            "The retry succeeded.",
+            true,
+        ));
+        for resolved_historical_message in [
+            r#"{"agent_message":"Initial gate status was unknown; reran the gate and it now PASSes."}"#,
+            r#"{"agent_message":{"text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
+        ] {
+            assert!(
+                !worker_output_indicates_blocked_with_receipt(
+                    resolved_historical_message,
+                    "",
+                    "The retry succeeded.",
+                    true,
+                ),
+                "resolved historical agent-message prose must not block: {resolved_historical_message}"
+            );
+        }
+        for diagnostic in [
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"zsh: read-only variable: status"}}"#,
+            r#"{"agent_message":"bash: exit status unknown"}"#,
+            r#"{"agent_message":{"text":"zsh: read-only variable: status"}}"#,
+            r#"{"agent_message":"tests and commit omitted"}"#,
+        ] {
+            assert!(
+                worker_output_indicates_blocked_with_receipt(
+                    diagnostic,
+                    "",
+                    "The retry succeeded.",
+                    true,
+                ),
+                "unresolved agent-message diagnostic must block: {diagnostic}"
+            );
+        }
+        assert!(worker_output_indicates_blocked_with_receipt(
+            r#"{"agent_message":"STATUS: BLOCKED — current gate is unavailable"}"#,
             "",
             "The retry succeeded.",
             true,
