@@ -21,12 +21,14 @@ pub(super) fn maybe_mark_dirty_sa_run_without_receipt(
     session_result: &mut SessionResult,
     has_positive_structured_completion: bool,
 ) {
-    if !dirty_sa_run_lacks_completion_receipt(
-        ctx.sa_mode,
-        ctx.task_type,
-        &ctx.changed_paths,
-        has_positive_structured_completion,
-    ) {
+    if result.exit_code != 0
+        || !dirty_sa_run_lacks_completion_receipt(
+            ctx.sa_mode,
+            ctx.task_type,
+            &ctx.changed_paths,
+            has_positive_structured_completion,
+        )
+    {
         return;
     }
 

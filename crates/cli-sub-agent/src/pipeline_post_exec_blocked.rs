@@ -74,28 +74,45 @@ fn agent_message_value_text(message: &serde_json::Value) -> Option<String> {
 
 fn message_reports_gate_resolution(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    let explicit_resolution = [
-        "reran",
-        "rerun",
-        "re-ran",
-        "re-run",
-        "retried",
-        "retry succeeded",
-        "fixed",
-        "resolved",
-        "completed both",
-    ]
-    .iter()
-    .any(|signal| lower.contains(signal));
     let positive_pass = lower
         .split(|character: char| !character.is_ascii_alphanumeric())
         .any(|word| matches!(word, "pass" | "passed" | "passes"));
-    let unconfirmed_pass = lower.contains("unable to confirm gate pass")
-        || lower.contains("cannot confirm gate pass")
-        || lower.contains("did not pass")
-        || lower.contains("not pass");
+    let positive_completion = [
+        "completed successfully",
+        "successfully completed",
+        "completion succeeded",
+        "gate succeeded",
+        "gate success",
+        "status: success",
+        "status is success",
+        "now reports success",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal));
 
-    explicit_resolution || (positive_pass && !unconfirmed_pass)
+    // A retry/fix describes an action, not its outcome. Suppress a historical
+    // diagnostic only when the same message states an unambiguous success.
+    (positive_pass || positive_completion) && !message_reports_unresolved_gate_outcome(&lower)
+}
+
+fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
+    [
+        "remains unknown",
+        "still unknown",
+        "remains unavailable",
+        "still unavailable",
+        "could not confirm",
+        "unable to confirm",
+        "cannot confirm",
+        "remains blocked",
+        "still blocked",
+        "failed",
+        "failure",
+        "did not pass",
+        "not pass",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal))
 }
 
 fn line_indicates_blocked(line: &str) -> bool {
@@ -122,6 +139,7 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
         lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
+        || message_reports_unresolved_gate_outcome(&lower)
         || readonly_status_variable
         || shell_lost_status
         || required_work_omitted
@@ -264,6 +282,21 @@ mod tests {
                     true,
                 ),
                 "unresolved agent-message diagnostic must block: {diagnostic}"
+            );
+        }
+        for unresolved_action_message in [
+            r#"{"agent_message":"I retried the gate, but gate status remains unknown."}"#,
+            r#"{"agent_message":"reran but could not confirm pass"}"#,
+            r#"{"agent_message":"fixed attempt failed"}"#,
+        ] {
+            assert!(
+                worker_output_indicates_blocked_with_receipt(
+                    unresolved_action_message,
+                    "",
+                    "The retry succeeded.",
+                    true,
+                ),
+                "action without a confirmed positive outcome must block: {unresolved_action_message}"
             );
         }
         assert!(worker_output_indicates_blocked_with_receipt(
