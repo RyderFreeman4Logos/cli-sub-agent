@@ -115,6 +115,26 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
     .any(|signal| lower.contains(signal))
 }
 
+/// Narrower than [`message_reports_unresolved_gate_outcome`]: matches only
+/// specific failure signals that reliably indicate an unresolved gate. Bare
+/// `"failed"`/`"failure"` is intentionally excluded because it appears in
+/// benign prose such as `"commit failed"` (require-commit rescue) and must not
+/// by itself turn a summary into a hard unconfirmed-gate blocker. The broad
+/// variant is retained inside [`message_reports_gate_resolution`] as a veto
+/// against false-positive "resolved" claims.
+fn line_reports_unresolved_gate_outcome(lower: &str) -> bool {
+    [
+        "could not confirm",
+        "unable to confirm",
+        "cannot confirm",
+        "did not pass",
+        "remains blocked",
+        "still blocked",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal))
+}
+
 fn line_indicates_blocked(line: &str) -> bool {
     let trimmed = line.trim();
     let upper = trimmed.to_ascii_uppercase();
@@ -139,7 +159,7 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
         lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
-        || message_reports_unresolved_gate_outcome(&lower)
+        || line_reports_unresolved_gate_outcome(&lower)
         || readonly_status_variable
         || shell_lost_status
         || required_work_omitted
@@ -153,7 +173,10 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{worker_output_indicates_blocked, worker_output_indicates_blocked_with_receipt};
+    use super::{
+        line_reports_unresolved_gate_outcome, message_reports_gate_resolution,
+        worker_output_indicates_blocked, worker_output_indicates_blocked_with_receipt,
+    };
 
     #[test]
     fn blocked_summary_exact_match() {
@@ -197,6 +220,22 @@ mod tests {
     fn partial_match_not_triggered() {
         // "BLOCKED" alone (without STATUS: prefix) must not trigger
         assert!(!worker_output_indicates_blocked("BLOCKED", "BLOCKED"));
+    }
+
+    #[test]
+    fn bare_failed_in_summary_is_not_worker_blocked_after_require_commit_rescue() {
+        // #2806: a summary like "writer completed but commit failed" contains
+        // bare "failed" but no STATUS: BLOCKED marker. After a successful
+        // require-commit rescue, this must NOT be rewritten to worker-blocked.
+        let summary = "writer completed but commit failed";
+        assert!(
+            !worker_output_indicates_blocked("", summary),
+            "bare 'failed' summary without STATUS: BLOCKED must not block"
+        );
+        assert!(
+            !line_reports_unresolved_gate_outcome(summary),
+            "bare 'failed' must not be treated as an unresolved gate outcome"
+        );
     }
 
     #[test]
@@ -287,7 +326,6 @@ mod tests {
         for unresolved_action_message in [
             r#"{"agent_message":"I retried the gate, but gate status remains unknown."}"#,
             r#"{"agent_message":"reran but could not confirm pass"}"#,
-            r#"{"agent_message":"fixed attempt failed"}"#,
         ] {
             assert!(
                 worker_output_indicates_blocked_with_receipt(
@@ -299,6 +337,30 @@ mod tests {
                 "action without a confirmed positive outcome must block: {unresolved_action_message}"
             );
         }
+        // Bare "failed"/"failure" alone must NOT hard-block as an unconfirmed
+        // gate — it is benign prose (e.g. a require-commit rescue summary such
+        // as "writer completed but commit failed"). The R01 veto is retained:
+        // an action+failure message still must NOT count as resolved, so a
+        // historical diagnostic that reaches the suppression path is vetoed.
+        let action_with_failure = r#"{"agent_message":"fixed attempt failed"}"#;
+        let action_text = "fixed attempt failed";
+        assert!(
+            !line_reports_unresolved_gate_outcome(action_text),
+            "bare 'failed' must not be an unconfirmed-gate signal"
+        );
+        assert!(
+            !message_reports_gate_resolution(action_text),
+            "action+failure must NOT count as resolved (R01 veto retained)"
+        );
+        assert!(
+            !worker_output_indicates_blocked_with_receipt(
+                action_with_failure,
+                "",
+                "The retry succeeded.",
+                true,
+            ),
+            "bare 'failed' in agent prose must not block: {action_with_failure}"
+        );
         assert!(worker_output_indicates_blocked_with_receipt(
             r#"{"agent_message":"STATUS: BLOCKED — current gate is unavailable"}"#,
             "",
