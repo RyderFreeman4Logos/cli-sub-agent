@@ -319,11 +319,11 @@ pub(crate) async fn process_execution_result(
         &mut session_result,
         has_positive_structured_completion,
     );
-    // Worker-blocked gate (#1483): rewrite to failure when output/summary
-    // contains "STATUS: BLOCKED" or an unconfirmed gate receipt.
+    // Fail zero-exit workers that report a blocker on any output stream.
     if result.exit_code == 0
         && blocked::worker_output_indicates_blocked_with_receipt(
             &result.output,
+            &result.stderr_output,
             &result.summary,
             has_positive_structured_completion,
         )

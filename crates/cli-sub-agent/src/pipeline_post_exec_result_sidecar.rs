@@ -56,13 +56,18 @@ fn ensure_owned_manager_result_artifact(
 pub(super) fn status_is_success(session_dir: &Path, completed_turn_count: u32) -> bool {
     let turn_scoped_path =
         csa_session::turn_contract_result_path(session_dir, completed_turn_count);
+    let Some(attempt_nonce) =
+        crate::pipeline::result_contract::current_result_attempt_nonce(session_dir)
+    else {
+        return false;
+    };
     // A root `output/result.toml` has no turn identity and can survive from a
-    // prior invocation. Only the current turn's contract path proves that the
-    // receipt was emitted for this invocation.
-    path_status_is_success(&turn_scoped_path)
+    // prior invocation. The current turn path plus an attempt nonce proves that
+    // the receipt was emitted for this provider attempt.
+    path_status_is_success(&turn_scoped_path, &attempt_nonce)
 }
 
-fn path_status_is_success(path: &Path) -> bool {
+fn path_status_is_success(path: &Path, attempt_nonce: &str) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
     };
@@ -70,16 +75,17 @@ fn path_status_is_success(path: &Path) -> bool {
         return false;
     };
 
-    let nested = table
-        .get("result")
-        .and_then(|value| value.as_table())
-        .and_then(|table| table.get("status"));
-    let flat = table.get("status");
+    let nested = table.get("result").and_then(|value| value.as_table());
+    let status = nested
+        .and_then(|result| result.get("status"))
+        .or_else(|| table.get("status"))
+        .and_then(|value| value.as_str());
+    let receipt_nonce = nested
+        .and_then(|result| result.get("attempt_nonce"))
+        .and_then(|value| value.as_str());
 
-    nested
-        .or(flat)
-        .and_then(|value| value.as_str())
-        .is_some_and(|status| status.eq_ignore_ascii_case("success"))
+    matches!(status, Some(status) if status.eq_ignore_ascii_case("success"))
+        && receipt_nonce == Some(attempt_nonce)
 }
 
 #[cfg(test)]

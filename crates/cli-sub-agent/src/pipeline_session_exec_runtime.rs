@@ -146,11 +146,6 @@ async fn prepare_session_runtime_inner(
     let capture_snapshot = session_exec_audit::capture_git_workspace_snapshot_if_needed;
     let pre_run_workspace =
         capture_snapshot(is_git, input.project_root, require_commit_on_mutation);
-    let result_file_cleared = clear_expected_result_artifacts_for_prompt(
-        input.prompt,
-        input.session_dir,
-        session.turn_count,
-    );
     crate::run_cmd_model_pin::sync_subtree_model_pin_sidecar(
         input.project_root,
         &session.meta_session_id,
@@ -251,6 +246,23 @@ async fn prepare_session_runtime_inner(
         ("CHANGED_CRATES_FLAGS".to_string(), String::new()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
+    // Bind the receipt after mutable pre-run hooks, immediately before the
+    // provider-facing execution setup. A hook cannot leave a valid stale
+    // next-turn receipt behind for this provider attempt.
+    let result_file_cleared = clear_expected_result_artifacts_for_prompt(
+        input.prompt,
+        input.session_dir,
+        session.turn_count,
+    );
+    if result_file_cleared
+        && let Some(attempt_nonce) =
+            super::super::result_contract::current_result_attempt_nonce(input.session_dir)
+    {
+        merged_env.insert(
+            super::super::result_contract::RESULT_TOML_ATTEMPT_NONCE_ENV.to_string(),
+            attempt_nonce,
+        );
+    }
     let new_file_guard = if !can_write_new {
         crate::edit_restriction_guard::maybe_capture_new_file_guard(input.project_root)?
     } else {

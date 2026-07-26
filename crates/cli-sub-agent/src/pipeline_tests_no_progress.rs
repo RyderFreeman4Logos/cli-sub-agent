@@ -63,9 +63,27 @@ fn write_current_turn_result_sidecar(
     completed_turn_count: u32,
     contents: &str,
 ) {
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            session_dir,
+            completed_turn_count,
+        ),
+        "prepare current-turn receipt"
+    );
+    let artifact_path = csa_session::next_turn_contract_result_artifact_path(completed_turn_count);
+    std::fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir),
+        format!("artifact_path = \"{artifact_path}\"\nattempt_nonce = \"current-test-attempt\"\n"),
+    )
+    .expect("bind current-turn receipt to test attempt");
     let path = csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
     std::fs::create_dir_all(path.parent().expect("sidecar parent")).expect("create output dir");
-    std::fs::write(path, contents).expect("write result sidecar");
+    std::fs::write(
+        path,
+        format!("{contents}\nattempt_nonce = \"current-test-attempt\"\n"),
+    )
+    .expect("write result sidecar");
 }
 
 fn run_git(repo: &std::path::Path, args: &[&str]) {

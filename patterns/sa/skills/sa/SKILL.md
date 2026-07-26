@@ -185,13 +185,14 @@ Example DONE WHEN:
 ### Employee -> Manager (`result.toml`)
 
 Employees MUST return a self-contained report that allows manager decision without opening any source/artifact content.
-Employees MUST write this file to `$CSA_RESULT_TOML_PATH_CONTRACT` (fallback: `$CSA_SESSION_DIR/result.toml`) and print that path only.
+Employees MUST write this file to `$CSA_RESULT_TOML_PATH_CONTRACT` (fallback: `$CSA_SESSION_DIR/result.toml`) and print that path only. Every attempt-bound receipt MUST copy `$CSA_RESULT_TOML_ATTEMPT_NONCE` into `[result].attempt_nonce`; CSA rejects a receipt without the current nonce.
 
 Required schema:
 
 ```toml
 [result]
 status = "success"  # success | partial | error | needs_clarification
+attempt_nonce = "$CSA_RESULT_TOML_ATTEMPT_NONCE"
 summary = "Implemented JWT validation with 15 test cases. All pass."
 error_code = ""
 session_id = "019c4c24-..."
