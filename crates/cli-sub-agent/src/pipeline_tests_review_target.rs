@@ -55,11 +55,10 @@ fn apply_review_target_dir_leaves_default_behavior_when_repo_target_missing() {
 #[test]
 fn apply_review_target_dir_leaves_non_review_sessions_unchanged() {
     let project = tempdir().expect("tempdir");
+    let explicit_target = tempdir().expect("explicit target tempdir");
+    let explicit_target = explicit_target.path().to_string_lossy().into_owned();
     let mut env = HashMap::new();
-    env.insert(
-        "CARGO_TARGET_DIR".to_string(),
-        "/repo/legacy-review-target".to_string(),
-    );
+    env.insert("CARGO_TARGET_DIR".to_string(), explicit_target.clone());
 
     let report = crate::pipeline_cargo_target::apply_task_target_dir_guards(
         Some("run"),
@@ -71,7 +70,7 @@ fn apply_review_target_dir_leaves_non_review_sessions_unchanged() {
 
     assert_eq!(
         env.get("CARGO_TARGET_DIR").map(String::as_str),
-        Some("/repo/legacy-review-target")
+        Some(explicit_target.as_str())
     );
     assert!(report.explicit_override_preserved);
 }
