@@ -78,6 +78,30 @@ fn classified_stdout_line(line: &str) -> ClassifiedStdoutLine {
         return ClassifiedStdoutLine::AgentMessage(message);
     }
 
+    let event_type = event.get("type").and_then(serde_json::Value::as_str);
+    // Claude stream-json tool_use / tool_call carry the invoked command in
+    // `input.command` (and tool name). That is provenance — same as Codex
+    // command_execution.command — not live shell output.
+    if matches!(event_type, Some("tool_use") | Some("tool_call")) {
+        if let Some(output) = claude_tool_use_output_text(&event) {
+            return ClassifiedStdoutLine::ToolOrCommandOutput(output);
+        }
+        return ClassifiedStdoutLine::CommandExecutionProvenance;
+    }
+    // Claude tool_result / tool_call_result: scan real tool output fields only.
+    if matches!(event_type, Some("tool_result") | Some("tool_call_result")) {
+        if let Some(text) = event
+            .get("content")
+            .or_else(|| event.get("output"))
+            .or_else(|| event.get("text"))
+            .or_else(|| event.get("result"))
+            .and_then(json_text_field)
+        {
+            return ClassifiedStdoutLine::ToolOrCommandOutput(text);
+        }
+        return ClassifiedStdoutLine::CommandExecutionProvenance;
+    }
+
     if let Some(item) = event.get("item") {
         let item_type = item.get("type").and_then(serde_json::Value::as_str);
         match item_type {
@@ -106,6 +130,29 @@ fn classified_stdout_line(line: &str) -> ClassifiedStdoutLine {
     // Unknown JSON shapes: keep scanning the original line so hard markers and
     // raw diagnostics in non-Codex providers still apply.
     ClassifiedStdoutLine::Raw
+}
+
+/// Real tool output on a Claude tool_use envelope, if any.
+///
+/// Claude Bash-class tool_use normally only carries `input.command` (provenance).
+/// When a provider embeds actual output fields, prefer those over provenance.
+fn claude_tool_use_output_text(event: &serde_json::Value) -> Option<String> {
+    for key in [
+        "aggregated_output",
+        "stdout",
+        "stderr",
+        "output",
+        "text",
+        "content",
+    ] {
+        if let Some(text) = event.get(key).and_then(json_text_field) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
 }
 
 fn command_execution_output_text(item: &serde_json::Value) -> Option<String> {
@@ -147,8 +194,15 @@ fn agent_message_event_text_from_value(event: &serde_json::Value) -> Option<Stri
         return agent_message_value_text(message);
     }
 
-    (event.get("type").and_then(serde_json::Value::as_str) == Some("item.completed"))
-        .then_some(())?;
+    let event_type = event.get("type").and_then(serde_json::Value::as_str);
+    // Claude stream-json assistant envelopes: extract prose only so resolved
+    // historical gate text can use the current-receipt suppression path, and so
+    // the full JSON (including unrelated fields) is not scanned as Raw.
+    if matches!(event_type, Some("assistant") | Some("assistant_message")) {
+        return claude_assistant_message_text(event);
+    }
+
+    (event_type == Some("item.completed")).then_some(())?;
     let item = event.get("item")?;
     (item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message")).then_some(())?;
     item.get("text")
@@ -162,12 +216,46 @@ fn agent_message_value_text(message: &serde_json::Value) -> Option<String> {
         serde_json::Value::Object(_) => message
             .get("text")
             .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
+            .map(str::to_owned)
+            .or_else(|| claude_message_content_text(message)),
         _ => None,
     }
 }
 
-fn message_reports_gate_resolution(message: &str) -> bool {
+/// Claude assistant / assistant_message text, matching transport_cli extraction.
+fn claude_assistant_message_text(event: &serde_json::Value) -> Option<String> {
+    if let Some(text) = event
+        .get("message")
+        .and_then(claude_message_content_text)
+        .filter(|text| !text.is_empty())
+    {
+        return Some(text);
+    }
+    event
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .filter(|text| !text.is_empty())
+}
+
+fn claude_message_content_text(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content").unwrap_or(message);
+    if let Some(text) = content.as_str() {
+        return Some(text.to_owned());
+    }
+    let arr = content.as_array()?;
+    let mut buf = String::new();
+    for block in arr {
+        if block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+            && let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+        {
+            buf.push_str(text);
+        }
+    }
+    (!buf.is_empty()).then_some(buf)
+}
+
+pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     // Bare English "passed"/"passes" (e.g. "I passed the logs to the
     // maintainer", "parser passes data downstream") is not gate-outcome proof.
@@ -261,7 +349,7 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
 /// by itself turn a summary into a hard unconfirmed-gate blocker. The broad
 /// variant is retained inside [`message_reports_gate_resolution`] as a veto
 /// against false-positive "resolved" claims.
-fn line_reports_unresolved_gate_outcome(lower: &str) -> bool {
+pub(super) fn line_reports_unresolved_gate_outcome(lower: &str) -> bool {
     [
         "could not confirm",
         "unable to confirm",
@@ -311,278 +399,5 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        line_reports_unresolved_gate_outcome, message_reports_gate_resolution,
-        worker_output_indicates_blocked, worker_output_indicates_blocked_with_receipt,
-    };
-
-    #[test]
-    fn blocked_summary_exact_match() {
-        assert!(worker_output_indicates_blocked("", "STATUS: BLOCKED"));
-    }
-
-    #[test]
-    fn blocked_summary_case_insensitive() {
-        assert!(worker_output_indicates_blocked("", "status: blocked"));
-        assert!(worker_output_indicates_blocked("", "Status: Blocked"));
-    }
-
-    #[test]
-    fn blocked_summary_with_trailing_text() {
-        assert!(worker_output_indicates_blocked(
-            "",
-            "STATUS: BLOCKED — Bash tool unavailable (EROFS)"
-        ));
-    }
-
-    #[test]
-    fn blocked_detected_in_output_line() {
-        let output = "Attempting task...\nSTATUS: BLOCKED\nSome trailing text";
-        assert!(worker_output_indicates_blocked(output, "Some summary"));
-    }
-
-    #[test]
-    fn non_blocked_summary_returns_false() {
-        assert!(!worker_output_indicates_blocked(
-            "all good",
-            "Task completed successfully"
-        ));
-    }
-
-    #[test]
-    fn empty_inputs_return_false() {
-        assert!(!worker_output_indicates_blocked("", ""));
-    }
-
-    #[test]
-    fn partial_match_not_triggered() {
-        // "BLOCKED" alone (without STATUS: prefix) must not trigger
-        assert!(!worker_output_indicates_blocked("BLOCKED", "BLOCKED"));
-    }
-
-    #[test]
-    fn bare_failed_in_summary_is_not_worker_blocked_after_require_commit_rescue() {
-        // #2806: a summary like "writer completed but commit failed" contains
-        // bare "failed" but no STATUS: BLOCKED marker. After a successful
-        // require-commit rescue, this must NOT be rewritten to worker-blocked.
-        let summary = "writer completed but commit failed";
-        assert!(
-            !worker_output_indicates_blocked("", summary),
-            "bare 'failed' summary without STATUS: BLOCKED must not block"
-        );
-        assert!(
-            !line_reports_unresolved_gate_outcome(summary),
-            "bare 'failed' must not be treated as an unresolved gate outcome"
-        );
-    }
-
-    #[test]
-    fn blocked_colon_summary_detected() {
-        assert!(worker_output_indicates_blocked(
-            "",
-            "Blocked: commit was not created because the pre-commit hook failed"
-        ));
-    }
-
-    #[test]
-    fn raw_shell_lost_gate_diagnostics_are_blocked() {
-        for diagnostic in [
-            "zsh: read-only variable: status",
-            "zsh: status: readonly variable",
-            "zsh: status unknown",
-            "bash: status: readonly variable",
-            "bash: exit status unavailable",
-            "bash: exit status unknown",
-            "bash: exit status lost",
-            "bash: exit status not available",
-        ] {
-            assert!(
-                worker_output_indicates_blocked("", diagnostic),
-                "raw lost-gate diagnostic must block: {diagnostic}"
-            );
-        }
-    }
-
-    #[test]
-    fn unconfirmed_gate_in_reported_summary_is_blocked() {
-        assert!(worker_output_indicates_blocked(
-            "",
-            "\u{95e8}\u{7981}\u{5df2}\u{6267}\u{884c}\u{4e00}\u{6b21}\u{ff0c}\u{4f46}\u{65e0}\u{6cd5}\u{786e}\u{8ba4}\u{95e8}\u{7981} PASS\u{ff1b}\u{672a}\u{91cd}\u{8dd1}\u{3002}"
-        ));
-    }
-
-    #[test]
-    fn current_receipt_suppresses_historical_agent_stdout_prose_but_not_raw_diagnostics() {
-        assert!(!worker_output_indicates_blocked_with_receipt(
-            "",
-            "",
-            "The previous turn omitted tests and commit; this turn completed both.",
-            true,
-        ));
-        assert!(!worker_output_indicates_blocked_with_receipt(
-            "",
-            "",
-            "Initial gate status was unknown; reran the gate and it now PASSes.",
-            true,
-        ));
-        assert!(!worker_output_indicates_blocked_with_receipt(
-            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
-            "",
-            "The retry succeeded.",
-            true,
-        ));
-        for resolved_historical_message in [
-            r#"{"agent_message":"Initial gate status was unknown; reran the gate and it now PASSes."}"#,
-            r#"{"agent_message":{"text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
-        ] {
-            assert!(
-                !worker_output_indicates_blocked_with_receipt(
-                    resolved_historical_message,
-                    "",
-                    "The retry succeeded.",
-                    true,
-                ),
-                "resolved historical agent-message prose must not block: {resolved_historical_message}"
-            );
-        }
-        for diagnostic in [
-            r#"{"type":"item.completed","item":{"type":"agent_message","text":"zsh: read-only variable: status"}}"#,
-            r#"{"agent_message":"bash: exit status unknown"}"#,
-            r#"{"agent_message":{"text":"zsh: read-only variable: status"}}"#,
-            r#"{"agent_message":"tests and commit omitted"}"#,
-        ] {
-            assert!(
-                worker_output_indicates_blocked_with_receipt(
-                    diagnostic,
-                    "",
-                    "The retry succeeded.",
-                    true,
-                ),
-                "unresolved agent-message diagnostic must block: {diagnostic}"
-            );
-        }
-        for unresolved_action_message in [
-            r#"{"agent_message":"I retried the gate, but gate status remains unknown."}"#,
-            r#"{"agent_message":"reran but could not confirm pass"}"#,
-        ] {
-            assert!(
-                worker_output_indicates_blocked_with_receipt(
-                    unresolved_action_message,
-                    "",
-                    "The retry succeeded.",
-                    true,
-                ),
-                "action without a confirmed positive outcome must block: {unresolved_action_message}"
-            );
-        }
-        // Bare "failed"/"failure" alone must NOT hard-block as an unconfirmed
-        // gate — it is benign prose (e.g. a require-commit rescue summary such
-        // as "writer completed but commit failed"). The R01 veto is retained:
-        // an action+failure message still must NOT count as resolved, so a
-        // historical diagnostic that reaches the suppression path is vetoed.
-        let action_with_failure = r#"{"agent_message":"fixed attempt failed"}"#;
-        let action_text = "fixed attempt failed";
-        assert!(
-            !line_reports_unresolved_gate_outcome(action_text),
-            "bare 'failed' must not be an unconfirmed-gate signal"
-        );
-        assert!(
-            !message_reports_gate_resolution(action_text),
-            "action+failure must NOT count as resolved (R01 veto retained)"
-        );
-        assert!(
-            !worker_output_indicates_blocked_with_receipt(
-                action_with_failure,
-                "",
-                "The retry succeeded.",
-                true,
-            ),
-            "bare 'failed' in agent prose must not block: {action_with_failure}"
-        );
-        assert!(worker_output_indicates_blocked_with_receipt(
-            r#"{"agent_message":"STATUS: BLOCKED — current gate is unavailable"}"#,
-            "",
-            "The retry succeeded.",
-            true,
-        ));
-        assert!(worker_output_indicates_blocked_with_receipt(
-            r#"{"type":"item.completed","item":{"type":"tool_result","text":"zsh: status unknown"}}"#,
-            "",
-            "The retry succeeded.",
-            true,
-        ));
-        assert!(worker_output_indicates_blocked_with_receipt(
-            "",
-            "zsh: status unknown",
-            "The retry succeeded.",
-            true,
-        ));
-    }
-
-    #[test]
-    fn bare_passed_prose_does_not_resolve_unconfirmed_gate() {
-        // R4-001: unrelated English "passed"/"passes" is not gate-outcome proof.
-        for message in [
-            "Gate status unknown; I passed the logs to the maintainer.",
-            "gate status unknown; parser passes data downstream",
-        ] {
-            assert!(
-                !message_reports_gate_resolution(message),
-                "bare prose must not resolve a gate: {message}"
-            );
-            let agent_message = format!(r#"{{"agent_message":"{message}"}}"#);
-            assert!(
-                worker_output_indicates_blocked_with_receipt(
-                    &agent_message,
-                    "",
-                    "The retry succeeded.",
-                    true,
-                ),
-                "current receipt + bare 'passed' prose must still block: {agent_message}"
-            );
-        }
-
-        // Gate-bound resolution phrases remain valid suppressors.
-        for message in [
-            "Initial gate status was unknown; reran the gate and it now PASSes.",
-            "gate status unknown earlier; gate passed after retry",
-            "previous gate status unknown; status: success now",
-            "prior gate status unknown; completed successfully on retry",
-        ] {
-            assert!(
-                message_reports_gate_resolution(message),
-                "gate-bound success must resolve: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn command_execution_command_provenance_is_not_worker_blocked() {
-        // R4-002: diagnostic-like text only inside command_execution.command is
-        // provenance (e.g. `rg 'zsh: status unknown'`), not real shell output.
-        for provenance in [
-            r#"{"type":"item.started","item":{"type":"command_execution","command":"rg -n 'zsh: status unknown' crates","status":"in_progress"}}"#,
-            r#"{"type":"item.completed","item":{"type":"command_execution","command":"rg -n 'zsh: status unknown' crates","exit_code":0,"status":"completed"}}"#,
-            r#"{"type":"item.started","item":{"type":"command_execution","command":"grep -F 'bash: exit status unknown' logs","status":"in_progress"}}"#,
-        ] {
-            assert!(
-                !worker_output_indicates_blocked_with_receipt(
-                    provenance,
-                    "",
-                    "The retry succeeded.",
-                    true,
-                ),
-                "command source must not worker-block: {provenance}"
-            );
-        }
-
-        // Real command/tool output streams still block.
-        assert!(worker_output_indicates_blocked_with_receipt(
-            r#"{"type":"item.completed","item":{"type":"command_execution","command":"just pre-commit","aggregated_output":"zsh: status unknown","exit_code":0,"status":"completed"}}"#,
-            "",
-            "The retry succeeded.",
-            true,
-        ));
-    }
-}
+#[path = "pipeline_post_exec_blocked_tests.rs"]
+mod tests;

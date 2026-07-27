@@ -340,3 +340,73 @@ async fn dirty_sa_without_receipt_preserves_authoritative_timeout_and_signal_res
         );
     }
 }
+
+#[tokio::test]
+async fn multi_envelope_turn_count_keeps_pre_exec_turn1_receipt_authoritative() {
+    // R5-001: pre-exec completed_turn_count=0 exports turn-1; streaming reports
+    // ctx.turn_count=3. Dirty SA with a valid nonce-bound turn-1 receipt must
+    // remain success (not rewritten as dirty-sa-run-unconfirmed).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    assert_eq!(session.turn_count, 0, "fresh session starts at turn 0");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_current_turn_result_sidecar(
+        &session_dir,
+        session.turn_count,
+        r#"
+[result]
+status = "success"
+summary = "multi-envelope SA completed with docs"
+"#,
+    );
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let mut ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        true,
+        true,
+    );
+    ctx.changed_paths = vec!["docs/readme.md".to_string()];
+    // One invocation observed three assistant envelopes (transport contract).
+    ctx.turn_count = 3;
+    let mut result = build_test_result("SA finished successfully with multi-envelope stream");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    assert_eq!(
+        session.turn_count, 3,
+        "post-exec aggregate turn count should reflect multi-envelope stream"
+    );
+    assert_eq!(result.exit_code, 0, "exit must stay success");
+    assert!(
+        !result.summary.contains("dirty SA-mode run lacks"),
+        "must not rewrite as dirty-SA unconfirmed: {}",
+        result.summary
+    );
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(
+        persisted.status,
+        SessionResult::status_from_exit_code(0),
+        "nonce-bound turn-1 receipt must remain authoritative"
+    );
+}

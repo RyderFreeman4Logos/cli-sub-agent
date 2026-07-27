@@ -54,13 +54,20 @@ fn ensure_owned_manager_result_artifact(
 }
 
 pub(super) fn status_is_success(session_dir: &Path, completed_turn_count: u32) -> bool {
-    let turn_scoped_path =
-        csa_session::turn_contract_result_path(session_dir, completed_turn_count);
     let Some(attempt_nonce) =
         crate::pipeline::result_contract::current_result_attempt_nonce(session_dir)
     else {
         return false;
     };
+    // Prefer the pre-exec marker path exported to the child (CSA_RESULT_TOML_*).
+    // Post-exec `session.turn_count` can be an aggregate of multiple assistant
+    // envelopes from one invocation, so reconstructing the turn-scoped path
+    // from that aggregate would miss the valid turn-N receipt the child wrote.
+    let turn_scoped_path = current_result_artifact_marker(session_dir)
+        .map(|artifact_path| session_dir.join(artifact_path))
+        .unwrap_or_else(|| {
+            csa_session::turn_contract_result_path(session_dir, completed_turn_count)
+        });
     // Every documented receipt path requires the current attempt nonce. That
     // lets legacy fallback paths remain compatible without accepting a prior
     // invocation's success receipt.
