@@ -48,7 +48,13 @@ pub(super) fn maybe_mark_dirty_sa_run_without_receipt(
         // (initial_session_status, e.g. "timed_out"/"interrupted"), so preserve
         // that status instead of recomputing from status_from_exit_code (which
         // would map 124 -> "failure", losing the timeout/signal distinction).
-        let preserved_exit_code = result.exit_code;
+        //
+        // R10-F3: result-contract enforcement runs BEFORE this function and may
+        // have called `mark_gate_failure`, coercing `exit_code` to 1. Use the
+        // ORIGINAL exit code captured pre-contract (`ctx.original_exit_code`)
+        // when available so a timeout/signal exit is preserved verbatim, not
+        // flattened to the contract's generic 1 (#2806 R10-F3).
+        let preserved_exit_code = ctx.original_exit_code.unwrap_or(result.exit_code);
         tracing::warn!(
             session = %session.meta_session_id,
             exit_code = preserved_exit_code,

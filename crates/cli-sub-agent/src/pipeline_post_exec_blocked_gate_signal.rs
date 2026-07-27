@@ -25,6 +25,14 @@
 /// gate report` are gate-object references, not gate-outcome statements. Both
 /// must be rejected so a real unresolved gate diagnostic is not suppressed
 /// (#2806 R6-002, R8-F2).
+///
+/// R10-F1 (full-trailing-token anchoring): the terminal-anchor check must scan
+/// ALL tokens after the pass clause, not only the immediately-adjacent one.
+/// Tokenization strips punctuation, so clause boundaries (`.`, `;`, newline)
+/// disappear; a late gate-object noun ANYWHERE in the trailing tokens proves
+/// the clause is mid-sentence prose and must not forge a pass. E.g.
+/// "the parser gate passed sanitized data downstream" — `data` and
+/// `downstream` both appear after `passed`, so this is rejected.
 pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
     // Tokenize so bare "passed the logs" / "password" cannot match.
     let tokens: Vec<&str> = lower
@@ -54,11 +62,15 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
         {
             return true;
         }
-        // "gate status pass" / "status is pass" / "result is pass".
+        // "gate status pass" / "status is pass" / "result is pass" — a bare
+        // outcome statement. The pass token MUST be terminal-anchored the same
+        // way the two-token forms are (#2806 R10-F1): "status is pass data
+        // downstream" is forged prose, not a gate-outcome statement.
         if start + 2 < len
             && tokens[start] == "gate"
             && tokens[start + 1] == "status"
             && is_pass_token(tokens[start + 2])
+            && clause_is_terminal_anchored(&tokens, start + 2)
         {
             return true;
         }
@@ -66,6 +78,7 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
             && matches!(tokens[start], "status" | "result")
             && tokens[start + 1] == "is"
             && is_pass_token(tokens[start + 2])
+            && clause_is_terminal_anchored(&tokens, start + 2)
         {
             return true;
         }
@@ -85,28 +98,34 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
     false
 }
 
-/// A gate-outcome clause is terminal-anchored ONLY when the token immediately
-/// after the clause's final token (the pass token or `gate` token) is
-/// end-of-string or a non-object token. A trailing gate-object noun (`logs`,
-/// `report`, `output`, `data`, `to`, `downstream`, ...) proves the clause is
-/// embedded mid-sentence prose and must not be treated as a pass signal
-/// (#2806 R8-F2, R9b-F4).
+/// A gate-outcome clause is terminal-anchored ONLY when NO gate-object noun
+/// (`logs`, `report`, `output`, `data`, `to`, `downstream`, ...) appears in the
+/// trailing tokens after the clause's final token. A gate-object noun ANYWHERE
+/// after the pass clause proves the clause is embedded mid-sentence prose and
+/// must not be treated as a pass signal (#2806 R8-F2, R9b-F4, R10-F1).
 ///
 /// Punctuation (`.`, `;`, `,`, `—`, ...) is stripped by tokenization, so
 /// "gate passed." / "gate passed; retry" both tokenize identically to
-/// "gate passed" (the trailing punctuation word is empty and filtered), and the
-/// next non-empty token is what we inspect. This is why a DENYLIST (reject only
-/// gate-object nouns) is the correct model rather than an allowlist: there are
-/// infinitely many non-object words that legitimately follow a sentence-ending
-/// pass clause (pronouns, conjunctions, "this turn", ...), and an allowlist
-/// cannot enumerate them. The earlier R9b-F4 attempt flipped this to an
-/// allowlist of `after|now|on|is|status`, which rejected every legitimate
-/// sentence boundary and broke resolved-prose suppression (#2806 R9b).
+/// "gate passed" (the trailing punctuation word is empty and filtered). Because
+/// clause boundaries disappear at tokenize time, scanning only the
+/// immediately-adjacent token is insufficient: a late gate-object noun
+/// (`"gate passed sanitized data downstream"`) is missed by an adjacent-only
+/// check and forges a false pass. R10-F1 therefore scans ALL remaining tokens.
+///
+/// This is why a DENYLIST (reject only gate-object nouns) is the correct model
+/// rather than an allowlist: there are infinitely many non-object words that
+/// legitimately follow a sentence-ending pass clause (pronouns, conjunctions,
+/// "this turn", ...), and an allowlist cannot enumerate them. The earlier
+/// R9b-F4 attempt flipped this to an allowlist of `after|now|on|is|status`,
+/// which rejected every legitimate sentence boundary and broke resolved-prose
+/// suppression (#2806 R9b).
 fn clause_is_terminal_anchored(tokens: &[&str], index: usize) -> bool {
-    match tokens.get(index + 1) {
-        None => true,
-        Some(after) => !is_gate_object_noun(after),
-    }
+    // No gate-object noun may appear anywhere in the trailing tokens. A
+    // trailing gate object proves the pass clause references a gate ARTIFACT
+    // ("passed the gate logs"), not a gate OUTCOME (#2806 R10-F1).
+    tokens[index + 1..]
+        .iter()
+        .all(|token| !is_gate_object_noun(token))
 }
 
 /// Nouns/particles that, when following a `gate`/pass clause token, prove the

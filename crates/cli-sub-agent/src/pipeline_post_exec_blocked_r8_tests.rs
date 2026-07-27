@@ -156,3 +156,102 @@ fn r8_prior_resolution_classes_still_hold() {
         "writer completed but commit failed"
     ));
 }
+
+// --- R10-F1: full-trailing-token gate-signal anchoring ---
+
+#[test]
+fn r10_late_gate_object_noun_after_bare_gate_passed_is_rejected() {
+    // R10-F1: a gate-object noun ANYWHERE in the trailing tokens proves the
+    // clause is mid-sentence prose. The adjacent-only check missed this.
+    for message in [
+        "the parser gate passed sanitized data downstream",
+        "the parser gate passed data downstream",
+        "Gate status unknown earlier; the parser gate passed sanitized data downstream",
+        "the gate passed output to the maintainer for review",
+        "the status passed logs downstream",
+    ] {
+        assert!(
+            !message_reports_gate_resolution(message),
+            "late gate-object noun must not forge a pass: {message}"
+        );
+    }
+}
+
+#[test]
+fn r10_gate_status_pass_with_trailing_gate_object_is_rejected() {
+    // R10-F1: the "gate status pass" / "status is pass" branches (which
+    // previously skipped the anchor check entirely) must now reject a trailing
+    // gate-object noun.
+    for message in [
+        "status is pass data downstream",
+        "result is pass output to the reviewer",
+        "gate status pass logs downstream",
+    ] {
+        assert!(
+            !message_reports_gate_resolution(message),
+            "'status is pass' / 'gate status pass' with trailing gate object must not forge: {message}"
+        );
+    }
+}
+
+#[test]
+fn r10_legitimate_resolutions_survive_full_token_scan() {
+    // Non-regression: genuine resolutions whose trailing tokens are NOT
+    // gate-object nouns must still resolve after the full-token scan.
+    for message in [
+        "gate passed",
+        "gate passed after retry",
+        "gate status: passed",
+        "result: pass on retry",
+        "status is pass",
+        "gate status pass",
+        "prior gate status unknown; gate passed after retry",
+        "reran the gate and it now passes the gate",
+    ] {
+        assert!(
+            message_reports_gate_resolution(message),
+            "legitimate resolution must still resolve: {message}"
+        );
+    }
+}
+
+// --- R10-F2: line-scoped historical omitted exemption ---
+
+#[test]
+fn r10_mixed_historical_and_current_omission_still_flags_current() {
+    // R10-F2: a mixed message with one historical-omission line and one
+    // CURRENT-omission line must still flag the current omission. The whole-text
+    // exemption previously suppressed both.
+    let mixed = "the previous turn omitted tests and commit\n\
+                 tests and commit omitted this turn";
+    assert!(
+        !message_reports_gate_resolution(mixed),
+        "mixed historical + current omission must not resolve: {mixed}"
+    );
+    // The mixed message must still be flagged as blocked even with a receipt.
+    assert!(
+        worker_output_indicates_blocked_with_receipt(mixed, "", "retry ok", true),
+        "current receipt + mixed omission must still block: {mixed}"
+    );
+}
+
+#[test]
+fn r10_pure_historical_omission_does_not_veto_gate_pass() {
+    // Non-regression: a message whose ONLY omission line carries the historical
+    // marker must NOT veto a genuine gate-bound pass (line-scoped exemption).
+    let historical = "the previous turn omitted tests and commit; this turn completed both";
+    assert!(
+        message_reports_gate_resolution(&format!("gate passed. {historical}")),
+        "gate passed + pure historical omission must resolve"
+    );
+    // Without a pass signal the historical line alone does not resolve — but it
+    // must not be flagged as a current omission either.
+    assert!(
+        !message_reports_gate_resolution(historical),
+        "historical narration without a pass signal does not resolve (no positive signal)"
+    );
+    assert!(
+        !worker_output_indicates_blocked_with_receipt(historical, "", "retry ok", true),
+        "pure historical omission must not block even as a summary: {historical}"
+    );
+}

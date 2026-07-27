@@ -50,6 +50,7 @@ async fn require_commit_recovery_uses_raw_exit_after_incidental_downgrade() {
         turn_count: 1,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     };
     let mut execution = csa_process::ExecutionResult {
         output: String::new(),

@@ -246,6 +246,7 @@ fn pre_execution_audit_baseline_returns_none_for_legacy_sessions_without_snapsho
         turn_count: 0,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     };
 
     assert_eq!(pre_execution_audit_baseline(&ctx, &session), None);
@@ -315,6 +316,7 @@ fn pre_execution_audit_baseline_prefers_per_execution_snapshot() {
         turn_count: 0,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     };
 
     assert_eq!(
@@ -411,6 +413,7 @@ fn audit_failure_does_not_fail_execution() {
         turn_count: 0,
         output_tokens: None,
         sa_mode: true,
+        original_exit_code: None,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFAILURE000000000".to_string(),
@@ -535,6 +538,7 @@ fn reused_session_audit_uses_per_execution_baseline_not_session_creation() {
         turn_count: 0,
         output_tokens: None,
         sa_mode: true,
+        original_exit_code: None,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTREUSEDSESSIONAUDIT000".to_string(),
@@ -638,6 +642,7 @@ fn writer_run_does_not_emit_repo_write_audit_artifact() {
         turn_count: 0,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTWRITERRUNAUDIT00000000".to_string(),
@@ -742,6 +747,7 @@ fn first_execution_falls_back_to_session_creation_baseline_when_per_exec_capture
         turn_count: 0,
         output_tokens: None,
         sa_mode: true,
+        original_exit_code: None,
     };
     let session = MetaSessionState {
         meta_session_id: "01TESTAUDITFALLBACK000000000".to_string(),

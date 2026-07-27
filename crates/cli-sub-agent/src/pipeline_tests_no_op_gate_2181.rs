@@ -38,6 +38,7 @@ fn build_commit_no_op_ctx<'a>(
         turn_count: 0,
         output_tokens: None,
         sa_mode: true,
+        original_exit_code: None,
     }
 }
 

@@ -391,18 +391,32 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
 
 /// True when the message still claims tests/commit were omitted (present
 /// omission), not when it only narrates previously-omitted work that was fixed.
+///
+/// R10-F2 (line-scoped historical exemption): the historical exemption is
+/// LINE-SCOPED, not whole-text. A mixed message with one historical omission
+/// line ("the previous turn omitted tests and commit") and one CURRENT omission
+/// line ("tests and commit omitted") must still flag the current omission —
+/// the historical line does not exempt the whole text (#2806 R10-F2).
 fn message_reports_current_omitted_required_work(lower: &str) -> bool {
-    if !(lower.contains("omitted") && lower.contains("test") && lower.contains("commit")) {
-        return false;
-    }
-    // Historical narration that was fixed this turn must not count as a
-    // present/current omission: "fixed the previously omitted tests and
-    // commit" and "the previous turn omitted tests and commit; this turn
-    // completed both". Both phrases narrate work that is now done.
-    if lower.contains("previously omitted") || lower.contains("previous turn omitted") {
-        return false;
-    }
-    true
+    // Only lines that both (a) name omitted + test + commit AND (b) lack a
+    // historical marker count as present/current omissions. A line with a
+    // historical marker ("previous turn omitted", "previously omitted") is
+    // narration of work that is now done and is excluded line-by-line.
+    lower.lines().any(|line| {
+        if !(line.contains("omitted") && line.contains("test") && line.contains("commit")) {
+            return false;
+        }
+        // Historical narration that was fixed this turn must not count as a
+        // present/current omission on THIS line: "fixed the previously omitted
+        // tests and commit" and "the previous turn omitted tests and commit;
+        // this turn completed both". Both phrases narrate work that is now done.
+        // The exemption applies to THIS line only — another line with a
+        // current omission is still flagged (#2806 R10-F2).
+        if line.contains("previously omitted") || line.contains("previous turn omitted") {
+            return false;
+        }
+        true
+    })
 }
 
 /// Narrower than [`message_reports_unresolved_gate_outcome`]: matches only

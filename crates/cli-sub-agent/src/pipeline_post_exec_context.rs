@@ -29,6 +29,12 @@ pub(crate) struct PostExecContext<'a> {
     pub turn_count: u32,
     pub output_tokens: Option<u64>,
     pub sa_mode: bool,
+    /// The raw exit code as captured BEFORE result-contract enforcement.
+    /// Contract validation may call `mark_gate_failure`, coercing `exit_code`
+    /// to `1`; the dirty-SA exit-preservation path must see the ORIGINAL
+    /// nonzero code (e.g. timeout 124 / signal 137), not the coerced 1
+    /// (#2806 R10-F3).
+    pub original_exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

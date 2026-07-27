@@ -36,6 +36,7 @@ fn build_test_ctx<'a>(
         turn_count: 0,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     }
 }
 
