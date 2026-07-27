@@ -780,6 +780,8 @@ fn enforce_result_toml_contract_now(
 
 #[path = "pipeline_tests_catalog_boundary.rs"]
 mod catalog_boundary_tests;
+#[path = "pipeline_tests_contract_nonce_status.rs"]
+mod contract_nonce_status_tests;
 #[path = "pipeline_tests_contract.rs"]
 mod contract_tests;
 #[path = "pipeline_tests_effective_timeout.rs"]

@@ -109,18 +109,18 @@ fn current_receipt_suppresses_historical_agent_stdout_prose_but_not_raw_diagnost
     assert!(!worker_output_indicates_blocked_with_receipt(
         "",
         "",
-        "Initial gate status was unknown; reran the gate and it now PASSes.",
+        "Initial gate status was unknown; reran the gate and it now PASSes the gate.",
         true,
     ));
     assert!(!worker_output_indicates_blocked_with_receipt(
-        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}}"#,
         "",
         "The retry succeeded.",
         true,
     ));
     for resolved_historical_message in [
-        r#"{"agent_message":"Initial gate status was unknown; reran the gate and it now PASSes."}"#,
-        r#"{"agent_message":{"text":"Initial gate status was unknown; reran the gate and it now PASSes."}}"#,
+        r#"{"agent_message":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}"#,
+        r#"{"agent_message":{"text":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}}"#,
     ] {
         assert!(
             !worker_output_indicates_blocked_with_receipt(
@@ -209,13 +209,19 @@ fn current_receipt_suppresses_historical_agent_stdout_prose_but_not_raw_diagnost
 #[test]
 fn bare_passed_prose_does_not_resolve_unconfirmed_gate() {
     // R4-001: unrelated English "passed"/"passes" is not gate-outcome proof.
+    // R6-002: unbound "now passed" / "reports passed" / "report passed" also
+    // must not resolve an unresolved gate diagnostic.
     for message in [
         "Gate status unknown; I passed the logs to the maintainer.",
         "gate status unknown; parser passes data downstream",
+        "Gate status unknown; I now passed the logs to the maintainer",
+        "Gate status unknown; the runner reports passed for the log handoff",
+        "Gate status unknown; the runner report passed the logs upstream",
+        "gate passed, but tests and commit omitted",
     ] {
         assert!(
             !message_reports_gate_resolution(message),
-            "bare prose must not resolve a gate: {message}"
+            "bare/unbound prose must not resolve a gate: {message}"
         );
         let agent_message = format!(r#"{{"agent_message":"{message}"}}"#);
         assert!(
@@ -225,16 +231,18 @@ fn bare_passed_prose_does_not_resolve_unconfirmed_gate() {
                 "The retry succeeded.",
                 true,
             ),
-            "current receipt + bare 'passed' prose must still block: {agent_message}"
+            "current receipt + unbound pass prose must still block: {agent_message}"
         );
     }
 
     // Gate-bound resolution phrases remain valid suppressors.
     for message in [
-        "Initial gate status was unknown; reran the gate and it now PASSes.",
+        "Initial gate status was unknown; reran the gate and it now PASSes the gate.",
         "gate status unknown earlier; gate passed after retry",
+        "previous gate status unknown; gate status: passed",
         "previous gate status unknown; status: success now",
         "prior gate status unknown; completed successfully on retry",
+        "prior gate status unknown; result: pass on retry",
     ] {
         assert!(
             message_reports_gate_resolution(message),
@@ -277,8 +285,8 @@ fn claude_assistant_and_tool_use_envelopes_follow_codex_classification() {
     // R5-002: Claude stream-json assistant / tool_use must not be treated as
     // Raw full-line scans. Resolved historical assistant prose with a current
     // receipt is suppressed; tool_use input.command is provenance only.
-    let resolved_assistant = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Initial gate status was unknown; reran the gate and it now PASSes."}]}}"#;
-    let resolved_assistant_message = r#"{"type":"assistant_message","text":"Initial gate status was unknown; reran the gate and it now PASSes."}"#;
+    let resolved_assistant = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}]}}"#;
+    let resolved_assistant_message = r#"{"type":"assistant_message","text":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}"#;
     for envelope in [resolved_assistant, resolved_assistant_message] {
         assert!(
             !worker_output_indicates_blocked_with_receipt(
@@ -312,4 +320,43 @@ fn claude_assistant_and_tool_use_envelopes_follow_codex_classification() {
         "The retry succeeded.",
         true,
     ));
+}
+
+#[test]
+fn claude_result_envelope_classifies_like_assistant_prose() {
+    // R6-003: Claude terminal {"type":"result","result":"..."} must not fall
+    // through to Raw. Resolved historical gate prose in the result text with a
+    // current receipt must not re-block; error result envelopes stay fail-closed.
+    let resolved_result = r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","subtype":"success","is_error":false}"#;
+    let stream = [
+        r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Initial gate status was unknown; reran the gate and it now PASSes the gate."}]}}"#,
+        resolved_result,
+    ]
+    .join("\n");
+    assert!(
+        !worker_output_indicates_blocked_with_receipt(&stream, "", "The retry succeeded.", true,),
+        "Claude system→assistant→result stream with resolved history + current receipt must not block"
+    );
+    assert!(
+        !worker_output_indicates_blocked_with_receipt(
+            resolved_result,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "Claude result envelope alone with resolved history + current receipt must not block"
+    );
+
+    // Error result envelopes remain fail-closed (not treated as suppressible prose).
+    let error_result = r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","is_error":true}"#;
+    assert!(
+        worker_output_indicates_blocked_with_receipt(
+            error_result,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "Claude error result envelope must not use assistant suppression: {error_result}"
+    );
 }

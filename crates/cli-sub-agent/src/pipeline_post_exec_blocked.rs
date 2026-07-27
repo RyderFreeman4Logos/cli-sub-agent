@@ -201,6 +201,13 @@ fn agent_message_event_text_from_value(event: &serde_json::Value) -> Option<Stri
     if matches!(event_type, Some("assistant") | Some("assistant_message")) {
         return claude_assistant_message_text(event);
     }
+    // Claude terminal result envelope carries the final agent prose in
+    // `result`. Treat successful envelopes like assistant messages so resolved
+    // historical gate text is not re-scanned as live Raw diagnostics (#2806
+    // R6-003). Error result envelopes stay unclassified (fail-closed → Raw).
+    if event_type == Some("result") {
+        return claude_result_envelope_text(event);
+    }
 
     (event_type == Some("item.completed")).then_some(())?;
     let item = event.get("item")?;
@@ -208,6 +215,32 @@ fn agent_message_event_text_from_value(event: &serde_json::Value) -> Option<Stri
     item.get("text")
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
+}
+
+/// Claude `{"type":"result","result":"..."}` terminal prose.
+///
+/// Successful envelopes yield agent-message text. Error envelopes (`is_error`,
+/// `subtype=error`, or non-zero `is_error`-equivalent fields) return `None` so
+/// classification falls through to Raw (fail-closed).
+fn claude_result_envelope_text(event: &serde_json::Value) -> Option<String> {
+    if event
+        .get("is_error")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    if event
+        .get("subtype")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|subtype| subtype.eq_ignore_ascii_case("error"))
+    {
+        return None;
+    }
+    event
+        .get("result")
+        .and_then(json_text_field)
+        .filter(|text| !text.trim().is_empty())
 }
 
 fn agent_message_value_text(message: &serde_json::Value) -> Option<String> {
@@ -279,7 +312,10 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
     (positive_pass || positive_completion) && !message_reports_unresolved_gate_outcome(&lower)
 }
 
-/// Pass/passed/passes only count when bound to a gate, status, or result outcome.
+/// Pass/passed/passes only count when syntactically bound to a gate, status, or
+/// result outcome. Bare `now passed` / `reports passed` / `report passed` are
+/// unbound English and must not suppress unresolved gate diagnostics (#2806
+/// R6-002).
 fn gate_bound_pass_signal(lower: &str) -> bool {
     // Tokenize so bare "passed the logs" / "password" cannot match.
     let tokens: Vec<&str> = lower
@@ -289,14 +325,7 @@ fn gate_bound_pass_signal(lower: &str) -> bool {
 
     for window in tokens.windows(2) {
         match window {
-            ["now", pass]
-            | ["gate", pass]
-            | ["status", pass]
-            | ["result", pass]
-            | ["reports", pass]
-            | ["report", pass]
-                if is_pass_token(pass) =>
-            {
+            ["gate", pass] | ["status", pass] | ["result", pass] if is_pass_token(pass) => {
                 return true;
             }
             [pass, "gate"] if is_pass_token(pass) => return true,
@@ -306,15 +335,18 @@ fn gate_bound_pass_signal(lower: &str) -> bool {
     for window in tokens.windows(3) {
         match window {
             [pass, "the", "gate"] if is_pass_token(pass) => return true,
+            // "gate status: passed" / "gate status passed"
+            ["gate", "status", pass] if is_pass_token(pass) => return true,
+            // "status is pass" / "result is passed"
             ["status", "is", pass] | ["result", "is", pass] if is_pass_token(pass) => {
                 return true;
             }
-            ["now", "reports", pass] | ["now", "report", pass] if is_pass_token(pass) => {
-                return true;
-            }
+            // "now PASSes the gate" — pass is bound via "the gate", not bare "now"
             _ => {}
         }
     }
+    // "gate status: passed" may tokenize as gate/status/passed (covered above)
+    // or as longer phrases; also accept "status: pass" already via 2-token.
     false
 }
 
@@ -323,7 +355,7 @@ fn is_pass_token(token: &str) -> bool {
 }
 
 fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
-    [
+    let unresolved_signal = [
         "remains unknown",
         "still unknown",
         "remains unavailable",
@@ -339,7 +371,25 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
         "not pass",
     ]
     .iter()
-    .any(|signal| lower.contains(signal))
+    .any(|signal| lower.contains(signal));
+    // "gate passed, but tests and commit omitted" is not a full resolution —
+    // current omitted required work vetoes a positive pass claim (#2806 R6-002).
+    // Historical "previously omitted" that was fixed/completed this turn must
+    // not veto a genuine gate-bound pass.
+    unresolved_signal || message_reports_current_omitted_required_work(lower)
+}
+
+/// True when the message still claims tests/commit were omitted (present
+/// omission), not when it only narrates previously-omitted work that was fixed.
+fn message_reports_current_omitted_required_work(lower: &str) -> bool {
+    if !(lower.contains("omitted") && lower.contains("test") && lower.contains("commit")) {
+        return false;
+    }
+    // Historical narration: "fixed the previously omitted tests and commit".
+    if lower.contains("previously omitted") {
+        return false;
+    }
+    true
 }
 
 /// Narrower than [`message_reports_unresolved_gate_outcome`]: matches only

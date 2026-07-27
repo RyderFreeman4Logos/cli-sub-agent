@@ -165,6 +165,43 @@ fn current_nonce_success_receipt_accepts_every_documented_fallback_path() {
 }
 
 #[test]
+fn nonce_matching_non_success_receipt_is_not_positive_completion() {
+    // R6-001: attempt_nonce match alone is not completion proof. error/partial/
+    // needs_clarification receipts must not satisfy status_is_success.
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let nonce = "current-attempt";
+    fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir.path()),
+        format!("attempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write current attempt marker");
+
+    let documented_paths = [
+        csa_session::turn_contract_result_path(session_dir.path(), 0),
+        session_dir.path().join("result.toml"),
+        csa_session::contract_result_path(session_dir.path()),
+        csa_session::legacy_user_result_path(session_dir.path()),
+    ];
+    for status in ["error", "partial", "needs_clarification", "failed"] {
+        for path in &documented_paths {
+            fs::create_dir_all(path.parent().expect("receipt parent"))
+                .expect("create receipt parent");
+            fs::write(
+                path,
+                format!("[result]\nstatus = \"{status}\"\nattempt_nonce = \"{nonce}\"\n"),
+            )
+            .expect("write non-success receipt");
+            assert!(
+                !status_is_success(session_dir.path(), 0),
+                "nonce-matching status={status} must not count as success: {}",
+                path.display()
+            );
+            fs::remove_file(path).expect("remove receipt before next path");
+        }
+    }
+}
+
+#[test]
 fn pre_exec_marker_turn_receipt_remains_authoritative_when_post_exec_turn_count_diverges() {
     // R5-001: completed_turn_count=0 exports turn-1 receipt path; multi-envelope
     // streaming can report ctx.turn_count=3 and inflate session.turn_count. Lookup

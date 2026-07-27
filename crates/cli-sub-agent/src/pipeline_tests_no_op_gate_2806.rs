@@ -95,7 +95,7 @@ summary = "current turn completed"
     let mut result = build_test_result("Current-turn completion receipt reports success.");
     result.output = [
         r#"{"type":"thread.started","thread_id":"current-success"}"#,
-        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; this turn reran the gate and it now reports PASS. This turn also fixed the previously omitted tests and commit; all current work is complete."}}"#,
+        r#"{"type":"item.completed","item":{"type":"agent_message","text":"Initial gate status was unknown; this turn reran the gate and it now PASSes the gate. This turn also fixed the previously omitted tests and commit; all current work is complete."}}"#,
         r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#,
     ]
     .join("\n");
@@ -408,5 +408,66 @@ summary = "multi-envelope SA completed with docs"
         persisted.status,
         SessionResult::status_from_exit_code(0),
         "nonce-bound turn-1 receipt must remain authoritative"
+    );
+}
+
+#[tokio::test]
+async fn nonce_matching_error_receipt_does_not_preserve_dirty_sa_success() {
+    // R6-001: tool calls + exit 0 + current nonce receipt with status=error must
+    // not count as positive structured completion (dirty SA rewrites to failure).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
+    let session_dir =
+        csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_current_turn_result_sidecar(
+        &session_dir,
+        session.turn_count,
+        r#"[result]
+status = "error"
+summary = "worker reported error"
+"#,
+    );
+
+    let executor = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: ClaudeCodeRuntimeMetadata::current(),
+    };
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let start = chrono::Utc::now() - chrono::Duration::seconds(15);
+    let mut ctx = build_test_ctx(
+        &executor,
+        session_dir,
+        project_root,
+        start,
+        &hooks_config,
+        true,
+        true,
+    );
+    ctx.changed_paths = vec!["src/dirty.rs".to_string()];
+    let mut result = build_test_result("Applied edits but receipt status is error.");
+
+    process_execution_result(ctx, &mut session, &mut result)
+        .await
+        .expect("process_execution_result");
+
+    let persisted = load_result(project_root, &session.meta_session_id)
+        .expect("load")
+        .expect("result exists");
+    assert_eq!(
+        result.exit_code, 1,
+        "error receipt must not preserve success"
+    );
+    assert_eq!(persisted.exit_code, 1);
+    assert!(
+        persisted
+            .summary
+            .contains("dirty SA-mode run lacks a positive structured completion signal")
+            || result.summary.contains("dirty SA-mode run lacks"),
+        "nonce-matching non-success receipt must fail dirty-SA completion: {}",
+        persisted.summary
     );
 }

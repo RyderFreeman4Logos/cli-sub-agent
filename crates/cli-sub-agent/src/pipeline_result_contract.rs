@@ -422,8 +422,11 @@ fn expected_contract_file_is_valid(path: &Path) -> bool {
     true
 }
 
+/// Nonce-matching alone is not completion proof: a current receipt with
+/// `status = "error" | "partial" | "needs_clarification"` (or any non-success)
+/// must not satisfy the path contract or any completion fallback (#2806 R6-001).
 fn current_attempt_receipt_is_valid(path: &Path, attempt_nonce: Option<&str>) -> bool {
-    current_attempt_receipt(path, attempt_nonce).is_some()
+    result_artifact_status_is_success(path, attempt_nonce)
 }
 
 fn current_attempt_receipt(path: &Path, attempt_nonce: Option<&str>) -> Option<toml::Table> {
@@ -458,6 +461,10 @@ fn result_artifact_status_is_success(path: &Path, attempt_nonce: Option<&str>) -
     let Some(table) = current_attempt_receipt(path, attempt_nonce) else {
         return false;
     };
+    receipt_table_status_is_success(&table)
+}
+
+fn receipt_table_status_is_success(table: &toml::Table) -> bool {
     let nested = table
         .get("result")
         .and_then(|v| v.as_table())
