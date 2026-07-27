@@ -323,6 +323,56 @@ fn claude_assistant_and_tool_use_envelopes_follow_codex_classification() {
 }
 
 #[test]
+fn claude_tool_result_content_array_and_fallthrough_block() {
+    // R7-001: Claude tool_result content blocks must extract text; empty/unparsed
+    // content must not shadow a later output/text/result field.
+    let content_blocks = r#"{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"zsh: status unknown"}]}"#;
+    assert!(
+        worker_output_indicates_blocked_with_receipt(
+            content_blocks,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "Claude tool_result content text blocks must block: {content_blocks}"
+    );
+
+    let empty_content_output_fallback = r#"{"type":"tool_result","tool_use_id":"toolu_1","content":"","output":"zsh: status unknown"}"#;
+    assert!(
+        worker_output_indicates_blocked_with_receipt(
+            empty_content_output_fallback,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "empty content must fall through to output: {empty_content_output_fallback}"
+    );
+
+    let unparsed_content_result_fallback = r#"{"type":"tool_call_result","tool_use_id":"toolu_2","content":{"nested":true},"result":"bash: exit status unknown"}"#;
+    assert!(
+        worker_output_indicates_blocked_with_receipt(
+            unparsed_content_result_fallback,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "unparsed content must fall through to result: {unparsed_content_result_fallback}"
+    );
+
+    let empty_content_array_text_fallback =
+        r#"{"type":"tool_result","content":[],"text":"STATUS: BLOCKED — tool failed"}"#;
+    assert!(
+        worker_output_indicates_blocked_with_receipt(
+            empty_content_array_text_fallback,
+            "",
+            "The retry succeeded.",
+            true,
+        ),
+        "empty content array must fall through to text: {empty_content_array_text_fallback}"
+    );
+}
+
+#[test]
 fn claude_result_envelope_classifies_like_assistant_prose() {
     // R6-003: Claude terminal {"type":"result","result":"..."} must not fall
     // through to Raw. Resolved historical gate prose in the result text with a
@@ -359,4 +409,23 @@ fn claude_result_envelope_classifies_like_assistant_prose() {
         ),
         "Claude error result envelope must not use assistant suppression: {error_result}"
     );
+
+    // R7-002: subtype prefixes (error_api/error_*) and non-bool is_error stay
+    // fail-closed — do not treat as suppressible agent prose.
+    for error_envelope in [
+        r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","subtype":"error_api"}"#,
+        r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","subtype":"error_max_turns"}"#,
+        r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","is_error":"true"}"#,
+        r#"{"type":"result","result":"Initial gate status was unknown; reran the gate and it now PASSes the gate.","is_error":1}"#,
+    ] {
+        assert!(
+            worker_output_indicates_blocked_with_receipt(
+                error_envelope,
+                "",
+                "The retry succeeded.",
+                true,
+            ),
+            "Claude error-like result envelope must not use assistant suppression: {error_envelope}"
+        );
+    }
 }

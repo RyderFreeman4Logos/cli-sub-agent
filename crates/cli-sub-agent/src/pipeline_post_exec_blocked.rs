@@ -89,14 +89,11 @@ fn classified_stdout_line(line: &str) -> ClassifiedStdoutLine {
         return ClassifiedStdoutLine::CommandExecutionProvenance;
     }
     // Claude tool_result / tool_call_result: scan real tool output fields only.
+    // Prefer content/output/text/result in order, extracting Claude content-block
+    // arrays; empty/unparsed fields fall through so a later populated field is
+    // not shadowed (#2806 R7-001).
     if matches!(event_type, Some("tool_result") | Some("tool_call_result")) {
-        if let Some(text) = event
-            .get("content")
-            .or_else(|| event.get("output"))
-            .or_else(|| event.get("text"))
-            .or_else(|| event.get("result"))
-            .and_then(json_text_field)
-        {
+        if let Some(text) = claude_tool_result_output_text(&event) {
             return ClassifiedStdoutLine::ToolOrCommandOutput(text);
         }
         return ClassifiedStdoutLine::CommandExecutionProvenance;
@@ -114,12 +111,7 @@ fn classified_stdout_line(line: &str) -> ClassifiedStdoutLine {
                 return ClassifiedStdoutLine::CommandExecutionProvenance;
             }
             Some("tool_result") | Some("function_call_output") => {
-                if let Some(text) = item
-                    .get("text")
-                    .or_else(|| item.get("output"))
-                    .or_else(|| item.get("content"))
-                    .and_then(json_text_field)
-                {
+                if let Some(text) = claude_tool_result_output_text(item) {
                     return ClassifiedStdoutLine::ToolOrCommandOutput(text);
                 }
             }
@@ -174,16 +166,44 @@ fn command_execution_output_text(item: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// Non-empty tool/command text from a Claude tool_result-shaped object.
+///
+/// Claude content may be a plain string, a string array, or content blocks
+/// `[{"type":"text","text":"..."}]`. Empty or unparsed fields fall through so a
+/// later `output`/`text`/`result` value is still classified as live tool output.
+fn claude_tool_result_output_text(event: &serde_json::Value) -> Option<String> {
+    for key in ["content", "output", "text", "result"] {
+        if let Some(text) = event.get(key).and_then(json_text_field) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
 fn json_text_field(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(text) => Some(text.to_owned()),
         serde_json::Value::Array(parts) => {
-            let joined = parts
-                .iter()
-                .filter_map(|part| part.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!joined.is_empty()).then_some(joined)
+            let mut buf = String::new();
+            for part in parts {
+                if let Some(text) = part.as_str() {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(text);
+                    continue;
+                }
+                // Claude content blocks: {"type":"text","text":"..."}.
+                if part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                    && let Some(text) = part.get("text").and_then(serde_json::Value::as_str)
+                {
+                    buf.push_str(text);
+                }
+            }
+            (!buf.is_empty()).then_some(buf)
         }
         _ => None,
     }
@@ -220,20 +240,22 @@ fn agent_message_event_text_from_value(event: &serde_json::Value) -> Option<Stri
 /// Claude `{"type":"result","result":"..."}` terminal prose.
 ///
 /// Successful envelopes yield agent-message text. Error envelopes (`is_error`,
-/// `subtype=error`, or non-zero `is_error`-equivalent fields) return `None` so
-/// classification falls through to Raw (fail-closed).
+/// `subtype` starting with `error` such as `error_api`, or non-bool `is_error`)
+/// return `None` so classification falls through to Raw (fail-closed). Matches
+/// `review_cmd_output_text::claude_result_is_error` subtype handling (#2806 R7-002).
 fn claude_result_envelope_text(event: &serde_json::Value) -> Option<String> {
-    if event
-        .get("is_error")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return None;
+    if let Some(is_error) = event.get("is_error") {
+        match is_error.as_bool() {
+            Some(true) => return None,
+            Some(false) => {}
+            // Missing bool parse (string/number/null): do not assume success.
+            None => return None,
+        }
     }
     if event
         .get("subtype")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|subtype| subtype.eq_ignore_ascii_case("error"))
+        .is_some_and(|subtype| subtype.to_ascii_lowercase().starts_with("error"))
     {
         return None;
     }
