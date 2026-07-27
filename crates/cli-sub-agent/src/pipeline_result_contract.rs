@@ -32,7 +32,19 @@ pub(crate) fn enforce_result_toml_path_contract(
     result_file_cleared: bool,
     result: &mut ExecutionResult,
 ) {
-    if result.exit_code != 0 || !prompt_requires_result_toml_path(prompt) {
+    // The contract validates that a session whose prompt demands a result.toml
+    // artifact actually produced a valid current-nonce success receipt. A
+    // nonzero exit that will be incidentally downgraded to success (#161) must
+    // STILL validate the contract — otherwise a completed-model-turn run with a
+    // contract marker + nonzero exit can report success without a valid receipt
+    // after the downgrade zeroes the exit (#2806 R9b-F1).
+    //
+    // Skip only when the prompt does not require the contract, or when the exit
+    // is nonzero AND the model did NOT complete (a genuinely incomplete run has
+    // no turn to validate).
+    if !prompt_requires_result_toml_path(prompt)
+        || (result.exit_code != 0 && result.model_completed != Some(true))
+    {
         return;
     }
 

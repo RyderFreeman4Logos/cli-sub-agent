@@ -24,7 +24,8 @@ pub(super) fn worker_output_indicates_blocked_with_receipt(
     has_positive_structured_completion: bool,
 ) -> bool {
     if text_indicates_blocked(summary)
-        || (!has_positive_structured_completion && text_indicates_unconfirmed_gate(summary))
+        || (text_indicates_unconfirmed_gate(summary)
+            && (!has_positive_structured_completion || !message_reports_gate_resolution(summary)))
     {
         return true;
     }
@@ -394,8 +395,11 @@ fn message_reports_current_omitted_required_work(lower: &str) -> bool {
     if !(lower.contains("omitted") && lower.contains("test") && lower.contains("commit")) {
         return false;
     }
-    // Historical narration: "fixed the previously omitted tests and commit".
-    if lower.contains("previously omitted") {
+    // Historical narration that was fixed this turn must not count as a
+    // present/current omission: "fixed the previously omitted tests and
+    // commit" and "the previous turn omitted tests and commit; this turn
+    // completed both". Both phrases narrate work that is now done.
+    if lower.contains("previously omitted") || lower.contains("previous turn omitted") {
         return false;
     }
     true
@@ -449,8 +453,11 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let shell_lost_status = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
         && lower.contains("status")
         && lost_status;
-    let required_work_omitted =
-        lower.contains("omitted") && lower.contains("test") && lower.contains("commit");
+    // Reuse the shared current-omission classifier so the summary and
+    // per-line unconfirmed-gate paths cannot drift apart. Historical
+    // narration ("previous turn omitted ...; this turn completed both")
+    // is excluded inside the helper (#2806 R9b).
+    let required_work_omitted = message_reports_current_omitted_required_work(&lower);
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
         || line_reports_unresolved_gate_outcome(&lower)

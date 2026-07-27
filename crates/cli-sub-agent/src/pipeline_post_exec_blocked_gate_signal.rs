@@ -34,11 +34,15 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
     let len = tokens.len();
     for start in 0..len {
         // "gate pass" / "status pass" / "result pass" — a bare outcome
-        // statement. These are inherently terminal (no object follows the pass
-        // token that would reclassify it as prose), so no anchor check.
+        // statement. The pass token MUST be terminal-anchored: "gate passed
+        // logs to the maintainer" is forged prose (the pass token is followed
+        // by a gate-object noun), not a gate-outcome statement (#2806 R9b-F4).
+        // "gate passed. This turn ..." is anchored (a sentence boundary,
+        // not a gate object) — see clause_is_terminal_anchored.
         if start + 1 < len
             && matches!(tokens[start], "gate" | "status" | "result")
             && is_pass_token(tokens[start + 1])
+            && clause_is_terminal_anchored(&tokens, start + 1)
         {
             return true;
         }
@@ -46,7 +50,7 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
         if start + 1 < len
             && is_pass_token(tokens[start])
             && tokens[start + 1] == "gate"
-            && gate_clause_is_anchored(&tokens, start + 1)
+            && clause_is_terminal_anchored(&tokens, start + 1)
         {
             return true;
         }
@@ -73,7 +77,7 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
             && is_pass_token(tokens[start])
             && tokens[start + 1] == "the"
             && tokens[start + 2] == "gate"
-            && gate_clause_is_anchored(&tokens, start + 2)
+            && clause_is_terminal_anchored(&tokens, start + 2)
         {
             return true;
         }
@@ -81,20 +85,34 @@ pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
     false
 }
 
-/// A `pass ... gate` / `pass the gate` clause is anchored (a real gate-outcome
-/// statement) when the token immediately after the `gate` token is end-of-string
-/// or a non-object token. A trailing gate-object noun (`logs`, `report`,
-/// `output`, `data`, `to`, `downstream`, ...) proves the clause is embedded
-/// mid-sentence prose and must not be treated as a pass signal (#2806 R8-F2).
-fn gate_clause_is_anchored(tokens: &[&str], gate_index: usize) -> bool {
-    match tokens.get(gate_index + 1) {
+/// A gate-outcome clause is terminal-anchored ONLY when the token immediately
+/// after the clause's final token (the pass token or `gate` token) is
+/// end-of-string or a non-object token. A trailing gate-object noun (`logs`,
+/// `report`, `output`, `data`, `to`, `downstream`, ...) proves the clause is
+/// embedded mid-sentence prose and must not be treated as a pass signal
+/// (#2806 R8-F2, R9b-F4).
+///
+/// Punctuation (`.`, `;`, `,`, `—`, ...) is stripped by tokenization, so
+/// "gate passed." / "gate passed; retry" both tokenize identically to
+/// "gate passed" (the trailing punctuation word is empty and filtered), and the
+/// next non-empty token is what we inspect. This is why a DENYLIST (reject only
+/// gate-object nouns) is the correct model rather than an allowlist: there are
+/// infinitely many non-object words that legitimately follow a sentence-ending
+/// pass clause (pronouns, conjunctions, "this turn", ...), and an allowlist
+/// cannot enumerate them. The earlier R9b-F4 attempt flipped this to an
+/// allowlist of `after|now|on|is|status`, which rejected every legitimate
+/// sentence boundary and broke resolved-prose suppression (#2806 R9b).
+fn clause_is_terminal_anchored(tokens: &[&str], index: usize) -> bool {
+    match tokens.get(index + 1) {
         None => true,
         Some(after) => !is_gate_object_noun(after),
     }
 }
 
-/// Nouns/particles that, when following `gate` in a `pass ... gate` clause,
-/// prove the clause is mid-sentence prose rather than a gate-outcome statement.
+/// Nouns/particles that, when following a `gate`/pass clause token, prove the
+/// clause is mid-sentence prose referencing a gate OBJECT rather than a
+/// gate-outcome statement. "passed the gate logs" / "gate passed the report"
+/// reference a gate's artifacts, not a gate outcome (#2806 R8-F2, R9b-F4).
 fn is_gate_object_noun(token: &str) -> bool {
     matches!(
         token,
