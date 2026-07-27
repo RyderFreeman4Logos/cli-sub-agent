@@ -3,6 +3,10 @@
 //! Detects sessions that exit 0 but output a "STATUS: BLOCKED" marker,
 //! indicating the worker could not complete the task.
 
+mod gate_signal {
+    include!("pipeline_post_exec_blocked_gate_signal.rs");
+}
+
 #[cfg(test)]
 pub(super) fn worker_output_indicates_blocked(output: &str, summary: &str) -> bool {
     worker_output_indicates_blocked_with_receipt(output, "", summary, false)
@@ -19,8 +23,8 @@ pub(super) fn worker_output_indicates_blocked_with_receipt(
     summary: &str,
     has_positive_structured_completion: bool,
 ) -> bool {
-    if line_indicates_blocked(summary)
-        || (!has_positive_structured_completion && line_indicates_unconfirmed_gate(summary))
+    if text_indicates_blocked(summary)
+        || (!has_positive_structured_completion && text_indicates_unconfirmed_gate(summary))
     {
         return true;
     }
@@ -42,15 +46,19 @@ fn stdout_line_indicates_blocked(line: &str, has_positive_structured_completion:
             false
         }
         ClassifiedStdoutLine::AgentMessage(message) => {
-            line_indicates_blocked(&message)
-                || (line_indicates_unconfirmed_gate(&message)
+            // Extracted agent prose may span multiple lines (content-block
+            // arrays joined with newlines). Scan every line so a hard marker
+            // on a trailing line is not missed (#2806 R8-F1).
+            text_indicates_blocked(&message)
+                || (text_indicates_unconfirmed_gate(&message)
                     && (!has_positive_structured_completion
                         || !message_reports_gate_resolution(&message)))
         }
         ClassifiedStdoutLine::ToolOrCommandOutput(text) => {
             // Real tool/command output streams are never historical prose;
-            // a current receipt cannot suppress them.
-            line_indicates_blocked(&text) || line_indicates_unconfirmed_gate(&text)
+            // a current receipt cannot suppress them. Scan every line so a
+            // hard marker on a trailing line is not missed (#2806 R8-F1).
+            text_indicates_blocked(&text) || text_indicates_unconfirmed_gate(&text)
         }
         ClassifiedStdoutLine::Raw => {
             // Non-agent raw lines are treated as live diagnostics. Only
@@ -200,6 +208,12 @@ fn json_text_field(value: &serde_json::Value) -> Option<String> {
                 if part.get("type").and_then(serde_json::Value::as_str) == Some("text")
                     && let Some(text) = part.get("text").and_then(serde_json::Value::as_str)
                 {
+                    // Insert a newline separator between blocks so a hard marker
+                    // in a trailing element is not fused onto the previous text
+                    // and lost by start-anchored line checks (#2806 R8-F1).
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
                     buf.push_str(text);
                 }
             }
@@ -304,6 +318,12 @@ fn claude_message_content_text(message: &serde_json::Value) -> Option<String> {
         if block.get("type").and_then(serde_json::Value::as_str) == Some("text")
             && let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
         {
+            // Newline-separate content blocks so a trailing hard marker is not
+            // fused onto earlier text and missed by start-anchored line checks
+            // (#2806 R8-F1).
+            if !buf.is_empty() {
+                buf.push('\n');
+            }
             buf.push_str(text);
         }
     }
@@ -315,7 +335,7 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
     // Bare English "passed"/"passes" (e.g. "I passed the logs to the
     // maintainer", "parser passes data downstream") is not gate-outcome proof.
     // Require a gate/status/result-bound success signal.
-    let positive_pass = gate_bound_pass_signal(&lower);
+    let positive_pass = gate_signal::gate_bound_pass_signal(&lower);
     let positive_completion = [
         "completed successfully",
         "successfully completed",
@@ -335,47 +355,8 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
 }
 
 /// Pass/passed/passes only count when syntactically bound to a gate, status, or
-/// result outcome. Bare `now passed` / `reports passed` / `report passed` are
-/// unbound English and must not suppress unresolved gate diagnostics (#2806
-/// R6-002).
-fn gate_bound_pass_signal(lower: &str) -> bool {
-    // Tokenize so bare "passed the logs" / "password" cannot match.
-    let tokens: Vec<&str> = lower
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    for window in tokens.windows(2) {
-        match window {
-            ["gate", pass] | ["status", pass] | ["result", pass] if is_pass_token(pass) => {
-                return true;
-            }
-            [pass, "gate"] if is_pass_token(pass) => return true,
-            _ => {}
-        }
-    }
-    for window in tokens.windows(3) {
-        match window {
-            [pass, "the", "gate"] if is_pass_token(pass) => return true,
-            // "gate status: passed" / "gate status passed"
-            ["gate", "status", pass] if is_pass_token(pass) => return true,
-            // "status is pass" / "result is passed"
-            ["status", "is", pass] | ["result", "is", pass] if is_pass_token(pass) => {
-                return true;
-            }
-            // "now PASSes the gate" — pass is bound via "the gate", not bare "now"
-            _ => {}
-        }
-    }
-    // "gate status: passed" may tokenize as gate/status/passed (covered above)
-    // or as longer phrases; also accept "status: pass" already via 2-token.
-    false
-}
-
-fn is_pass_token(token: &str) -> bool {
-    matches!(token, "pass" | "passed" | "passes")
-}
-
+/// result outcome AND fully anchored as a terminal clause. The anchor and
+/// gate-object-noun logic lives in [`gate_signal`] (#2806 R6-002, R8-F2).
 fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
     let unresolved_signal = [
         "remains unknown",
@@ -394,11 +375,17 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
     ]
     .iter()
     .any(|signal| lower.contains(signal));
+    // A CONCURRENT "status unknown/unavailable/lost" (not a historical "prior
+    // status unknown") unconditionally vetoes a positive pass claim, even when
+    // the pass signal is syntactically gate-bound (#2806 R8-F2).
+    let concurrent_status_lost = gate_signal::reports_concurrent_status_unknown(lower);
     // "gate passed, but tests and commit omitted" is not a full resolution —
     // current omitted required work vetoes a positive pass claim (#2806 R6-002).
     // Historical "previously omitted" that was fixed/completed this turn must
     // not veto a genuine gate-bound pass.
-    unresolved_signal || message_reports_current_omitted_required_work(lower)
+    unresolved_signal
+        || concurrent_status_lost
+        || message_reports_current_omitted_required_work(lower)
 }
 
 /// True when the message still claims tests/commit were omitted (present
@@ -442,6 +429,14 @@ fn line_indicates_blocked(line: &str) -> bool {
         || upper.starts_with("BLOCKED:")
 }
 
+/// Scan EVERY line of an extracted text for a hard-blocker marker. Extracted
+/// tool/agent output may span multiple lines (content-block arrays joined with
+/// newlines, multi-line string values); a `STATUS: BLOCKED` on a trailing line
+/// must not be missed by a single start-anchored check (#2806 R8-F1).
+fn text_indicates_blocked(text: &str) -> bool {
+    text.lines().any(line_indicates_blocked)
+}
+
 fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     let lost_status = lower.contains("unknown")
@@ -470,6 +465,17 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
             && lower.contains("pass"))
 }
 
+/// Scan EVERY line of an extracted text for an unconfirmed-gate marker. Like
+/// [`text_indicates_blocked`], this guards against hard markers hiding on a
+/// trailing line of a multi-line extracted string (#2806 R8-F1).
+fn text_indicates_unconfirmed_gate(text: &str) -> bool {
+    text.lines().any(line_indicates_unconfirmed_gate)
+}
+
 #[cfg(test)]
 #[path = "pipeline_post_exec_blocked_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_post_exec_blocked_r8_tests.rs"]
+mod r8_tests;
