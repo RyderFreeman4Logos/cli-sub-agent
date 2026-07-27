@@ -476,3 +476,100 @@ fn r10_dirty_sa_preserves_original_exit_when_contract_coerced_to_one() {
         "dirty-SA preserves the first canonical gate-failure reason (contract)"
     );
 }
+
+// --- R11-F3: dirty-SA conditional exit restore (no false success) ---
+
+#[test]
+fn r11_dirty_sa_does_not_restore_zero_original_exit_when_gate_coerced_to_one() {
+    // R11-F3: the ORIGINAL exit code restore was UNCONDITIONAL. If the provider's
+    // original exit was 0 (success) and a result-contract / write-limit / commit
+    // policy gate later coerced it to a nonzero failure, restoring original 0
+    // here would RECOVER the provider's success and forge a false success on a
+    // dirty SA run. The dirty-SA branch must only restore the ORIGINAL exit when
+    // it was NONZERO; a zero original must let the gate/contract failure exit
+    // stand. Here the contract has already coerced exit_code to 1.
+    use csa_session::create_session;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&tmp);
+    let project_root = tmp.path();
+    let mut session =
+        create_session(project_root, Some("test"), None, Some("codex")).expect("create session");
+    let hooks_config = csa_hooks::HooksConfig::default();
+    let executor = csa_executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::codex_runtime::codex_runtime_metadata(),
+    };
+    let session_dir =
+        get_session_dir(project_root, &session.meta_session_id).expect("resolve session dir");
+    // Simulate a dirty SA-mode run that the provider reported as a SUCCESS
+    // (original exit 0), but the result-contract gate later failed it.
+    let ctx = crate::pipeline_post_exec::PostExecContext {
+        executor: &executor,
+        prompt: "write src.rs",
+        effective_prompt: "write src.rs",
+        task_type: Some("run"),
+        readonly_project_root: false,
+        project_root,
+        config: None,
+        global_config: None,
+        session_dir,
+        sessions_root: "test-root".to_string(),
+        execution_start_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+        hooks_config: &hooks_config,
+        memory_project_key: None,
+        provider_session_id: None,
+        events_count: 1,
+        transcript_artifacts: vec![],
+        changed_paths: vec!["src.rs".to_string()],
+        pre_exec_snapshot: None,
+        timeout_diagnostics: None,
+        has_tool_calls: true,
+        turn_count: 1,
+        output_tokens: None,
+        sa_mode: true,
+        // The provider's ORIGINAL exit was 0 (success).
+        original_exit_code: Some(0),
+    };
+    // Contract already coerced exit_code to 1 via mark_gate_failure.
+    let mut result = csa_process::ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: "contract violation: missing result.toml".to_string(),
+        exit_code: 1,
+        csa_gate_failure: Some("result-toml-contract".to_string()),
+        ..Default::default()
+    };
+    let mut session_result = csa_session::SessionResult {
+        post_exec_gate: None,
+        status: csa_session::SessionResult::status_from_exit_code(0),
+        exit_code: 0,
+        summary: "provider success".to_string(),
+        tool: "codex".to_string(),
+        ..Default::default()
+    };
+    maybe_mark_dirty_sa_run_without_receipt(
+        &ctx,
+        &mut session,
+        &mut result,
+        &mut session_result,
+        false,
+    );
+    // The dirty-SA path must NOT restore the original 0; the contract-failure
+    // exit (1) must stand so the dirty SA run is recorded as a failure.
+    assert_eq!(
+        result.exit_code, 1,
+        "dirty-SA must not restore original exit 0 when a gate coerced to 1 (no false success)"
+    );
+    assert_eq!(
+        session_result.exit_code, 1,
+        "session_result must keep the gate-failure exit (1), not recover original 0"
+    );
+    // The contract gate-failure marker is preserved (mark_gate_failure keeps
+    // the first canonical reason); the dirty-SA path does NOT override it.
+    assert_eq!(
+        result.csa_gate_failure.as_deref(),
+        Some("result-toml-contract"),
+        "dirty-SA preserves the first canonical gate-failure reason (contract)"
+    );
+}

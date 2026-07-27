@@ -324,6 +324,67 @@ fn r11_gate_object_noun_in_trailing_tokens_rejects_pass() {
     }
 }
 
+// --- R12-1H: clause-boundary-aware tokenization for terminal anchoring ---
+
+#[test]
+fn r12_arbitrary_trailing_prose_does_not_forge_terminal_success() {
+    // A terminal pass/success allows only after/now/on/retry before its clause
+    // ends. Arbitrary trailing prose must not forge receipt suppression.
+    for message in [
+        "gate unavailable; gate success was merely quoted by the assistant",
+        "gate unavailable; gate success appears in the changelog",
+        "gate unavailable; status: success referenced from the upstream dashboard",
+        "gate passed inside a comment block",
+        "result: pass described above",
+    ] {
+        assert!(
+            !message_reports_gate_resolution(message),
+            "arbitrary trailing prose must NOT forge a terminal success (allowlist): {message}"
+        );
+        // Use the established R8 unresolved marker for the receipt path.
+        let agent_message = format!(r#"{{"agent_message":"Gate status unknown; {message}"}}"#);
+        assert!(
+            worker_output_indicates_blocked_with_receipt(&agent_message, "", "retry ok", true),
+            "current receipt + forged trailing prose must still block: {agent_message}"
+        );
+    }
+}
+
+#[test]
+fn r12_cross_clause_gate_object_does_not_over_reject_terminal_pass() {
+    // Punctuation and newlines end a passing clause; later prose cannot veto it.
+    for message in [
+        "gate success. Completion confirmed.",
+        "gate passed. The completion report was attached.",
+        "status: success; completion verified downstream",
+        "gate succeeded\ncompletion report filed",
+        "gate passed. tests and commit completed this turn",
+    ] {
+        assert!(
+            message_reports_gate_resolution(message),
+            "cross-clause prose must NOT over-reject a terminal pass clause: {message}"
+        );
+    }
+}
+
+#[test]
+fn r12_terminal_pass_followed_by_allowed_modifier_resolves() {
+    // Allowed terminal modifiers must remain valid.
+    for message in [
+        "gate passed after retry",
+        "result: pass on retry",
+        "prior gate status unknown; status: success now",
+        "prior gate status unknown; completed successfully on retry",
+        "gate succeeded",
+        "completion succeeded",
+    ] {
+        assert!(
+            message_reports_gate_resolution(message),
+            "terminal pass + allowed modifier must resolve: {message}"
+        );
+    }
+}
+
 #[test]
 fn command_execution_command_provenance_is_not_worker_blocked() {
     // R4-002: diagnostic-like text only inside command_execution.command is

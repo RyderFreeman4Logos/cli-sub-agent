@@ -17,6 +17,16 @@
 // This file is compiled via `include!` inside `mod gate_signal { ... }` in
 // pipeline_post_exec_blocked.rs; `pub(super)` therefore refers to the parent
 // blocked-output module.
+//
+// R12-1H (clause-boundary-aware tokenization): the terminal-anchor check now
+// operates per-CLAUSE, not over the whole text. Sentence/clause boundaries
+// (`.`, `;`, `!`, `?`, newline) are preserved during tokenization so a
+// gate-object noun in a LATER clause cannot collapse across the boundary and
+// forge a false pass or wrongly reject a genuine terminal pass. Within a
+// clause the matched phrase must sit at the clause end or be followed ONLY by
+// an explicitly-allowed modifier (`after`/`now`/`on`/`retry`). The earlier
+// R8-R11 denylist model (`is_gate_object_noun`) was an open-ended list that
+// kept finding new bypass words; the finite allowlist is strict and complete.
 
 /// Pass/passed/passes only count when syntactically bound to a gate, status, or
 /// result outcome AND fully anchored as a terminal clause — not embedded
@@ -26,147 +36,132 @@
 /// must be rejected so a real unresolved gate diagnostic is not suppressed
 /// (#2806 R6-002, R8-F2).
 ///
-/// R10-F1 (full-trailing-token anchoring): the terminal-anchor check must scan
-/// ALL tokens after the pass clause, not only the immediately-adjacent one.
-/// Tokenization strips punctuation, so clause boundaries (`.`, `;`, newline)
-/// disappear; a late gate-object noun ANYWHERE in the trailing tokens proves
-/// the clause is mid-sentence prose and must not forge a pass. E.g.
-/// "the parser gate passed sanitized data downstream" — `data` and
-/// `downstream` both appear after `passed`, so this is rejected.
+/// R12-1H (clause-boundary-aware scan): the terminal-anchor check is now
+/// PER-CLAUSE. `tokenize_by_clauses` preserves sentence/clause boundaries so a
+/// pass clause followed by a period and unrelated prose ("gate passed. The
+/// completion report was attached") is anchored — the later `report` lives in a
+/// different clause and cannot veto the terminal pass. Within the pass clause
+/// itself, any trailing token that is not an explicitly-allowed modifier
+/// (`after`/`now`/`on`/`retry`) still rejects the clause as mid-sentence prose.
 pub(super) fn gate_bound_pass_signal(lower: &str) -> bool {
-    // Tokenize so bare "passed the logs" / "password" cannot match.
-    let tokens: Vec<&str> = lower
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-    let len = tokens.len();
-    for start in 0..len {
-        // "gate pass" / "status pass" / "result pass" — a bare outcome
-        // statement. The pass token MUST be terminal-anchored: "gate passed
-        // logs to the maintainer" is forged prose (the pass token is followed
-        // by a gate-object noun), not a gate-outcome statement (#2806 R9b-F4).
-        // "gate passed. This turn ..." is anchored (a sentence boundary,
-        // not a gate object) — see clause_is_terminal_anchored.
-        if start + 1 < len
-            && matches!(tokens[start], "gate" | "status" | "result")
-            && is_pass_token(tokens[start + 1])
-            && clause_is_terminal_anchored(&tokens, start + 1)
-        {
-            return true;
-        }
-        // "pass gate" / "passed gate".
-        if start + 1 < len
-            && is_pass_token(tokens[start])
-            && tokens[start + 1] == "gate"
-            && clause_is_terminal_anchored(&tokens, start + 1)
-        {
-            return true;
-        }
-        // "gate status pass" / "status is pass" / "result is pass" — a bare
-        // outcome statement. The pass token MUST be terminal-anchored the same
-        // way the two-token forms are (#2806 R10-F1): "status is pass data
-        // downstream" is forged prose, not a gate-outcome statement.
-        if start + 2 < len
-            && tokens[start] == "gate"
-            && tokens[start + 1] == "status"
-            && is_pass_token(tokens[start + 2])
-            && clause_is_terminal_anchored(&tokens, start + 2)
-        {
-            return true;
-        }
-        if start + 2 < len
-            && matches!(tokens[start], "status" | "result")
-            && tokens[start + 1] == "is"
-            && is_pass_token(tokens[start + 2])
-            && clause_is_terminal_anchored(&tokens, start + 2)
-        {
-            return true;
-        }
-        // "pass the gate" / "passed the gate" / "passes the gate" — a genuine
-        // gate-outcome clause ONLY when not followed by a gate-object noun
-        // (logs/report/output/data/results/...). "passed the gate logs to the
-        // maintainer" is forged prose, not a pass signal (#2806 R8-F2).
-        if start + 2 < len
-            && is_pass_token(tokens[start])
-            && tokens[start + 1] == "the"
-            && tokens[start + 2] == "gate"
-            && clause_is_terminal_anchored(&tokens, start + 2)
-        {
-            return true;
+    // Tokenize WITH clause boundaries so a late gate-object noun in a LATER
+    // clause does not collapse across the boundary (#2806 R12-1H).
+    for clause in tokenize_by_clauses(lower) {
+        let tokens: &[&str] = &clause;
+        let len = tokens.len();
+        for start in 0..len {
+            // "gate pass" / "status pass" / "result pass" — a bare outcome
+            // statement. The pass token MUST be terminal-anchored WITHIN THIS
+            // CLAUSE: "gate passed logs to the maintainer" is forged prose (a
+            // trailing non-allowlisted token), not a gate-outcome statement
+            // (#2806 R9b-F4, R12-1H). "gate passed. This turn ..." is anchored
+            // (a clause boundary ends the clause) — see clause_is_terminal_anchored.
+            if start + 1 < len
+                && matches!(tokens[start], "gate" | "status" | "result")
+                && is_pass_token(tokens[start + 1])
+                && clause_is_terminal_anchored(tokens, start + 1)
+            {
+                return true;
+            }
+            // "pass gate" / "passed gate".
+            if start + 1 < len
+                && is_pass_token(tokens[start])
+                && tokens[start + 1] == "gate"
+                && clause_is_terminal_anchored(tokens, start + 1)
+            {
+                return true;
+            }
+            // "gate status pass" / "status is pass" / "result is pass" — a bare
+            // outcome statement. The pass token MUST be terminal-anchored within
+            // this clause the same way the two-token forms are (#2806 R10-F1,
+            // R12-1H): "status is pass data downstream" is forged prose.
+            if start + 2 < len
+                && tokens[start] == "gate"
+                && tokens[start + 1] == "status"
+                && is_pass_token(tokens[start + 2])
+                && clause_is_terminal_anchored(tokens, start + 2)
+            {
+                return true;
+            }
+            if start + 2 < len
+                && matches!(tokens[start], "status" | "result")
+                && tokens[start + 1] == "is"
+                && is_pass_token(tokens[start + 2])
+                && clause_is_terminal_anchored(tokens, start + 2)
+            {
+                return true;
+            }
+            // "pass the gate" / "passed the gate" / "passes the gate" — a
+            // genuine gate-outcome clause ONLY when the clause ends at the gate
+            // token or is followed solely by an allowed modifier
+            // (#2806 R8-F2, R12-1H).
+            if start + 2 < len
+                && is_pass_token(tokens[start])
+                && tokens[start + 1] == "the"
+                && tokens[start + 2] == "gate"
+                && clause_is_terminal_anchored(tokens, start + 2)
+            {
+                return true;
+            }
         }
     }
     false
 }
 
-/// A gate-outcome clause is terminal-anchored ONLY when NO gate-object noun
-/// (`logs`, `report`, `output`, `data`, `to`, `downstream`, ...) appears in the
-/// trailing tokens after the clause's final token. A gate-object noun ANYWHERE
-/// after the pass clause proves the clause is embedded mid-sentence prose and
-/// must not be treated as a pass signal (#2806 R8-F2, R9b-F4, R10-F1).
+/// Split `lower` into clauses on sentence/clause boundaries (`.`, `;`, `!`,
+/// `?`, newline), then tokenize each clause by non-alphanumeric characters.
+/// Clause boundaries are PRESERVED so the terminal-anchor check only examines
+/// tokens within the SAME clause as the matched phrase (#2806 R12-1H).
 ///
-/// Punctuation (`.`, `;`, `,`, `—`, ...) is stripped by tokenization, so
-/// "gate passed." / "gate passed; retry" both tokenize identically to
-/// "gate passed" (the trailing punctuation word is empty and filtered). Because
-/// clause boundaries disappear at tokenize time, scanning only the
-/// immediately-adjacent token is insufficient: a late gate-object noun
-/// (`"gate passed sanitized data downstream"`) is missed by an adjacent-only
-/// check and forges a false pass. R10-F1 therefore scans ALL remaining tokens.
-///
-/// This is why a DENYLIST (reject only gate-object nouns) is the correct model
-/// rather than an allowlist: there are infinitely many non-object words that
-/// legitimately follow a sentence-ending pass clause (pronouns, conjunctions,
-/// "this turn", ...), and an allowlist cannot enumerate them. The earlier
-/// R9b-F4 attempt flipped this to an allowlist of `after|now|on|is|status`,
-/// which rejected every legitimate sentence boundary and broke resolved-prose
-/// suppression (#2806 R9b).
-fn clause_is_terminal_anchored(tokens: &[&str], index: usize) -> bool {
-    // No gate-object noun may appear anywhere in the trailing tokens. A
-    // trailing gate object proves the pass clause references a gate ARTIFACT
-    // ("passed the gate logs"), not a gate OUTCOME (#2806 R10-F1).
-    tokens[index + 1..]
-        .iter()
-        .all(|token| !is_gate_object_noun(token))
+/// Before R12-1H, tokenization split the whole text on every
+/// non-alphanumeric character, dropping clause delimiters. That collapsed
+/// distinct clauses together: a gate-object noun (or any non-allowlisted
+/// word) in a LATER clause rejected a genuine terminal pass in an EARLIER
+/// clause ("gate passed. Completion confirmed." → rejected), while an
+/// arbitrary trailing word absent from the denylist forged a false success
+/// ("gate success was merely quoted by the assistant"). Preserving the
+/// delimiters scopes the anchor check to the matched phrase's own clause.
+fn tokenize_by_clauses(lower: &str) -> Vec<Vec<&str>> {
+    lower
+        .split(['.', ';', '!', '?', '\n', '\r'])
+        .map(|clause| {
+            clause
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|token| !token.is_empty())
+                .collect::<Vec<&str>>()
+        })
+        .filter(|tokens| !tokens.is_empty())
+        .collect()
 }
 
-/// Nouns/particles that, when following a `gate`/pass clause token, prove the
-/// clause is mid-sentence prose referencing a gate OBJECT rather than a
-/// gate-outcome statement. "passed the gate logs" / "gate passed the report"
-/// reference a gate's artifacts, not a gate outcome (#2806 R8-F2, R9b-F4).
+/// A gate-outcome clause is terminal-anchored ONLY when every token AFTER the
+/// matched phrase within the SAME clause is an explicitly-allowed modifier
+/// (`after`/`now`/`on`/`retry`), or the clause ends right at the phrase
+/// (#2806 R8-F2, R9b-F4, R10-F1, R12-1H).
 ///
-/// R11-F2 (gate-object noun in trailing tokens): `gate`/`gates`/`completion`
-/// are ALSO gate-object nouns. A positive pass phrase like "status is pass"
-/// followed by "sanitized completion gate" references a gate artifact, not a
-/// gate outcome — the trailing `gate`/`completion` proves mid-sentence prose.
-/// Without these in the denylist, "status is pass sanitized completion gate"
-/// passes `clause_is_terminal_anchored` and forges a false success.
-fn is_gate_object_noun(token: &str) -> bool {
-    matches!(
-        token,
-        "logs"
-            | "log"
-            | "report"
-            | "reports"
-            | "output"
-            | "outputs"
-            | "data"
-            | "result"
-            | "results"
-            | "to"
-            | "downstream"
-            | "upstream"
-            | "file"
-            | "files"
-            | "command"
-            | "commands"
-            | "string"
-            | "strings"
-            | "argument"
-            | "args"
-            | "handoff"
-            | "gate"
-            | "gates"
-            | "completion"
-    )
+/// R12-1H replaces the open-ended denylist model (`is_gate_object_noun`) with
+/// a finite, strict allowlist. The denylist kept finding new bypass words
+/// because natural language is infinite: "gate success was merely quoted by
+/// the assistant" has no denylist noun in its trailing tokens yet is forged
+/// prose. The allowlist is the inverse — only an enumerated set of small
+/// modifiers may legitimately trail a terminal pass clause ("gate passed after
+/// retry", "result: pass on retry", "status: success now"), so any other
+/// trailing token rejects the clause. The caller scopes `clause_tokens` to a
+/// single clause via [`tokenize_by_clauses`], so a reject word in a LATER
+/// clause no longer interferes.
+fn clause_is_terminal_anchored(clause_tokens: &[&str], index: usize) -> bool {
+    clause_tokens[index + 1..]
+        .iter()
+        .all(|token| is_allowed_terminal_modifier(token))
+}
+
+/// The only tokens that may legitimately trail a terminal pass/success phrase
+/// WITHIN its own clause. The set is derived from genuine resolution prose:
+/// "gate passed after retry", "result: pass on retry", "status: success now".
+/// Any other trailing token proves the clause is mid-sentence prose
+/// (#2806 R12-1H).
+fn is_allowed_terminal_modifier(token: &str) -> bool {
+    matches!(token, "after" | "now" | "on" | "retry")
 }
 
 fn is_pass_token(token: &str) -> bool {
@@ -174,46 +169,52 @@ fn is_pass_token(token: &str) -> bool {
 }
 
 /// True when `lower` contains any of `phrases` as a contiguous token
-/// subsequence AND no gate-object noun follows the matched subsequence. This
-/// applies the same trailing-token anchoring as [`gate_bound_pass_signal`] to
-/// positive-completion phrases ("gate succeeded", "completed successfully",
-/// "status: success", ...) so forged prose like "gate success report forwarded
-/// downstream" is rejected — the trailing `report`/`downstream` prove
-/// mid-sentence prose — while a genuine terminal clause resolves
-/// (#2806 R11-F1).
+/// subsequence within a single clause AND the clause is terminal-anchored at
+/// the match (the phrase sits at the clause end or is followed only by an
+/// allowed modifier). This applies the same clause-scoped anchoring as
+/// [`gate_bound_pass_signal`] to positive-completion phrases ("gate
+/// succeeded", "completed successfully", "status: success", ...) so forged
+/// prose like "gate success report forwarded downstream" is rejected — the
+/// trailing `report`/`downstream` are not allowed modifiers — while a genuine
+/// terminal clause resolves (#2806 R11-F1, R12-1H).
 ///
 /// Before R11-F1 these phrases used a bare `contains()` substring match that
-/// bypassed the trailing-token scan entirely: "gate exit unavailable; gate
-/// success report forwarded downstream" matched "gate success" and forged a
-/// false resolution. Tokenizing both the input and each phrase (splitting on
-/// non-alphanumeric characters, identical to [`gate_bound_pass_signal`]) means
-/// the same [`clause_is_terminal_anchored`] denylist gates every positive
-/// signal uniformly.
+/// bypassed the trailing-token scan entirely. R12-1H scopes the scan to the
+/// matched phrase's own clause so "gate success. Completion confirmed." no
+/// longer collapses the later `completion` across the boundary and wrongly
+/// rejects a genuine success.
 pub(super) fn any_terminal_anchored_phrase(lower: &str, phrases: &[&str]) -> bool {
-    let tokens: Vec<&str> = lower
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
+    let clauses = tokenize_by_clauses(lower);
+    let phrase_token_lists: Vec<Vec<&str>> = phrases
+        .iter()
+        .map(|phrase| {
+            phrase
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .filter(|token| !token.is_empty())
+                .collect()
+        })
         .collect();
-    phrases.iter().any(|phrase| {
-        let phrase_tokens: Vec<&str> = phrase
-            .split(|character: char| !character.is_ascii_alphanumeric())
-            .filter(|token| !token.is_empty())
-            .collect();
-        phrase_matches_terminal_anchored(&tokens, &phrase_tokens)
-    })
+    clauses
+        .iter()
+        .any(|clause| phrase_token_lists.iter().any(|phrase_tokens| {
+            phrase_matches_terminal_anchored(clause, phrase_tokens)
+        }))
 }
 
-/// True when `phrase_tokens` appears as a contiguous subsequence of `tokens`
-/// and no gate-object noun follows the subsequence's last token. Multiple
-/// occurrences are all checked; any terminal-anchored occurrence resolves.
-fn phrase_matches_terminal_anchored(tokens: &[&str], phrase_tokens: &[&str]) -> bool {
+/// True when `phrase_tokens` appears as a contiguous subsequence of
+/// `clause_tokens` and the clause is terminal-anchored at the subsequence's
+/// last token. The match and anchor check are confined to a single clause, so
+/// a phrase can never span a clause boundary (#2806 R12-1H). Multiple
+/// occurrences within the clause are all checked; any terminal-anchored
+/// occurrence resolves.
+fn phrase_matches_terminal_anchored(clause_tokens: &[&str], phrase_tokens: &[&str]) -> bool {
     let plen = phrase_tokens.len();
-    if plen == 0 || plen > tokens.len() {
+    if plen == 0 || plen > clause_tokens.len() {
         return false;
     }
-    for start in 0..=(tokens.len() - plen) {
-        if tokens[start..start + plen] == phrase_tokens[..]
-            && clause_is_terminal_anchored(tokens, start + plen - 1)
+    for start in 0..=(clause_tokens.len() - plen) {
+        if clause_tokens[start..start + plen] == phrase_tokens[..]
+            && clause_is_terminal_anchored(clause_tokens, start + plen - 1)
         {
             return true;
         }
@@ -242,8 +243,7 @@ pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
         if state_index < len && tokens[state_index] == "is" {
             state_index += 1;
         }
-        if state_index >= len || !matches!(tokens[state_index], "unknown" | "unavailable" | "lost")
-        {
+        if state_index >= len || !matches!(tokens[state_index], "unknown" | "unavailable" | "lost") {
             continue;
         }
         // Historical qualifiers within two tokens before "status", or in the two
@@ -269,13 +269,7 @@ pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
 fn is_historical_qualifier(token: &str) -> bool {
     matches!(
         token,
-        "prior"
-            | "previous"
-            | "earlier"
-            | "former"
-            | "initial"
-            | "originally"
-            | "initially"
+        "prior" | "previous" | "earlier" | "former" | "initial" | "originally" | "initially"
             | "past"
     )
 }
