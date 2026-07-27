@@ -337,7 +337,17 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
     // maintainer", "parser passes data downstream") is not gate-outcome proof.
     // Require a gate/status/result-bound success signal.
     let positive_pass = gate_signal::gate_bound_pass_signal(&lower);
-    let positive_completion = [
+    // R11-F1 (positive_completion trailing-token scan): these success phrases
+    // were previously matched with a bare `contains()` substring test that
+    // bypassed the trailing-token anchoring applied to pass signals. That let
+    // forged prose such as "gate exit unavailable; gate success report
+    // forwarded downstream" (matches "gate success") forge a false resolution.
+    // Each phrase is now matched as a contiguous token subsequence AND gated by
+    // the same `clause_is_terminal_anchored` denylist used by
+    // `gate_bound_pass_signal`, so any gate-object noun (report/logs/to/...,
+    // plus gate/gates/completion per R11-F2) in the trailing tokens rejects the
+    // clause as mid-sentence prose (#2806 R11-F1).
+    let positive_completion_phrases = [
         "completed successfully",
         "successfully completed",
         "completion succeeded",
@@ -346,9 +356,9 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
         "status: success",
         "status is success",
         "now reports success",
-    ]
-    .iter()
-    .any(|signal| lower.contains(signal));
+    ];
+    let positive_completion =
+        gate_signal::any_terminal_anchored_phrase(&lower, &positive_completion_phrases);
 
     // A retry/fix describes an action, not its outcome. Suppress a historical
     // diagnostic only when the same message states an unambiguous success.

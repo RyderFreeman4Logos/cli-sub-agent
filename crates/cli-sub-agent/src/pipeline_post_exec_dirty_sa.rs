@@ -54,7 +54,25 @@ pub(super) fn maybe_mark_dirty_sa_run_without_receipt(
         // ORIGINAL exit code captured pre-contract (`ctx.original_exit_code`)
         // when available so a timeout/signal exit is preserved verbatim, not
         // flattened to the contract's generic 1 (#2806 R10-F3).
-        let preserved_exit_code = ctx.original_exit_code.unwrap_or(result.exit_code);
+        //
+        // R11-F3 (dirty-SA conditional exit restore): only restore the ORIGINAL
+        // exit code when it was NONZERO. If the provider's original exit was 0
+        // (success) and a later gate — result-contract / write-limit / commit
+        // policy — coerced it to a nonzero failure, restoring the original 0
+        // here would RECOVER the provider's success and forge a false success
+        // on a dirty SA run. The contract/policy failure exit must stand. When
+        // the original exit is unknown (None) fall back to the current
+        // `result.exit_code`, which is already nonzero (this branch only runs
+        // when `result.exit_code != 0`), so the fallback is always a failure.
+        let preserved_exit_code = match ctx.original_exit_code {
+            // A nonzero original (e.g. timeout 124, signal 137/143) is
+            // authoritative terminal state; preserve it verbatim.
+            Some(code) if code != 0 => code,
+            // Original was 0 (or unknown): do NOT override a gate/contract
+            // failure with the recovered success. Keep the current nonzero
+            // exit so the dirty SA run is recorded as a failure (#2806 R11-F3).
+            _ => result.exit_code,
+        };
         tracing::warn!(
             session = %session.meta_session_id,
             exit_code = preserved_exit_code,

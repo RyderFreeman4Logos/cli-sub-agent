@@ -132,6 +132,13 @@ fn clause_is_terminal_anchored(tokens: &[&str], index: usize) -> bool {
 /// clause is mid-sentence prose referencing a gate OBJECT rather than a
 /// gate-outcome statement. "passed the gate logs" / "gate passed the report"
 /// reference a gate's artifacts, not a gate outcome (#2806 R8-F2, R9b-F4).
+///
+/// R11-F2 (gate-object noun in trailing tokens): `gate`/`gates`/`completion`
+/// are ALSO gate-object nouns. A positive pass phrase like "status is pass"
+/// followed by "sanitized completion gate" references a gate artifact, not a
+/// gate outcome — the trailing `gate`/`completion` proves mid-sentence prose.
+/// Without these in the denylist, "status is pass sanitized completion gate"
+/// passes `clause_is_terminal_anchored` and forges a false success.
 fn is_gate_object_noun(token: &str) -> bool {
     matches!(
         token,
@@ -156,11 +163,62 @@ fn is_gate_object_noun(token: &str) -> bool {
             | "argument"
             | "args"
             | "handoff"
+            | "gate"
+            | "gates"
+            | "completion"
     )
 }
 
 fn is_pass_token(token: &str) -> bool {
     matches!(token, "pass" | "passed" | "passes")
+}
+
+/// True when `lower` contains any of `phrases` as a contiguous token
+/// subsequence AND no gate-object noun follows the matched subsequence. This
+/// applies the same trailing-token anchoring as [`gate_bound_pass_signal`] to
+/// positive-completion phrases ("gate succeeded", "completed successfully",
+/// "status: success", ...) so forged prose like "gate success report forwarded
+/// downstream" is rejected — the trailing `report`/`downstream` prove
+/// mid-sentence prose — while a genuine terminal clause resolves
+/// (#2806 R11-F1).
+///
+/// Before R11-F1 these phrases used a bare `contains()` substring match that
+/// bypassed the trailing-token scan entirely: "gate exit unavailable; gate
+/// success report forwarded downstream" matched "gate success" and forged a
+/// false resolution. Tokenizing both the input and each phrase (splitting on
+/// non-alphanumeric characters, identical to [`gate_bound_pass_signal`]) means
+/// the same [`clause_is_terminal_anchored`] denylist gates every positive
+/// signal uniformly.
+pub(super) fn any_terminal_anchored_phrase(lower: &str, phrases: &[&str]) -> bool {
+    let tokens: Vec<&str> = lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+    phrases.iter().any(|phrase| {
+        let phrase_tokens: Vec<&str> = phrase
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|token| !token.is_empty())
+            .collect();
+        phrase_matches_terminal_anchored(&tokens, &phrase_tokens)
+    })
+}
+
+/// True when `phrase_tokens` appears as a contiguous subsequence of `tokens`
+/// and no gate-object noun follows the subsequence's last token. Multiple
+/// occurrences are all checked; any terminal-anchored occurrence resolves.
+fn phrase_matches_terminal_anchored(tokens: &[&str], phrase_tokens: &[&str]) -> bool {
+    let plen = phrase_tokens.len();
+    if plen == 0 || plen > tokens.len() {
+        return false;
+    }
+    for start in 0..=(tokens.len() - plen) {
+        if tokens[start..start + plen] == phrase_tokens[..]
+            && clause_is_terminal_anchored(tokens, start + plen - 1)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Detects a CONCURRENT "status unknown/unavailable/lost" claim. A present-tense

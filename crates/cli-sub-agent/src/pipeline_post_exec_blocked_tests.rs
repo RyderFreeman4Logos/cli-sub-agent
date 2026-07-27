@@ -251,6 +251,79 @@ fn bare_passed_prose_does_not_resolve_unconfirmed_gate() {
     }
 }
 
+// --- R11-F1 / R11-F2: positive_completion trailing-token scan + denylist ---
+
+#[test]
+fn r11_positive_completion_gate_object_prose_does_not_resolve() {
+    // R11-F1: positive_completion phrases previously used a bare `contains()`
+    // substring match, bypassing the trailing-token scan that gates pass
+    // signals. Forged prose that embeds "gate success" mid-sentence (followed
+    // by a gate-object noun like report/logs/downstream) forged a false
+    // resolution. Each phrase is now matched as a contiguous token subsequence
+    // AND gated by the same clause_is_terminal_anchored denylist.
+    for message in [
+        // "gate success report forwarded downstream" — trailing report/downstream
+        "gate exit unavailable; gate success report forwarded downstream",
+        // "gate success logs to maintainer" — trailing logs/to
+        "gate unavailable; gate success logs to the maintainer",
+        // "status: success report" — trailing report
+        "gate unavailable; status: success report forwarded",
+        // "status is success data" — trailing data
+        "status is success data downstream",
+        // "gate succeeded output" — trailing output
+        "gate unavailable; gate succeeded output captured",
+        // "completed successfully to" — trailing "to" (handoff particle)
+        "completed successfully to downstream",
+        // "completion succeeded report" — trailing report
+        "completion succeeded report attached",
+        // "now reports success downstream" — trailing downstream
+        "now reports success downstream",
+    ] {
+        assert!(
+            !message_reports_gate_resolution(message),
+            "positive_completion phrase followed by a gate-object noun must NOT resolve (forged prose): {message}"
+        );
+    }
+}
+
+#[test]
+fn r11_terminal_positive_completion_phrases_still_resolve() {
+    // R11-F1 must not break genuine terminal positive-completion clauses.
+    for message in [
+        "gate status unknown earlier; gate success",
+        "previous gate status unknown; gate succeeded",
+        "prior gate status unknown; status: success now",
+        "prior gate status unknown; status is success now",
+        "prior gate status unknown; completed successfully on retry",
+        "prior gate status unknown; completion succeeded",
+        "prior gate status unknown; now reports success",
+        "prior gate status unknown; successfully completed",
+    ] {
+        assert!(
+            message_reports_gate_resolution(message),
+            "terminal positive-completion clause must resolve: {message}"
+        );
+    }
+}
+
+#[test]
+fn r11_gate_object_noun_in_trailing_tokens_rejects_pass() {
+    // R11-F2: "gate"/"gates"/"completion" are gate-object nouns. A pass token
+    // followed by any of these references a gate artifact, not an outcome.
+    // "status is pass sanitized completion gate" must NOT resolve.
+    for message in [
+        "status is pass sanitized completion gate",
+        "gate pass completion report",
+        "status is pass gates downstream",
+        "result is pass completion gate artifact",
+    ] {
+        assert!(
+            !message_reports_gate_resolution(message),
+            "pass token followed by gate/gates/completion must NOT resolve: {message}"
+        );
+    }
+}
+
 #[test]
 fn command_execution_command_provenance_is_not_worker_blocked() {
     // R4-002: diagnostic-like text only inside command_execution.command is
