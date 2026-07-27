@@ -227,41 +227,64 @@ fn phrase_matches_terminal_anchored(clause_tokens: &[&str], phrase_tokens: &[&st
 /// vetoes a positive pass signal — `gate passed, but gate status is unknown`
 /// cannot resolve. Historical narration (`prior status unknown`, `previous
 /// status unknown`, `status unknown earlier`) is explicitly excluded so a
-/// genuine retry-after-fix still resolves (#2806 R8-F2).
+/// genuine retry-after-fix still resolves (#2806 R8-F2). The qualifier and
+/// status claim must occur in the same clause; historical narration in a prior
+/// clause cannot exempt a later current unknown (#2806 R13-P1).
 pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
-    let tokens: Vec<&str> = lower
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .collect();
-    let len = tokens.len();
-    for index in 0..len {
-        if tokens[index] != "status" {
-            continue;
+    for clause_tokens in tokenize_by_clauses(lower) {
+        for index in 0..clause_tokens.len() {
+            if clause_tokens[index] != "status" {
+                continue;
+            }
+            // The state token follows directly, or one slot after an "is".
+            let mut state_index = index + 1;
+            if state_index < clause_tokens.len() && clause_tokens[state_index] == "is" {
+                state_index += 1;
+            }
+            if state_index >= clause_tokens.len()
+                || !matches!(
+                    clause_tokens[state_index],
+                    "unknown" | "unavailable" | "lost"
+                )
+            {
+                continue;
+            }
+            if token_is_historically_qualified(&clause_tokens, index, state_index) {
+                continue;
+            }
+            return true;
         }
-        // The state token follows directly, or one slot after an "is".
-        let mut state_index = index + 1;
-        if state_index < len && tokens[state_index] == "is" {
-            state_index += 1;
-        }
-        if state_index >= len || !matches!(tokens[state_index], "unknown" | "unavailable" | "lost") {
-            continue;
-        }
-        // Historical qualifiers within two tokens before "status", or in the two
-        // tokens after the state word, mark this as past narration, not a
-        // concurrent veto.
-        let before = tokens[index.saturating_sub(2)..index].to_vec();
-        let after = tokens
-            .get(state_index + 1..state_index + 3)
-            .map(|slice| slice.to_vec())
-            .unwrap_or_default();
-        if before.iter().any(|token| is_historical_qualifier(token))
-            || after.iter().any(|token| is_historical_qualifier(token))
-        {
-            continue;
-        }
-        return true;
     }
     false
+}
+
+/// True when a `failed`/`failure` word is a present outcome rather than
+/// historical narration. This deliberately uses the same clause-scoped
+/// historical qualifier check as status-unknown detection: a prior clause's
+/// failure must not veto a later terminal gate pass (#2806 R13-P2).
+pub(super) fn reports_current_failure(lower: &str) -> bool {
+    tokenize_by_clauses(lower).into_iter().any(|clause_tokens| {
+        clause_tokens.iter().enumerate().any(|(index, token)| {
+            matches!(*token, "failed" | "failure")
+                && !token_is_historically_qualified(&clause_tokens, index, index)
+        })
+    })
+}
+
+/// Historical qualifiers within two tokens before a subject, or in the two
+/// tokens after its end, mark a claim as past narration. Callers must supply
+/// tokens from a single clause so punctuation-separated history cannot suppress
+/// a later current claim.
+fn token_is_historically_qualified(
+    clause_tokens: &[&str],
+    subject_start: usize,
+    subject_end: usize,
+) -> bool {
+    let before = &clause_tokens[subject_start.saturating_sub(2)..subject_start];
+    let after_end = (subject_end + 3).min(clause_tokens.len());
+    let after = &clause_tokens[subject_end + 1..after_end];
+    before.iter().any(|token| is_historical_qualifier(token))
+        || after.iter().any(|token| is_historical_qualifier(token))
 }
 
 /// Qualifiers that mark a "status unknown" claim as historical (past) rather
@@ -269,7 +292,14 @@ pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
 fn is_historical_qualifier(token: &str) -> bool {
     matches!(
         token,
-        "prior" | "previous" | "earlier" | "former" | "initial" | "originally" | "initially"
+        "prior"
+            | "previous"
+            | "previously"
+            | "earlier"
+            | "former"
+            | "initial"
+            | "originally"
+            | "initially"
             | "past"
     )
 }

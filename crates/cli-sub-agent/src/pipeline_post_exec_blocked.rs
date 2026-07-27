@@ -379,13 +379,15 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
         "cannot confirm",
         "remains blocked",
         "still blocked",
-        "failed",
-        "failure",
         "did not pass",
         "not pass",
     ]
     .iter()
     .any(|signal| lower.contains(signal));
+    // R13-P2: bare failure words remain a resolution veto when current, but a
+    // historical failure in an earlier clause ("Previous turn failed. Gate
+    // passed.") must not reject the later terminal outcome.
+    let current_failure = gate_signal::reports_current_failure(lower);
     // A CONCURRENT "status unknown/unavailable/lost" (not a historical "prior
     // status unknown") unconditionally vetoes a positive pass claim, even when
     // the pass signal is syntactically gate-bound (#2806 R8-F2).
@@ -395,6 +397,7 @@ fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
     // Historical "previously omitted" that was fixed/completed this turn must
     // not veto a genuine gate-bound pass.
     unresolved_signal
+        || current_failure
         || concurrent_status_lost
         || message_reports_current_omitted_required_work(lower)
 }
@@ -510,3 +513,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pipeline_post_exec_blocked_r8_tests.rs"]
 mod r8_tests;
+
+#[cfg(test)]
+#[path = "pipeline_post_exec_blocked_r13_tests.rs"]
+mod r13_tests;
