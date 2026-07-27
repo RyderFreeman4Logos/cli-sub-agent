@@ -340,6 +340,7 @@ OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Write TODO artifact to $CSA_SESSION_DIR/artifacts/TODO.md
 - Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT using required schema
+- Every attempt-bound receipt MUST set [result].attempt_nonce = "$CSA_RESULT_TOML_ATTEMPT_NONCE"
 - Print ONLY the absolute result.toml path
 
 SCOPE:
@@ -350,6 +351,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/artifacts/TODO.md exists
 - $CSA_RESULT_TOML_PATH_CONTRACT exists with status in {success, partial, needs_clarification, error}
 - $CSA_RESULT_TOML_PATH_CONTRACT contains [result], [report], [timing], [tool], [artifacts]
+- $CSA_RESULT_TOML_PATH_CONTRACT [result].attempt_nonce equals $CSA_RESULT_TOML_ATTEMPT_NONCE
 PLAN_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
@@ -381,6 +383,7 @@ OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Perform implementation and validation autonomously
 - Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT using required schema
+- Every attempt-bound receipt MUST set [result].attempt_nonce = "$CSA_RESULT_TOML_ATTEMPT_NONCE"
 - Include commit_hash/review_result in [artifacts] when available
 - Print ONLY the absolute result.toml path
 
@@ -393,6 +396,7 @@ SCOPE:
 DONE WHEN:
 - Implementation tasks are complete or explicitly marked partial/error
 - $CSA_RESULT_TOML_PATH_CONTRACT exists and is self-contained for manager decision
+- $CSA_RESULT_TOML_PATH_CONTRACT [result].attempt_nonce equals $CSA_RESULT_TOML_ATTEMPT_NONCE
 IMPL_EOF
 
 SID=$(csa run --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
@@ -418,7 +422,8 @@ INPUT:
 OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Run independent verification (e.g. csa review --diff or csa debate)
-- Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT
+- Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT using required schema
+- Every attempt-bound receipt MUST set [result].attempt_nonce = "$CSA_RESULT_TOML_ATTEMPT_NONCE"
 - In [report], clearly state agreement/disagreement and why
 - Print ONLY the absolute result.toml path
 
@@ -429,6 +434,7 @@ SCOPE:
 DONE WHEN:
 - Verification completed
 - $CSA_RESULT_TOML_PATH_CONTRACT includes clear verdict in summary/report
+- $CSA_RESULT_TOML_PATH_CONTRACT [result].attempt_nonce equals $CSA_RESULT_TOML_ATTEMPT_NONCE
 VERIFY_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")

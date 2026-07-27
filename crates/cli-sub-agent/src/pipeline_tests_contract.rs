@@ -566,6 +566,31 @@ fn sa_skill_docs_reference_contract_result_path_and_plain_git_commit() {
 }
 
 #[test]
+fn sa_practical_dispatch_templates_each_require_attempt_nonce() {
+    // R4-003: each Practical Dispatch Template heredoc must require the nonce.
+    let sa_skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/skills/sa/SKILL.md"
+    ));
+    for marker in ["PLAN_EOF", "IMPL_EOF", "VERIFY_EOF"] {
+        let open = format!("<<'{marker}'");
+        let start = sa_skill
+            .find(&open)
+            .unwrap_or_else(|| panic!("missing open {open}"));
+        let body = &sa_skill[start + open.len()..];
+        let end = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing close {marker}"));
+        let body = &body[..end];
+        assert!(
+            body.contains("$CSA_RESULT_TOML_ATTEMPT_NONCE")
+                && body.contains("[result].attempt_nonce"),
+            "{marker} heredoc must require attempt_nonce"
+        );
+    }
+}
+
+#[test]
 fn sa_pattern_and_workflow_dispatch_templates_propagate_sa_mode() {
     let pattern = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
