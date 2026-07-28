@@ -489,3 +489,7 @@ mod r13_tests;
 #[cfg(test)]
 #[path = "pipeline_post_exec_blocked_r14_tests.rs"]
 mod r14_tests;
+
+#[cfg(test)]
+#[path = "pipeline_post_exec_blocked_r15_tests.rs"]
+mod r15_tests;
