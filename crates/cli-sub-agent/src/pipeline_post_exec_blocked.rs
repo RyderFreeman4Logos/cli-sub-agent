@@ -368,68 +368,36 @@ pub(super) fn message_reports_gate_resolution(message: &str) -> bool {
 /// Pass/passed/passes only count when syntactically bound to a gate, status, or
 /// result outcome AND fully anchored as a terminal clause. The anchor and
 /// gate-object-noun logic lives in [`gate_signal`] (#2806 R6-002, R8-F2).
+///
+/// R14-F2 convergence unification: EVERY veto phrase is now classified by the
+/// SAME shared per-clause classifier in [`gate_signal`]. The unresolved-signal
+/// list, the failed/failure path, the status-unknown path, and the omitted-
+/// required-work check all share one [`gate_signal::tokenize_by_clauses`]-based
+/// scope and one whole-clause historical-qualifier binding. Before R14 these
+/// used three different scopes (whole-message contains, ±2-token, per-line),
+/// which let mixed historical/current messages slip through in inconsistent
+/// directions (#2806 R10→R14 convergence protocol).
 fn message_reports_unresolved_gate_outcome(lower: &str) -> bool {
-    let unresolved_signal = [
-        "remains unknown",
-        "still unknown",
-        "remains unavailable",
-        "still unavailable",
-        "could not confirm",
-        "unable to confirm",
-        "cannot confirm",
-        "remains blocked",
-        "still blocked",
-        "did not pass",
-        "not pass",
-    ]
-    .iter()
-    .any(|signal| lower.contains(signal));
-    // R13-P2: bare failure words remain a resolution veto when current, but a
-    // historical failure in an earlier clause ("Previous turn failed. Gate
-    // passed.") must not reject the later terminal outcome.
+    // Unresolved signals are now matched per-clause: a historical qualifier
+    // ANYWHERE in the same clause marks the occurrence as past narration, so a
+    // prior clause's unresolved signal does not veto a later terminal pass
+    // (#2806 R14-F2).
+    let unresolved_signal = gate_signal::reports_current_unresolved_signal(lower);
+    // R13-P2/R14-F2: bare failure words remain a resolution veto when current,
+    // but a historical failure in an earlier clause ("Previous turn failed.
+    // Gate passed.") must not reject the later terminal outcome.
     let current_failure = gate_signal::reports_current_failure(lower);
     // A CONCURRENT "status unknown/unavailable/lost" (not a historical "prior
     // status unknown") unconditionally vetoes a positive pass claim, even when
-    // the pass signal is syntactically gate-bound (#2806 R8-F2).
+    // the pass signal is syntactically gate-bound (#2806 R8-F2, R14-F1).
     let concurrent_status_lost = gate_signal::reports_concurrent_status_unknown(lower);
     // "gate passed, but tests and commit omitted" is not a full resolution —
-    // current omitted required work vetoes a positive pass claim (#2806 R6-002).
-    // Historical "previously omitted" that was fixed/completed this turn must
-    // not veto a genuine gate-bound pass.
-    unresolved_signal
-        || current_failure
-        || concurrent_status_lost
-        || message_reports_current_omitted_required_work(lower)
-}
-
-/// True when the message still claims tests/commit were omitted (present
-/// omission), not when it only narrates previously-omitted work that was fixed.
-///
-/// R10-F2 (line-scoped historical exemption): the historical exemption is
-/// LINE-SCOPED, not whole-text. A mixed message with one historical omission
-/// line ("the previous turn omitted tests and commit") and one CURRENT omission
-/// line ("tests and commit omitted") must still flag the current omission —
-/// the historical line does not exempt the whole text (#2806 R10-F2).
-fn message_reports_current_omitted_required_work(lower: &str) -> bool {
-    // Only lines that both (a) name omitted + test + commit AND (b) lack a
-    // historical marker count as present/current omissions. A line with a
-    // historical marker ("previous turn omitted", "previously omitted") is
-    // narration of work that is now done and is excluded line-by-line.
-    lower.lines().any(|line| {
-        if !(line.contains("omitted") && line.contains("test") && line.contains("commit")) {
-            return false;
-        }
-        // Historical narration that was fixed this turn must not count as a
-        // present/current omission on THIS line: "fixed the previously omitted
-        // tests and commit" and "the previous turn omitted tests and commit;
-        // this turn completed both". Both phrases narrate work that is now done.
-        // The exemption applies to THIS line only — another line with a
-        // current omission is still flagged (#2806 R10-F2).
-        if line.contains("previously omitted") || line.contains("previous turn omitted") {
-            return false;
-        }
-        true
-    })
+    // current omitted required work vetoes a positive pass claim (#2806
+    // R6-002). The check is now CLAUSE-scoped: a historical marker on a line
+    // exempts only the clause it sits in, not every clause on that line (#2806
+    // R10-F2, R14-F3).
+    let omitted_required_work = gate_signal::reports_current_omitted_required_work(lower);
+    unresolved_signal || current_failure || concurrent_status_lost || omitted_required_work
 }
 
 /// Narrower than [`message_reports_unresolved_gate_outcome`]: matches only
@@ -480,11 +448,11 @@ fn line_indicates_unconfirmed_gate(line: &str) -> bool {
     let shell_lost_status = ["bash:", "zsh:"].iter().any(|shell| lower.contains(shell))
         && lower.contains("status")
         && lost_status;
-    // Reuse the shared current-omission classifier so the summary and
-    // per-line unconfirmed-gate paths cannot drift apart. Historical
-    // narration ("previous turn omitted ...; this turn completed both")
-    // is excluded inside the helper (#2806 R9b).
-    let required_work_omitted = message_reports_current_omitted_required_work(&lower);
+    // Reuse the shared clause-scoped current-omission classifier so the summary
+    // and per-line unconfirmed-gate paths cannot drift apart. Historical
+    // narration ("previous turn omitted ...; this turn completed both") is
+    // excluded clause-by-clause inside the helper (#2806 R9b, R14-F3).
+    let required_work_omitted = gate_signal::reports_current_omitted_required_work(&lower);
     lower.contains("unable to confirm gate pass")
         || lower.contains("cannot confirm gate pass")
         || line_reports_unresolved_gate_outcome(&lower)
@@ -517,3 +485,7 @@ mod r8_tests;
 #[cfg(test)]
 #[path = "pipeline_post_exec_blocked_r13_tests.rs"]
 mod r13_tests;
+
+#[cfg(test)]
+#[path = "pipeline_post_exec_blocked_r14_tests.rs"]
+mod r14_tests;

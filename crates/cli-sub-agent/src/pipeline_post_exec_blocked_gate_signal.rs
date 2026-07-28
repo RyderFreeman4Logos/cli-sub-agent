@@ -223,24 +223,33 @@ fn phrase_matches_terminal_anchored(clause_tokens: &[&str], phrase_tokens: &[&st
 }
 
 /// Detects a CONCURRENT "status unknown/unavailable/lost" claim. A present-tense
-/// `status <unknown|unavailable|lost>` (optionally via `status is <state>`)
-/// vetoes a positive pass signal — `gate passed, but gate status is unknown`
-/// cannot resolve. Historical narration (`prior status unknown`, `previous
-/// status unknown`, `status unknown earlier`) is explicitly excluded so a
-/// genuine retry-after-fix still resolves (#2806 R8-F2). The qualifier and
+/// `status <unknown|unavailable|lost>` (optionally via `status is <state>`, or
+/// with a current-tense modifier `status currently unknown` / `status now
+/// unavailable`) vetoes a positive pass signal — `gate passed, but gate status
+/// is unknown` cannot resolve. Historical narration (`prior status unknown`,
+/// `previous status unknown`, `status unknown earlier`) is explicitly excluded
+/// so a genuine retry-after-fix still resolves (#2806 R8-F2). The qualifier and
 /// status claim must occur in the same clause; historical narration in a prior
-/// clause cannot exempt a later current unknown (#2806 R13-P1).
+/// clause cannot exempt a later current unknown (#2806 R13-P1). A current-tense
+/// modifier anywhere in the SAME clause marks the status claim as concurrent,
+/// even when a distant historical qualifier also sits in the clause (#2806
+/// R14-F1): `prior status is currently unknown` is a concurrent unknown.
 pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
     for clause_tokens in tokenize_by_clauses(lower) {
         for index in 0..clause_tokens.len() {
             if clause_tokens[index] != "status" {
                 continue;
             }
-            // The state token follows directly, or one slot after an "is".
+            // The state token follows directly, optionally via `status is
+            // <state>` and optionally with a current-tense modifier
+            // (`currently`/`now`) between `status`/`is` and the state token:
+            // "status currently unknown", "status is now unavailable",
+            // "status now unavailable" (#2806 R14-F1).
             let mut state_index = index + 1;
             if state_index < clause_tokens.len() && clause_tokens[state_index] == "is" {
                 state_index += 1;
             }
+            state_index = skip_current_tense_modifiers(&clause_tokens, state_index);
             if state_index >= clause_tokens.len()
                 || !matches!(
                     clause_tokens[state_index],
@@ -249,7 +258,13 @@ pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
             {
                 continue;
             }
-            if token_is_historically_qualified(&clause_tokens, index, state_index) {
+            // Any current-tense modifier in the SAME clause marks the claim
+            // concurrent, even if a historical qualifier also appears in that
+            // clause (#2806 R14-F1).
+            if clause_has_current_tense_modifier(&clause_tokens) {
+                return true;
+            }
+            if clause_has_historical_qualifier(&clause_tokens) {
                 continue;
             }
             return true;
@@ -259,36 +274,138 @@ pub(super) fn reports_concurrent_status_unknown(lower: &str) -> bool {
 }
 
 /// True when a `failed`/`failure` word is a present outcome rather than
-/// historical narration. This deliberately uses the same clause-scoped
-/// historical qualifier check as status-unknown detection: a prior clause's
-/// failure must not veto a later terminal gate pass (#2806 R13-P2).
+/// historical narration. This uses the same clause-scoped historical qualifier
+/// check as status-unknown detection: any qualifier in the SAME clause marks
+/// the occurrence as historical (not just ±2 neighboring tokens), so a prior
+/// clause's failure does not veto a later terminal gate pass (#2806 R13-P2,
+/// R14-F2).
 pub(super) fn reports_current_failure(lower: &str) -> bool {
     tokenize_by_clauses(lower).into_iter().any(|clause_tokens| {
-        clause_tokens.iter().enumerate().any(|(index, token)| {
+        clause_tokens.iter().any(|token| {
             matches!(*token, "failed" | "failure")
-                && !token_is_historically_qualified(&clause_tokens, index, index)
+                && !clause_has_historical_qualifier(&clause_tokens)
         })
     })
 }
 
-/// Historical qualifiers within two tokens before a subject, or in the two
-/// tokens after its end, mark a claim as past narration. Callers must supply
-/// tokens from a single clause so punctuation-separated history cannot suppress
-/// a later current claim.
-fn token_is_historically_qualified(
-    clause_tokens: &[&str],
-    subject_start: usize,
-    subject_end: usize,
-) -> bool {
-    let before = &clause_tokens[subject_start.saturating_sub(2)..subject_start];
-    let after_end = (subject_end + 3).min(clause_tokens.len());
-    let after = &clause_tokens[subject_end + 1..after_end];
-    before.iter().any(|token| is_historical_qualifier(token))
-        || after.iter().any(|token| is_historical_qualifier(token))
+/// True when the message contains any unresolved-gate signal
+/// (`remains unknown`, `could not confirm`, `did not pass`, ...) in a CURRENT
+/// clause. The signal is matched per-clause as a contiguous token subsequence
+/// — a historical qualifier ANYWHERE in the SAME clause marks the occurrence as
+/// past narration, so a prior clause's unresolved signal does not veto a later
+/// terminal gate pass (#2806 R14-F2).
+///
+/// Before R14-F2 these phrases used a whole-message `contains()` substring
+/// test. That had no clause scoping at all, so a historical phrase in an
+/// earlier clause (e.g. "Previous attempt could not confirm gate pass. Gate
+/// passed.") blocked a genuine later terminal pass — the historical phrase sat
+/// in the wrong scope and exempted nothing.
+pub(super) fn reports_current_unresolved_signal(lower: &str) -> bool {
+    let unresolved_signals: &[&str] = &[
+        "remains unknown",
+        "still unknown",
+        "remains unavailable",
+        "still unavailable",
+        "could not confirm",
+        "unable to confirm",
+        "cannot confirm",
+        "remains blocked",
+        "still blocked",
+        "did not pass",
+        "not pass",
+    ];
+    let signal_token_lists: Vec<Vec<&str>> = unresolved_signals
+        .iter()
+        .map(|signal| {
+            signal
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .filter(|token| !token.is_empty())
+                .collect()
+        })
+        .collect();
+    tokenize_by_clauses(lower).into_iter().any(|clause_tokens| {
+        !clause_has_historical_qualifier(&clause_tokens)
+            && signal_token_lists
+                .iter()
+                .any(|signal_tokens| phrase_occurs(&clause_tokens, signal_tokens))
+    })
 }
 
-/// Qualifiers that mark a "status unknown" claim as historical (past) rather
-/// than concurrent (present).
+/// True when a clause contains a current (present) omission of required work —
+/// `omitted` alongside `test` and `commit` in the SAME clause, without a
+/// historical qualifier in that clause. Historical narration
+/// (`previously omitted tests and commit; this turn completed both`) is
+/// excluded clause-by-clause, so a prior clause's historical omission does not
+/// exempt a LATER clause's current omission on the same line (#2806 R10-F2,
+/// R14-F3).
+///
+/// Before R14-F3 the check was LINE-scoped: a historical marker on a line
+/// exempted every clause on that line, so a mixed line such as "Gate passed.
+/// Previous turn omitted tests and commit; tests and commit omitted this turn."
+/// failed to flag the current omission after the semicolon.
+pub(super) fn reports_current_omitted_required_work(lower: &str) -> bool {
+    tokenize_by_clauses(lower)
+        .into_iter()
+        .any(|clause_tokens| {
+            clause_contains_omitted_test_commit(&clause_tokens)
+                && !clause_has_historical_qualifier(&clause_tokens)
+        })
+}
+
+/// True when `phrase_tokens` appears as a contiguous subsequence of
+/// `clause_tokens` anywhere in the clause. This is the same matching primitive
+/// [`phrase_matches_terminal_anchored`] uses, but WITHOUT the terminal-anchor
+/// constraint — an unresolved signal vetoes a pass even when it is not clause
+/// terminal.
+fn phrase_occurs(clause_tokens: &[&str], phrase_tokens: &[&str]) -> bool {
+    let plen = phrase_tokens.len();
+    if plen == 0 || plen > clause_tokens.len() {
+        return false;
+    }
+    clause_tokens
+        .windows(plen)
+        .any(|window| window == phrase_tokens)
+}
+
+/// True when a clause contains `omitted` alongside `test` and `commit`. The
+/// historical qualifier is evaluated separately so a mixed clause
+/// (historical + current) still flags the current part (#2806 R14-F3).
+fn clause_contains_omitted_test_commit(clause_tokens: &[&str]) -> bool {
+    clause_tokens.contains(&"omitted")
+        && (clause_tokens.contains(&"test") || clause_tokens.contains(&"tests"))
+        && clause_tokens.contains(&"commit")
+}
+
+/// Skip any current-tense modifiers (`currently`/`now`) starting at `index`,
+/// returning the index of the next non-modifier token. Allows "status
+/// currently unknown", "status is now unavailable", and "status now
+/// unavailable" (#2806 R14-F1).
+fn skip_current_tense_modifiers(clause_tokens: &[&str], mut index: usize) -> usize {
+    while index < clause_tokens.len() && is_current_tense_modifier(clause_tokens[index]) {
+        index += 1;
+    }
+    index
+}
+
+/// True when the clause contains ANY historical qualifier token. The scan is
+/// whole-clause, not ±2 tokens around the matched subject: a qualifier anywhere
+/// in the same clause marks the claim as historical narration. Callers supply
+/// tokens from a single clause (via [`tokenize_by_clauses`]) so a
+/// punctuation-separated qualifier in a prior clause cannot suppress a later
+/// current claim (#2806 R14-F2, R14-F3).
+fn clause_has_historical_qualifier(clause_tokens: &[&str]) -> bool {
+    clause_tokens.iter().any(|token| is_historical_qualifier(token))
+}
+
+/// True when the clause contains ANY current-tense modifier. A current-tense
+/// modifier anywhere in the same clause overrides a historical qualifier so a
+/// concurrent claim is not wrongly exempted (#2806 R14-F1).
+fn clause_has_current_tense_modifier(clause_tokens: &[&str]) -> bool {
+    clause_tokens.iter().any(|token| is_current_tense_modifier(token))
+}
+
+/// Qualifiers that mark a claim as historical (past) rather than concurrent
+/// (present).
 fn is_historical_qualifier(token: &str) -> bool {
     matches!(
         token,
@@ -302,4 +419,12 @@ fn is_historical_qualifier(token: &str) -> bool {
             | "initially"
             | "past"
     )
+}
+
+/// Current-tense modifiers that mark a claim as concurrent (present). These
+/// override a historical qualifier when both sit in the SAME clause, because a
+/// phrase such as "prior status is currently unknown" reports a concurrent
+/// unknown with a historical subject (#2806 R14-F1).
+fn is_current_tense_modifier(token: &str) -> bool {
+    matches!(token, "currently" | "now")
 }
