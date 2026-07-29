@@ -371,10 +371,10 @@ fn segment_has_qualifier_at(clause_tokens: &[&str], index: usize) -> bool {
 
 /// Split on `but`, or on `and` before a new gate-outcome / omission subject.
 /// R17-1H: `and` may be followed by optional determiners (`the`/`a`/`an`) and
-/// optional current-turn subjects (`this turn` / `that attempt`) before
-/// `gate|status|result|omitted`. Without that lookahead, forms like
-/// `failed and the gate remains blocked` or `omitted ... and this turn omitted`
-/// stay in the historical segment and hide the concurrent veto.
+/// an explicit current-outcome subject (`this turn` / `that attempt`) before
+/// `gate|status|result|omitted`. A determiner immediately before `omitted`,
+/// without that subject, instead starts an adjectival noun phrase such as
+/// `the omitted tests`, not a new omission outcome (R18-1H).
 fn segment_boundaries(clause_tokens: &[&str]) -> Vec<std::ops::Range<usize>> {
     let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
     let mut start = 0;
@@ -399,22 +399,30 @@ fn and_starts_new_outcome_segment(clause_tokens: &[&str], and_index: usize) -> b
     while index < clause_tokens.len() && matches!(clause_tokens[index], "the" | "a" | "an") {
         index += 1;
     }
-    if index < clause_tokens.len() && matches!(clause_tokens[index], "this" | "that" | "current") {
-        index += 1;
-        if index < clause_tokens.len()
-            && matches!(
-                clause_tokens[index],
-                "turn" | "attempt" | "run" | "session"
-            )
-        {
-            index += 1;
-        }
-    }
-    index < clause_tokens.len()
+    let has_leading_determiner = index > and_index + 1;
+
+    // A current-outcome subject makes the following `omitted` a predicate,
+    // including `and the current run omitted ...`. Require the subject noun:
+    // without it, `the current omitted tests` is another adjectival phrase.
+    let has_explicit_current_outcome_subject = index + 1 < clause_tokens.len()
+        && matches!(clause_tokens[index], "this" | "that" | "current")
         && matches!(
-            clause_tokens[index],
-            "gate" | "status" | "result" | "omitted"
-        )
+            clause_tokens[index + 1],
+            "turn" | "attempt" | "run" | "session"
+        );
+    if has_explicit_current_outcome_subject {
+        index += 2;
+    }
+
+    if index >= clause_tokens.len() {
+        return false;
+    }
+
+    matches!(clause_tokens[index], "gate" | "status" | "result")
+        // A bare `omitted` begins a predicate. In contrast, `the omitted ...`
+        // is adjectival unless an explicit current-outcome subject preceded it.
+        || (clause_tokens[index] == "omitted"
+            && (!has_leading_determiner || has_explicit_current_outcome_subject))
 }
 
 fn is_historical_qualifier(token: &str) -> bool {
