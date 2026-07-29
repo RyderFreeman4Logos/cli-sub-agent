@@ -131,3 +131,117 @@ what_was_done = "historical diagnostic report"
         "historical sidecar remains visible but diagnostics-only after save/load"
     );
 }
+
+#[test]
+fn current_nonce_success_receipt_accepts_every_documented_fallback_path() {
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let nonce = "current-attempt";
+    fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir.path()),
+        format!("attempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write current attempt marker");
+
+    let documented_paths = [
+        csa_session::turn_contract_result_path(session_dir.path(), 0),
+        session_dir.path().join("result.toml"),
+        csa_session::contract_result_path(session_dir.path()),
+        csa_session::legacy_user_result_path(session_dir.path()),
+    ];
+    for path in documented_paths {
+        fs::create_dir_all(path.parent().expect("receipt parent")).expect("create receipt parent");
+        fs::write(
+            &path,
+            format!("[result]\nstatus = \"success\"\nattempt_nonce = \"{nonce}\"\n"),
+        )
+        .expect("write current receipt");
+        assert!(
+            status_is_success(session_dir.path(), 0),
+            "documented current receipt path must satisfy dirty-SA completion: {}",
+            path.display()
+        );
+        fs::remove_file(path).expect("remove receipt before next path");
+    }
+}
+
+#[test]
+fn nonce_matching_non_success_receipt_is_not_positive_completion() {
+    // R6-001: attempt_nonce match alone is not completion proof. error/partial/
+    // needs_clarification receipts must not satisfy status_is_success.
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let nonce = "current-attempt";
+    fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir.path()),
+        format!("attempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write current attempt marker");
+
+    let documented_paths = [
+        csa_session::turn_contract_result_path(session_dir.path(), 0),
+        session_dir.path().join("result.toml"),
+        csa_session::contract_result_path(session_dir.path()),
+        csa_session::legacy_user_result_path(session_dir.path()),
+    ];
+    for status in ["error", "partial", "needs_clarification", "failed"] {
+        for path in &documented_paths {
+            fs::create_dir_all(path.parent().expect("receipt parent"))
+                .expect("create receipt parent");
+            fs::write(
+                path,
+                format!("[result]\nstatus = \"{status}\"\nattempt_nonce = \"{nonce}\"\n"),
+            )
+            .expect("write non-success receipt");
+            assert!(
+                !status_is_success(session_dir.path(), 0),
+                "nonce-matching status={status} must not count as success: {}",
+                path.display()
+            );
+            fs::remove_file(path).expect("remove receipt before next path");
+        }
+    }
+}
+
+#[test]
+fn pre_exec_marker_turn_receipt_remains_authoritative_when_post_exec_turn_count_diverges() {
+    // R5-001: completed_turn_count=0 exports turn-1 receipt path; multi-envelope
+    // streaming can report ctx.turn_count=3 and inflate session.turn_count. Lookup
+    // must use the pre-exec marker path, not the post-exec aggregate.
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let nonce = "current-multi-envelope-attempt";
+    let turn1_artifact = csa_session::next_turn_contract_result_artifact_path(0);
+    assert_eq!(
+        turn1_artifact,
+        csa_session::turn_contract_result_artifact_path(1)
+    );
+    fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir.path()),
+        format!("artifact_path = \"{turn1_artifact}\"\nattempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write pre-exec turn-1 marker");
+
+    let turn1_path = session_dir.path().join(&turn1_artifact);
+    fs::create_dir_all(turn1_path.parent().expect("turn-1 parent")).expect("create turn-1 parent");
+    fs::write(
+        &turn1_path,
+        format!("[result]\nstatus = \"success\"\nattempt_nonce = \"{nonce}\"\n"),
+    )
+    .expect("write turn-1 success receipt");
+
+    // No turn-3 receipt exists; post-exec aggregate would look there and fail.
+    assert!(
+        !session_dir
+            .path()
+            .join(csa_session::turn_contract_result_artifact_path(3))
+            .exists(),
+        "test fixture must not plant a post-stream turn-3 receipt"
+    );
+
+    assert!(
+        status_is_success(session_dir.path(), 3),
+        "nonce-bound turn-1 marker receipt must remain authoritative when completed_turn_count/post-exec aggregate is 3"
+    );
+    assert!(
+        status_is_success(session_dir.path(), 0),
+        "marker path must also win when completed_turn_count stays at pre-exec 0"
+    );
+}

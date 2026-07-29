@@ -349,6 +349,56 @@ fn result_toml_path_contract_fails_when_output_summary_empty_and_no_disk_file() 
 }
 
 #[test]
+fn result_toml_path_contract_rejects_missing_or_stale_nonce_on_every_documented_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let nonce_marker =
+        crate::pipeline::result_contract::current_result_artifact_marker_path(temp.path());
+    fs::write(&nonce_marker, "attempt_nonce = \"current-attempt\"\n").unwrap();
+    let documented_paths = [
+        csa_session::next_turn_contract_result_path(temp.path(), 0),
+        temp.path().join("result.toml"),
+        csa_session::contract_result_path(temp.path()),
+        csa_session::legacy_user_result_path(temp.path()),
+    ];
+
+    for attempt_nonce in [None, Some("stale-attempt")] {
+        for path in &documented_paths {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let nonce_line = attempt_nonce
+                .map(|nonce| format!("attempt_nonce = \"{nonce}\"\n"))
+                .unwrap_or_default();
+            fs::write(
+                path,
+                format!("[result]\nstatus = \"success\"\n{nonce_line}"),
+            )
+            .unwrap();
+            let mut result = ExecutionResult {
+                output: format!("{}\n", path.display()),
+                exit_code: 0,
+                peak_memory_mb: None,
+                ..Default::default()
+            };
+
+            enforce_result_toml_path_contract(
+                "CSA_RESULT_TOML_PATH_CONTRACT=1",
+                "",
+                temp.path(),
+                0,
+                true,
+                &mut result,
+            );
+            assert_eq!(
+                result.exit_code,
+                1,
+                "receipt without the current nonce must not satisfy the contract: {}",
+                path.display()
+            );
+            fs::remove_file(path).unwrap();
+        }
+    }
+}
+
+#[test]
 fn clear_expected_result_tomls_removes_all_stale_result_artifacts() {
     let temp = tempfile::tempdir().unwrap();
     let output_dir = temp.path().join("output");
@@ -490,6 +540,54 @@ fn sa_skill_docs_reference_contract_result_path_and_plain_git_commit() {
         sa_skill.contains("plain `git commit`"),
         "SA skill should document plain git commit for child-session commits"
     );
+
+    let pattern = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/PATTERN.md"
+    ));
+    let workflow = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/workflow.toml"
+    ));
+    for (name, document) in [
+        ("skill", sa_skill),
+        ("pattern", pattern),
+        ("workflow", workflow),
+    ] {
+        assert!(
+            document.contains("$CSA_RESULT_TOML_ATTEMPT_NONCE"),
+            "SA {name} must require the current attempt nonce in result.toml receipts"
+        );
+        assert!(
+            document.contains("[result].attempt_nonce"),
+            "SA {name} must identify the nonce field's receipt schema location"
+        );
+    }
+}
+
+#[test]
+fn sa_practical_dispatch_templates_each_require_attempt_nonce() {
+    // R4-003: each Practical Dispatch Template heredoc must require the nonce.
+    let sa_skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/skills/sa/SKILL.md"
+    ));
+    for marker in ["PLAN_EOF", "IMPL_EOF", "VERIFY_EOF"] {
+        let open = format!("<<'{marker}'");
+        let start = sa_skill
+            .find(&open)
+            .unwrap_or_else(|| panic!("missing open {open}"));
+        let body = &sa_skill[start + open.len()..];
+        let end = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing close {marker}"));
+        let body = &body[..end];
+        assert!(
+            body.contains("$CSA_RESULT_TOML_ATTEMPT_NONCE")
+                && body.contains("[result].attempt_nonce"),
+            "{marker} heredoc must require attempt_nonce"
+        );
+    }
 }
 
 #[test]

@@ -26,6 +26,9 @@ test_static_nextest_profile_contract() {
   assert_contains static-profile-slow-timeout \
     'slow-timeout = { period = "60s", terminate-after = 2, grace-period = "10s", on-timeout = "fail" }' \
     "$config"
+  assert_contains static-profile-isolates-mcp-hub-proxy-latency \
+    $'[[profile.static.overrides]]\nfilter = \'binary_id(=cli-sub-agent::mcp_hub_e2e) & test(=hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget)\'\nthreads-required = "num-test-threads"' \
+    "$config"
   count="$(grep -Ec '^default-filter = ' .config/nextest.toml || true)"
   assert_eq static-profile-single-selector 1 "$count"
   selector_output="$(

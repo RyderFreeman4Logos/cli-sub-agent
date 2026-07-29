@@ -39,6 +39,7 @@ fn build_test_ctx<'a>(
         turn_count: 0,
         output_tokens: None,
         sa_mode,
+        original_exit_code: None,
     }
 }
 
@@ -71,6 +72,37 @@ fn write_result_sidecar(session_dir: &std::path::Path, contents: &str) {
     std::fs::write(path, contents).expect("write output/result.toml");
 }
 
+fn write_current_turn_result_sidecar(
+    session_dir: &std::path::Path,
+    completed_turn_count: u32,
+    contents: &str,
+) {
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            session_dir,
+            completed_turn_count,
+        ),
+        "prepare current-turn receipt"
+    );
+    let artifact_path = csa_session::next_turn_contract_result_artifact_path(completed_turn_count);
+    std::fs::write(
+        crate::pipeline::result_contract::current_result_artifact_marker_path(session_dir),
+        format!("artifact_path = \"{artifact_path}\"\nattempt_nonce = \"current-test-attempt\"\n"),
+    )
+    .expect("bind current-turn receipt to test attempt");
+    let path = csa_session::next_turn_contract_result_path(session_dir, completed_turn_count);
+    std::fs::create_dir_all(path.parent().expect("turn result sidecar parent"))
+        .expect("create turn output dir");
+    std::fs::write(
+        path,
+        format!("{contents}\nattempt_nonce = \"current-test-attempt\"\n"),
+    )
+    .expect("write current turn result.toml");
+}
+
+#[path = "pipeline_tests_no_op_gate_2806.rs"]
+mod issue_2806_tests;
 #[path = "pipeline_tests_no_op_gate_task_type.rs"]
 mod task_type_tests;
 
@@ -179,8 +211,9 @@ async fn no_op_gate_preserves_success_when_result_sidecar_reports_success() {
         create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
     let session_dir =
         csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
-    write_result_sidecar(
+    write_current_turn_result_sidecar(
         &session_dir,
+        session.turn_count,
         r#"[result]
 status = "success"
 summary = "PASS"
@@ -498,6 +531,14 @@ async fn no_op_gate_does_not_trigger_when_changed_paths_present() {
         create_session(project_root, Some("test"), None, Some("claude-code")).expect("create");
     let session_dir =
         csa_session::get_session_dir(project_root, &session.meta_session_id).expect("dir");
+    write_current_turn_result_sidecar(
+        &session_dir,
+        session.turn_count,
+        r#"[result]
+status = "success"
+summary = "PASS"
+"#,
+    );
 
     let executor = Executor::ClaudeCode {
         model_override: None,

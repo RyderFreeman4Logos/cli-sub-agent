@@ -26,6 +26,7 @@ use crate::session_outcome::{
 };
 
 const REVIEW_FIX_FINDING_TASK_TYPE: &str = "review_fix_finding";
+
 #[path = "pipeline_post_exec_context.rs"]
 mod context;
 pub(crate) use context::{PostExecContext, PreExecutionSnapshot};
@@ -41,12 +42,19 @@ pub(crate) use fallback::{
     ensure_terminal_result_for_session_on_post_exec_error,
     ensure_terminal_result_on_post_exec_error,
 };
+#[path = "pipeline_post_exec_dirty_sa.rs"]
+mod dirty_sa;
 #[path = "pipeline_post_exec_helpers.rs"]
 mod helpers;
 #[path = "pipeline_post_exec_lefthook.rs"]
 mod lefthook;
 #[path = "pipeline_post_exec_no_op.rs"]
 mod no_op;
+#[cfg(test)]
+use dirty_sa::dirty_sa_run_lacks_completion_receipt;
+use dirty_sa::maybe_mark_dirty_sa_run_without_receipt;
+#[path = "pipeline_post_exec_false_success_gates.rs"]
+mod false_success_gates;
 #[path = "pipeline_post_exec_progress.rs"]
 mod progress;
 #[path = "pipeline_post_exec_result_sidecar.rs"]
@@ -224,6 +232,22 @@ pub(crate) async fn process_execution_result(
     // turn. The downgrade runs BEFORE the false-success gates below so they can
     // re-examine the now-zero exit; if one re-flags a real failure it calls
     // `mark_gate_failure`, which clears the incidental warning.
+    //
+    // Dirty-SA exit-preservation (#2806 R9b-F2): a SA-mode run that mutated
+    // files but lacks a positive structured completion receipt must NOT be
+    // incidentally downgraded — its nonzero exit is authoritative, not
+    // incidental. Evaluate this BEFORE the effective-outcome classification so
+    // the dirty-SA receipt check sees the raw nonzero exit, not a zeroed one.
+    let elapsed_secs = (execution_end_time - ctx.execution_start_time).num_seconds();
+    let has_positive_structured_completion =
+        result_sidecar::status_is_success(&ctx.session_dir, session.turn_count);
+    maybe_mark_dirty_sa_run_without_receipt(
+        &ctx,
+        session,
+        result,
+        &mut session_result,
+        has_positive_structured_completion,
+    );
     let task_kind = task_kind_from_task_type(ctx.task_type);
     let final_output_present =
         !result.output.trim().is_empty() || !result.summary.trim().is_empty();
@@ -265,92 +289,19 @@ pub(crate) async fn process_execution_result(
         }
         EffectiveOutcome::ExitCodeAuthoritative => {}
     }
-    // No-op gate: fail short successful SA-mode runs with no tool calls/output.
-    let elapsed_secs = (execution_end_time - ctx.execution_start_time).num_seconds();
-    if ctx.sa_mode
-        && ctx.task_type.is_none_or(|t| t == "run")
-        && result.exit_code == 0
-        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
-        && session.turn_count <= 1
-        && !ctx.has_tool_calls
-        && !has_meaningful_reasoning_output
-        && ctx.changed_paths.is_empty()
-        && elapsed_secs < no_op::ELAPSED_THRESHOLD_SECS
-    {
-        let original_summary = session_result.summary.clone();
-        let no_op_summary = no_op::build_no_op_failure_summary(
-            session.turn_count,
-            elapsed_secs,
-            ctx.executor.tool_name(),
-            session.description.as_deref(),
-            ctx.prompt,
-            &original_summary,
-        );
-        warn!(
-            session = %session.meta_session_id,
-            turn_count = session.turn_count,
-            elapsed_secs,
-            "SA-mode no-op exit gate triggered — rewriting status to failure"
-        );
-        session_result.exit_code = 1;
-        session_result.status = SessionResult::status_from_exit_code(1);
-        session_result.summary = no_op_summary.clone();
-        result.summary = no_op_summary.clone();
-        // CSA-own gate: a SA-mode no-op (zero useful work) is a real failure.
-        result.mark_gate_failure("no-op-exit");
-        // Sync tool_state so state.toml agrees with result.toml after rewrite.
-        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
-            tool_state.last_exit_code = 1;
-            tool_state.last_action_summary = no_op_summary;
-        }
-    }
-    // Worker-blocked gate (#1483): rewrite to failure when output/summary
-    // contains "STATUS: BLOCKED" (Bash unavailable, EROFS, missing tooling).
-    if result.exit_code == 0
-        && blocked::worker_output_indicates_blocked(&result.output, &result.summary)
-    {
-        let blocked_summary = format!(
-            "worker blocked: STATUS: BLOCKED detected; task was not completed. \
-             Original summary: {}",
-            result.summary,
-        );
-        warn!(
-            session = %session.meta_session_id,
-            original_summary = %result.summary,
-            "STATUS: BLOCKED in session output — rewriting exit_code to 1"
-        );
-        session_result.exit_code = 1;
-        session_result.status = csa_session::SessionResult::status_from_exit_code(1);
-        session_result.summary = blocked_summary.clone();
-        // CSA-own gate: worker reported STATUS: BLOCKED — a real failure.
-        result.mark_gate_failure("worker-blocked");
-        result.summary = blocked_summary.clone();
-        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
-            tool_state.last_exit_code = 1;
-            tool_state.last_action_summary = blocked_summary;
-        }
-    }
-    if result.exit_code == 0
-        && ctx.task_type == Some("run")
-        && !result_sidecar::status_is_success(&ctx.session_dir, session.turn_count)
-        && session.turn_count <= 1
-        && !ctx.has_tool_calls
-        && !has_meaningful_reasoning_output
-        && ctx.changed_paths.is_empty()
-        && elapsed_secs < no_op::ELAPSED_THRESHOLD_SECS
-        && let Err(err) = progress::maybe_mark_no_progress_session(
-            ctx.project_root,
-            session,
-            result,
-            &mut session_result,
-        )
-    {
-        warn!(
-            session = %session.meta_session_id,
-            error = %err,
-            "Skipping post-session no-progress detection; preserving success status"
-        );
-    }
+    // Post-classification false-success gates (no-op / blocked-output /
+    // no-progress): re-examine exit-0 survivors of the #161 classifier and
+    // promote genuine false-successes to real failures. Extracted into
+    // `false_success_gates` to keep this module under the token budget.
+    false_success_gates::apply_false_success_gates(
+        &ctx,
+        session,
+        result,
+        &mut session_result,
+        elapsed_secs,
+        has_positive_structured_completion,
+        has_meaningful_reasoning_output,
+    );
     // Finalize the #161 incidental downgrade: if the success survived every
     // false-success gate above (exit still 0, no gate fired), record the raw
     // exit code and warning as diagnostics on the persisted envelope. If a gate

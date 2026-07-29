@@ -54,16 +54,34 @@ fn ensure_owned_manager_result_artifact(
 }
 
 pub(super) fn status_is_success(session_dir: &Path, completed_turn_count: u32) -> bool {
-    let turn_scoped_path =
-        csa_session::turn_contract_result_path(session_dir, completed_turn_count);
-    if path_status_is_success(&turn_scoped_path) {
-        return true;
-    }
-
-    path_status_is_success(&csa_session::contract_result_path(session_dir))
+    let Some(attempt_nonce) =
+        crate::pipeline::result_contract::current_result_attempt_nonce(session_dir)
+    else {
+        return false;
+    };
+    // Prefer the pre-exec marker path exported to the child (CSA_RESULT_TOML_*).
+    // Post-exec `session.turn_count` can be an aggregate of multiple assistant
+    // envelopes from one invocation, so reconstructing the turn-scoped path
+    // from that aggregate would miss the valid turn-N receipt the child wrote.
+    let turn_scoped_path = current_result_artifact_marker(session_dir)
+        .map(|artifact_path| session_dir.join(artifact_path))
+        .unwrap_or_else(|| {
+            csa_session::turn_contract_result_path(session_dir, completed_turn_count)
+        });
+    // Every documented receipt path requires the current attempt nonce. That
+    // lets legacy fallback paths remain compatible without accepting a prior
+    // invocation's success receipt.
+    [
+        turn_scoped_path,
+        session_dir.join("result.toml"),
+        csa_session::contract_result_path(session_dir),
+        csa_session::legacy_user_result_path(session_dir),
+    ]
+    .iter()
+    .any(|path| path_status_is_success(path, &attempt_nonce))
 }
 
-fn path_status_is_success(path: &Path) -> bool {
+fn path_status_is_success(path: &Path, attempt_nonce: &str) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
     };
@@ -71,16 +89,17 @@ fn path_status_is_success(path: &Path) -> bool {
         return false;
     };
 
-    let nested = table
-        .get("result")
-        .and_then(|value| value.as_table())
-        .and_then(|table| table.get("status"));
-    let flat = table.get("status");
+    let nested = table.get("result").and_then(|value| value.as_table());
+    let status = nested
+        .and_then(|result| result.get("status"))
+        .or_else(|| table.get("status"))
+        .and_then(|value| value.as_str());
+    let receipt_nonce = nested
+        .and_then(|result| result.get("attempt_nonce"))
+        .and_then(|value| value.as_str());
 
-    nested
-        .or(flat)
-        .and_then(|value| value.as_str())
-        .is_some_and(|status| status.eq_ignore_ascii_case("success"))
+    matches!(status, Some(status) if status.eq_ignore_ascii_case("success"))
+        && receipt_nonce == Some(attempt_nonce)
 }
 
 #[cfg(test)]

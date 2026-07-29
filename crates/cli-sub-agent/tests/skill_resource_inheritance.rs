@@ -16,7 +16,12 @@ fn csa_cmd(home: &Path) -> Command {
         .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("TOKIO_WORKER_THREADS", "1")
-        .env("CSA_DAEMON_INDEPENDENT_SCOPE", "0");
+        .env("CSA_DAEMON_INDEPENDENT_SCOPE", "0")
+        // Keep the inherited 9000MB contract assertion hermetic: gate
+        // concurrency can leave less physical memory than that intentionally
+        // large parent contract. This debug-only hook bypasses host admission
+        // for the fake child; release builds keep production admission intact.
+        .env("CSA_TEST_SKIP_HOST_MEMORY_ADMISSION", "1");
     cmd
 }
 

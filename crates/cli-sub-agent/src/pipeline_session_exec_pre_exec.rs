@@ -14,6 +14,23 @@ use crate::session_guard::{
     SessionCleanupGuard, write_pre_exec_error_result, write_pre_exec_error_result_with_no_provider,
 };
 
+const TEST_SKIP_HOST_MEMORY_ADMISSION_ENV: &str = "CSA_TEST_SKIP_HOST_MEMORY_ADMISSION";
+
+/// Integration fixtures that propagate a deliberately oversized parent contract
+/// can opt out of host-memory admission in debug binaries. Release builds never
+/// honor this test hook, so normal production admission semantics are unchanged.
+fn skip_host_memory_admission_for_test() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(TEST_SKIP_HOST_MEMORY_ADMISSION_ENV).is_ok_and(|value| value == "1")
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct PipelinePreExecFailureDetails<'a> {
     pub(super) config: Option<&'a ProjectConfig>,
@@ -67,8 +84,9 @@ pub(super) fn check_resources_before_spawn(
     let admission =
         build_spawn_memory_admission(project_root, &session.meta_session_id, projected_spawn_mb);
 
-    if let Err(err) =
-        resource_guard.check_availability_with_admission(executor.tool_name(), Some(admission))
+    if !skip_host_memory_admission_for_test()
+        && let Err(err) =
+            resource_guard.check_availability_with_admission(executor.tool_name(), Some(admission))
     {
         return Err(persist_pipeline_pre_exec_failure(
             project_root,

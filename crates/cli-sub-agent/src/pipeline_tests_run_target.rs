@@ -87,6 +87,44 @@ fn apply_run_target_dir_guard_preserves_explicit_env_with_broken_target_symlink(
     assert!(!report.automatic_substitution_applied);
 }
 
+#[cfg(unix)]
+#[test]
+fn run_target_preflight_fails_closed_for_broken_external_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let _lock = current_dir_lock().lock().expect("current dir lock");
+    let project = tempdir().expect("tempdir");
+    let _cwd = CurrentDirGuard::enter(project.path());
+    let lexical_target = project.path().join("target");
+    let resolved_target = project.path().join("external-ssd").join("target");
+    symlink(&resolved_target, &lexical_target).expect("create broken external target symlink");
+    let mut env = HashMap::new();
+
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+        Some("run"),
+        "codex",
+        project.path(),
+        &mut env,
+    )
+    .expect_err("broken canonical target must block the run before edits");
+
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains(&format!("lexical path '{}'", lexical_target.display())));
+    assert!(error.contains(&format!("resolves to '{}'", resolved_target.display())));
+    assert!(error.contains("will not substitute an alternate CARGO_TARGET_DIR"));
+    assert!(
+        !env.contains_key("CARGO_TARGET_DIR"),
+        "preflight must not inject a managed alternate target"
+    );
+    assert!(
+        std::fs::symlink_metadata(&lexical_target)
+            .expect("target symlink metadata")
+            .file_type()
+            .is_symlink(),
+        "preflight must preserve the configured canonical symlink"
+    );
+}
+
 #[test]
 fn apply_run_target_dir_guard_does_not_inject_override_when_repo_target_missing() {
     let _lock = current_dir_lock().lock().expect("current dir lock");
@@ -143,7 +181,7 @@ fn apply_run_target_dir_guard_preserves_existing_env_when_repo_target_missing() 
 
 #[cfg(unix)]
 #[test]
-fn apply_run_target_dir_guard_preserves_absolute_workspace_target_override() {
+fn apply_run_target_dir_guard_rejects_unwritable_absolute_explicit_target_override() {
     let _lock = current_dir_lock().lock().expect("current dir lock");
     let project = tempdir().expect("tempdir");
     let _state_home =
@@ -153,27 +191,25 @@ fn apply_run_target_dir_guard_preserves_absolute_workspace_target_override() {
     let explicit_target = project.path().join("target").to_string_lossy().into_owned();
     let mut env = HashMap::from([("CARGO_TARGET_DIR".to_string(), explicit_target.clone())]);
 
-    let report = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
     )
-    .expect("policy should resolve");
+    .expect_err("explicit unwritable target must block before provider execution");
 
     assert_eq!(
         env.get("CARGO_TARGET_DIR").map(String::as_str),
         Some(explicit_target.as_str())
     );
-    assert_eq!(report.policy_reason, "explicit_override_preserved");
-    assert_eq!(report.selected_cargo_target, explicit_target);
-    assert!(report.explicit_override_preserved);
-    assert!(!report.automatic_substitution_applied);
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains("resolves to '/proc'"));
 }
 
 #[cfg(unix)]
 #[test]
-fn apply_run_target_dir_guard_preserves_relative_workspace_target_override() {
+fn apply_run_target_dir_guard_rejects_unwritable_relative_explicit_target_override() {
     let _lock = current_dir_lock().lock().expect("current dir lock");
     let project = tempdir().expect("tempdir");
     let _state_home =
@@ -182,22 +218,116 @@ fn apply_run_target_dir_guard_preserves_relative_workspace_target_override() {
     make_unwritable_target(project.path());
     let mut env = HashMap::from([("CARGO_TARGET_DIR".to_string(), "target".to_string())]);
 
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+        Some("run"),
+        "codex",
+        project.path(),
+        &mut env,
+    )
+    .expect_err("relative explicit unwritable target must block before provider execution");
+
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR").map(String::as_str),
+        Some("target")
+    );
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains("resolves to '/proc'"));
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_run_target_dir_guard_rejects_explicit_target_broken_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let _lock = current_dir_lock().lock().expect("current dir lock");
+    let project = tempdir().expect("tempdir");
+    let _cwd = CurrentDirGuard::enter(project.path());
+    let explicit_target = project.path().join("explicit-target");
+    symlink("missing-mount/target", &explicit_target).expect("create broken explicit symlink");
+    let mut env = HashMap::from([(
+        "CARGO_TARGET_DIR".to_string(),
+        explicit_target.to_string_lossy().into_owned(),
+    )]);
+
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+        Some("run"),
+        "codex",
+        project.path(),
+        &mut env,
+    )
+    .expect_err("broken explicit symlink must block before provider execution");
+
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains("explicit-target"));
+    assert!(
+        std::fs::symlink_metadata(&explicit_target)
+            .expect("explicit target metadata")
+            .file_type()
+            .is_symlink(),
+        "preflight must preserve the explicit symlink"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_run_target_dir_guard_rejects_missing_explicit_target_under_unwritable_parent() {
+    if !Path::new("/proc").is_dir() {
+        return;
+    }
+
+    let _lock = current_dir_lock().lock().expect("current dir lock");
+    let project = tempdir().expect("tempdir");
+    let _cwd = CurrentDirGuard::enter(project.path());
+    let explicit_target = "/proc/csa-target";
+    let mut env = HashMap::from([("CARGO_TARGET_DIR".to_string(), explicit_target.to_string())]);
+
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+        Some("run"),
+        "codex",
+        project.path(),
+        &mut env,
+    )
+    .expect_err("missing explicit target under /proc must block before provider execution");
+
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR").map(String::as_str),
+        Some(explicit_target)
+    );
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains("explicit_target_missing_parent_unwritable"));
+}
+
+#[test]
+fn cargo_target_sandbox_preflight_revalidates_target_after_mutation() {
+    let _lock = current_dir_lock().lock().expect("current dir lock");
+    let project = tempdir().expect("tempdir");
+    let _cwd = CurrentDirGuard::enter(project.path());
+    let explicit_target = project.path().join("explicit-target");
+    std::fs::create_dir(&explicit_target).expect("create explicit target");
+    let mut env = HashMap::from([(
+        "CARGO_TARGET_DIR".to_string(),
+        explicit_target.to_string_lossy().into_owned(),
+    )]);
     let report = crate::pipeline_cargo_target::apply_run_target_dir_guard(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
     )
-    .expect("policy should resolve");
+    .expect("initial writable explicit target should pass");
 
-    assert_eq!(
-        env.get("CARGO_TARGET_DIR").map(String::as_str),
-        Some("target")
-    );
-    assert_eq!(report.policy_reason, "explicit_override_preserved");
-    assert_eq!(report.selected_cargo_target, "target");
-    assert!(report.explicit_override_preserved);
-    assert!(!report.automatic_substitution_applied);
+    std::fs::remove_dir(&explicit_target).expect("remove target after initial preflight");
+    std::fs::write(&explicit_target, "not a directory").expect("replace target after preflight");
+
+    let error = crate::pipeline_cargo_target::ensure_cargo_target_sandbox_writable(
+        &report,
+        project.path(),
+        None,
+    )
+    .expect_err("post-hook target mutation must block before provider execution");
+
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert!(error.contains("explicit-target"));
 }
 
 #[cfg(unix)]
@@ -242,21 +372,21 @@ fn runtime_guard_replaces_readonly_ambient_target_for_unwritable_target() {
         "normal env merge must preserve the ambient target before the runtime guard decides"
     );
 
-    let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
+    let error = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
         None,
     )
-    .expect("policy should resolve");
+    .expect_err("unwritable canonical target must fail closed");
 
-    let selected = PathBuf::from(env.get("CARGO_TARGET_DIR").expect("managed target env"));
-    assert!(selected.ends_with("cargo-target"));
-    assert_ne!(selected, project.path().join("target"));
-    assert_eq!(report.policy_reason, "managed_target_selected");
-    assert!(!report.explicit_override_preserved);
-    assert!(report.automatic_substitution_applied);
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR").map(String::as_str),
+        Some("/usr/local"),
+        "preflight must not replace the configured target with a managed fallback"
+    );
 }
 
 #[cfg(unix)]
@@ -295,21 +425,21 @@ fn runtime_guard_replaces_readonly_caller_target_for_unwritable_target() {
         "normal env merge must preserve the caller target before the runtime guard decides"
     );
 
-    let report = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
+    let error = crate::pipeline_cargo_target::apply_runtime_task_target_dir_guards(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
         Some(&caller_env),
     )
-    .expect("policy should resolve");
+    .expect_err("unwritable canonical target must fail closed");
 
-    let selected = PathBuf::from(env.get("CARGO_TARGET_DIR").expect("managed target env"));
-    assert!(selected.ends_with("cargo-target"));
-    assert_ne!(selected, project.path().join("target"));
-    assert_eq!(report.policy_reason, "managed_target_selected");
-    assert!(!report.explicit_override_preserved);
-    assert!(report.automatic_substitution_applied);
+    assert!(error.contains("Cargo target preflight blocked before provider execution"));
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR").map(String::as_str),
+        Some("/usr/local"),
+        "preflight must not replace the configured target with a managed fallback"
+    );
 }
 
 #[cfg(unix)]
@@ -381,130 +511,23 @@ fn cargo_target_detects_unwritable_workspace_target() {
     make_unwritable_target(project.path());
     let mut env = HashMap::new();
 
-    let report = crate::pipeline_cargo_target::apply_run_target_dir_guard(
+    let error = crate::pipeline_cargo_target::apply_run_target_dir_guard(
         Some("run"),
         "codex",
         project.path(),
         &mut env,
     )
-    .expect("policy should resolve");
+    .expect_err("unwritable canonical target must fail closed");
 
-    let selected = PathBuf::from(env.get("CARGO_TARGET_DIR").expect("managed target env"));
-    assert!(selected.ends_with("cargo-target"));
-    assert!(selected.is_dir());
-    assert_eq!(report.policy_reason, "managed_target_selected");
-    assert_eq!(
-        report.workspace_target_status,
-        "workspace_target_unwritable"
-    );
-    assert!(report.automatic_substitution_applied);
-    assert!(!project.path().join("target/.cargo-build-lock").exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn cargo_target_policy_is_recorded_in_session_artifacts() {
-    let _lock = current_dir_lock().lock().expect("current dir lock");
-    let project = tempdir().expect("tempdir");
-    let _state_home =
-        crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", project.path().join("state"));
-    let session_dir = project.path().join("session");
-    std::fs::create_dir_all(&session_dir).expect("create session dir");
-    make_unwritable_target(project.path());
-    let mut env = HashMap::new();
-    let report = crate::pipeline_cargo_target::apply_run_target_dir_guard(
-        Some("run"),
-        "codex",
-        project.path(),
-        &mut env,
-    )
-    .expect("policy should resolve");
-
-    crate::pipeline_cargo_target::persist_cargo_target_policy_artifact(&session_dir, &report)
-        .expect("write policy artifact");
-
-    let artifact = session_dir.join(crate::pipeline_cargo_target::CARGO_TARGET_POLICY_ARTIFACT);
-    let raw = std::fs::read_to_string(&artifact).expect("read policy artifact");
-    let parsed: toml::Value = toml::from_str(&raw).expect("parse policy artifact");
-    assert_eq!(
-        parsed["policy_reason"].as_str(),
-        Some("managed_target_selected")
-    );
-    assert_eq!(
-        parsed["original_workspace_target"].as_str(),
-        Some(
-            project
-                .path()
-                .join("target")
-                .to_str()
-                .expect("target path utf8")
-        )
-    );
-    assert_eq!(
-        parsed["selected_cargo_target"].as_str(),
-        env.get("CARGO_TARGET_DIR").map(String::as_str)
-    );
-    assert_eq!(parsed["explicit_override_preserved"].as_bool(), Some(false));
-    assert_eq!(
-        parsed["automatic_substitution_applied"].as_bool(),
-        Some(true)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn cargo_target_writeability_regression() {
-    let _lock = current_dir_lock().lock().expect("current dir lock");
-    let project = tempdir().expect("tempdir");
-    let _state_home =
-        crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", project.path().join("state"));
-    let _cwd = CurrentDirGuard::enter(project.path());
-    std::fs::write(
-        project.path().join("Cargo.toml"),
-        "[package]\nname = \"cargo-target-regression\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
-    )
-    .expect("write Cargo.toml");
-    std::fs::create_dir(project.path().join("src")).expect("create src dir");
-    std::fs::write(
-        project.path().join("src/lib.rs"),
-        "pub fn value() -> u8 { 1 }\n",
-    )
-    .expect("write lib.rs");
-    make_unwritable_target(project.path());
-    let mut env = HashMap::new();
-
-    crate::pipeline_cargo_target::apply_run_target_dir_guard(
-        Some("run"),
-        "codex",
-        project.path(),
-        &mut env,
-    )
-    .expect("policy should resolve");
-    let selected = env
-        .get("CARGO_TARGET_DIR")
-        .expect("managed CARGO_TARGET_DIR should be set");
-
-    let output = std::process::Command::new("cargo")
-        .arg("check")
-        .env("CARGO_TARGET_DIR", selected)
-        .current_dir(project.path())
-        .output()
-        .expect("run cargo check");
-
+    assert!(error.contains("workspace_target_unwritable"));
+    assert!(error.contains("will not substitute an alternate CARGO_TARGET_DIR"));
     assert!(
-        output.status.success(),
-        "cargo check should use managed target\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        !env.contains_key("CARGO_TARGET_DIR"),
+        "preflight must not select a managed target"
     );
     assert!(
         !project.path().join("target/.cargo-build-lock").exists(),
-        "Cargo must not lock the unwritable workspace target"
-    );
-    assert!(
-        Path::new(selected).join("debug/.cargo-build-lock").exists()
-            || Path::new(selected).join(".rustc_info.json").exists(),
-        "managed target should receive Cargo artifacts"
+        "preflight must not invoke Cargo"
     );
 }
 

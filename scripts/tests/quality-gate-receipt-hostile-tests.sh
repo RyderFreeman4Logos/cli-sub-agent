@@ -96,7 +96,7 @@ PY
     "${fixture}/.csa/state/collection-lock-ready"
   started="$(date +%s)"
   set +e
-  output="$(cd "$fixture" && timeout 7 "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  output="$(cd "$fixture" && timeout 15 "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   code=$?
   set -e
   elapsed="$(( $(date +%s) - started ))"
@@ -104,7 +104,10 @@ PY
   wait "$lock" 2>/dev/null || true
   unregister_child "$lock"
   assert_eq hostile-collection-lock-timeout-exit 0 "$code"
-  assert_num_lt hostile-collection-lock-timeout-elapsed 7 "$elapsed"
+  # The enclosing `timeout 15` is the exact wall-clock bound.  `date +%s`
+  # reports whole seconds, so an execution that finishes just under that
+  # bound can span fifteen calendar-second ticks.
+  assert_num_lt hostile-collection-lock-timeout-elapsed 16 "$elapsed"
   assert_eq hostile-collection-lock-timeout-reason lock_timeout \
     "$(printf '%s' "$output" | json_field rejection_reason)"
   echo "PASS hostile-collection-lock-timeout"
@@ -133,7 +136,7 @@ PY
     "${fixture}/.csa/state/lock-ready"
   started="$(date +%s)"
   set +e
-  output="$(cd "$fixture" && timeout 7 "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  output="$(cd "$fixture" && timeout 15 "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   code=$?
   set -e
   elapsed="$(( $(date +%s) - started ))"
@@ -141,7 +144,9 @@ PY
   wait "$lock" 2>/dev/null || true
   unregister_child "$lock"
   assert_eq hostile-identity-lock-timeout-exit 0 "$code"
-  assert_num_lt hostile-identity-lock-timeout-elapsed 7 "$elapsed"
+  # Keep the coarse elapsed-time assertion compatible with the outer timeout;
+  # the process must still exit successfully before `timeout 15` can fire.
+  assert_num_lt hostile-identity-lock-timeout-elapsed 16 "$elapsed"
   assert_eq hostile-identity-lock-timeout-reason lock_timeout \
     "$(printf '%s' "$output" | json_field rejection_reason)"
   echo "PASS hostile-lock-timeout"

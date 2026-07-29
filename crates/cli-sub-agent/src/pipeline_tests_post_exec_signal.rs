@@ -62,6 +62,7 @@ async fn process_execution_result_persists_signal_kill_hint() {
         turn_count: 1,
         output_tokens: None,
         sa_mode: false,
+        original_exit_code: None,
     };
     let mut result = csa_process::ExecutionResult {
         output: String::new(),

@@ -19,3 +19,9 @@ threads-required = "num-test-threads"
 [[profile.static.overrides]]
 filter = 'binary_id(=cli-sub-agent::bin/csa) & test(=plan_cmd::tests_pr_bot_degraded::execute_pr_bot_degraded_local_fallback_records_rationale_and_reaches_merge)'
 threads-required = "num-test-threads"
+
+# This real proxy p95 measurement must not contend with sibling nextest processes
+# in the Static partition; retain its bounded regression check in isolation (#2812).
+[[profile.static.overrides]]
+filter = 'binary_id(=cli-sub-agent::mcp_hub_e2e) & test(=hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget)'
+threads-required = "num-test-threads"
