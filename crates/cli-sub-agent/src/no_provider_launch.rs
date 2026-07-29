@@ -1,6 +1,8 @@
+use std::path::Path;
+
 use anyhow::Error;
 use csa_config::ProjectConfig;
-use csa_resource::{MemoryAdmissionError, memory_policy};
+use csa_resource::{MemoryAdmissionError, ResourceGuard, ResourceLimits, memory_policy};
 use csa_session::{
     MetaSessionState, NO_PROVIDER_LAUNCH_SCHEMA_VERSION, NoProviderLaunchDiagnostic,
     NoProviderLaunchMemoryDiagnostic,
@@ -38,19 +40,22 @@ fn from_soft_limit_admission(
     ctx: NoProviderLaunchContext<'_>,
     error: &MemorySoftLimitAdmissionError,
 ) -> NoProviderLaunchDiagnostic {
+    let memory = soft_limit_admission_diagnostic_memory(
+        Path::new(&ctx.session.project_path),
+        &ctx.session.meta_session_id,
+        ctx.config,
+        ctx.resource_overrides,
+        error,
+    );
+    let mut guidance = error.guidance();
+    guidance.extend(soft_limit_admission_guidance(ctx.tool_name, &memory));
+
     base_diagnostic(
         &ctx,
         error.role(),
         MemorySoftLimitAdmissionError::TERMINATION_REASON,
-        NoProviderLaunchMemoryDiagnostic {
-            effective_memory_max_mb: Some(error.memory_max_mb()),
-            soft_limit_percent: Some(error.soft_limit_percent()),
-            soft_threshold_mb: Some(error.threshold_mb()),
-            required_floor_mb: Some(error.required_threshold_mb()),
-            required_memory_max_mb: Some(error.required_memory_max_mb()),
-            ..Default::default()
-        },
-        error.guidance(),
+        memory,
+        guidance,
     )
 }
 
@@ -92,6 +97,83 @@ pub(crate) fn host_memory_guidance_from_error(
         host_memory,
     );
     Some(host_memory_guidance(task_type, tool_name, &memory))
+}
+
+pub(crate) fn soft_limit_admission_guidance_from_error(
+    project_root: &Path,
+    current_session_id: &str,
+    tool_name: &str,
+    config: Option<&ProjectConfig>,
+    resource_overrides: RunResourceOverrides,
+    error: &Error,
+) -> Option<Vec<String>> {
+    let soft_limit = error.downcast_ref::<MemorySoftLimitAdmissionError>()?;
+    let memory = soft_limit_admission_diagnostic_memory(
+        project_root,
+        current_session_id,
+        config,
+        resource_overrides,
+        soft_limit,
+    );
+    let mut guidance = soft_limit.guidance();
+    guidance.extend(soft_limit_admission_guidance(tool_name, &memory));
+    Some(guidance)
+}
+
+fn soft_limit_admission_diagnostic_memory(
+    project_root: &Path,
+    current_session_id: &str,
+    config: Option<&ProjectConfig>,
+    resource_overrides: RunResourceOverrides,
+    error: &MemorySoftLimitAdmissionError,
+) -> NoProviderLaunchMemoryDiagnostic {
+    let admission = crate::resource_admission::build_spawn_memory_admission(
+        project_root,
+        current_session_id,
+        error.memory_max_mb(),
+    );
+    let mut resource_guard = ResourceGuard::new(ResourceLimits {
+        min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
+    });
+    let snapshot = resource_guard.memory_admission_retry_snapshot(admission);
+    let retry_lower_bound_mb = Some(host_memory_retry_lower_bound_mb(Some(
+        error.required_memory_max_mb(),
+    )));
+    let retry_feasible = retry_lower_bound_mb.map(|lower_bound_mb| {
+        lower_bound_mb <= snapshot.retry_bounds.combined_upper_mb
+            || reserve_delta_retry_from_bounds(
+                snapshot.available_phys_mb,
+                snapshot.reserve_mb,
+                snapshot
+                    .retry_bounds
+                    .active_session_upper_mb
+                    .unwrap_or(u64::MAX),
+                lower_bound_mb,
+            )
+            .is_some_and(|retry| lower_bound_mb <= retry.adjusted_upper_mb)
+    });
+
+    NoProviderLaunchMemoryDiagnostic {
+        effective_memory_max_mb: Some(error.memory_max_mb()),
+        soft_limit_percent: Some(error.soft_limit_percent()),
+        soft_threshold_mb: Some(error.threshold_mb()),
+        required_floor_mb: Some(error.required_threshold_mb()),
+        required_memory_max_mb: Some(error.required_memory_max_mb()),
+        reserve_mb: Some(snapshot.reserve_mb),
+        available_memory_mb: Some(snapshot.available_phys_mb),
+        required_available_mb: retry_lower_bound_mb
+            .map(|lower_bound_mb| lower_bound_mb.saturating_add(snapshot.reserve_mb)),
+        projected_spawn_mb: Some(snapshot.admission.projected_spawn_mb),
+        active_session_rss_mb: Some(snapshot.admission.active_session_rss_mb),
+        active_session_projected_mb: Some(snapshot.admission.active_session_projected_mb),
+        active_session_count: Some(snapshot.admission.active_session_count),
+        sampled_session_count: Some(snapshot.admission.sampled_session_count),
+        retry_physical_upper_mb: Some(snapshot.retry_bounds.physical_upper_mb),
+        retry_active_session_upper_mb: snapshot.retry_bounds.active_session_upper_mb,
+        retry_combined_upper_mb: Some(snapshot.retry_bounds.combined_upper_mb),
+        retry_lower_bound_mb,
+        retry_feasible,
+    }
 }
 
 fn host_memory_diagnostic_memory(
@@ -184,6 +266,19 @@ pub(crate) fn role_from_task_type(task_type: Option<&str>) -> &'static str {
         Some("run") | None => "writer",
         Some(_) => "session",
     }
+}
+
+fn soft_limit_admission_guidance(
+    tool_name: &str,
+    memory: &NoProviderLaunchMemoryDiagnostic,
+) -> Vec<String> {
+    vec![
+        "CSA: soft-limit admission rejected before provider launch; this is an \
+         infrastructure/session-unavailable pre-exec denial and did not launch the provider or \
+         mutate the worktree."
+            .to_string(),
+        host_memory_retry_feasibility(tool_name, memory),
+    ]
 }
 
 fn host_memory_guidance(
@@ -412,96 +507,5 @@ pub(crate) fn enrich_review_diagnostic(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn host_memory_reviewer_guidance_suggests_soft_limit_safe_retry_pair() {
-        let memory = NoProviderLaunchMemoryDiagnostic {
-            effective_memory_max_mb: Some(10_000),
-            soft_limit_percent: Some(90),
-            soft_threshold_mb: Some(9_000),
-            required_floor_mb: Some(8_192),
-            required_memory_max_mb: Some(9_103),
-            reserve_mb: Some(9_000),
-            available_memory_mb: Some(17_033),
-            required_available_mb: Some(19_000),
-            projected_spawn_mb: Some(10_000),
-            retry_physical_upper_mb: Some(8_033),
-            retry_active_session_upper_mb: Some(16_000),
-            retry_combined_upper_mb: Some(8_033),
-            retry_lower_bound_mb: Some(9_103),
-            retry_feasible: Some(true),
-            ..Default::default()
-        };
-
-        let guidance = host_memory_guidance(Some("reviewer_sub_session"), "codex", &memory);
-        let joined = guidance.join("\n");
-
-        assert!(joined.contains("physical MemAvailable only"));
-        assert!(joined.contains("swap/combined memory is diagnostic"));
-        assert!(joined.contains("Retry feasibility: feasible with reserve delta"));
-        assert!(joined.contains("--memory-max-mb 9103 --min-free-memory-mb 6000"));
-        assert!(joined.contains("lower_bound=9103MB > current_upper=8033MB"));
-        assert!(joined.contains("lowering reserve opens retry_window=9103..=11033MB"));
-        assert!(joined.contains("host_required=15103MB <= physical_available=17033MB"));
-        assert!(joined.contains("csa plan run"));
-    }
-
-    #[test]
-    fn host_memory_reviewer_guidance_preserves_tight_retry_window() {
-        let memory = NoProviderLaunchMemoryDiagnostic {
-            effective_memory_max_mb: Some(10_000),
-            soft_limit_percent: Some(90),
-            soft_threshold_mb: Some(9_000),
-            required_floor_mb: Some(8_192),
-            required_memory_max_mb: Some(9_103),
-            reserve_mb: Some(256),
-            available_memory_mb: Some(9_296),
-            required_available_mb: Some(10_256),
-            projected_spawn_mb: Some(10_000),
-            retry_physical_upper_mb: Some(9_040),
-            retry_active_session_upper_mb: Some(12_000),
-            retry_combined_upper_mb: Some(9_040),
-            retry_lower_bound_mb: Some(9_103),
-            retry_feasible: Some(true),
-            ..Default::default()
-        };
-
-        let guidance = host_memory_guidance(Some("reviewer_sub_session"), "codex", &memory);
-        let joined = guidance.join("\n");
-
-        assert!(joined.contains("--memory-max-mb 9103 --min-free-memory-mb 193"));
-        assert!(joined.contains("lower_bound=9103MB > current_upper=9040MB"));
-        assert!(joined.contains("lowering reserve opens retry_window=9103..=9103MB"));
-        assert!(joined.contains("host_required=9296MB <= physical_available=9296MB"));
-    }
-
-    #[test]
-    fn host_memory_reviewer_guidance_reports_active_pressure_infeasible() {
-        let memory = NoProviderLaunchMemoryDiagnostic {
-            effective_memory_max_mb: Some(10_000),
-            soft_limit_percent: Some(90),
-            soft_threshold_mb: Some(9_000),
-            required_floor_mb: Some(8_192),
-            required_memory_max_mb: Some(9_103),
-            reserve_mb: Some(1_000),
-            available_memory_mb: Some(20_000),
-            required_available_mb: Some(11_000),
-            projected_spawn_mb: Some(10_000),
-            retry_physical_upper_mb: Some(19_000),
-            retry_active_session_upper_mb: Some(8_000),
-            retry_combined_upper_mb: Some(8_000),
-            retry_lower_bound_mb: Some(9_103),
-            retry_feasible: Some(false),
-            ..Default::default()
-        };
-
-        let guidance = host_memory_guidance(Some("reviewer_sub_session"), "codex", &memory);
-        let joined = guidance.join("\n");
-
-        assert!(joined.contains("Retry feasibility: infeasible"));
-        assert!(joined.contains("active-session upper 8000MB is below lower_bound=9103MB"));
-        assert!(joined.contains("Do not retry with another memory_max_mb"));
-    }
-}
+#[path = "no_provider_launch_tests.rs"]
+mod tests;

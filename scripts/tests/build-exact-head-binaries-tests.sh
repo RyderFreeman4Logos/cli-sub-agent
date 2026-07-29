@@ -3,6 +3,18 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 builder="${repo_root}/scripts/build-exact-head-binaries.sh"
+
+# Git hooks export their checkout's local Git environment. This test creates
+# and commits a separate fixture repository, so discard that inherited context
+# before any fixture Git command can resolve back to the checkout.
+clear_inherited_git_environment() {
+  local variable
+  while IFS= read -r variable; do
+    unset "$variable"
+  done < <(git rev-parse --local-env-vars)
+}
+clear_inherited_git_environment
+
 tmp="$(mktemp -d)"
 race_builder_pid=""
 cleanup() {

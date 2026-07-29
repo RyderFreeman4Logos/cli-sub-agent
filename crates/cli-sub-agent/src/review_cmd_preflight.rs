@@ -233,7 +233,26 @@ fn validate_review_candidate_resources_before_session(
             .sandbox
             .as_ref()
             .map(|sandbox| &sandbox.isolation_plan),
-    )?;
+    )
+    .map_err(|err| {
+        let err = anyhow::Error::new(err);
+        let guidance = crate::no_provider_launch::soft_limit_admission_guidance_from_error(
+            project_root,
+            REVIEW_PREFLIGHT_SESSION_ID,
+            tool.as_str(),
+            project_config,
+            resource_overrides,
+            &err,
+        );
+        if let Some(guidance) = guidance {
+            err.context(format!(
+                "soft-limit memory retry guidance:\n- {}",
+                guidance.join("\n- ")
+            ))
+        } else {
+            err
+        }
+    })?;
     validate_host_memory_before_session(project_root, project_config, tool, resource_overrides)
         .with_context(|| format!("review preflight for tool '{tool}'"))
 }

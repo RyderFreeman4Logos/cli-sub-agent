@@ -49,6 +49,11 @@ pub struct MemoryAdmissionRetryBounds {
     pub combined_upper_mb: u64,
 }
 
+#[path = "guard_retry_snapshot.rs"]
+mod guard_retry_snapshot;
+
+pub use guard_retry_snapshot::MemoryAdmissionRetrySnapshot;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryAdmissionKind {
     Reserve,
