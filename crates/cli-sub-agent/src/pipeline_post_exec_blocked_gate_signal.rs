@@ -301,49 +301,53 @@ pub(super) fn reports_current_unresolved_signal(lower: &str) -> bool {
         })
         .collect();
     tokenize_by_clauses(lower).into_iter().any(|clause_tokens| {
-        signal_token_lists
-            .iter()
-            .any(|signal_tokens| match phrase_occurs_index(&clause_tokens, signal_tokens) {
-                Some(occurrence_index) => {
-                    !segment_has_qualifier_at(
-                        &clause_tokens,
-                        occurrence_index,
-                    )
-                }
-                None => false,
+        // R16-F1: inspect EVERY occurrence of each signal phrase. First-match
+        // only would treat "Previous gate remains blocked but gate remains
+        // blocked" as historical and miss the concurrent second occurrence.
+        signal_token_lists.iter().any(|signal_tokens| {
+            phrase_occurrence_indices(&clause_tokens, signal_tokens).any(|occurrence_index| {
+                !segment_has_qualifier_at(&clause_tokens, occurrence_index)
             })
+        })
     })
 }
 
-/// Current omission of required work (`omitted` + `test`/`tests` + `commit`)
-/// in the same clause. Historical only when a qualifier is in the same
-/// coordination segment as `omitted` (#2806 R10/R14/R15-F1).
+/// Current omission of required work (`omitted` + `test`/`tests` + `commit`).
+/// R16-F2: evaluate each coordination segment independently — a historical
+/// first `omitted` must not exempt a concurrent omission after `but`.
 pub(super) fn reports_current_omitted_required_work(lower: &str) -> bool {
     tokenize_by_clauses(lower).into_iter().any(|clause_tokens| {
-        clause_contains_omitted_test_commit(&clause_tokens)
-            && !segment_has_qualifier_for(
-                &clause_tokens,
-                |token| *token == "omitted",
-            )
+        segment_boundaries(&clause_tokens).into_iter().any(|seg| {
+            let segment = &clause_tokens[seg.start..seg.end];
+            clause_contains_omitted_test_commit(segment)
+                && !segment
+                    .iter()
+                    .any(|token| is_historical_qualifier(token))
+        })
     })
 }
 
-/// First contiguous match of `phrase_tokens` in `clause_tokens`, or `None`.
-fn phrase_occurs_index(clause_tokens: &[&str], phrase_tokens: &[&str]) -> Option<usize> {
+/// Starting indices of every contiguous match of `phrase_tokens`.
+fn phrase_occurrence_indices<'a>(
+    clause_tokens: &'a [&str],
+    phrase_tokens: &'a [&str],
+) -> impl Iterator<Item = usize> + 'a {
     let plen = phrase_tokens.len();
-    if plen == 0 || plen > clause_tokens.len() {
-        return None;
-    }
-    clause_tokens
-        .windows(plen)
-        .position(|window| window == phrase_tokens)
+    let max_start = clause_tokens.len().saturating_sub(plen);
+    // Empty phrase or phrase longer than the clause: no matches. The
+    // saturating_sub alone is not enough — when plen > len, max_start is 0 and
+    // `0..=0` would still attempt an out-of-range slice.
+    let has_room = plen > 0 && plen <= clause_tokens.len();
+    (0..=max_start).filter(move |start| {
+        has_room && clause_tokens[*start..*start + plen] == *phrase_tokens
+    })
 }
 
-/// Clause has `omitted` plus `test`/`tests` and `commit`.
-fn clause_contains_omitted_test_commit(clause_tokens: &[&str]) -> bool {
-    clause_tokens.contains(&"omitted")
-        && (clause_tokens.contains(&"test") || clause_tokens.contains(&"tests"))
-        && clause_tokens.contains(&"commit")
+/// Tokens contain `omitted` plus `test`/`tests` and `commit`.
+fn clause_contains_omitted_test_commit(tokens: &[&str]) -> bool {
+    tokens.contains(&"omitted")
+        && (tokens.contains(&"test") || tokens.contains(&"tests"))
+        && tokens.contains(&"commit")
 }
 
 /// Skip leading `currently`/`now` tokens from `index`.
@@ -363,17 +367,6 @@ fn segment_has_qualifier_at(clause_tokens: &[&str], index: usize) -> bool {
                 .iter()
                 .any(|token| is_historical_qualifier(token))
     })
-}
-
-/// Like [`segment_has_qualifier_at`] after locating the occurrence by predicate.
-fn segment_has_qualifier_for<F>(clause_tokens: &[&str], is_occurrence: F) -> bool
-where
-    F: Fn(&&str) -> bool,
-{
-    match clause_tokens.iter().position(is_occurrence) {
-        Some(index) => segment_has_qualifier_at(clause_tokens, index),
-        None => false,
-    }
 }
 
 /// Split on `but`, or on `and` before a gate-outcome subject (R15-F1).
