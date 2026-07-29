@@ -334,6 +334,10 @@ fn csa_cmd(home: &Path) -> Command {
         .env("CARGO_HOME", cargo_home)
         .env("RUSTUP_HOME", rustup_home)
         .env("TOKIO_WORKER_THREADS", "1")
+        // Keep the deliberate 9000MB writer contract hermetic under full-suite
+        // host pressure. Debug-only hook; release builds keep production
+        // admission intact (see pipeline_session_exec_pre_exec).
+        .env("CSA_TEST_SKIP_HOST_MEMORY_ADMISSION", "1")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CI");
     cmd
