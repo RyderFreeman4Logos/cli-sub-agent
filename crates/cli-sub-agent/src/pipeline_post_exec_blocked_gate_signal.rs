@@ -369,7 +369,12 @@ fn segment_has_qualifier_at(clause_tokens: &[&str], index: usize) -> bool {
     })
 }
 
-/// Split on `but`, or on `and` before a gate-outcome subject (R15-F1).
+/// Split on `but`, or on `and` before a new gate-outcome / omission subject.
+/// R17-1H: `and` may be followed by optional determiners (`the`/`a`/`an`) and
+/// optional current-turn subjects (`this turn` / `that attempt`) before
+/// `gate|status|result|omitted`. Without that lookahead, forms like
+/// `failed and the gate remains blocked` or `omitted ... and this turn omitted`
+/// stay in the historical segment and hide the concurrent veto.
 fn segment_boundaries(clause_tokens: &[&str]) -> Vec<std::ops::Range<usize>> {
     let mut segments: Vec<std::ops::Range<usize>> = Vec::new();
     let mut start = 0;
@@ -377,9 +382,7 @@ fn segment_boundaries(clause_tokens: &[&str]) -> Vec<std::ops::Range<usize>> {
     while index < clause_tokens.len() {
         let token = clause_tokens[index];
         let is_coordination_boundary = (token == "but")
-            || (token == "and"
-                && index + 1 < clause_tokens.len()
-                && matches!(clause_tokens[index + 1], "gate" | "status" | "result"));
+            || (token == "and" && and_starts_new_outcome_segment(clause_tokens, index));
         if is_coordination_boundary {
             segments.push(start..index);
             start = index;
@@ -388,6 +391,30 @@ fn segment_boundaries(clause_tokens: &[&str]) -> Vec<std::ops::Range<usize>> {
     }
     segments.push(start..clause_tokens.len());
     segments
+}
+
+/// True when tokens after `and` at `and_index` head a new outcome segment.
+fn and_starts_new_outcome_segment(clause_tokens: &[&str], and_index: usize) -> bool {
+    let mut index = and_index + 1;
+    while index < clause_tokens.len() && matches!(clause_tokens[index], "the" | "a" | "an") {
+        index += 1;
+    }
+    if index < clause_tokens.len() && matches!(clause_tokens[index], "this" | "that" | "current") {
+        index += 1;
+        if index < clause_tokens.len()
+            && matches!(
+                clause_tokens[index],
+                "turn" | "attempt" | "run" | "session"
+            )
+        {
+            index += 1;
+        }
+    }
+    index < clause_tokens.len()
+        && matches!(
+            clause_tokens[index],
+            "gate" | "status" | "result" | "omitted"
+        )
 }
 
 fn is_historical_qualifier(token: &str) -> bool {
