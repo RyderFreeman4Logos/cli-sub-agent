@@ -67,6 +67,48 @@ fn resolve_with_memory_override(
     )
 }
 
+fn resolve_with_resource_overrides_on_capability(
+    config: &csa_config::ProjectConfig,
+    resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
+    resource_capability: csa_resource::ResourceCapability,
+) -> SandboxResolution {
+    resolve_with_resource_overrides_on_capability_for_tool(
+        config,
+        "codex",
+        resource_overrides,
+        resource_capability,
+    )
+}
+
+fn resolve_with_resource_overrides_on_capability_for_tool(
+    config: &csa_config::ProjectConfig,
+    tool_name: &str,
+    resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
+    resource_capability: csa_resource::ResourceCapability,
+) -> SandboxResolution {
+    resolve_sandbox_options_with_capabilities(
+        SandboxResolveInput {
+            config: Some(config),
+            tool_name,
+            session_id: "test-session",
+            project_root: &current_project_root(),
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: None,
+        },
+        resource_overrides,
+        resource_capability,
+        csa_resource::FilesystemCapability::Bwrap,
+    )
+}
+
 #[test]
 fn run_memory_override_promotes_no_config_lightweight_default_off() {
     let result = resolve_with_memory_override(None, "opencode", 6144);
@@ -122,4 +164,87 @@ memory_max_mb = 16384
     let result = resolve_with_memory_override(Some(&cfg), "codex", 6144);
 
     assert_run_memory_override_enforced_or_rejected(result, 6144);
+}
+
+#[test]
+fn inherited_memory_override_promotes_config_lightweight_default_off() {
+    let cfg = parse_project_config(
+        r#"
+[tools.opencode]
+enabled = true
+"#,
+    );
+    let inherited =
+        crate::run_resource_overrides::RunResourceOverrides::from_cli(Some(6144), None).for_child();
+
+    let result = resolve_with_resource_overrides_on_capability_for_tool(
+        &cfg,
+        "opencode",
+        inherited,
+        csa_resource::ResourceCapability::Setrlimit,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("inherited memory_max_mb must promote a default-off child sandbox");
+    };
+    let sandbox = opts
+        .sandbox
+        .expect("inherited memory_max_mb should still build an isolation plan");
+    assert_eq!(sandbox.isolation_plan.memory_max_mb, Some(6144));
+    assert_eq!(
+        sandbox.isolation_plan.resource,
+        csa_resource::ResourceCapability::Setrlimit
+    );
+}
+
+#[test]
+fn inherited_memory_override_allows_setrlimit_and_keeps_memory_limit() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+enforcement_mode = "best-effort"
+"#,
+    );
+    let inherited =
+        crate::run_resource_overrides::RunResourceOverrides::from_cli(Some(6144), None).for_child();
+
+    let result = resolve_with_resource_overrides_on_capability(
+        &cfg,
+        inherited,
+        csa_resource::ResourceCapability::Setrlimit,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("inherited memory_max_mb must not require cgroup v2 enforcement");
+    };
+    let sandbox = opts
+        .sandbox
+        .expect("inherited memory_max_mb should still build an isolation plan");
+    assert_eq!(sandbox.isolation_plan.memory_max_mb, Some(6144));
+    assert_eq!(
+        sandbox.isolation_plan.resource,
+        csa_resource::ResourceCapability::Setrlimit
+    );
+}
+
+#[test]
+fn explicit_cli_memory_override_requires_cgroup_v2_on_setrlimit() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_with_resource_overrides_on_capability(
+        &cfg,
+        crate::run_resource_overrides::RunResourceOverrides::from_cli(Some(6144), None),
+        csa_resource::ResourceCapability::Setrlimit,
+    );
+
+    let SandboxResolution::RequiredButUnavailable(message) = result else {
+        panic!("explicit --memory-max-mb must require cgroup v2 enforcement");
+    };
+    assert!(message.contains("--memory-max-mb"));
+    assert!(message.contains("cgroup v2"));
 }

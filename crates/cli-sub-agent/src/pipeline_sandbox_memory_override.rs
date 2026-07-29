@@ -12,16 +12,19 @@ pub(crate) fn default_off_allows_unsandboxed(
 pub(crate) fn resolve_config_enforcement(
     cfg: &ProjectConfig,
     tool_name: &str,
-    has_run_memory_override: bool,
+    has_memory_max_override: bool,
+    has_explicit_cli_memory_max: bool,
 ) -> Result<Option<EnforcementMode>, String> {
     let enforcement = cfg.tool_enforcement_mode(tool_name);
     if !matches!(enforcement, EnforcementMode::Off) {
         return Ok(Some(enforcement));
     }
-    if !has_run_memory_override {
+    if !has_memory_max_override {
         return Ok(None);
     }
-    if explicit_resource_enforcement_mode(cfg, tool_name) == Some(EnforcementMode::Off) {
+    if has_explicit_cli_memory_max
+        && explicit_resource_enforcement_mode(cfg, tool_name) == Some(EnforcementMode::Off)
+    {
         return Err(format!(
             "--memory-max-mb cannot be used for tool '{tool_name}' because resource \
              sandbox enforcement_mode is explicitly \"off\". Set enforcement_mode = \
@@ -31,7 +34,7 @@ pub(crate) fn resolve_config_enforcement(
 
     warn!(
         tool = %tool_name,
-        "Auto-promoting resource enforcement_mode Off to BestEffort for per-run --memory-max-mb"
+        "Auto-promoting resource enforcement_mode Off to BestEffort for inherited or per-run memory_max_mb"
     );
     Ok(Some(EnforcementMode::BestEffort))
 }

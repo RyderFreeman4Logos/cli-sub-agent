@@ -437,6 +437,23 @@ memory_max_mb = 16384
     }
 
     #[test]
+    fn spawn_projection_uses_inherited_memory_override_before_tool_config() {
+        let cfg: ProjectConfig = toml::from_str(
+            r#"
+[tools.codex]
+memory_max_mb = 16384
+"#,
+        )
+        .expect("config should parse");
+        let inherited = RunResourceOverrides::from_cli(Some(6144), None).for_child();
+
+        assert_eq!(
+            spawn_memory_projection_mb_with_overrides(Some(&cfg), "codex", inherited),
+            6144
+        );
+    }
+
+    #[test]
     fn default_projection_is_bounded_by_physical_memory_after_reserve() {
         assert_eq!(
             bound_default_spawn_projection_mb(14_000, 12_000, 1024),

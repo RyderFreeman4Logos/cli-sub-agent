@@ -212,6 +212,10 @@ impl RunResourceOverrides {
         self.memory_max_mb.is_some()
     }
 
+    pub(crate) fn has_explicit_cli_memory_max(self) -> bool {
+        self.memory_max_mb_source == Some(ResourceValueSource::ExplicitCli)
+    }
+
     pub(crate) fn resolve_memory_max_mb(
         self,
         config: Option<&ProjectConfig>,
@@ -306,6 +310,7 @@ mod tests {
         let info = overrides.resolution_info(None, "codex");
 
         assert_eq!(overrides.resolve_memory_max_mb(None, "codex"), Some(12_000));
+        assert!(overrides.has_explicit_cli_memory_max());
         assert_eq!(
             info.inherited_memory_max_mb,
             Some(SourcedResourceValue {
@@ -344,6 +349,8 @@ mod tests {
             })
         );
         assert_eq!(info.effective_memory_max_mb, info.inherited_memory_max_mb);
+        assert!(overrides.has_memory_max_override());
+        assert!(!overrides.has_explicit_cli_memory_max());
     }
 
     #[test]

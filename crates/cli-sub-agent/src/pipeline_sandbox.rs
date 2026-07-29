@@ -194,7 +194,8 @@ fn resolve_sandbox_options_with_capability_source(
         extra_readable,
         execution_env,
     } = input;
-    let has_run_memory_override = resource_overrides.has_memory_max_override();
+    let has_memory_max_override = resource_overrides.has_memory_max_override();
+    let has_explicit_cli_memory_max = resource_overrides.has_explicit_cli_memory_max();
 
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -225,7 +226,7 @@ fn resolve_sandbox_options_with_capability_source(
 
         if memory_override::default_off_allows_unsandboxed(
             defaults.enforcement,
-            has_run_memory_override,
+            has_memory_max_override,
         ) {
             return SandboxResolution::Ok(Box::new(execute_options));
         }
@@ -242,7 +243,7 @@ fn resolve_sandbox_options_with_capability_source(
         };
         if let Some(message) = memory_override::capability_error_if_unenforced(
             tool_name,
-            has_run_memory_override,
+            has_explicit_cli_memory_max,
             resource_cap,
         ) {
             return SandboxResolution::RequiredButUnavailable(message);
@@ -324,7 +325,7 @@ fn resolve_sandbox_options_with_capability_source(
             .build()
             .expect("BestEffort IsolationPlan should never fail");
         if let Some(message) =
-            memory_override::plan_error_if_unenforced(tool_name, has_run_memory_override, &plan)
+            memory_override::plan_error_if_unenforced(tool_name, has_explicit_cli_memory_max, &plan)
         {
             return SandboxResolution::RequiredButUnavailable(message);
         }
@@ -350,7 +351,8 @@ fn resolve_sandbox_options_with_capability_source(
     let enforcement = match memory_override::resolve_config_enforcement(
         cfg,
         tool_name,
-        has_run_memory_override,
+        has_memory_max_override,
+        has_explicit_cli_memory_max,
     ) {
         Ok(Some(enforcement)) => enforcement,
         Ok(None) => {
@@ -378,7 +380,7 @@ fn resolve_sandbox_options_with_capability_source(
     let resource_cap = resource_capability();
     if let Some(message) = memory_override::capability_error_if_unenforced(
         tool_name,
-        has_run_memory_override,
+        has_explicit_cli_memory_max,
         resource_cap,
     ) {
         return SandboxResolution::RequiredButUnavailable(message);
@@ -573,7 +575,7 @@ fn resolve_sandbox_options_with_capability_source(
         }
     };
     if let Some(message) =
-        memory_override::plan_error_if_unenforced(tool_name, has_run_memory_override, &plan)
+        memory_override::plan_error_if_unenforced(tool_name, has_explicit_cli_memory_max, &plan)
     {
         return SandboxResolution::RequiredButUnavailable(message);
     }
