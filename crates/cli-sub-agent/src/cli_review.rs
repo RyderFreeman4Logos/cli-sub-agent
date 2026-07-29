@@ -354,7 +354,7 @@ pub struct ReviewArgs {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     pub extra_readable: Vec<PathBuf>,
 
-    /// Caller-confirmed fix prompt text for --fix-finding.
+    /// Fix-finding prompt text (requires --fix-finding).
     ///
     /// Optional when the source review has exactly one structured finding in
     /// `output/findings.toml` (derived automatically). Otherwise required via

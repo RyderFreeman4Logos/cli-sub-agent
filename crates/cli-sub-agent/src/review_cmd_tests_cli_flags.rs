@@ -1,4 +1,19 @@
 use super::*;
+use clap::CommandFactory;
+
+#[test]
+fn review_help_discloses_prompt_requires_fix_finding() {
+    let mut command = Cli::command();
+    let review = command
+        .find_subcommand_mut("review")
+        .expect("review subcommand should exist");
+    let help = review.render_long_help().to_string();
+
+    assert!(
+        help.contains("Fix-finding prompt text (requires --fix-finding)."),
+        "{help}"
+    );
+}
 
 #[test]
 fn review_cli_parses_hint_difficulty_flag() {
