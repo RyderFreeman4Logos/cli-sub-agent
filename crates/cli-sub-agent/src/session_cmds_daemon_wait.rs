@@ -482,10 +482,12 @@ fn emit_wait_completion_signal(
     }
 }
 
-/// Check whether the session's last event remains within its configured
-/// liveness deadline while waiting. A live PID or diagnostic lock does not
-/// override a stale event: callers need a liveness failure instead of repeated
-/// `status=alive` outcomes for a stuck worker.
+/// Check whether a session has gone stale while waiting.
+///
+/// A stale event stream alone is not a death signal: a read-only liveness
+/// probe or a live worktree write lock shows that the session is still making
+/// progress. In their absence, the configured event deadline remains
+/// fail-closed for genuinely dead sessions.
 fn check_session_stale_before_wait(
     project_root: &Path,
     session_id: &str,
@@ -504,8 +506,6 @@ fn check_session_stale_before_wait(
         Ok(session) => {
             if matches!(session.phase, csa_session::SessionPhase::Active) {
                 // A durable terminal result or completion marker is authoritative.
-                // Otherwise, verify the event age before accepting a live PID or
-                // worktree lock as proof that the session is still healthy.
                 if super::legacy_complete_marker_is_valid(session_dir)
                     || (super::daemon_completion_exists(session_dir)
                         && !session_has_terminal_process(session_dir))
@@ -517,6 +517,15 @@ fn check_session_stale_before_wait(
                     Ok(None) => {}
                 }
 
+                if csa_process::ToolLiveness::is_alive_read_only(session_dir)
+                    || any_session_holds_worktree_write_lock(
+                        worktree_lock_root,
+                        worktree_lock_session_ids,
+                    )
+                {
+                    return Ok(());
+                }
+
                 let elapsed = wait_options
                     .current_time()
                     .signed_duration_since(session.last_accessed);
@@ -526,15 +535,6 @@ fn check_session_stale_before_wait(
                         elapsed.num_seconds(),
                         liveness_dead_seconds
                     ));
-                }
-
-                if csa_process::ToolLiveness::is_alive(session_dir)
-                    || any_session_holds_worktree_write_lock(
-                        worktree_lock_root,
-                        worktree_lock_session_ids,
-                    )
-                {
-                    return Ok(());
                 }
             }
         }
@@ -560,7 +560,7 @@ fn state_loss_has_waitable_evidence(session_dir: &Path) -> bool {
         .is_file()
         || super::daemon_completion_exists(session_dir)
         || session_has_terminal_process(session_dir)
-        || csa_process::ToolLiveness::is_alive(session_dir)
+        || csa_process::ToolLiveness::is_alive_read_only(session_dir)
 }
 
 fn any_session_holds_worktree_write_lock(

@@ -78,6 +78,7 @@ fn run_wait_host_memory_denial_fails_before_session_started_marker() {
             "run",
             "--sa-mode",
             "false",
+            "--allow-base-branch-working",
             "--wait",
             "--tool",
             "codex",

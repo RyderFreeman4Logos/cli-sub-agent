@@ -95,8 +95,8 @@ fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_p
         "test requires session_has_terminal_process=false: no daemon pid"
     );
     assert!(
-        csa_process::ToolLiveness::is_alive(&session_dir),
-        "recent session writes must make is_alive return true"
+        csa_process::ToolLiveness::is_alive_read_only(&session_dir),
+        "recent session writes must make the read-only liveness probe return true"
     );
 
     let exit_code = handle_session_wait_with_hooks(
@@ -128,7 +128,7 @@ fn handle_session_wait_continues_polling_when_pid_missing_but_liveness_signals_p
 
 #[cfg(target_os = "linux")]
 #[test]
-fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_deadline() {
+fn handle_session_wait_continues_when_read_only_liveness_outlives_event_deadline() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -158,6 +158,7 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
     session.last_accessed = fixed_now - chrono::Duration::seconds(2);
     save_session(&session).expect("persist stale event at fixed time");
     let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
 
     let wait_result = handle_session_wait_with_hooks_at(
         session_id,
@@ -173,17 +174,21 @@ fn handle_session_wait_fails_when_live_daemon_event_exceeds_configured_liveness_
         fixed_now,
         Some(true),
         |_project_root, _current_session_id, _trigger| {
-            panic!("stale live session must fail liveness before reconciliation")
+            panic!("live session must not reconcile after its event deadline")
         },
         |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
-            panic!("stale live session must not emit a terminal completion")
+            panic!("live session must not emit a terminal completion")
         },
     );
 
     assert_eq!(
-        wait_result.expect("wait should classify stale liveness"),
-        1,
-        "a live PID with no new session event past liveness_dead_seconds must not return alive"
+        wait_result.expect("wait should preserve productive liveness"),
+        0,
+        "read-only liveness must override an event deadline while productive evidence remains"
+    );
+    assert!(
+        !session_dir.join(".liveness.snapshot").exists(),
+        "stale precheck must not persist a liveness snapshot"
     );
 }
 

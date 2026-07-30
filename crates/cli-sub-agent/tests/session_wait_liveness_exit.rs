@@ -55,26 +55,42 @@ fn output_text(output: &Output) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn read_process_start_time_ticks(pid: u32) -> u64 {
-    let content = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("read /proc stat");
-    let close_paren = content.rfind(')').expect("stat comm terminator");
-    let mut parts = content[close_paren + 1..].split_whitespace();
-    parts.next().expect("state");
-    parts.next().expect("ppid");
-    parts.next().expect("pgrp");
-    for _ in 0..16 {
-        parts.next().expect("intermediate stat field");
+fn backdate_tree(path: &Path, seconds_ago: u64) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).expect("read session tree") {
+            backdate_tree(&entry.expect("session tree entry").path(), seconds_ago);
+        }
     }
-    parts
-        .next()
-        .expect("starttime")
-        .parse::<u64>()
-        .expect("starttime parse")
+    let target = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .saturating_sub(Duration::from_secs(seconds_ago));
+    let times = [
+        libc::timespec {
+            tv_sec: target.as_secs() as libc::time_t,
+            tv_nsec: target.subsec_nanos() as libc::c_long,
+        },
+        libc::timespec {
+            tv_sec: target.as_secs() as libc::time_t,
+            tv_nsec: target.subsec_nanos() as libc::c_long,
+        },
+    ];
+    let path = CString::new(path.as_os_str().as_bytes()).expect("path contains no NUL");
+    // SAFETY: `path` is NUL-terminated and `times` lives for the system call.
+    assert_eq!(
+        unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) },
+        0,
+        "backdate {}",
+        path.to_string_lossy()
+    );
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
+fn session_wait_liveness_failure_exits_nonzero_without_live_signal() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(project.join(".csa")).expect("create project config dir");
@@ -112,20 +128,7 @@ fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
     std::fs::create_dir_all(session_dir.join("input")).expect("create session input dir");
     std::fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
     csa_session::save_session_in(&session_root, &session).expect("save stale active session");
-
-    let mut daemon = Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .expect("spawn live daemon stand-in");
-    std::fs::write(
-        session_dir.join("daemon.pid"),
-        format!(
-            "{} {}\n",
-            daemon.id(),
-            read_process_start_time_ticks(daemon.id())
-        ),
-    )
-    .expect("write live daemon pid");
+    backdate_tree(&session_dir, 31);
 
     let mut wait = csa_cmd(tmp.path())
         .current_dir(&project)
@@ -152,8 +155,6 @@ fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
             None => {
                 wait.kill().ok();
                 wait.wait().ok();
-                daemon.kill().ok();
-                daemon.wait().ok();
                 panic!("session wait did not fail before the test watchdog expired");
             }
         }
@@ -161,15 +162,6 @@ fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
     let output = wait
         .wait_with_output()
         .expect("collect csa session wait output");
-
-    assert!(
-        daemon.try_wait().expect("poll live daemon").is_none(),
-        "session wait must report stale liveness while the daemon is still live: {}",
-        output_text(&output)
-    );
-
-    daemon.kill().ok();
-    daemon.wait().ok();
 
     assert_eq!(
         output.status.code(),
