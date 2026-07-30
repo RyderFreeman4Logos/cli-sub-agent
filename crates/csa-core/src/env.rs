@@ -106,8 +106,20 @@ pub fn rust_state_path_needs_session_override(path: &std::path::Path) -> bool {
 /// Keep the narrower Rustup helper above for deliberately mounted mise
 /// toolchain homes; never use those install prefixes as a Cargo cache.
 pub fn cargo_home_needs_session_override(path: &std::path::Path) -> bool {
-    path.starts_with(std::path::Path::new("/usr/local"))
-        || rust_state_path_needs_session_override(path)
+    cargo_home_needs_session_override_with_rust_state(
+        path,
+        rust_state_path_needs_session_override(path),
+    )
+}
+
+// Keep the policy decision separable from the host writability probe. A Cargo
+// cache under `/usr/local` is unsafe in bwrap even when its host mount is
+// writable, while Rustup toolchain state can retain its narrower policy.
+fn cargo_home_needs_session_override_with_rust_state(
+    path: &std::path::Path,
+    rust_state_needs_session_override: bool,
+) -> bool {
+    path.starts_with(std::path::Path::new("/usr/local")) || rust_state_needs_session_override
 }
 
 fn rust_state_path_is_writable(path: &std::path::Path) -> bool {
@@ -365,6 +377,17 @@ mod tests {
         assert!(rust_state_path_needs_session_override(
             std::path::Path::new("/usr/local")
         ));
+    }
+
+    #[test]
+    fn cargo_home_under_usr_local_overrides_even_when_host_path_is_writable() {
+        let mise_toolchain_home =
+            std::path::Path::new("/usr/local/share/mise/installs/rust/1.97.1");
+
+        assert!(
+            cargo_home_needs_session_override_with_rust_state(mise_toolchain_home, false),
+            "a bwrap child receives /usr/local read-only even when the host can write the mise path"
+        );
     }
 
     #[test]

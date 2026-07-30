@@ -102,17 +102,18 @@ fn tool_defaults_override_cargo_home_env_when_usr_local_is_readonly() {
 }
 
 #[test]
-fn tool_defaults_override_cargo_registry_under_usr_local_even_when_host_writable() {
+fn tool_defaults_redirect_mise_cargo_home_to_sandbox_owned_cache() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(home.join(".cargo")).unwrap();
     let _home = ScopedEnvVar::set("HOME", &home);
     let _xdg = ScopedEnvVar::unset("XDG_STATE_HOME");
-    // The host may make this path writable, but bwrap starts from a read-only
-    // root. A Cargo registry beneath /usr/local therefore cannot be trusted as
-    // a sandbox cache source (#2833).
-    let _cargo_home = ScopedEnvVar::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local/registry");
+    // The Verbatim writer inherited this exact mise toolchain install path.
+    // Cargo must use a sandbox-owned cache instead of this toolchain state.
+    let readonly_mise_cargo_home = "/usr/local/share/mise/installs/rust/1.97.1";
+    let _cargo_home =
+        ScopedEnvVar::set(csa_core::env::CARGO_HOME_ENV_KEY, readonly_mise_cargo_home);
     let _rustup_home = ScopedEnvVar::unset(csa_core::env::RUSTUP_HOME_ENV_KEY);
 
     let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
@@ -137,7 +138,7 @@ fn tool_defaults_override_cargo_registry_under_usr_local_even_when_host_writable
     assert!(
         !plan
             .writable_paths
-            .contains(&PathBuf::from("/usr/local/registry")),
+            .contains(&PathBuf::from(readonly_mise_cargo_home)),
         "the host registry must not be granted a writable bind"
     );
 }

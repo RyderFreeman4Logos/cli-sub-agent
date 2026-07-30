@@ -68,12 +68,17 @@ fn build_merged_env_preserves_current_path_for_tool_runtime_resolution() {
 }
 
 #[test]
-fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
+fn build_merged_env_normalizes_readonly_mise_cargo_registry() {
     let _env_lock = crate::test_env_lock::TEST_ENV_LOCK.blocking_lock();
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let mise_data = temp.path().join("mise-data");
     let mise_rust = mise_data.join("installs/rust/stable");
+    // Match the inherited CARGO_HOME from the Verbatim writer incident (#2826).
+    // This is a Rust toolchain install directory, never a sandbox-writable
+    // Cargo registry/cache even if its host mount happens to be writable.
+    let readonly_mise_cargo_home =
+        std::path::Path::new("/usr/local/share/mise/installs/rust/1.97.1");
     let toolchain_bin = mise_rust
         .join("toolchains")
         .join("1.96.0-x86_64-unknown-linux-gnu")
@@ -92,7 +97,10 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
     .expect("write rust toolchain");
     let _home = ScopedEnvVarRestore::set("HOME", home.to_str().expect("home utf8"));
     let _path = ScopedEnvVarRestore::set("PATH", "/usr/local/bin:/bin");
-    let _cargo_home = ScopedEnvVarRestore::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local");
+    let _cargo_home = ScopedEnvVarRestore::set(
+        csa_core::env::CARGO_HOME_ENV_KEY,
+        readonly_mise_cargo_home.to_str().expect("mise cargo home utf8"),
+    );
     let _rustup_home = ScopedEnvVarRestore::set(csa_core::env::RUSTUP_HOME_ENV_KEY, "/usr/local");
     let _cargo_install_root =
         ScopedEnvVarRestore::set(csa_core::env::CARGO_INSTALL_ROOT_ENV_KEY, "/usr/local");
@@ -126,9 +134,14 @@ fn build_merged_env_normalizes_readonly_usr_local_rust_state() {
         "CARGO_HOME should use shared cache or HOME/.cargo; repo-local .cargo-local is forbidden, got {}",
         normalized_cargo_home.display()
     );
+    assert_ne!(
+        normalized_cargo_home,
+        readonly_mise_cargo_home,
+        "the inherited mise toolchain install directory must never reach the writer"
+    );
     assert!(
-        !csa_core::env::rust_state_path_needs_session_override(&normalized_cargo_home),
-        "normalized CARGO_HOME must not point at read-only /usr/local"
+        !csa_core::env::cargo_home_needs_session_override(&normalized_cargo_home),
+        "normalized CARGO_HOME must be writable outside the bwrap read-only prefix"
     );
     assert_eq!(
         merged
