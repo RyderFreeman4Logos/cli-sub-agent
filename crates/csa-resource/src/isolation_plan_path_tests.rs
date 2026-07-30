@@ -148,6 +148,16 @@ fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
 
     assert!(plan.readable_paths.contains(&bus_socket));
     assert!(plan.readable_paths.contains(&systemd_socket));
+    assert_eq!(
+        plan.env_overrides.get("XDG_RUNTIME_DIR"),
+        Some(&runtime_root.display().to_string()),
+        "the sandbox must retain the narrow runtime root required to resolve the user bus"
+    );
+    assert_eq!(
+        plan.env_overrides.get("DBUS_SESSION_BUS_ADDRESS"),
+        Some(&format!("unix:path={}", bus_socket.display())),
+        "the sandbox must construct the user-bus address instead of inheriting the caller environment"
+    );
 }
 
 #[test]
@@ -166,6 +176,11 @@ fn test_daemon_sockets_not_exposed_without_user_daemon_ipc() {
         .expect("plan should build without runtime scope");
 
     assert!(!plan.readable_paths.contains(&bus_socket));
+    assert!(
+        !plan.env_overrides.contains_key("XDG_RUNTIME_DIR")
+            && !plan.env_overrides.contains_key("DBUS_SESSION_BUS_ADDRESS"),
+        "the user bus environment must remain absent without the explicit capability"
+    );
 }
 
 #[cfg(unix)]

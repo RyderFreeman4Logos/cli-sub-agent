@@ -529,11 +529,29 @@ impl IsolationPlanBuilder {
             return;
         };
 
+        let bus_socket = runtime_root.join("bus");
         for socket_path in runtime_path::runtime_daemon_socket_paths(&runtime_root) {
             if !socket_path.exists() || self.path_already_exposed(&socket_path) {
                 continue;
             }
             self.readable_paths.push(socket_path);
+        }
+
+        // The execution transport may use a clean environment.  Do not rely on
+        // its caller's D-Bus variables: after granting the two narrow socket
+        // mounts, construct only the runtime and bus address that resolve to
+        // that mounted user bus.  In particular, do not copy arbitrary
+        // DBUS_SESSION_BUS_ADDRESS values (which could designate an unrelated
+        // or abstract bus) into the sandbox.
+        if bus_socket.exists() {
+            self.env_overrides.insert(
+                "XDG_RUNTIME_DIR".to_string(),
+                runtime_root.display().to_string(),
+            );
+            self.env_overrides.insert(
+                "DBUS_SESSION_BUS_ADDRESS".to_string(),
+                format!("unix:path={}", bus_socket.display()),
+            );
         }
     }
 
