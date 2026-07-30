@@ -5,6 +5,8 @@ use std::process::Command;
 
 #[path = "session_cmds_tests_tail_daemon_completion.rs"]
 mod daemon_completion;
+#[path = "session_cmds_tests_tail_2832.rs"]
+mod tail_tests_2832;
 
 #[cfg(unix)]
 fn wait_for_spawned_daemon_visibility(
@@ -23,6 +25,7 @@ fn wait_for_spawned_daemon_visibility(
     }
     panic!("daemon child never became visible to ToolLiveness");
 }
+
 
 #[test]
 fn resolve_session_prefix_with_global_fallback_accepts_initializing_exact_session_dir() {
@@ -601,63 +604,6 @@ fn handle_session_wait_prefers_result_toml_over_daemon_completion_exit_code() {
         exit_code, 0,
         "result.toml records the session's actual outcome and must override the daemon process exit code"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
-
-    let td = tempdir().unwrap();
-    let _env_lock = TEST_ENV_LOCK.blocking_lock();
-    let state_home = td.path().join("xdg-state");
-    std::fs::create_dir_all(&state_home).unwrap();
-    let _home_guard = EnvVarGuard::set("HOME", td.path());
-    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
-    let project = td.path();
-
-    let session = create_session(
-        project,
-        Some("wait-live-completion-packet"),
-        None,
-        Some("codex"),
-    )
-    .unwrap();
-    let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).unwrap();
-    std::fs::write(
-        session_dir.join("daemon-completion.toml"),
-        "exit_code = 1\nstatus = \"failure\"\n",
-    )
-    .unwrap();
-
-    let script_path = td.path().join("live-completion-packet.sh");
-    let script =
-        "#!/bin/sh\nset -eu\nsession_id=\"$1\"\nsleep 2\nprintf '%s' \"$session_id\" >/dev/null\n";
-    std::fs::write(&script_path, script).unwrap();
-    let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&script_path, perms).unwrap();
-
-    let mut child = Command::new(&script_path).arg(&session_id).spawn().unwrap();
-    std::fs::write(session_dir.join("daemon.pid"), child.id().to_string()).unwrap();
-    wait_for_spawned_daemon_visibility(&session_dir, &mut child);
-
-    let exit_code =
-        handle_session_wait(session_id, Some(project.to_string_lossy().into_owned()), 1).unwrap();
-
-    // Daemon is still alive when the 1s wait cap fires; the completion packet
-    // recorded the daemon process exit, not the session outcome, so the wait
-    // must NOT surface it. Under #1439, alive-at-cap returns the KV-warm code
-    // (0) rather than the legacy 124.
-    assert_eq!(
-        exit_code, 0,
-        "wait should emit the KV-warm exit instead of reporting completion while the daemon is still alive"
-    );
-
-    child.kill().ok();
-    let _ = child.wait();
 }
 
 #[test]

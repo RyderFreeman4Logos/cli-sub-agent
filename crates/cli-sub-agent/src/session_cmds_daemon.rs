@@ -627,7 +627,7 @@ mod session_cmds_daemon_kill_tests;
 mod session_cmds_daemon_routing_proptest;
 #[cfg(test)]
 #[path = "session_cmds_daemon_test_support.rs"]
-mod session_cmds_daemon_test_support;
+pub(crate) mod session_cmds_daemon_test_support;
 #[cfg(test)]
 #[path = "session_cmds_daemon_tests.rs"]
 mod tests;

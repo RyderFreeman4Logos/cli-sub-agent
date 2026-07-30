@@ -1,5 +1,7 @@
 [profile.default]
 retries = 2
+# A test that leaves a child holding nextest capture FDs is a failure, not a warning.
+leak-timeout = { period = "500ms", result = "fail" }
 
 [profile.static]
 retries = 0
