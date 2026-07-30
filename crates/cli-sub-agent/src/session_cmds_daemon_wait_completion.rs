@@ -145,10 +145,20 @@ fn render_wait_cap_outcome(
         .map(|path| crate::daemon_caller_hints::format_cd_arg(Path::new(path)))
         .unwrap_or_default();
     if session_alive {
-        let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
-            session_id,
-            context.project_root,
-            context.preferred_provider,
+        let wait_command = context.preferred_provider.map_or_else(
+            || {
+                crate::daemon_caller_hints::resolve_session_wait_command(
+                    session_id,
+                    context.project_root,
+                )
+            },
+            |caller_provider| {
+                crate::daemon_caller_hints::resolve_session_wait_retry_command(
+                    session_id,
+                    context.project_root,
+                    caller_provider,
+                )
+            },
         );
         let _ = writeln!(
             text,
@@ -267,7 +277,7 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn wait_cap_preserves_exact_configured_xai_ttl_without_reusing_reviewer_provider() {
+    fn wait_cap_and_retry_hint_preserve_exact_configured_xai_ttl() {
         let _lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
         let temp = tempfile::tempdir().expect("tempdir");
         let config_home = temp.path().join("xdg-config");
@@ -281,13 +291,13 @@ mod tests {
         std::fs::write(config_path, "[kv_cache.provider_ttls]\nxai = 3300\n")
             .expect("write config");
 
-        let reviewer_provider = csa_config::ModelProvider::new(" XAI ");
+        let caller_provider = csa_config::ModelProvider::new(" XAI ");
         let outcome = render_wait_cap_outcome(
             "01KAS6M5XG7V4M4M6YDRS7P8R9",
             None,
             WaitCapContext {
                 project_root: temp.path(),
-                preferred_provider: Some(&reviewer_provider),
+                preferred_provider: Some(&caller_provider),
             },
             3300,
             3300,
@@ -302,25 +312,17 @@ mod tests {
             outcome.text
         );
         assert!(
-            outcome.text.contains("action=select_wait_provider"),
-            "{}",
-            outcome.text
-        );
-        assert!(
-            outcome.text.contains("legal_keys=\"xai\""),
+            outcome.text.contains(
+                "cmd=\"csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai"
+            ),
             "{}",
             outcome.text
         );
         assert!(
             outcome
                 .text
-                .contains("calling parent provider for KV-cache wait TTL, not the review tool"),
+                .contains("CSA:CALLER_HINT action=\"retry_wait\" provider=\"xai\""),
             "{}",
-            outcome.text
-        );
-        assert!(
-            !outcome.text.contains("--model-provider xai"),
-            "a reviewer provider must not produce a runnable caller wait command: {}",
             outcome.text
         );
         assert!(!outcome.text.contains("240"), "{}", outcome.text);

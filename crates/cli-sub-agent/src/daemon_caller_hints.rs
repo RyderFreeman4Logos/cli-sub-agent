@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use csa_config::{GlobalConfig, ModelProvider};
+use csa_config::{GlobalConfig, ModelProvider, provider_ttl};
 
 const MAX_CALLER_HINT_BODY_BYTES: usize = 300;
 const SESSION_WAIT_CALLER_HINT_FORBID: &str =
@@ -45,20 +45,46 @@ impl SessionWaitCommand {
     }
 }
 
-/// Resolve a provider-qualified `csa session wait` command for caller hints.
+/// Resolve an initial `csa session wait` command for caller hints.
 ///
 /// Launch routing identifies the child/reviewer model, not the parent that
-/// owns the KV cache. Until a trusted caller-provider field is available, this
-/// deliberately emits no runnable command and directs the caller to choose
-/// from [`SessionWaitCommand::provider_selection_hint`].
+/// owns the KV cache. An initial hint therefore deliberately emits no runnable
+/// command and directs the caller to choose from
+/// [`SessionWaitCommand::provider_selection_hint`].
 pub(crate) fn resolve_session_wait_command(
     _session_id: &str,
     _project_root: &Path,
-    _launch_provider: Option<&ModelProvider>,
 ) -> SessionWaitCommand {
     let config = GlobalConfig::load().ok();
-    let legal_provider_keys = config
+    SessionWaitCommand {
+        command: None,
+        provider: None,
+        legal_provider_keys: configured_wait_provider_keys(config.as_ref()),
+    }
+}
+
+/// Resolve a provider-qualified retry from the caller provider already
+/// validated by `csa session wait`.
+pub(crate) fn resolve_session_wait_retry_command(
+    session_id: &str,
+    project_root: &Path,
+    caller_provider: &ModelProvider,
+) -> SessionWaitCommand {
+    let config = GlobalConfig::load().ok();
+    let valid_provider = config
         .as_ref()
+        .is_some_and(|config| provider_ttl(caller_provider, &config.kv_cache).is_some());
+    let provider = caller_provider.as_str().to_string();
+    SessionWaitCommand {
+        command: valid_provider
+            .then(|| format_session_wait_command(session_id, project_root, &provider)),
+        provider: valid_provider.then_some(provider),
+        legal_provider_keys: configured_wait_provider_keys(config.as_ref()),
+    }
+}
+
+fn configured_wait_provider_keys(config: Option<&GlobalConfig>) -> Vec<String> {
+    config
         .map(|config| {
             config
                 .kv_cache
@@ -69,12 +95,7 @@ pub(crate) fn resolve_session_wait_command(
                 .map(|(provider, _)| provider.clone())
                 .collect()
         })
-        .unwrap_or_default();
-    SessionWaitCommand {
-        command: None,
-        provider: None,
-        legal_provider_keys,
-    }
+        .unwrap_or_default()
 }
 
 /// Render the compact structured contract required to wait for a CSA session.
@@ -125,7 +146,6 @@ pub(crate) fn explicit_wait_provider_from_launch_routing(
 }
 
 /// Format every emitted shell wait command in one provider-aware form.
-#[cfg(test)]
 pub(crate) fn format_session_wait_command(
     session_id: &str,
     project_root: &Path,
@@ -171,7 +191,10 @@ fn shell_escape_for_command(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_CALLER_HINT_BODY_BYTES, resolve_session_wait_command};
+    use super::{
+        MAX_CALLER_HINT_BODY_BYTES, resolve_session_wait_command,
+        resolve_session_wait_retry_command,
+    };
     use crate::test_env_lock::TEST_ENV_LOCK;
     use std::path::Path;
 
@@ -217,11 +240,8 @@ mod tests {
         std::fs::write(config_path, "[kv_cache.provider_ttls]\nopenai = 17\n")
             .expect("write provider config");
 
-        let command = resolve_session_wait_command(
-            "01KAS6M5XG7V4M4M6YDRS7P8R9",
-            Path::new("/tmp/repo"),
-            None,
-        );
+        let command =
+            resolve_session_wait_command("01KAS6M5XG7V4M4M6YDRS7P8R9", Path::new("/tmp/repo"));
         assert!(
             command.command().is_none(),
             "an initial or retry hint must not infer its provider from HERMES_MODEL_PROVIDER"
@@ -251,11 +271,8 @@ mod tests {
             .expect("write provider config");
 
         let provider = csa_config::ModelProvider::new(" XAI ");
-        let command = resolve_session_wait_command(
-            "01KAS6M5XG7V4M4M6YDRS7P8R9",
-            Path::new("/tmp/repo"),
-            Some(&provider),
-        );
+        let command =
+            resolve_session_wait_command("01KAS6M5XG7V4M4M6YDRS7P8R9", Path::new("/tmp/repo"));
         assert!(
             command.command().is_none(),
             "a child launch provider must not be reused as the caller's wait provider"
@@ -267,12 +284,24 @@ mod tests {
             "the caller must select its own provider from configured keys"
         );
 
-        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")
-            .expect("invalidate provider config");
-        let reloaded = resolve_session_wait_command(
+        let retry = resolve_session_wait_retry_command(
             "01KAS6M5XG7V4M4M6YDRS7P8R9",
             Path::new("/tmp/repo"),
-            Some(&provider),
+            &provider,
+        );
+        assert!(
+            retry
+                .command()
+                .is_some_and(|command| command.contains("--model-provider xai")),
+            "a validated caller provider must be retained for retry"
+        );
+
+        std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")
+            .expect("invalidate provider config");
+        let reloaded = resolve_session_wait_retry_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            &provider,
         );
         assert!(
             reloaded.command().is_none(),
@@ -305,7 +334,7 @@ mod tests {
         )
         .expect("write provider config");
 
-        let command = resolve_session_wait_command("session", Path::new("/tmp/repo"), None);
+        let command = resolve_session_wait_command("session", Path::new("/tmp/repo"));
         let hint = command.provider_selection_hint();
 
         assert!(hint.len() <= MAX_CALLER_HINT_BODY_BYTES, "{hint}");

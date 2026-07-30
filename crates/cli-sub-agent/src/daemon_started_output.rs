@@ -15,12 +15,8 @@ pub(crate) fn prepare(
     _wait_provider: Option<&csa_config::ModelProvider>,
 ) -> Result<DaemonStartedOutput> {
     crate::run_cmd_daemon::verify_daemon_session_waitable(project_root, &result.session_id)?;
-    let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
-        &result.session_id,
-        project_root,
-        // Launch routing selects the child/reviewer, not the caller KV-cache provider.
-        None,
-    );
+    let wait_command =
+        crate::daemon_caller_hints::resolve_session_wait_command(&result.session_id, project_root);
     let wait_cmd_attr = wait_command
         .command()
         .map(crate::daemon_caller_hints::escape_structured_comment_attr)

@@ -21,13 +21,12 @@ fn subagent_initial_wait_hint_requires_the_parent_to_select_its_provider() {
     let provider =
         crate::daemon_caller_hints::explicit_wait_provider_from_launch_routing(None, &startup_env)
             .expect("trusted subagent model pin must carry a provider");
-    let spawn_options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[], false)
+    let _spawn_options = DaemonSpawnOptions::for_run(None, None, None, None, false, &[], false)
         .with_wait_hint_provider(Some(provider));
 
     let command = crate::daemon_caller_hints::resolve_session_wait_command(
         "01KAS6M5XG7V4M4M6YDRS7P8R9",
         project.path(),
-        spawn_options.wait_hint_provider.as_ref(),
     );
 
     assert!(
