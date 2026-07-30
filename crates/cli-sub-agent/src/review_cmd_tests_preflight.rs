@@ -161,11 +161,35 @@ fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_se
     write_project_config(project_dir.path(), &config);
     let args = parse_review_args(
         project_dir.path(),
-        &["--tier", "quality", "--tool", "codex"],
+        &[
+            "--tier",
+            "quality",
+            "--tool",
+            "codex",
+            "--memory-max-mb",
+            "8192",
+        ],
     );
+    let original_argv = vec![
+        "csa".to_string(),
+        "review".to_string(),
+        "--cd".to_string(),
+        project_dir.path().display().to_string(),
+        "--diff".to_string(),
+        "--tier".to_string(),
+        "quality".to_string(),
+        "--tool".to_string(),
+        "codex".to_string(),
+        "--memory-max-mb".to_string(),
+        "8192".to_string(),
+    ];
 
-    let err = super::validate_before_session(&args, &StartupSubtreeEnv::default())
-        .expect_err("reviewer soft-limit admission must fail before session creation");
+    let err = super::validate_before_session_with_argv(
+        &args,
+        &StartupSubtreeEnv::default(),
+        &original_argv,
+    )
+    .expect_err("reviewer soft-limit admission must fail before session creation");
 
     let msg = format!("{err:#}");
     assert!(msg.contains("memory_soft_limit_admission"), "{msg}");
@@ -173,6 +197,10 @@ fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_se
     assert!(msg.contains("Retry feasibility:"), "{msg}");
     assert!(msg.contains("lower_bound=11703MB (role/tool soft-limit floor)"));
     assert!(msg.contains("physical/reserve upper="), "{msg}");
+    assert!(msg.contains("Suggested retry command: csa review"), "{msg}");
+    assert!(msg.contains("--memory-max-mb 11703"), "{msg}");
+    assert!(!msg.contains("Retry command delta:"), "{msg}");
+    assert!(msg.contains("host_required="), "{msg}");
     assert!(
         msg.contains("soft-limit admission rejected before provider launch"),
         "{msg}"

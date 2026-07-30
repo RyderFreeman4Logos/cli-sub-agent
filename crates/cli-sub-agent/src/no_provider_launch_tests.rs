@@ -20,13 +20,27 @@ fn host_memory_reviewer_guidance_suggests_soft_limit_safe_retry_pair() {
         ..Default::default()
     };
 
-    let guidance = host_memory_guidance(Some("reviewer_sub_session"), "codex", &memory);
+    let original_argv = vec![
+        "csa".to_string(),
+        "review".to_string(),
+        "--memory-max-mb".to_string(),
+        "10000".to_string(),
+        "--diff".to_string(),
+    ];
+    let guidance = host_memory_guidance_with_argv(
+        Some("reviewer_sub_session"),
+        "codex",
+        &memory,
+        &original_argv,
+    );
     let joined = guidance.join("\n");
 
     assert!(joined.contains("physical MemAvailable only"));
     assert!(joined.contains("swap/combined memory is diagnostic"));
     assert!(joined.contains("Retry feasibility: feasible with reserve delta"));
-    assert!(joined.contains("--memory-max-mb 9103 --min-free-memory-mb 6000"));
+    assert!(joined.contains(
+        "Suggested retry command: csa review --memory-max-mb 9103 --diff --min-free-memory-mb 6000"
+    ));
     assert!(joined.contains("lower_bound=9103MB > current_upper=8033MB"));
     assert!(joined.contains("lowering reserve opens retry_window=9103..=11033MB"));
     assert!(joined.contains("host_required=15103MB <= physical_available=17033MB"));
@@ -81,7 +95,14 @@ fn soft_limit_writer_guidance_reports_feasible_unified_interval_and_retry_comman
         ..Default::default()
     };
 
-    let guidance = soft_limit_admission_guidance("codex", &memory);
+    let original_argv = vec![
+        "csa".to_string(),
+        "run".to_string(),
+        "--memory-max-mb".to_string(),
+        "9103".to_string(),
+        "fix the retry guidance".to_string(),
+    ];
+    let guidance = soft_limit_admission_guidance_with_argv("codex", &memory, &original_argv);
     let joined = guidance.join("\n");
 
     assert!(joined.contains("soft-limit admission rejected before provider launch"));
@@ -90,10 +111,9 @@ fn soft_limit_writer_guidance_reports_feasible_unified_interval_and_retry_comman
         "lower_bound=10000MB (role/tool soft-limit floor); current_upper=10167MB \
          (physical/reserve upper=10167MB, active-session upper=20000MB)"
     ));
-    assert!(
-        joined
-            .contains("Retry command delta: add --memory-max-mb 10000 to the same CSA invocation")
-    );
+    assert!(joined.contains(
+        "Suggested retry command: csa run --memory-max-mb 10000 'fix the retry guidance'"
+    ));
 }
 
 #[test]

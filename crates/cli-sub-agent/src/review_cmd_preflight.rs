@@ -14,6 +14,15 @@ pub(crate) fn validate_before_session(
     args: &ReviewArgs,
     startup_env: &StartupSubtreeEnv,
 ) -> Result<()> {
+    let argv: Vec<String> = std::env::args().collect();
+    validate_before_session_with_argv(args, startup_env, &argv)
+}
+
+fn validate_before_session_with_argv(
+    args: &ReviewArgs,
+    startup_env: &StartupSubtreeEnv,
+    argv: &[String],
+) -> Result<()> {
     if args.check_verdict {
         return Ok(());
     }
@@ -21,13 +30,13 @@ pub(crate) fn validate_before_session(
     super::session_fix::validate_session_fix_before_daemon(args)?;
     super::fix_finding::validate_fix_finding_before_daemon(args)?;
     if args.fix_finding {
-        return validate_fix_finding_resources_before_session(args);
+        return validate_fix_finding_resources_before_session(args, argv);
     }
     super::validate_review_prompt_file(args.prompt_file.as_deref())?;
-    validate_review_routing_before_session(args, startup_env)
+    validate_review_routing_before_session(args, startup_env, argv)
 }
 
-fn validate_fix_finding_resources_before_session(args: &ReviewArgs) -> Result<()> {
+fn validate_fix_finding_resources_before_session(args: &ReviewArgs, argv: &[String]) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
     let project_config = effective_config.project;
@@ -44,12 +53,14 @@ fn validate_fix_finding_resources_before_session(args: &ReviewArgs) -> Result<()
         &global_config,
         route.tool,
         false,
+        argv,
     )
 }
 
 fn validate_review_routing_before_session(
     args: &ReviewArgs,
     startup_env: &StartupSubtreeEnv,
+    argv: &[String],
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     let effective_config = csa_config::EffectiveConfig::load(&project_root)?;
@@ -155,6 +166,7 @@ fn validate_review_routing_before_session(
             &global_config,
             candidate_tool,
             readonly_project_root,
+            argv,
         )?;
     }
 
@@ -180,6 +192,7 @@ fn validate_review_candidate_resources_before_session(
     global_config: &GlobalConfig,
     tool: ToolName,
     readonly_project_root: bool,
+    argv: &[String],
 ) -> Result<()> {
     let resource_overrides = args.resource_overrides();
     let stream_mode =
@@ -236,14 +249,16 @@ fn validate_review_candidate_resources_before_session(
     )
     .map_err(|err| {
         let err = anyhow::Error::new(err);
-        let guidance = crate::no_provider_launch::soft_limit_admission_guidance_from_error(
-            project_root,
-            REVIEW_PREFLIGHT_SESSION_ID,
-            tool.as_str(),
-            project_config,
-            resource_overrides,
-            &err,
-        );
+        let guidance =
+            crate::no_provider_launch::soft_limit_admission_guidance_from_error_with_argv(
+                project_root,
+                REVIEW_PREFLIGHT_SESSION_ID,
+                tool.as_str(),
+                project_config,
+                resource_overrides,
+                &err,
+                argv,
+            );
         if let Some(guidance) = guidance {
             err.context(format!(
                 "soft-limit memory retry guidance:\n- {}",
