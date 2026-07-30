@@ -532,13 +532,39 @@ async fn post_exec_gate_nonzero_committed_clean_is_fatal() {
 }
 
 #[tokio::test]
-async fn post_exec_gate_nonzero_dirty_is_fatal() {
+async fn require_commit_gate_failure_preserves_structured_evidence() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
     init_clean_git_repo(project_dir.path());
     let session_id = create_session_at_current_head(project_dir.path());
     std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").unwrap();
     write_success_result_for(project_dir.path(), &session_id);
+    // `--require-commit` marks the caller-facing execution result fatal before
+    // the post-exec gate runs. The gate must still execute from the writer's
+    // original success and replace the generic contract result with structured
+    // gate evidence (#2830).
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let mut execution = csa_process::ExecutionResult {
+        summary: "writer completed".to_string(),
+        exit_code: 0,
+        model_completed: Some(true),
+        terminal_reason: Some("end_turn".to_string()),
+        ..Default::default()
+    };
+    crate::run_cmd::uncommitted::record_run_dirty(
+        project_dir.path(),
+        Some(&session_id),
+        &mut execution,
+        Some(&changed_paths),
+        Some(false),
+        true,
+        None,
+    );
+    assert_eq!(execution.exit_code, 1);
+    assert_eq!(
+        persisted_result(project_dir.path(), &session_id).summary,
+        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+    );
     // No employee sections seeded: exercises the branch that CREATES summary.md
     // with the banner when the employee emitted none.
 
@@ -563,6 +589,10 @@ async fn post_exec_gate_nonzero_dirty_is_fatal() {
 
     let result = persisted_result(project_dir.path(), &session_id);
     assert_gate_failure_surfaced(project_dir.path(), &session_id, &result);
+    assert!(
+        result.require_commit_recovery.is_some(),
+        "post-exec evidence must not discard require-commit recovery context"
+    );
 }
 
 #[tokio::test]
