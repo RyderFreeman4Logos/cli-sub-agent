@@ -106,6 +106,10 @@ pub fn rust_state_path_needs_session_override(path: &std::path::Path) -> bool {
 /// Keep the narrower Rustup helper above for deliberately mounted mise
 /// toolchain homes; never use those install prefixes as a Cargo cache.
 pub fn cargo_home_needs_session_override(path: &std::path::Path) -> bool {
+    if path.starts_with(std::path::Path::new("/usr/local")) {
+        return true;
+    }
+
     cargo_home_needs_session_override_with_rust_state(
         path,
         rust_state_path_needs_session_override(path),
