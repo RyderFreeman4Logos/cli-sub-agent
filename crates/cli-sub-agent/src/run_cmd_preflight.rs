@@ -1,19 +1,112 @@
 //! Preflight helpers for `csa run`.
 
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
+use csa_process::StreamMode;
+use std::path::{Path, PathBuf};
 
-use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolArg;
 
 use crate::run_cmd_model_pin::{self, inherited_model_pin_from_startup};
 use crate::run_helpers_branch_guard;
 use crate::startup_env::StartupSubtreeEnv;
 
+const RUN_PREFLIGHT_SESSION_ID: &str = "run-pre-session-preflight";
+
+/// The final resolved inputs needed to reject an unsafe writer memory envelope
+/// before allocating a session directory.
+pub(crate) struct RunMemorySoftLimitPreflight<'a> {
+    pub project_root: &'a Path,
+    pub project_config: Option<&'a ProjectConfig>,
+    pub global_config: &'a GlobalConfig,
+    pub tool_name: &'a str,
+    pub resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
+    pub stream_mode: StreamMode,
+    pub idle_timeout_seconds: u64,
+    pub initial_response_timeout_seconds: Option<u64>,
+    pub build_jobs: Option<u32>,
+    pub no_fs_sandbox: bool,
+    pub allow_user_daemon_ipc: bool,
+    pub extra_writable: &'a [PathBuf],
+    pub extra_readable: &'a [PathBuf],
+}
+
 /// Validate `--prompt-file` with filesystem semantics before any Git pathspec
 /// handling, preflight probes, or session creation (#2834).
 pub(crate) fn validate_run_prompt_file(path: Option<&Path>) -> Result<()> {
     crate::run_helpers::validate_prompt_file_path(path)
+}
+
+/// Resolve the writer's actual sandbox plan before creating a fresh session.
+///
+/// This deliberately uses the same resolved limits and soft-limit admission
+/// gate as session execution. A cap that is adequate for a reviewer may still
+/// be below the writer's role-specific floor; returning that error here keeps
+/// the caller from receiving a new, guaranteed-to-fail session.
+pub(crate) fn validate_run_memory_soft_limit_before_session(
+    input: RunMemorySoftLimitPreflight<'_>,
+) -> Result<()> {
+    let mut execution_env = input.global_config.build_execution_env(
+        input.tool_name,
+        ExecutionEnvOptions::with_no_flash_fallback(),
+    );
+    crate::build_jobs_env::apply_build_jobs_env(&mut execution_env, input.build_jobs);
+    let sandbox_input = crate::pipeline_sandbox::SandboxResolveInput {
+        config: input.project_config,
+        tool_name: input.tool_name,
+        session_id: RUN_PREFLIGHT_SESSION_ID,
+        project_root: input.project_root,
+        stream_mode: input.stream_mode,
+        idle_timeout_seconds: input.idle_timeout_seconds,
+        liveness_dead_seconds: crate::pipeline::resolve_liveness_dead_seconds(input.project_config),
+        initial_response_timeout_seconds: input.initial_response_timeout_seconds,
+        no_fs_sandbox: input.no_fs_sandbox,
+        allow_user_daemon_ipc: input.allow_user_daemon_ipc,
+        readonly_project_root: false,
+        extra_writable: input.extra_writable,
+        extra_readable: input.extra_readable,
+        execution_env: execution_env.as_ref(),
+    };
+    let execute_options = match crate::pipeline_sandbox::resolve_sandbox_options_with_overrides(
+        sandbox_input,
+        input.resource_overrides,
+    ) {
+        crate::pipeline_sandbox::SandboxResolution::Ok(options) => *options,
+        crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(message) => {
+            anyhow::bail!(message)
+        }
+    };
+    crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
+        Some("run"),
+        input.tool_name,
+        execute_options
+            .sandbox
+            .as_ref()
+            .map(|sandbox| &sandbox.isolation_plan),
+    )
+    .map_err(|err| {
+        let err = anyhow::Error::new(err);
+        let argv: Vec<String> = std::env::args().collect();
+        let guidance =
+            crate::no_provider_launch::soft_limit_admission_guidance_from_error_with_argv(
+                input.project_root,
+                RUN_PREFLIGHT_SESSION_ID,
+                input.tool_name,
+                input.project_config,
+                input.resource_overrides,
+                &err,
+                &argv,
+            );
+        if let Some(guidance) = guidance {
+            err.context(format!(
+                "writer soft-limit memory retry guidance before session creation:\n- {}",
+                guidance.join("\n- ")
+            ))
+        } else {
+            err
+        }
+    })
+    .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))
 }
 
 #[derive(Clone, Copy)]
@@ -159,3 +252,7 @@ fn disable_ai_config_preflight(
         global_config.preflight.ai_config_symlink_check.enabled = false;
     }
 }
+
+#[cfg(test)]
+#[path = "run_cmd_preflight_tests.rs"]
+mod tests;

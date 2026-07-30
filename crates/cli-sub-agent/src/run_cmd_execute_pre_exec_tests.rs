@@ -314,7 +314,10 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     unsafe {
         std::env::set_var("PATH", format!("{}:{inherited_path}", bin_dir.display()));
     }
-    let config = run_config_with_tier("default", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
+    let mut config = run_config_with_tier("default", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
+    config.resources.memory_max_mb = Some(10_000);
+    config.resources.soft_limit_percent = Some(90);
+    config.tools.get_mut("codex").unwrap().memory_max_mb = Some(10_000);
     write_project_config(project_dir.path(), &config);
     let holder =
         csa_session::create_session(project_dir.path(), Some("holder"), None, Some("codex"))
@@ -386,7 +389,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     )
     .await
     .expect_err("run writer should fail before tool execution when worktree lock is held");
-    let err = err.to_string();
+    let err = format!("{err:#}");
 
     assert!(
         !execution_marker.exists(),
@@ -408,6 +411,92 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
     assert!(
         err.contains("sequentially"),
         "missing serialize guidance: {err}"
+    );
+}
+
+#[tokio::test]
+async fn handle_run_writer_memory_floor_with_user_daemon_ipc_creates_no_preflight_artifact() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let mut config = run_config_with_tier("default", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
+    config.resources.memory_max_mb = Some(9_103);
+    config.resources.min_free_memory_mb = 1;
+    config.resources.soft_limit_percent = Some(90);
+    config.tools.get_mut("codex").unwrap().memory_max_mb = Some(9_103);
+    write_project_config(project_dir.path(), &config);
+
+    let error = handle_run(
+        Some(ToolArg::Specific(ToolName::Codex)),
+        None,
+        None,
+        None,
+        Some("fix the repository".to_string()),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        false,
+        false,
+        Some("writer memory floor admission".to_string()),
+        false,
+        None,
+        None,
+        false,
+        true,
+        Some(project_dir.path().display().to_string()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        crate::run_resource_overrides::RunResourceOverrides::absent(),
+        false,
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        0,
+        OutputFormat::Text,
+        csa_process::StreamMode::BufferOnly,
+        Some("default".to_string()),
+        false,
+        false,
+        true,
+        None, // error_marker_scan_override: defer to marker/config (#1745/#1847)
+        false,
+        false,
+        false,
+        false,
+        false,
+        Vec::new(),
+        Vec::new(),
+        crate::startup_env::StartupSubtreeEnv::default(),
+    )
+    .await
+    .expect_err("writer cap below its role-specific floor must fail before session creation");
+
+    let message = format!("{error:#}");
+    assert!(message.contains("memory_soft_limit_admission"), "{message}");
+    let sessions = csa_session::list_sessions(project_dir.path(), None).expect("list sessions");
+    assert!(
+        sessions.is_empty(),
+        "memory floor preflight must not create a writer session"
+    );
+    let preflight_dir = csa_session::get_session_root(project_dir.path())
+        .expect("get session root")
+        .join("run-pre-session-preflight");
+    assert!(
+        !preflight_dir.exists(),
+        "--allow-user-daemon-ipc must not write a synthetic preflight directory: {}",
+        preflight_dir.display()
     );
 }
 
