@@ -601,8 +601,9 @@ fn handle_session_attach_waits_for_live_daemon_before_consuming_completion_packe
         "attach must keep tailing while the daemon process is still alive"
     );
 
-    child.kill().ok();
-    child.wait().ok();
+    child
+        .terminate_and_reap()
+        .expect("terminate and reap daemon fixture group");
 
     let exit_code = rx
         .recv_timeout(Duration::from_secs(2))
@@ -716,7 +717,8 @@ fn handle_session_kill_uses_lock_file_for_inline_session() {
     )
     .expect("write lock file");
 
-    let reaper = std::thread::spawn(move || child.wait().expect("wait child"));
+    let reaper =
+        std::thread::spawn(move || child.wait_for_external_termination().expect("wait child"));
 
     handle_session_kill(
         session_id.clone(),

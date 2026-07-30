@@ -48,7 +48,8 @@ fn handle_session_kill_accepts_legacy_stderr_pid() {
         "legacy stderr PID fixture must be recognized as a live session process before kill"
     );
 
-    let reaper = std::thread::spawn(move || child.wait().expect("wait child"));
+    let reaper =
+        std::thread::spawn(move || child.wait_for_external_termination().expect("wait child"));
 
     handle_session_kill(
         session_id.clone(),
