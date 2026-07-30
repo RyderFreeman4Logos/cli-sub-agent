@@ -126,7 +126,17 @@ fn cargo_home_needs_session_override_with_rust_state(
     path.starts_with(std::path::Path::new("/usr/local")) || rust_state_needs_session_override
 }
 
+#[cfg(test)]
+thread_local! {
+    static RUST_STATE_WRITABILITY_PROBE_CALLS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
 fn rust_state_path_is_writable(path: &std::path::Path) -> bool {
+    #[cfg(test)]
+    RUST_STATE_WRITABILITY_PROBE_CALLS.with(|calls| calls.set(calls.get() + 1));
+
     let dir = if path.is_dir() {
         path
     } else if let Some(parent) = path.parent() {
@@ -384,14 +394,23 @@ mod tests {
     }
 
     #[test]
-    fn cargo_home_under_usr_local_overrides_even_when_host_path_is_writable() {
+    fn cargo_home_under_usr_local_short_circuits_writability_probe() {
         let mise_toolchain_home =
             std::path::Path::new("/usr/local/share/mise/installs/rust/1.97.1");
 
+        RUST_STATE_WRITABILITY_PROBE_CALLS.with(|calls| calls.set(0));
+
         assert!(
-            cargo_home_needs_session_override_with_rust_state(mise_toolchain_home, false),
+            cargo_home_needs_session_override(mise_toolchain_home),
             "a bwrap child receives /usr/local read-only even when the host can write the mise path"
         );
+        RUST_STATE_WRITABILITY_PROBE_CALLS.with(|calls| {
+            assert_eq!(
+                calls.get(),
+                0,
+                "CARGO_HOME beneath /usr/local must short-circuit before the writability probe"
+            );
+        });
     }
 
     #[test]
