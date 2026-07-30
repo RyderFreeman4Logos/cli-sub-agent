@@ -3,6 +3,9 @@ use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::session_cmds_daemon::session_cmds_daemon_test_support::spawn_daemon_like_process;
+
 #[path = "session_cmds_tests_tail_daemon_completion.rs"]
 mod daemon_completion;
 #[path = "session_cmds_tests_tail_2832.rs"]
@@ -134,9 +137,8 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase()
     assert!(load_result(project, &session_id).unwrap().is_none());
 }
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-#[rustfmt::skip]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
@@ -152,15 +154,17 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let locks_dir = session_dir.join("locks");
     std::fs::create_dir_all(&locks_dir).unwrap();
 
-    // Use a spawned process with session ID in cmdline to satisfy ToolLiveness context check.
-    let mut child = std::process::Command::new("sh").arg("-c").arg(format!("sleep 60 # {}", session_id)).spawn().unwrap();
+    // Keep the session ID in the fixture leader's cmdline for ToolLiveness.
+    let mut child = spawn_daemon_like_process(&session_id);
     let pid = child.id();
 
     std::fs::write(locks_dir.join("codex.lock"), format!(r#"{{"pid": {}}}"#, pid)).unwrap();
 
     let reconciled = ensure_terminal_result_for_dead_active_session(project, &session_id, "session list").unwrap();
 
-    child.kill().ok(); child.wait().ok();
+    child
+        .terminate_and_reap()
+        .expect("terminate and reap daemon fixture group");
 
     assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
     assert!(load_result(project, &session_id).unwrap().is_none());
