@@ -321,7 +321,7 @@ fn handle_session_wait_rejects_duplicate_wait_before_entering_loop() {
 }
 
 #[test]
-fn handle_session_wait_fails_stale_session_despite_live_worktree_lock() {
+fn handle_session_wait_continues_stale_session_with_live_worktree_lock() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -365,18 +365,18 @@ fn handle_session_wait_fails_stale_session_despite_live_worktree_lock() {
         fixed_now,
         None,
         |_project_root, _current_session_id, _trigger| {
-            panic!("stale liveness failure must happen before reconciliation")
+            panic!("live worktree lock must prevent stale-session reconciliation")
         },
         |sid: &str, status: &str, exit_code, synthetic, _mirror_to_stdout| {
             emitted_completion = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
         },
     )
-    .expect("wait should fail the stale session despite its live lock");
+    .expect("wait should preserve the stale session while its lock is live");
 
-    assert_eq!(exit_code, 1);
+    assert_eq!(exit_code, 0);
     assert_eq!(
         emitted_completion, None,
-        "live lock must not override the configured liveness deadline"
+        "live lock must override the configured liveness deadline"
     );
 }
 

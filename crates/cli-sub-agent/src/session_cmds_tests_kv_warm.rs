@@ -386,7 +386,7 @@ fn exact_id_wait_and_result_survive_repeated_kv_warm_after_registry_state_loss()
 
 #[cfg(target_os = "linux")]
 #[test]
-fn stale_precheck_fails_live_daemon_after_liveness_deadline() {
+fn stale_precheck_preserves_live_daemon_after_liveness_deadline() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -434,11 +434,11 @@ fn stale_precheck_fails_live_daemon_after_liveness_deadline() {
             panic!("stale precheck must not emit a synthetic completion for a live daemon");
         },
     )
-    .expect("wait should reject the stale event before accepting liveness");
+    .expect("wait should preserve liveness before the event deadline");
 
     assert_eq!(
-        exit_code, 1,
-        "a live daemon must not override the configured liveness deadline"
+        exit_code, 0,
+        "a live daemon must override the configured liveness deadline"
     );
 }
 
