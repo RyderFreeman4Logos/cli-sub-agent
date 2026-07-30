@@ -16,6 +16,28 @@ fn review_help_discloses_prompt_requires_fix_finding() {
 }
 
 #[test]
+fn review_help_exposes_configured_min_timeout_floor() {
+    let mut command = Cli::command();
+    let review = command
+        .find_subcommand_mut("review")
+        .expect("review subcommand should exist");
+    let help = review.render_long_help().to_string();
+
+    assert!(
+        help.contains("Absolute wall-clock timeout"),
+        "review --timeout help should describe wall-clock timeout: {help}"
+    );
+    assert!(
+        help.contains("execution.min_timeout_seconds"),
+        "review --timeout help should mention configured min_timeout floor: {help}"
+    );
+    assert!(
+        help.contains("csa config get execution.min_timeout_seconds"),
+        "review --timeout help should point at config get for the floor: {help}"
+    );
+}
+
+#[test]
 fn review_cli_parses_hint_difficulty_flag() {
     let args = parse_review_args(&[
         "csa",

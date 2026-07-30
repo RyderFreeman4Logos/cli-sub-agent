@@ -180,6 +180,28 @@ fn run_help_explains_tier_policy_for_direct_tool() {
 }
 
 #[test]
+fn run_help_exposes_configured_min_timeout_floor() {
+    let mut command = Cli::command();
+    let run = command
+        .find_subcommand_mut("run")
+        .expect("run subcommand should exist");
+    let help = run.render_long_help().to_string();
+
+    assert!(
+        help.contains("Absolute wall-clock timeout"),
+        "run --timeout help should describe wall-clock timeout: {help}"
+    );
+    assert!(
+        help.contains("execution.min_timeout_seconds"),
+        "run --timeout help should mention configured min_timeout floor: {help}"
+    );
+    assert!(
+        help.contains("csa config get execution.min_timeout_seconds"),
+        "run --timeout help should point at config get for the floor: {help}"
+    );
+}
+
+#[test]
 fn run_cli_parses_require_commit_flag() {
     let cli = try_parse_cli(&["csa", "run", "--require-commit", "--sa-mode", "false", "x"])
         .expect("--require-commit should parse");

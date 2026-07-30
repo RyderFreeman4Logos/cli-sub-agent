@@ -132,7 +132,9 @@ pub enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u64))]
         initial_response_timeout: Option<u64>,
 
-        /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
+        /// Absolute wall-clock timeout in seconds (kills execution after N seconds).
+        /// Must be at least configured `execution.min_timeout_seconds`; inspect the
+        /// floor with `csa config get execution.min_timeout_seconds`.
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: Option<u64>,
 
