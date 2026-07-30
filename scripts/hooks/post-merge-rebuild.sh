@@ -18,7 +18,18 @@ if [ -n "${CSA_SESSION_ID:-}" ]; then
 fi
 
 # Must match the install_dir passed to `just install` (not an independent check).
-INSTALL_DIR="${CSA_POST_MERGE_INSTALL_DIR:-/usr/local/bin}"
+# Explicit policy wins. Without one, preserve the source-install default while
+# recognizing the installer-owned user-local target only when it is the active
+# executable. Never infer arbitrary PATH locations as install authorization.
+if [ -n "${CSA_POST_MERGE_INSTALL_DIR:-}" ]; then
+    INSTALL_DIR="$CSA_POST_MERGE_INSTALL_DIR"
+elif [ -n "${CSA_INSTALL_DIR:-}" ]; then
+    INSTALL_DIR="$CSA_INSTALL_DIR"
+elif [ "$(command -v csa 2>/dev/null || true)" = "${HOME:?HOME is required to select the default install directory}/.local/bin/csa" ]; then
+    INSTALL_DIR="$HOME/.local/bin"
+else
+    INSTALL_DIR="/usr/local/bin"
+fi
 JUST_CMD="${CSA_POST_MERGE_JUST:-just}"
 CARGO_CMD="${CSA_POST_MERGE_CARGO:-cargo}"
 

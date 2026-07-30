@@ -156,6 +156,101 @@ order_body="$(cat "$order")"
 assert_contains "$order_body" $'just install '"$install_dir"$'\ncargo clean' "order success install then clean"
 assert_not_contains "$order_body" "install_dir=" "hook uses positional install_dir, not install_dir= keyword-as-positional"
 
+echo "== trusted install policy handles PATH-selected user-local csa =="
+tmp_policy="$tmp_root/policy"
+mkdir -p "$tmp_policy"
+policy_home="$tmp_policy/home"
+user_install_dir="$policy_home/.local/bin"
+system_install_dir="$tmp_policy/system/bin"
+shadow_dir="$tmp_policy/path-shadow"
+mkdir -p "$user_install_dir" "$system_install_dir" "$shadow_dir"
+shadow_log="$tmp_policy/shadow.log"
+: >"$shadow_log"
+cat >"$user_install_dir/csa" <<'EOF'
+#!/usr/bin/env bash
+printf 'PATH csa was executed\n' >>"${CSA_TEST_SHADOW_LOG:?}"
+exit 99
+EOF
+chmod +x "$user_install_dir/csa"
+
+user_order="$tmp_policy/user-order"
+: >"$user_order"
+setup_fake_tools "$tmp_policy/user-tools" 0 0
+set +e
+env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+    -u CSA_POST_MERGE_INSTALL_DIR -u CSA_INSTALL_DIR \
+    HOME="$policy_home" \
+    PATH="$user_install_dir:$shadow_dir:$PATH" \
+    CSA_TEST_SHADOW_LOG="$shadow_log" \
+    CSA_TEST_ORDER_FILE="$user_order" \
+    CSA_POST_MERGE_JUST="$tmp_policy/user-tools/just" \
+    CSA_POST_MERGE_CARGO="$tmp_policy/user-tools/cargo" \
+    bash "$HOOK"
+rc=$?
+set -e
+assert_eq "$rc" "0" "PATH-selected user-local policy succeeds"
+assert_contains "$(cat "$user_order")" "just install $user_install_dir" "active user-local csa selects HOME/.local/bin"
+assert_eq "$(cat "$shadow_log")" "" "target selection never executes PATH csa"
+
+# An arbitrary PATH-selected csa is not installation authorization. With no
+# explicit policy, it must still fall back to the system target and must never
+# execute the PATH binary while deciding.
+echo "== arbitrary PATH csa falls back to system install target =="
+arbitrary_dir="$tmp_policy/arbitrary-path/bin"
+mkdir -p "$arbitrary_dir"
+cat >"$arbitrary_dir/csa" <<'EOF'
+#!/usr/bin/env bash
+printf 'arbitrary PATH csa was executed\n' >>"${CSA_TEST_SHADOW_LOG:?}"
+exit 99
+EOF
+chmod +x "$arbitrary_dir/csa"
+arbitrary_order="$tmp_policy/arbitrary-order"
+: >"$arbitrary_order"
+: >"$shadow_log"
+setup_fake_tools "$tmp_policy/arbitrary-tools" 0 0
+set +e
+arbitrary_output="$(env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+    -u CSA_POST_MERGE_INSTALL_DIR -u CSA_INSTALL_DIR \
+    HOME="$policy_home" \
+    PATH="$arbitrary_dir:$shadow_dir:$PATH" \
+    CSA_TEST_SHADOW_LOG="$shadow_log" \
+    CSA_TEST_ORDER_FILE="$arbitrary_order" \
+    CSA_POST_MERGE_JUST="$tmp_policy/arbitrary-tools/just" \
+    CSA_POST_MERGE_CARGO="$tmp_policy/arbitrary-tools/cargo" \
+    bash "$HOOK" 2>&1)"
+rc=$?
+set -e
+assert_eq "$rc" "0" "arbitrary PATH fallback exits successfully"
+if [ -w /usr/local/bin ]; then
+    assert_contains "$(cat "$arbitrary_order")" "just install /usr/local/bin" "arbitrary PATH falls back to system install directory"
+    assert_contains "$(cat "$arbitrary_order")" "cargo clean" "system fallback completes clean after install"
+else
+    assert_eq "$(cat "$arbitrary_order")" "" "non-writable system fallback skips tools"
+    assert_contains "$arbitrary_output" "/usr/local/bin is not writable" "arbitrary PATH reports system fallback skip"
+fi
+assert_eq "$(cat "$shadow_log")" "" "arbitrary PATH csa is never executed or selected"
+
+system_order="$tmp_policy/system-order"
+: >"$system_order"
+setup_fake_tools "$tmp_policy/system-tools" 1 0
+set +e
+env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+    -u CSA_POST_MERGE_INSTALL_DIR \
+    HOME="$policy_home" \
+    PATH="$user_install_dir:$shadow_dir:$PATH" \
+    CSA_INSTALL_DIR="$system_install_dir" \
+    CSA_TEST_SHADOW_LOG="$shadow_log" \
+    CSA_TEST_ORDER_FILE="$system_order" \
+    CSA_POST_MERGE_JUST="$tmp_policy/system-tools/just" \
+    CSA_POST_MERGE_CARGO="$tmp_policy/system-tools/cargo" \
+    bash "$HOOK"
+rc=$?
+set -e
+assert_eq "$rc" "1" "configured system policy surfaces install/provenance conflict"
+assert_contains "$(cat "$system_order")" "just install $system_install_dir" "configured policy selects system install directory"
+assert_not_contains "$(cat "$system_order")" "cargo clean" "configured system conflict skips cargo clean"
+assert_eq "$(cat "$shadow_log")" "" "configured policy never executes arbitrary PATH csa"
+
 echo "== skip when CSA_SESSION_ID set =="
 tmp2="$tmp_root/t2"
 mkdir -p "$tmp2"
