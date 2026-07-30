@@ -207,7 +207,7 @@ fn apply_rust_session_env_contract_inner(
     let home = env_path(env, "HOME");
     let cargo_home = preferred_cargo_home(home.as_deref(), project_root);
     if let Some(cargo_home) = cargo_home.as_deref() {
-        ensure_rust_env_path(env, csa_core::env::CARGO_HOME_ENV_KEY, cargo_home);
+        ensure_cargo_home_env_path(env, cargo_home);
     }
 
     if materialize_cargo_install_root {
@@ -257,7 +257,7 @@ fn preferred_cargo_home_with_shared(
     project_root: Option<&Path>,
     shared: &Path,
 ) -> Option<PathBuf> {
-    if shared.is_dir() && !csa_core::env::rust_state_path_needs_session_override(shared) {
+    if shared.is_dir() && !csa_core::env::cargo_home_needs_session_override(shared) {
         return Some(shared.to_path_buf());
     }
 
@@ -274,6 +274,16 @@ fn ensure_rust_env_path(env: &mut HashMap<String, String>, key: &str, fallback: 
         .filter(|current| !csa_core::env::rust_state_path_needs_session_override(current))
         .unwrap_or_else(|| fallback.to_path_buf());
     env.insert(key.to_string(), effective.to_string_lossy().into_owned());
+}
+
+fn ensure_cargo_home_env_path(env: &mut HashMap<String, String>, fallback: &Path) {
+    let effective = env_path(env, csa_core::env::CARGO_HOME_ENV_KEY)
+        .filter(|current| !csa_core::env::cargo_home_needs_session_override(current))
+        .unwrap_or_else(|| fallback.to_path_buf());
+    env.insert(
+        csa_core::env::CARGO_HOME_ENV_KEY.to_string(),
+        effective.to_string_lossy().into_owned(),
+    );
 }
 
 fn force_project_env_path(env: &mut HashMap<String, String>, key: &str, fallback: &Path) {

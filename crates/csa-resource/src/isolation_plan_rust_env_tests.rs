@@ -100,3 +100,44 @@ fn tool_defaults_override_cargo_home_env_when_usr_local_is_readonly() {
         "RUSTUP_HOME must be overridden to writable ~/.rustup when original is /usr/local"
     );
 }
+
+#[test]
+fn tool_defaults_override_cargo_registry_under_usr_local_even_when_host_writable() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(home.join(".cargo")).unwrap();
+    let _home = ScopedEnvVar::set("HOME", &home);
+    let _xdg = ScopedEnvVar::unset("XDG_STATE_HOME");
+    // The host may make this path writable, but bwrap starts from a read-only
+    // root. A Cargo registry beneath /usr/local therefore cannot be trusted as
+    // a sandbox cache source (#2833).
+    let _cargo_home = ScopedEnvVar::set(csa_core::env::CARGO_HOME_ENV_KEY, "/usr/local/registry");
+    let _rustup_home = ScopedEnvVar::unset(csa_core::env::RUSTUP_HOME_ENV_KEY);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults(
+            "codex",
+            &PathBuf::from("/tmp/project"),
+            &PathBuf::from("/tmp/session"),
+        )
+        .build()
+        .expect("should succeed");
+
+    assert_eq!(
+        plan.env_overrides.get(csa_core::env::CARGO_HOME_ENV_KEY),
+        Some(&home.join(".cargo").to_string_lossy().to_string()),
+        "CARGO_HOME beneath /usr/local must be redirected to the sandbox-owned cache"
+    );
+    assert!(
+        plan.writable_paths.contains(&home.join(".cargo")),
+        "the redirected Cargo home must be writable in the bwrap sandbox"
+    );
+    assert!(
+        !plan
+            .writable_paths
+            .contains(&PathBuf::from("/usr/local/registry")),
+        "the host registry must not be granted a writable bind"
+    );
+}
