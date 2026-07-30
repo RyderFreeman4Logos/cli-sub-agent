@@ -12,14 +12,11 @@ pub(crate) struct DaemonStartedOutput {
 pub(crate) fn prepare(
     result: &csa_process::daemon::DaemonSpawnResult,
     project_root: &Path,
-    wait_provider: Option<&csa_config::ModelProvider>,
+    _wait_provider: Option<&csa_config::ModelProvider>,
 ) -> Result<DaemonStartedOutput> {
     crate::run_cmd_daemon::verify_daemon_session_waitable(project_root, &result.session_id)?;
-    let wait_command = crate::daemon_caller_hints::resolve_session_wait_command(
-        &result.session_id,
-        project_root,
-        wait_provider,
-    );
+    let wait_command =
+        crate::daemon_caller_hints::resolve_session_wait_command(&result.session_id, project_root);
     let wait_cmd_attr = wait_command
         .command()
         .map(crate::daemon_caller_hints::escape_structured_comment_attr)
@@ -172,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn root_initial_wait_hint_propagates_normalized_explicit_provider() {
+    fn root_initial_wait_hint_requires_the_parent_to_select_its_provider() {
         let _lock = TEST_ENV_LOCK.clone().blocking_lock_owned();
         let temp = tempfile::tempdir().expect("tempdir");
         let project_root = temp.path().join("project");
@@ -208,18 +205,15 @@ mod tests {
         let output =
             prepare(&result, &project_root, Some(&provider)).expect("render root started marker");
 
-        let expected_wait_command = format!(
-            "wait_cmd=\"csa session wait --session {session_id} --model-provider xai --cd '{}'\"",
-            project_root.display(),
-        );
         assert!(
-            output.stderr.contains(&expected_wait_command),
-            "root initial wait hint must preserve its normalized launch provider: {:#?}",
+            output.stderr.contains("wait_cmd=\"\""),
+            "root initial wait hint must not reuse the launched provider: {:#?}",
             output.stderr
         );
         assert!(
-            !output.stderr.contains("--model-provider custom"),
-            "root initial wait hint must not use the ambient provider: {:#?}",
+            output.stderr.contains("action=\"select_wait_provider\"")
+                && output.stderr.contains("legal_keys=\"xai\""),
+            "root initial wait hint must make the parent select its provider: {:#?}",
             output.stderr
         );
         let _ = std::fs::remove_dir_all(session_root);
@@ -321,6 +315,13 @@ mod tests {
         );
         assert!(
             output.stderr.contains("legal_keys=\"custom\""),
+            "{:#?}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains(
+                "Choose the calling parent provider for KV-cache wait TTL, not the review tool"
+            ),
             "{:#?}",
             output.stderr
         );

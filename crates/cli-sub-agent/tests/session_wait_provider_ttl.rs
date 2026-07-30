@@ -245,6 +245,12 @@ fn session_wait_help_requires_an_explicit_configured_provider_ttl() {
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "calling parent agent's provider for KV-cache wait TTL, not the review tool's provider"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("configured `[kv_cache.provider_ttls]` entry is > 0"),
         "{stdout}"
     );

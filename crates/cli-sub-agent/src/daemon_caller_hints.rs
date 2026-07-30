@@ -31,27 +31,60 @@ impl SessionWaitCommand {
             self.legal_provider_keys.join(",")
         };
         let legal_keys = escape_structured_comment_attr(&legal_keys);
-        format!(
+        let marker = format!(
             "<!-- CSA:CALLER_HINT action=\"select_wait_provider\" legal_keys=\"{legal_keys}\" \
-             rule=\"Do not issue a bare session wait. Derive the caller provider and pass --model-provider with one legal configured key.\" -->"
-        )
+             rule=\"Do not issue a bare session wait. Choose the calling parent provider for KV-cache wait TTL, not the review tool, then pass --model-provider with one legal configured key.\" -->"
+        );
+        if marker.len() <= MAX_CALLER_HINT_BODY_BYTES {
+            return marker;
+        }
+
+        "<!-- CSA:CALLER_HINT action=\"select_wait_provider\" legal_keys=\"truncated\" \
+         rule=\"Choose the calling parent provider for KV-cache wait TTL, not the review tool; inspect [kv_cache.provider_ttls].\" -->"
+            .to_string()
     }
 }
 
-/// Resolve a provider-qualified `csa session wait` command for caller hints.
+/// Resolve an initial `csa session wait` command for caller hints.
 ///
-/// A command is emitted only for the explicit launch or wait provider when it
-/// has a positive TTL in the active user configuration. Otherwise the caller
-/// must choose from the legal keys carried by
+/// Launch routing identifies the child/reviewer model, not the parent that
+/// owns the KV cache. An initial hint therefore deliberately emits no runnable
+/// command and directs the caller to choose from
 /// [`SessionWaitCommand::provider_selection_hint`].
 pub(crate) fn resolve_session_wait_command(
-    session_id: &str,
-    project_root: &Path,
-    preferred_provider: Option<&ModelProvider>,
+    _session_id: &str,
+    _project_root: &Path,
 ) -> SessionWaitCommand {
     let config = GlobalConfig::load().ok();
-    let legal_provider_keys = config
+    SessionWaitCommand {
+        command: None,
+        provider: None,
+        legal_provider_keys: configured_wait_provider_keys(config.as_ref()),
+    }
+}
+
+/// Resolve a provider-qualified retry from the caller provider already
+/// validated by `csa session wait`.
+pub(crate) fn resolve_session_wait_retry_command(
+    session_id: &str,
+    project_root: &Path,
+    caller_provider: &ModelProvider,
+) -> SessionWaitCommand {
+    let config = GlobalConfig::load().ok();
+    let valid_provider = config
         .as_ref()
+        .is_some_and(|config| provider_ttl(caller_provider, &config.kv_cache).is_some());
+    let provider = caller_provider.as_str().to_string();
+    SessionWaitCommand {
+        command: valid_provider
+            .then(|| format_session_wait_command(session_id, project_root, &provider)),
+        provider: valid_provider.then_some(provider),
+        legal_provider_keys: configured_wait_provider_keys(config.as_ref()),
+    }
+}
+
+fn configured_wait_provider_keys(config: Option<&GlobalConfig>) -> Vec<String> {
+    config
         .map(|config| {
             config
                 .kv_cache
@@ -62,23 +95,7 @@ pub(crate) fn resolve_session_wait_command(
                 .map(|(provider, _)| provider.clone())
                 .collect()
         })
-        .unwrap_or_default();
-    let provider = preferred_provider
-        .filter(|provider| {
-            config
-                .as_ref()
-                .and_then(|config| provider_ttl(provider, &config.kv_cache))
-                .is_some()
-        })
-        .map(|provider| provider.as_str().to_string());
-
-    SessionWaitCommand {
-        command: provider
-            .as_deref()
-            .map(|provider| format_session_wait_command(session_id, project_root, provider)),
-        provider,
-        legal_provider_keys,
-    }
+        .unwrap_or_default()
 }
 
 /// Render the compact structured contract required to wait for a CSA session.
@@ -174,7 +191,10 @@ fn shell_escape_for_command(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_session_wait_command;
+    use super::{
+        MAX_CALLER_HINT_BODY_BYTES, resolve_session_wait_command,
+        resolve_session_wait_retry_command,
+    };
     use crate::test_env_lock::TEST_ENV_LOCK;
     use std::path::Path;
 
@@ -220,11 +240,8 @@ mod tests {
         std::fs::write(config_path, "[kv_cache.provider_ttls]\nopenai = 17\n")
             .expect("write provider config");
 
-        let command = resolve_session_wait_command(
-            "01KAS6M5XG7V4M4M6YDRS7P8R9",
-            Path::new("/tmp/repo"),
-            None,
-        );
+        let command =
+            resolve_session_wait_command("01KAS6M5XG7V4M4M6YDRS7P8R9", Path::new("/tmp/repo"));
         assert!(
             command.command().is_none(),
             "an initial or retry hint must not infer its provider from HERMES_MODEL_PROVIDER"
@@ -238,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_command_reloads_provider_ttl_config_and_preserves_explicit_provider() {
+    fn launch_provider_never_makes_a_parent_wait_command_runnable() {
         let _env_lock = TEST_ENV_LOCK.blocking_lock();
         let dir = tempfile::tempdir().expect("tempdir");
         let config_root = dir.path().join("xdg-config");
@@ -254,31 +271,37 @@ mod tests {
             .expect("write provider config");
 
         let provider = csa_config::ModelProvider::new(" XAI ");
-        let command = resolve_session_wait_command(
-            "01KAS6M5XG7V4M4M6YDRS7P8R9",
-            Path::new("/tmp/repo"),
-            Some(&provider),
-        );
-        assert_eq!(
-            command.command(),
-            Some(
-                "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai --cd '/tmp/repo'"
-            )
+        let command =
+            resolve_session_wait_command("01KAS6M5XG7V4M4M6YDRS7P8R9", Path::new("/tmp/repo"));
+        assert!(
+            command.command().is_none(),
+            "a child launch provider must not be reused as the caller's wait provider"
         );
         assert!(
             command
-                .caller_hint("retry_wait")
-                .expect("validated provider must be retained for the caller hint")
-                .contains("provider=\"xai\""),
-            "caller hint must retain the validated normalized provider"
+                .provider_selection_hint()
+                .contains("legal_keys=\"xai\""),
+            "the caller must select its own provider from configured keys"
+        );
+
+        let retry = resolve_session_wait_retry_command(
+            "01KAS6M5XG7V4M4M6YDRS7P8R9",
+            Path::new("/tmp/repo"),
+            &provider,
+        );
+        assert!(
+            retry
+                .command()
+                .is_some_and(|command| command.contains("--model-provider xai")),
+            "a validated caller provider must be retained for retry"
         );
 
         std::fs::write(&config_path, "[kv_cache.provider_ttls]\nxai = 0\n")
             .expect("invalidate provider config");
-        let reloaded = resolve_session_wait_command(
+        let reloaded = resolve_session_wait_retry_command(
             "01KAS6M5XG7V4M4M6YDRS7P8R9",
             Path::new("/tmp/repo"),
-            Some(&provider),
+            &provider,
         );
         assert!(
             reloaded.command().is_none(),
@@ -289,6 +312,36 @@ mod tests {
                 .provider_selection_hint()
                 .contains("legal_keys=\"none\""),
             "an invalidated explicit provider must fail closed"
+        );
+    }
+
+    #[test]
+    fn provider_selection_hint_stays_within_budget_for_long_legal_keys() {
+        let _env_lock = TEST_ENV_LOCK.blocking_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+        let provider = "x".repeat(80);
+        let config_path =
+            csa_config::ProjectConfig::user_config_path().expect("resolve user config path");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config parent");
+        std::fs::write(
+            config_path,
+            format!("[kv_cache.provider_ttls]\n\"{provider}\" = 17\n"),
+        )
+        .expect("write provider config");
+
+        let command = resolve_session_wait_command("session", Path::new("/tmp/repo"));
+        let hint = command.provider_selection_hint();
+
+        assert!(hint.len() <= MAX_CALLER_HINT_BODY_BYTES, "{hint}");
+        assert!(hint.contains("legal_keys=\"truncated\""), "{hint}");
+        assert!(
+            hint.contains("calling parent provider for KV-cache wait TTL, not the review tool"),
+            "{hint}"
         );
     }
 }

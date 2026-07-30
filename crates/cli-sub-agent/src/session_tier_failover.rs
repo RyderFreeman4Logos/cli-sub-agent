@@ -49,7 +49,7 @@ pub(crate) fn emit_pending_tier_failover_handoff(
 
 fn render_pending_tier_failover_handoff(session_id: &str, project_root: &Path) -> String {
     let wait_command =
-        crate::daemon_caller_hints::resolve_session_wait_command(session_id, project_root, None);
+        crate::daemon_caller_hints::resolve_session_wait_command(session_id, project_root);
     debug_assert!(
         wait_command.command().is_none(),
         "tier fallback has no trusted provider and must not emit a runnable wait command"
