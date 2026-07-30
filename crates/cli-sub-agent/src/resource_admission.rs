@@ -202,11 +202,12 @@ pub(crate) fn build_spawn_memory_admission(
 
 fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
     let project_root = Path::new(&session.project_path);
-    // Keep admission's active set aligned with `session list`: a persisted result is terminal.
+    // A result is terminal only after its writer/daemon exits; live results remain charged.
     if csa_session::load_result(project_root, &session.meta_session_id)
         .ok()
         .flatten()
         .is_some()
+        && !session_has_live_process_signal(project_root, &session.meta_session_id)
     {
         return SessionMemorySample::Terminal;
     }
