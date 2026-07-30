@@ -315,7 +315,7 @@ fn wait_provider_error(
         let _ = writeln!(message, "Config load error: {error:#}");
     }
     message.push_str(
-        "Action: re-run with --model-provider <one configured key> matching the caller model provider.\n\
+        "Action: re-run with --model-provider <one configured key> matching the calling parent agent's KV-cache TTL policy, not the review tool.\n\
          Do not omit this flag; provider can change mid-session when the user switches models.\n\
          <!-- CSA:CALLER_HINT action=\"select_wait_provider\" rule=\"Derive the caller model provider dynamically on every wait; pass --model-provider with a configured provider_ttls key.\" -->",
     );
@@ -432,6 +432,9 @@ custom = 1666
         );
         assert!(message.contains("CSA:CALLER_HINT"));
         assert!(message.contains("dynamically on every wait"));
+        assert!(
+            message.contains("calling parent agent's KV-cache TTL policy, not the review tool")
+        );
         assert!(!message.contains("default_ttl_seconds = 555"));
     }
 

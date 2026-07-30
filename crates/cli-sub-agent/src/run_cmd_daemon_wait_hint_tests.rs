@@ -1,5 +1,5 @@
 #[test]
-fn subagent_initial_wait_hint_preserves_trusted_normalized_provider() {
+fn subagent_initial_wait_hint_requires_the_parent_to_select_its_provider() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
         .blocking_lock_owned();
@@ -30,15 +30,14 @@ fn subagent_initial_wait_hint_preserves_trusted_normalized_provider() {
         spawn_options.wait_hint_provider.as_ref(),
     );
 
-    assert_eq!(
-        command.command(),
-        Some(
-            format!(
-                "csa session wait --session 01KAS6M5XG7V4M4M6YDRS7P8R9 --model-provider xai --cd '{}'",
-                project.path().display(),
-            )
-            .as_str()
-        ),
-        "subagent initial wait hint must preserve its trusted normalized launch provider"
+    assert!(
+        command.command().is_none(),
+        "the subagent launch provider is not the caller's KV-cache provider"
+    );
+    assert!(
+        command
+            .provider_selection_hint()
+            .contains("legal_keys=\"xai\""),
+        "the caller must select its own configured provider"
     );
 }

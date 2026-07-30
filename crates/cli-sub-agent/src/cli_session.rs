@@ -293,6 +293,8 @@ pub enum SessionCommands {
     },
 
     /// Wait for a daemon session to report a terminal result.
+    /// `--model-provider` selects the calling parent agent's provider for KV-cache
+    /// wait TTL, not the review tool's provider.
     /// Every wait requires an explicit normalized `--model-provider` whose configured
     /// `[kv_cache.provider_ttls]` entry is > 0. Its TTL is resolved exactly from that
     /// entry; missing, unconfigured, or zero values fail closed.
@@ -319,7 +321,8 @@ pub enum SessionCommands {
         #[arg(long)]
         memory_warn_mb: Option<u64>,
 
-        /// Caller provider for wait TTL selection. Derive this dynamically on every wait.
+        /// Calling parent agent provider for KV-cache wait TTL, not the review tool provider.
+        /// Derive this dynamically on every wait.
         /// Accepted values: any configured [kv_cache.provider_ttls] key with TTL > 0.
         #[arg(long, value_parser = csa_config::parse_model_provider)]
         model_provider: Option<csa_config::ModelProvider>,
