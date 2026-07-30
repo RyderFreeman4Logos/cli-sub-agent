@@ -338,16 +338,15 @@ impl IsolationPlanBuilder {
             let default_cargo_home = home.join(".cargo");
             if let Ok(cargo_home_env) = std::env::var(csa_core::env::CARGO_HOME_ENV_KEY) {
                 let cargo_home =
-                    rust_env::resolve_rust_state_path(&cargo_home_env, &default_cargo_home);
+                    rust_env::resolve_cargo_home_path(&cargo_home_env, &default_cargo_home);
                 if cargo_home == default_cargo_home {
                     // CARGO_HOME points to the default — treat as if unset.
                     add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
                     // Override the env var when the original pointed at a
                     // read-only system prefix (e.g. /usr/local) so the child
                     // process uses the writable default instead (#2607).
-                    rust_env::insert_env_override_if_needed(
+                    rust_env::insert_cargo_home_override_if_needed(
                         &mut self.env_overrides,
-                        csa_core::env::CARGO_HOME_ENV_KEY,
                         &cargo_home_env,
                         &default_cargo_home,
                     );

@@ -97,6 +97,19 @@ pub fn rust_state_path_needs_session_override(path: &std::path::Path) -> bool {
     path.starts_with(usr_local) && !rust_state_path_is_writable(path)
 }
 
+/// Return true when `CARGO_HOME` must be redirected to a sandbox-owned cache.
+///
+/// Unlike `RUSTUP_HOME`, Cargo's registry and git state are mutable during
+/// normal quality gates. A bwrap child starts with `/usr/local` read-only, so a
+/// host writability probe for a descendant (for example `/usr/local/registry`)
+/// is not evidence that Cargo can populate it in the child namespace (#2833).
+/// Keep the narrower Rustup helper above for deliberately mounted mise
+/// toolchain homes; never use those install prefixes as a Cargo cache.
+pub fn cargo_home_needs_session_override(path: &std::path::Path) -> bool {
+    path.starts_with(std::path::Path::new("/usr/local"))
+        || rust_state_path_needs_session_override(path)
+}
+
 fn rust_state_path_is_writable(path: &std::path::Path) -> bool {
     let dir = if path.is_dir() {
         path
