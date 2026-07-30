@@ -125,10 +125,11 @@ fn resolve_and_prepare_required_writable_sources(
             Ok(true) if candidate.is_dir() => prepared.push(candidate.clone()),
             Ok(true) => {
                 return Err(format!(
-                    "{source_label} path '{}' resolved to '{}' is not a directory before session launch. \
+                    "{source_label} path '{}' resolved to '{}' {} before session launch. \
                      Rust state env values must point to writable directories.",
                     path.display(),
-                    candidate.display()
+                    candidate.display(),
+                    non_directory_path_detail(candidate)
                 ));
             }
             Ok(false) => {
@@ -215,16 +216,92 @@ fn prepare_missing_required_source_directory(
         path = %candidate.display(),
         "Creating missing required writable directory before sandbox launch"
     );
-    std::fs::create_dir_all(candidate).map_err(|error| {
-        format!(
-            "{source_label} path '{}' resolved to '{}' could not be created before session launch: {error}. \
-             Set Cargo/Rustup env to writable paths or grant the exact cache directory with --extra-writable.",
-            original.display(),
-            candidate.display()
-        )
-    })?;
-    prepared.push(candidate.to_path_buf());
+    match std::fs::create_dir_all(candidate) {
+        Ok(()) => prepared.push(candidate.to_path_buf()),
+        // A concurrent creator may win after the preceding existence check.
+        // Treat the resulting directory as success, but never mask a file,
+        // broken symlink, or other non-directory that reports EEXIST.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && candidate.is_dir() => {
+            prepared.push(candidate.to_path_buf());
+        }
+        Err(error) => {
+            let reason =
+                non_directory_component_detail(candidate).unwrap_or_else(|| error.to_string());
+            return Err(format!(
+                "{source_label} path '{}' resolved to '{}' could not be created before session launch: {reason}. \
+                 Set Cargo/Rustup env to writable paths or grant the exact cache directory with --extra-writable.",
+                original.display(),
+                candidate.display()
+            ));
+        }
+    }
     Ok(())
+}
+
+fn non_directory_path_detail(path: &Path) -> &'static str {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            "exists as a symlink to a non-directory (not a directory)"
+        }
+        Ok(_) => "exists as a file or other non-directory (not a directory)",
+        Err(_) => "is not a directory",
+    }
+}
+
+/// Return a precise type diagnostic for the first existing path component that
+/// prevents `create_dir_all` from creating a required Rust state directory.
+///
+/// `Path::try_exists` follows symlinks, so a broken intermediate symlink looks
+/// absent and otherwise surfaces only as an opaque EEXIST from `create_dir_all`.
+/// Keep a directory symlink valid, but call out a broken or non-directory
+/// symlink without relaxing the required-directory check.
+fn non_directory_component_detail(path: &Path) -> Option<String> {
+    let mut component = path.to_path_buf();
+    loop {
+        match std::fs::symlink_metadata(&component) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                match std::fs::metadata(&component) {
+                    Ok(target) if target.is_dir() => {}
+                    Ok(_) => {
+                        return Some(format!(
+                            "path component '{}' exists as a symlink to a non-directory (not a directory)",
+                            component.display()
+                        ));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Some(format!(
+                            "path component '{}' exists as a symlink with an unavailable target",
+                            component.display()
+                        ));
+                    }
+                    Err(error) => {
+                        return Some(format!(
+                            "path component '{}' exists as a symlink that could not be inspected: {error}",
+                            component.display()
+                        ));
+                    }
+                }
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Some(format!(
+                    "path component '{}' exists as a file or other non-directory (not a directory)",
+                    component.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Some(format!(
+                    "path component '{}' could not be inspected: {error}",
+                    component.display()
+                ));
+            }
+        }
+
+        if !component.pop() {
+            return None;
+        }
+    }
 }
 
 fn path_looks_like_file(path: &Path) -> bool {

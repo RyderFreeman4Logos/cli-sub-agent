@@ -4,6 +4,9 @@ use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 
 use super::*;
 
+#[path = "pipeline_sandbox_cargo_install_root_writable_tests.rs"]
+mod cargo_install_root_writable_tests;
+
 fn parse_project_config(toml_str: &str) -> csa_config::ProjectConfig {
     toml::from_str(toml_str).expect("test TOML should parse")
 }
