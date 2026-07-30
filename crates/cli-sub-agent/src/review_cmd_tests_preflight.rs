@@ -148,6 +148,71 @@ fn review_host_memory_admission_is_rejected_before_session_creation() {
 }
 
 #[test]
+fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let mut config = project_config_with_quality_tier();
+    config.resources.memory_max_mb = Some(8_192);
+    config.resources.soft_limit_percent = Some(70);
+    write_project_config(project_dir.path(), &config);
+    let args = parse_review_args(
+        project_dir.path(),
+        &[
+            "--tier",
+            "quality",
+            "--tool",
+            "codex",
+            "--memory-max-mb",
+            "8192",
+        ],
+    );
+    let original_argv = vec![
+        "csa".to_string(),
+        "review".to_string(),
+        "--cd".to_string(),
+        project_dir.path().display().to_string(),
+        "--diff".to_string(),
+        "--tier".to_string(),
+        "quality".to_string(),
+        "--tool".to_string(),
+        "codex".to_string(),
+        "--memory-max-mb".to_string(),
+        "8192".to_string(),
+    ];
+
+    let err = super::validate_before_session_with_argv(
+        &args,
+        &StartupSubtreeEnv::default(),
+        &original_argv,
+    )
+    .expect_err("reviewer soft-limit admission must fail before session creation");
+
+    let msg = format!("{err:#}");
+    assert!(msg.contains("memory_soft_limit_admission"), "{msg}");
+    assert!(msg.contains("soft-limit memory retry guidance"), "{msg}");
+    assert!(msg.contains("Retry feasibility:"), "{msg}");
+    assert!(msg.contains("lower_bound=11703MB (role/tool soft-limit floor)"));
+    assert!(msg.contains("physical/reserve upper="), "{msg}");
+    assert!(msg.contains("Suggested retry command: csa review"), "{msg}");
+    assert!(msg.contains("--memory-max-mb 11703"), "{msg}");
+    assert!(!msg.contains("Retry command delta:"), "{msg}");
+    assert!(msg.contains("host_required="), "{msg}");
+    assert!(
+        msg.contains("soft-limit admission rejected before provider launch"),
+        "{msg}"
+    );
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert!(
+        sessions.is_empty(),
+        "soft-limit preflight validation must not create a review session"
+    );
+}
+
+#[test]
 fn fix_finding_prompt_file_dash_reaches_fix_finding_validation() {
     let project_dir = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);

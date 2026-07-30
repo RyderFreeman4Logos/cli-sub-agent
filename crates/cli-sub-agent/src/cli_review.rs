@@ -546,31 +546,97 @@ fn timeout_validation_message(given: u64, min_timeout: u64) -> String {
 
 fn build_suggested_command(given: u64, min_timeout: u64) -> String {
     let args: Vec<String> = std::env::args().collect();
-    let given_str = given.to_string();
-    let min_str = min_timeout.to_string();
-
-    let mut result = args.clone();
-    let mut replaced = false;
-    let mut i = 0;
-
-    while i < result.len() {
-        if result[i] == "--timeout" && i + 1 < result.len() && result[i + 1] == given_str {
-            result[i + 1] = min_str.clone();
-            replaced = true;
+    let given = given.to_string();
+    let given_equals = format!("--timeout={given}");
+    let mut found = false;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--" {
             break;
         }
-        if result[i] == format!("--timeout={given_str}") {
-            result[i] = format!("--timeout={min_str}");
-            replaced = true;
+        if (args[index] == "--timeout" && args.get(index + 1) == Some(&given))
+            || args[index] == given_equals
+        {
+            found = true;
             break;
         }
-        i += 1;
+        index += 1;
     }
 
-    if replaced {
-        result.join(" ")
+    if found {
+        rewrite_cli_command_options(&args, &[("--timeout", min_timeout.to_string())])
+            .unwrap_or_else(|| format!("csa ... --timeout {min_timeout}"))
     } else {
-        format!("csa ... --timeout {min_str}")
+        format!("csa ... --timeout {min_timeout}")
+    }
+}
+
+/// Rebuild a shell-copyable command after replacing or adding CLI options.
+pub(crate) fn rewrite_cli_command_options(
+    argv: &[String],
+    replacements: &[(&str, String)],
+) -> Option<String> {
+    if argv.is_empty() {
+        return None;
+    }
+
+    let mut result = argv.to_vec();
+    for (option, value) in replacements {
+        let mut replaced = false;
+        let mut index = 0;
+        while index < result.len() {
+            if result[index] == "--" {
+                break;
+            }
+            if result[index] == *option {
+                if index + 1 < result.len() && result[index + 1] != "--" {
+                    result[index + 1] = value.clone();
+                    replaced = true;
+                    index += 2;
+                    continue;
+                }
+            } else if result[index]
+                .strip_prefix(option)
+                .is_some_and(|suffix| suffix.starts_with('='))
+            {
+                result[index] = format!("{option}={value}");
+                replaced = true;
+            }
+            index += 1;
+        }
+
+        if !replaced {
+            let insertion_index = result
+                .iter()
+                .position(|argument| argument == "--")
+                .unwrap_or(result.len());
+            result.insert(insertion_index, (*option).to_string());
+            result.insert(insertion_index + 1, value.clone());
+        }
+    }
+
+    Some(
+        result
+            .iter()
+            .map(|argument| shell_escape_suggested_argument(argument))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn shell_escape_suggested_argument(argument: &str) -> String {
+    let is_shell_safe = !argument.is_empty()
+        && argument.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+                )
+        });
+    if is_shell_safe {
+        argument.to_string()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\\''"))
     }
 }
 
