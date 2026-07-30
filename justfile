@@ -117,7 +117,7 @@ pre-commit-fast:
     just check-version-bumped
     just check-chinese
     just fmt
-    ./scripts/hooks/check-env-dependent-tests.sh
+    just check-env-dependent-tests
     just deny
     just clippy
 
@@ -139,6 +139,11 @@ pre-push:
 check-path-includes:
     ./scripts/hooks/check-path-included-src.sh --self-test
     ./scripts/hooks/check-path-included-src.sh
+
+# Exercise the env-dependent test checker before applying it to this checkout.
+check-env-dependent-tests:
+    bash scripts/tests/check-env-dependent-tests.sh
+    ./scripts/hooks/check-env-dependent-tests.sh
 
 # ==============================================================================
 

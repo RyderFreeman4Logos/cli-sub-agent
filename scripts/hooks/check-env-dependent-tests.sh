@@ -11,69 +11,6 @@ cd "$repo_root"
 
 declare -a violations=()
 
-record_violation() {
-    local file="$1"
-    local line="$2"
-    local message="$3"
-    violations+=("$file:$line: $message")
-}
-
-# Given a file and the line number of a #[cfg(test)] attribute, extract
-# the range of lines belonging to the cfg(test) block (the item that
-# follows the attribute — typically `mod tests { ... }`).
-# Outputs: "start_line end_line"
-cfg_test_range() {
-    local file="$1"
-    local attr_line="$2"
-    local total_lines
-    total_lines="$(wc -l < "$file")"
-
-    # Find the opening brace of the item following the attribute.
-    local line_num="$attr_line"
-    local depth=0
-    local found_open=false
-    local line=""
-    local open_only=""
-    local close_only=""
-
-    while [ "$line_num" -le "$total_lines" ]; do
-        line="$(sed -n "${line_num}p" "$file")"
-        open_only="${line//[^\{]/}"
-        close_only="${line//[^\}]/}"
-        depth=$((depth + ${#open_only} - ${#close_only}))
-        if [ ${#open_only} -gt 0 ] && [ "$found_open" = false ]; then
-            found_open=true
-        fi
-        if [ "$found_open" = true ] && [ "$depth" -le 0 ]; then
-            echo "$attr_line $line_num"
-            return
-        fi
-        line_num=$((line_num + 1))
-    done
-    # If we couldn't find the end, return to end of file.
-    echo "$attr_line $total_lines"
-}
-
-# Check whether a given line number falls inside any #[cfg(test)] block
-# in the file.  Uses the pre-computed ranges passed via the array name.
-# Arguments: line_number ranges_string
-# ranges_string is space-separated pairs: "start1 end1 start2 end2 ..."
-line_in_test_block() {
-    local target="$1"
-    shift
-    local ranges=("$@")
-    local i=0
-    while [ "$i" -lt "${#ranges[@]}" ]; do
-        local rstart="${ranges[$i]}"
-        local rend="${ranges[$((i+1))]}"
-        if [ "$target" -ge "$rstart" ] && [ "$target" -le "$rend" ]; then
-            return 0
-        fi
-        i=$((i + 2))
-    done
-    return 1
-}
-
 # Returns true if the file name matches common Rust test file patterns.
 is_test_named_file() {
     local file="$1"
@@ -84,134 +21,151 @@ is_test_named_file() {
     return 1
 }
 
-# Scan a file for home_dir() / env::var("HOME") near assertion macros
-# without a .exists() guard.
-# Arguments: file [ranges...]
-# If ranges is empty, scan the whole file; otherwise only lines in ranges.
-check_home_sensitive_asserts() {
+# Scan each file once. The awk state machine tracks #[cfg(test)] brace ranges
+# and pending HOME-derived expressions while streaming the source. This avoids
+# spawning sed once per source line for every cfg(test) block and match.
+scan_file() {
     local file="$1"
-    shift
-    local ranges=("$@")
-    local scan_all=false
-    if [ "${#ranges[@]}" -eq 0 ]; then
-        scan_all=true
-    fi
+    local scan_all="$2"
 
-    local line_number=""
-    while IFS=: read -r line_number _; do
-        [ -n "$line_number" ] || continue
+    while IFS= read -r violation; do
+        violations+=("$violation")
+    done < <(
+        awk -v file="$file" -v scan_all="$scan_all" '
+            function count_open_braces(line,    copy) {
+                copy = line
+                return gsub(/\{/, "", copy)
+            }
 
-        # If we have ranges, skip lines outside test blocks.
-        if [ "$scan_all" = false ]; then
-            if ! line_in_test_block "$line_number" "${ranges[@]}"; then
-                continue
-            fi
-        fi
+            function count_close_braces(line,    copy) {
+                copy = line
+                return gsub(/\}/, "", copy)
+            }
 
-        # Scan forward from the match. If we enter a brace-delimited block,
-        # keep scanning until it closes; otherwise inspect the next 5 lines.
-        local total_lines max_scan_line current_line="$line_number"
-        total_lines="$(wc -l < "$file")"
-        max_scan_line=$((line_number + 5))
-        if [ "$max_scan_line" -gt "$total_lines" ]; then
-            max_scan_line="$total_lines"
-        fi
+            function has_if_let_guard(block,    lines, line_count, i) {
+                line_count = split(block, lines, "\n")
+                for (i = 1; i <= line_count; i++) {
+                    if (lines[i] ~ /if let Some\(.*\)[[:space:]]*=[[:space:]]*(home_dir|env::var)/) {
+                        return 1
+                    }
+                }
+                return 0
+            }
 
-        local line="" block="" open_only="" close_only="" depth=0 found_open=false
-        while [ "$current_line" -le "$total_lines" ]; do
-            line="$(sed -n "${current_line}p" "$file")"
-            block+="$line"$'\n'
-            open_only="${line//[^\{]/}"
-            close_only="${line//[^\}]/}"
-            if [ ${#open_only} -gt 0 ]; then
-                found_open=true
-            fi
-            depth=$((depth + ${#open_only} - ${#close_only}))
-            if [ "$found_open" = true ] && [ "$depth" -le 0 ]; then
-                break
-            fi
-            if [ "$found_open" = false ] && [ "$current_line" -ge "$max_scan_line" ]; then
-                break
-            fi
-            current_line=$((current_line + 1))
-        done
+            function finish_home(id,    block) {
+                block = home_block[id]
+                if (block ~ /assert(_eq|_ne|_matches)?!/ &&
+                    block !~ /\.exists\(/ &&
+                    !has_if_let_guard(block)) {
+                    home_violations[++home_violation_count] = file ":" home_start[id] ": HOME-derived value used near assertion without '\''.exists()'\'' guard"
+                }
+                delete home_block[id]
+                delete home_depth[id]
+                delete home_found_open[id]
+                delete home_limit[id]
+                delete home_start[id]
+            }
 
-        # Must contain an assertion macro (any of assert!, assert_eq!, etc.)
-        if ! printf '%s' "$block" | grep -Eq 'assert(_eq|_ne|_matches)?!'; then
-            continue
-        fi
+            function advance_homes(line, opens, brace_delta,    id) {
+                for (id = 1; id <= home_count; id++) {
+                    if (!(id in home_start)) {
+                        continue
+                    }
+                    home_block[id] = home_block[id] line "\n"
+                    if (opens > 0) {
+                        home_found_open[id] = 1
+                    }
+                    home_depth[id] += brace_delta
+                    if ((home_found_open[id] && home_depth[id] <= 0) ||
+                        (!home_found_open[id] && NR >= home_limit[id])) {
+                        finish_home(id)
+                    }
+                }
+            }
 
-        # Skip if guarded: .exists() check, or if-let-Some wrapping home_dir().
-        if printf '%s' "$block" | grep -Eq '\.exists\('; then
-            continue
-        fi
-        if printf '%s' "$block" | grep -Eq 'if let Some\(.*\)\s*=\s*(home_dir|env::var)'; then
-            continue
-        fi
+            function start_home(line, opens, brace_delta,    id) {
+                id = ++home_count
+                home_start[id] = NR
+                home_limit[id] = NR + 5
+                home_block[id] = line "\n"
+                home_depth[id] = brace_delta
+                home_found_open[id] = (opens > 0)
+                if (home_found_open[id] && home_depth[id] <= 0) {
+                    finish_home(id)
+                }
+            }
 
-        record_violation \
-            "$file" \
-            "$line_number" \
-            "HOME-derived value used near assertion without '.exists()' guard"
-    done < <(grep -nE 'home_dir\(|env::var\([[:space:]]*"HOME"' "$file" 2>/dev/null || true)
-}
+            function discard_finished_cfg_blocks(    i, next_count) {
+                next_count = 0
+                for (i = 1; i <= cfg_count; i++) {
+                    if (cfg_found_open[i] && cfg_depth[i] <= 0) {
+                        continue
+                    }
+                    ++next_count
+                    cfg_found_open[next_count] = cfg_found_open[i]
+                    cfg_depth[next_count] = cfg_depth[i]
+                }
+                for (i = next_count + 1; i <= cfg_count; i++) {
+                    delete cfg_found_open[i]
+                    delete cfg_depth[i]
+                }
+                cfg_count = next_count
+            }
 
-# Scan a file for Command::new("which") or Command::new("where") in tests.
-# Arguments: file [ranges...]
-check_which_where_processes() {
-    local file="$1"
-    shift
-    local ranges=("$@")
-    local scan_all=false
-    if [ "${#ranges[@]}" -eq 0 ]; then
-        scan_all=true
-    fi
+            {
+                opens = count_open_braces($0)
+                closes = count_close_braces($0)
+                brace_delta = opens - closes
 
-    local line_number="" matched=""
-    while IFS=: read -r line_number matched; do
-        [ -n "$line_number" ] || continue
+                if ($0 ~ /^[[:space:]]*#\[cfg\(test\)\]/) {
+                    ++cfg_count
+                    cfg_found_open[cfg_count] = 0
+                    cfg_depth[cfg_count] = 0
+                }
+                for (i = 1; i <= cfg_count; i++) {
+                    if (!cfg_found_open[i] && opens > 0) {
+                        cfg_found_open[i] = 1
+                    }
+                    cfg_depth[i] += brace_delta
+                }
 
-        if [ "$scan_all" = false ]; then
-            if ! line_in_test_block "$line_number" "${ranges[@]}"; then
-                continue
-            fi
-        fi
+                in_test_context = (scan_all == "true" || cfg_count > 0)
+                advance_homes($0, opens, brace_delta)
 
-        record_violation \
-            "$file" \
-            "$line_number" \
-            "test shells out to ${matched}; avoid host-specific binary discovery"
-    done < <(grep -nE 'Command::new\([[:space:]]*"(which|where)"' "$file" 2>/dev/null || true)
+                if (in_test_context && $0 ~ /home_dir\(|env::var\([[:space:]]*"HOME"/) {
+                    start_home($0, opens, brace_delta)
+                }
+                if (in_test_context && $0 ~ /Command::new\([[:space:]]*"(which|where)"/) {
+                    process_violations[++process_violation_count] = file ":" NR ": test shells out to " $0 "; avoid host-specific binary discovery"
+                }
+
+                discard_finished_cfg_blocks()
+            }
+
+            END {
+                for (id = 1; id <= home_count; id++) {
+                    if (id in home_start) {
+                        finish_home(id)
+                    }
+                }
+                for (id = 1; id <= home_violation_count; id++) {
+                    print home_violations[id]
+                }
+                for (id = 1; id <= process_violation_count; id++) {
+                    print process_violations[id]
+                }
+            }
+        ' "$file"
+    )
 }
 
 # --- Main ---
 
 while IFS= read -r file; do
     if is_test_named_file "$file"; then
-        # Entire file is test context — scan everything.
-        check_home_sensitive_asserts "$file"
-        check_which_where_processes "$file"
+        scan_file "$file" true
     else
-        # Only scan within #[cfg(test)] blocks.
-        cfg_lines=()
-        while IFS= read -r ln; do
-            cfg_lines+=("$ln")
-        done < <(grep -nE '^\s*#\[cfg\(test\)\]' "$file" 2>/dev/null | cut -d: -f1)
-
-        if [ "${#cfg_lines[@]}" -eq 0 ]; then
-            continue
-        fi
-
-        # Build ranges array.
-        ranges=()
-        for ln in "${cfg_lines[@]}"; do
-            range_pair="$(cfg_test_range "$file" "$ln")"
-            # shellcheck disable=SC2086
-            ranges+=($range_pair)
-        done
-
-        check_home_sensitive_asserts "$file" "${ranges[@]}"
-        check_which_where_processes "$file" "${ranges[@]}"
+        scan_file "$file" false
     fi
 done < <(git ls-files 'crates/**.rs')
 
