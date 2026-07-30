@@ -38,13 +38,14 @@ impl SessionTreeMemorySampler {
                     io::Error::new(io::ErrorKind::NotFound, "session daemon PID unavailable")
                 })?;
 
+            let expected_daemon_scope = csa_resource::cgroup::scope_unit_name("daemon", session_id);
             Ok(Self {
                 daemon_pid,
-                memory_current_path: read_process_control_group(daemon_pid).map(|control_group| {
-                    Path::new("/sys/fs/cgroup")
-                        .join(control_group.trim_start_matches('/'))
-                        .join("memory.current")
-                }),
+                memory_current_path: read_process_control_group(daemon_pid).and_then(
+                    |control_group| {
+                        csa_scope_memory_current_path(&control_group, &expected_daemon_scope)
+                    },
+                ),
             })
         }
     }
@@ -100,6 +101,28 @@ fn read_memory_current_bytes(memory_current_path: &Path) -> io::Result<u64> {
     raw.trim()
         .parse::<u64>()
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+#[cfg(target_os = "linux")]
+fn csa_scope_memory_current_path(
+    control_group: &str,
+    expected_daemon_scope: &str,
+) -> Option<PathBuf> {
+    // A parent/login scope includes unrelated processes and would be counted once per
+    // active session by admission. A direct detached daemon can also inherit another
+    // session's CSA scope, so only this daemon's exact transient scope can safely
+    // replace process-tree sampling.
+    let relative = control_group.trim().trim_start_matches('/');
+    let scope_name = relative.rsplit('/').next()?;
+    if scope_name != expected_daemon_scope {
+        return None;
+    }
+
+    Some(
+        Path::new("/sys/fs/cgroup")
+            .join(relative)
+            .join("memory.current"),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -213,9 +236,11 @@ mod non_linux_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::bytes_to_mb_ceil;
     #[cfg(target_os = "linux")]
-    use super::parse_process_control_group;
+    use super::{csa_scope_memory_current_path, parse_process_control_group};
 
     #[test]
     fn bytes_to_mb_ceil_rounds_up_partial_megabytes() {
@@ -250,5 +275,48 @@ mod tests {
     fn parse_process_control_group_ignores_root_path() {
         let raw = "0::/\n";
         assert_eq!(parse_process_control_group(raw), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_login_scope_is_not_used_as_a_session_memory_sample() {
+        assert_eq!(
+            csa_scope_memory_current_path(
+                "/user.slice/user-1001.slice/session-5.scope",
+                "csa-daemon-01JTEST.scope",
+            ),
+            None,
+            "a shared login scope would charge every active session with the same host memory"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn csa_scope_is_used_as_a_session_memory_sample() {
+        assert_eq!(
+            csa_scope_memory_current_path(
+                "/user.slice/user-1001.slice/user@1001.service/app.slice/csa-daemon-01JTEST.scope",
+                "csa-daemon-01JTEST.scope",
+            )
+            .as_deref(),
+            Some(
+                Path::new("/sys/fs/cgroup")
+                    .join("user.slice/user-1001.slice/user@1001.service/app.slice/csa-daemon-01JTEST.scope/memory.current")
+                    .as_path()
+            )
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inherited_parent_csa_scope_is_not_used_for_a_different_daemon_session() {
+        assert_eq!(
+            csa_scope_memory_current_path(
+                "/user.slice/user-1001.slice/user@1001.service/app.slice/csa-codex-01JPARENT.scope",
+                "csa-daemon-01JCHILD.scope",
+            ),
+            None,
+            "a direct detached daemon can inherit its caller's CSA scope"
+        );
     }
 }
