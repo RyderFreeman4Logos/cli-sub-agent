@@ -61,7 +61,8 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
             in_findings_section = true;
             continue;
         }
-        if in_findings_section && trimmed.starts_with('#') {
+        if in_findings_section && trimmed.starts_with('#') && !is_markdown_finding_heading(trimmed)
+        {
             in_findings_section = false;
             continue;
         }
@@ -159,7 +160,7 @@ pub(in crate::review_cmd) fn findings_section_bodies(text: &str) -> Vec<Findings
         let Some((body, _)) = current.as_mut() else {
             continue;
         };
-        if !in_code_fence && trimmed.starts_with('#') {
+        if !in_code_fence && trimmed.starts_with('#') && !is_markdown_finding_heading(trimmed) {
             if let Some((body, is_markdown_heading)) = current.take() {
                 bodies.push(FindingsSectionBody {
                     body,
@@ -273,7 +274,17 @@ fn bracketed_finding_severity(body: &str) -> Option<Severity> {
 }
 
 fn structured_finding_body(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let line = line
+        .strip_prefix('#')
+        .map_or(line, |line| line.trim_start_matches('#').trim_start());
     strip_numbered_prefix(line).or_else(|| strip_unordered_finding_prefix(line))
+}
+
+fn is_markdown_finding_heading(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix('#')
+        .is_some_and(|line| structured_finding_body(line).is_some())
 }
 
 fn strip_numbered_prefix(line: &str) -> Option<&str> {
@@ -372,7 +383,8 @@ fn parse_path_prefixed_finding(body: &str, severity: Severity) -> Option<ParsedP
 fn parse_file_reference_line(line: &str) -> Option<ReviewFindingFileRange> {
     let line = strip_unordered_list_prefix(line);
     let (label, rest) = line.split_once(':')?;
-    if !label.trim().eq_ignore_ascii_case("file") {
+    if !(label.trim().eq_ignore_ascii_case("file") || label.trim().eq_ignore_ascii_case("location"))
+    {
         return None;
     }
     parse_leading_file_range(rest.trim()).map(|(range, _)| range)
