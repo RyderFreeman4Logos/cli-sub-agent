@@ -545,6 +545,12 @@ pub(crate) async fn handle_run(
     let executed_session_id = loop_outcome.executed_session_id;
     let session_id = executed_session_id.as_deref();
     let fork_resolution = loop_outcome.fork_resolution;
+    // Preserve whether the writer itself completed successfully before enforcing
+    // the commit contract. `record_run_dirty` intentionally turns a missing
+    // commit into a fatal result, but that must not suppress the configured
+    // post-exec gate: its structured failure report is the actionable evidence
+    // a require-commit caller needs to diagnose dirty work that did not commit.
+    let post_exec_gate_eligible = result.exit_code == 0;
     let warning = crate::run_cmd::uncommitted::record_run_dirty(
         &project_root,
         session_id,
@@ -558,7 +564,7 @@ pub(crate) async fn handle_run(
         run_output::enrich_ephemeral_signal_diagnostics(&mut result);
     }
 
-    if result.exit_code == 0 {
+    if post_exec_gate_eligible {
         let post_exec_gate_env = crate::build_jobs_env::build_jobs_env(build_jobs);
         apply_post_exec_gate_after_success_with_runner(
             &project_root,
