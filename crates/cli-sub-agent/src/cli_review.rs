@@ -278,7 +278,9 @@ pub struct ReviewArgs {
     )]
     pub consensus: String,
 
-    /// Absolute wall-clock timeout in seconds (kills execution after N seconds when set)
+    /// Absolute wall-clock timeout in seconds (kills execution after N seconds when set).
+    /// Must be at least configured `execution.min_timeout_seconds`; inspect the
+    /// floor with `csa config get execution.min_timeout_seconds`.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: Option<u64>,
 
