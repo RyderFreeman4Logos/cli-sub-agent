@@ -95,3 +95,7 @@ mod pre_exec_tests;
 #[cfg(test)]
 #[path = "run_cmd_execute_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "run_cmd_execute_handle_tests.rs"]
+mod handle_tests;

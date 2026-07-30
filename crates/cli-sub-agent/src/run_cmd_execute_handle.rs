@@ -1,4 +1,47 @@
 use super::*;
+use std::path::Path;
+
+/// Enforce the commit contract without losing the writer-success signal used to
+/// decide whether a post-exec gate must run. A missing commit changes the
+/// caller-facing result to fatal, but the configured gate is still diagnostic
+/// evidence for a writer that completed successfully.
+pub(super) async fn record_run_dirty_then_apply_post_exec_gate(
+    project_root: &Path,
+    prompt_text: &str,
+    session_id: Option<&str>,
+    config: Option<&csa_config::ProjectConfig>,
+    result: &mut csa_process::ExecutionResult,
+    changed_paths: Option<&[String]>,
+    commit_created: Option<bool>,
+    require_commit: bool,
+    post_exec_options: PostExecGateApplyOptions<'_>,
+) -> Result<Option<csa_session::LargeDiffWarningReport>> {
+    // Preserve the writer's outcome before `record_run_dirty` may convert a
+    // missing required commit into a fatal result. Gate failure details are the
+    // actionable diagnostic for this exact case (#2830).
+    let post_exec_gate_eligible = result.exit_code == 0;
+    let warning = crate::run_cmd::uncommitted::record_run_dirty(
+        project_root,
+        session_id,
+        result,
+        changed_paths,
+        commit_created,
+        require_commit,
+        config,
+    );
+    if post_exec_gate_eligible {
+        apply_post_exec_gate_after_success_with_runner(
+            project_root,
+            prompt_text,
+            session_id,
+            config,
+            post_exec_options,
+            execute_post_exec_gate_command,
+        )
+        .await?;
+    }
+    Ok(warning)
+}
 
 pub(crate) async fn handle_run(
     tool: Option<ToolArg>,
@@ -545,41 +588,26 @@ pub(crate) async fn handle_run(
     let executed_session_id = loop_outcome.executed_session_id;
     let session_id = executed_session_id.as_deref();
     let fork_resolution = loop_outcome.fork_resolution;
-    // Preserve whether the writer itself completed successfully before enforcing
-    // the commit contract. `record_run_dirty` intentionally turns a missing
-    // commit into a fatal result, but that must not suppress the configured
-    // post-exec gate: its structured failure report is the actionable evidence
-    // a require-commit caller needs to diagnose dirty work that did not commit.
-    let post_exec_gate_eligible = result.exit_code == 0;
-    let warning = crate::run_cmd::uncommitted::record_run_dirty(
+    let post_exec_gate_env = crate::build_jobs_env::build_jobs_env(build_jobs);
+    let warning = record_run_dirty_then_apply_post_exec_gate(
         &project_root,
+        &gate_prompt_text,
         session_id,
+        config.as_ref(),
         &mut result,
         loop_outcome.changed_paths.as_deref(),
         loop_outcome.commit_created,
         require_commit,
-        config.as_ref(),
-    );
+        PostExecGateApplyOptions {
+            changed_paths: loop_outcome.changed_paths.as_deref(),
+            extra_env: post_exec_gate_env,
+            no_post_exec_gate,
+            planning_only: skill.as_deref() == Some("mktd"),
+        },
+    )
+    .await?;
     if ephemeral && executed_session_id.is_none() {
         run_output::enrich_ephemeral_signal_diagnostics(&mut result);
-    }
-
-    if post_exec_gate_eligible {
-        let post_exec_gate_env = crate::build_jobs_env::build_jobs_env(build_jobs);
-        apply_post_exec_gate_after_success_with_runner(
-            &project_root,
-            &gate_prompt_text,
-            session_id,
-            config.as_ref(),
-            PostExecGateApplyOptions {
-                changed_paths: loop_outcome.changed_paths.as_deref(),
-                extra_env: post_exec_gate_env,
-                no_post_exec_gate,
-                planning_only: skill.as_deref() == Some("mktd"),
-            },
-            execute_post_exec_gate_command,
-        )
-        .await?;
     }
 
     if fork_call {
