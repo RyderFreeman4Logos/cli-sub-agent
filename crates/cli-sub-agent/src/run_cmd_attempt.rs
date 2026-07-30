@@ -1,5 +1,8 @@
 include!("run_cmd_attempt_prelude.rs");
 
+#[path = "run_cmd_attempt_admission.rs"]
+mod admission;
+
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
     let mut g = capture_cg(request.project_root, request.skill)?;
     let o = ri(request, &mut g).await;
@@ -11,6 +14,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
 
 async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion> {
     let config_refs = request.config_refs();
+    let memory_admission = admission::RunMemoryAdmission::from_request(&request);
     let max_failover_attempts =
         max_failovers(request.no_failover, request.config, request.global_config);
 
@@ -80,6 +84,12 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             request.run_timeout_seconds,
             tool_name_str,
         );
+        if (effective_session_arg.is_none() || is_fork)
+            && executed_session_id.is_none()
+            && pre_created_fork_session_id.is_none()
+        {
+            memory_admission.validate(tool_name_str, initial_response_timeout_seconds)?;
+        }
         let max_concurrent = request.global_config.max_concurrent(tool_name_str);
         let mut _slot_guard = match acquire_attempt_slot(
             AttemptSlotRequest {

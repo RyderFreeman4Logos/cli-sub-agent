@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn cross_model_retry_clears_non_fork_effective_session() {
+fn cross_model_resume_retry_clears_non_fork_effective_session_for_fresh_admission() {
     let mut failover_context = None;
     let mut tool = ToolName::Codex;
     let mut model_spec = Some("codex/test-provider/model-a/high".to_string());
