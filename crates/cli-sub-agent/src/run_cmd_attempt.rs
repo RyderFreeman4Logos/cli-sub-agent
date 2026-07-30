@@ -84,7 +84,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             request.run_timeout_seconds,
             tool_name_str,
         );
-        if (session_arg.is_none() || is_fork)
+        if (effective_session_arg.is_none() || is_fork)
             && executed_session_id.is_none()
             && pre_created_fork_session_id.is_none()
         {
