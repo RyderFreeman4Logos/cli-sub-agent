@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use csa_session::{MetaSessionState, SessionPhase};
@@ -126,7 +127,7 @@ fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
     )
     .expect("write live daemon pid");
 
-    let output = csa_cmd(tmp.path())
+    let mut wait = csa_cmd(tmp.path())
         .current_dir(&project)
         .args([
             "session",
@@ -138,8 +139,34 @@ fn session_wait_liveness_failure_exits_nonzero_even_with_live_daemon() {
             "--cd",
             project.to_str().expect("utf-8 project path"),
         ])
-        .output()
-        .expect("run csa session wait");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn csa session wait");
+
+    let wait_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match wait.try_wait().expect("poll csa session wait") {
+            Some(_) => break,
+            None if Instant::now() < wait_deadline => std::thread::sleep(Duration::from_millis(10)),
+            None => {
+                wait.kill().ok();
+                wait.wait().ok();
+                daemon.kill().ok();
+                daemon.wait().ok();
+                panic!("session wait did not fail before the test watchdog expired");
+            }
+        }
+    }
+    let output = wait
+        .wait_with_output()
+        .expect("collect csa session wait output");
+
+    assert!(
+        daemon.try_wait().expect("poll live daemon").is_none(),
+        "session wait must report stale liveness while the daemon is still live: {}",
+        output_text(&output)
+    );
 
     daemon.kill().ok();
     daemon.wait().ok();
