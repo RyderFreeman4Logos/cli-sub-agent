@@ -34,6 +34,7 @@ struct ActiveSessionObservation {
 enum SessionMemorySample {
     RssMb(u64),
     UnsupportedLiveProcess,
+    Terminal,
     Unavailable,
 }
 
@@ -201,6 +202,16 @@ pub(crate) fn build_spawn_memory_admission(
 
 fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
     let project_root = Path::new(&session.project_path);
+    // A result is terminal only after its writer/daemon exits; live results remain charged.
+    if csa_session::load_result(project_root, &session.meta_session_id)
+        .ok()
+        .flatten()
+        .is_some()
+        && !session_has_live_process_signal(project_root, &session.meta_session_id)
+    {
+        return SessionMemorySample::Terminal;
+    }
+
     match SessionTreeMemorySampler::new(project_root, &session.meta_session_id)
         .and_then(|sampler| sampler.sample_rss_mb())
     {
@@ -269,6 +280,7 @@ fn active_session_observation(
         .and_then(|sandbox| sandbox.memory_max_mb);
 
     match sample {
+        SessionMemorySample::Terminal => return None,
         SessionMemorySample::RssMb(rss_mb) => {
             return Some(ActiveSessionObservation {
                 sampled_rss_mb: Some(rss_mb),
@@ -349,6 +361,10 @@ fn count_observable_active_sessions(
         .try_into()
         .unwrap_or(u64::MAX)
 }
+
+#[cfg(test)]
+#[path = "resource_admission_terminal_session_tests.rs"]
+mod terminal_session_tests;
 
 #[cfg(test)]
 mod tests {
