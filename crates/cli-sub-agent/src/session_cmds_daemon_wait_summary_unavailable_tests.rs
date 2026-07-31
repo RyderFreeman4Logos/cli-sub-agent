@@ -53,7 +53,9 @@ fn compact_summary_includes_redacted_provider_usage_limit_reason() {
 }
 
 #[test]
-fn compact_summary_omits_provider_usage_reason_for_auth_only_unavailable() {
+fn compact_summary_surfaces_actionable_auth_unavailable_reason() {
+    // #2911: auth/admission failures must remain actionable (not opaque UNAVAILABLE).
+    // Secrets still redacted; only the "omit entirely" behavior is retired.
     let temp = tempfile::tempdir().expect("tempdir should be created");
     let api_field = concat!("api", "_", "key");
     let fake_value = concat!("sk", "-", "sec", "...", "6789");
@@ -82,8 +84,10 @@ fn compact_summary_omits_provider_usage_reason_for_auth_only_unavailable() {
 
     let summary = render_wait_result_summary(temp.path(), "01TESTWAITAUTHA", &result);
 
-    assert!(!summary.contains("Unavailable reason:"));
+    assert!(summary.contains("Unavailable reason: auth:"));
+    assert!(summary.contains("API Key not found") || summary.contains("api_key_invalid"));
     assert!(!summary.contains(fake_value));
+    assert!(summary.contains("[REDACTED]"));
 }
 
 #[test]
