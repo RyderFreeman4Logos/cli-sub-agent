@@ -34,15 +34,56 @@ pub(crate) fn review_unavailable_reason(
         artifact.failure_reason.as_deref(),
         artifact.primary_failure.as_deref(),
     ];
-    candidates
+    if let Some(candidate) = candidates
         .into_iter()
         .flatten()
         .filter_map(provider_limit_candidate)
         .max_by_key(|candidate| candidate.score)
-        .map(|candidate| UnavailableReason {
+    {
+        return Some(UnavailableReason {
             kind: UNAVAILABLE_REASON_KIND,
             message: candidate.message,
+        });
+    }
+
+    // #2911: admission/provider launch failures must remain actionable even when
+    // they are not usage-limit shaped (opaque UNAVAILABLE is not enough).
+    candidates
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|text| !text.is_empty())
+        .map(|text| {
+            let redacted = csa_session::redact_text_content(text);
+            let compact = compact_visible_text(&redacted);
+            UnavailableReason {
+                kind: actionable_unavailable_kind(&compact),
+                message: clip_chars(&compact, UNAVAILABLE_REASON_MAX_CHARS),
+            }
         })
+        .filter(|reason| !reason.message.is_empty())
+}
+
+fn actionable_unavailable_kind(text: &str) -> &'static str {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("host_memory_admission")
+        || lower.contains("memory admission")
+        || lower.contains("active-session memory")
+    {
+        "host_memory_admission"
+    } else if lower.contains("admission") {
+        "admission"
+    } else if lower.contains("api key")
+        || lower.contains("api_key")
+        || lower.contains("auth")
+        || lower.contains("unauthorized")
+    {
+        "auth"
+    } else if lower.contains("did not launch") || lower.contains("provider") {
+        "provider_launch"
+    } else {
+        "unavailable"
+    }
 }
 
 fn read_review_verdict_artifact(session_dir: &Path) -> Option<ReviewVerdictArtifact> {
@@ -260,13 +301,30 @@ mod tests {
     }
 
     #[test]
-    fn review_unavailable_reason_ignores_auth_only_unavailable() {
+    fn review_unavailable_reason_surfaces_admission_reason() {
+        let artifact = unavailable_artifact(
+            Some(
+                "host_memory_admission: reviewer provider did not launch; no alternate configured reviewer candidate was available",
+            ),
+            Some("codex=host_memory_admission: reviewer provider did not launch"),
+        );
+
+        let reason = review_unavailable_reason(&artifact).expect("admission reason");
+        assert_eq!(reason.kind, "host_memory_admission");
+        assert!(reason.message.contains("host_memory_admission"));
+        assert!(reason.message.contains("did not launch"));
+    }
+
+    #[test]
+    fn review_unavailable_reason_surfaces_auth_failure() {
         let artifact = unavailable_artifact(
             Some("api_key_invalid"),
             Some("gemini-cli tool failure: API Key not found"),
         );
 
-        assert_eq!(review_unavailable_reason(&artifact), None);
+        let reason = review_unavailable_reason(&artifact).expect("auth reason");
+        assert_eq!(reason.kind, "auth");
+        assert!(reason.message.contains("API Key not found") || reason.message.contains("api_key"));
     }
 
     #[test]

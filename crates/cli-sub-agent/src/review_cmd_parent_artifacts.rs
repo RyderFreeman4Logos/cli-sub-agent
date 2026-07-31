@@ -28,7 +28,12 @@ use super::output::ReviewerOutcome;
 
 #[path = "review_cmd_parent_verdict.rs"]
 mod parent_verdict;
-use parent_verdict::write_parent_review_verdict;
+use parent_verdict::{
+    aggregate_unavailable_reviewer_reasons, patch_parent_review_verdict_unavailable_reasons,
+    write_parent_review_details, write_parent_review_summary, write_parent_review_verdict,
+};
+
+pub(super) use parent_verdict::unavailable_outcome_reason;
 
 pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) project_root: &'a Path,
@@ -243,6 +248,11 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
     let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
     write_consolidated_artifact(&parent_artifact, &session_dir)?;
     write_parent_findings_toml(&session_dir, &parent_artifact)?;
+    let (primary_failure, failure_reason) = if parent_decision == ReviewDecision::Unavailable {
+        aggregate_unavailable_reviewer_reasons(outcomes)
+    } else {
+        (None, None)
+    };
     write_parent_review_verdict(
         &session_dir,
         &session_id,
@@ -256,11 +266,20 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
         // Authoritative run mode, not reviewer-derived `parent_artifact.review_mode` (#1817).
         run_review_mode,
     )?;
+    if primary_failure.is_some() || failure_reason.is_some() {
+        patch_parent_review_verdict_unavailable_reasons(
+            &session_dir,
+            primary_failure.as_deref(),
+            failure_reason.as_deref(),
+        )?;
+    }
     if let Some(meta) = parent_review_meta {
         let mut meta = meta.clone();
         meta.decision = parent_decision.as_str().to_string();
         meta.verdict = parent_verdict.clone();
         meta.review_mode = run_review_mode.map(str::to_string);
+        meta.primary_failure = primary_failure.clone();
+        meta.failure_reason = failure_reason.clone();
         meta.exit_code = if parent_decision.is_clean() { 0 } else { 1 };
         write_review_meta_with_diff_report(&session_dir, &meta, diff_size, large_diff_warning)
             .context("failed to write parent review_meta.json")?;
@@ -330,6 +349,11 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let artifact = parent_artifact_for_decision(&consolidated, decision);
     write_consolidated_artifact(&artifact, &session_dir)?;
     write_parent_findings_toml(&session_dir, &artifact)?;
+    let (primary_failure, failure_reason) = if decision == ReviewDecision::Unavailable {
+        aggregate_unavailable_reviewer_reasons(ctx.outcomes)
+    } else {
+        (None, None)
+    };
     let meta = ReviewSessionMeta {
         session_id: target.session_id.clone(),
         head_sha: ctx.head_sha.to_string(),
@@ -339,8 +363,8 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         review_mode: ctx.run_review_mode.map(str::to_string),
         status_reason: None,
         routed_to: None,
-        primary_failure: None,
-        failure_reason: None,
+        primary_failure: primary_failure.clone(),
+        failure_reason: failure_reason.clone(),
         tool: "consensus".to_string(),
         scope: ctx.scope.to_string(),
         exit_code: if decision.is_clean() { 0 } else { 1 },
@@ -361,6 +385,8 @@ pub(super) fn write_standalone_consensus_review_artifacts(
         Vec::new(),
     );
     verdict_artifact.review_mode = ctx.run_review_mode.map(str::to_string);
+    verdict_artifact.primary_failure = primary_failure;
+    verdict_artifact.failure_reason = failure_reason;
     verdict_artifact.diff_size = ctx.diff_size.cloned();
     apply_large_diff_warning(&mut verdict_artifact, ctx.large_diff_warning);
     write_review_verdict(&session_dir, &verdict_artifact)
@@ -590,73 +616,6 @@ fn parent_legacy_verdict(decision: ReviewDecision, fallback: &str) -> String {
             fallback.to_string()
         }
     }
-}
-
-fn write_parent_review_summary(
-    session_dir: &Path,
-    outcomes: &[ReviewerOutcome],
-    final_verdict: &str,
-    diff_size: Option<&ReviewDiffSize>,
-) -> Result<()> {
-    let output_dir = session_dir.join("output");
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("failed to create {}", output_dir.display()))?;
-    let mut summary = format!("Final verdict: {final_verdict}\n\nReviewer outcomes:\n");
-    if let Some(diff_size) = diff_size {
-        summary = format!(
-            "{}\n{summary}",
-            super::diff_size::format_review_diff_size_line(diff_size)
-        );
-    }
-    for outcome in outcomes {
-        summary.push_str(&format!(
-            "- reviewer {} ({}) => {}",
-            outcome.reviewer_index + 1,
-            outcome.tool,
-            outcome.verdict
-        ));
-        if let Some(diagnostic) = &outcome.diagnostic {
-            summary.push_str(&format!("; diagnostic: {diagnostic}"));
-        }
-        summary.push('\n');
-    }
-    fs::write(output_dir.join("summary.md"), summary)
-        .context("failed to write parent output/summary.md")
-}
-
-fn write_parent_review_details(
-    session_dir: &Path,
-    outcomes: &[ReviewerOutcome],
-    diff_size: Option<&ReviewDiffSize>,
-) -> Result<()> {
-    let output_dir = session_dir.join("output");
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("failed to create {}", output_dir.display()))?;
-    let mut details = String::new();
-    if let Some(diff_size) = diff_size {
-        details.push_str(&super::diff_size::format_review_diff_size_line(diff_size));
-        details.push_str("\n\n");
-    }
-    for outcome in outcomes {
-        details.push_str(&format!(
-            "## Reviewer {} ({})\n\nVerdict: {}\nExit code: {}\n",
-            outcome.reviewer_index + 1,
-            outcome.tool,
-            outcome.verdict,
-            outcome.exit_code
-        ));
-        if let Some(diagnostic) = &outcome.diagnostic {
-            details.push_str(&format!("Diagnostic: {diagnostic}\n"));
-        }
-        details.push('\n');
-        details.push_str(&outcome.output);
-        if !details.ends_with('\n') {
-            details.push('\n');
-        }
-        details.push('\n');
-    }
-    fs::write(output_dir.join("details.md"), details)
-        .context("failed to write parent output/details.md")
 }
 
 #[cfg(test)]
