@@ -290,7 +290,8 @@ fn validate_host_memory_before_session(
         project_root,
         REVIEW_PREFLIGHT_SESSION_ID,
         projected_spawn_mb,
-    );
+    )
+    .context("Failed to build host-memory admission")?;
     resource_guard
         .check_availability_with_admission(tool.as_str(), Some(admission))
         .map_err(|err| {

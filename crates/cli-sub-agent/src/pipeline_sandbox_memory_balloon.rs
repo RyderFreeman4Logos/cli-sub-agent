@@ -19,8 +19,16 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str, project_root: &Path, sessio
     let available_memory = sys.available_memory();
     let available_swap = sys.free_swap();
     let available_memory_mb = available_memory / 1024 / 1024;
-    let active_session_count =
-        crate::resource_admission::active_session_count_for_balloon(project_root, session_id);
+    let active_session_count = match crate::resource_admission::active_session_count_for_balloon(
+        project_root,
+        session_id,
+    ) {
+        Ok(count) => count,
+        Err(err) => {
+            warn!(error = %err, "Skipping MemoryBalloon prewarm: active-session admission is unavailable");
+            return;
+        }
+    };
 
     if should_skip_balloon_prewarm(available_memory_mb, active_session_count) {
         warn!(
