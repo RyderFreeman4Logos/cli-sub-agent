@@ -43,7 +43,8 @@ pub(super) fn read_review_verdict_label(
             && let Some(primary_failure) = artifact.primary_failure.as_deref()
             && !primary_failure.trim().is_empty()
         {
-            let redacted = csa_session::redact_text_content(primary_failure.trim());
+            let redacted =
+                crate::review_failure_context::sanitize_review_surface_text(primary_failure.trim());
             let compacted = super::compact_wait_summary_text(&redacted);
             let label = compacted.unwrap_or_else(|| redacted.clone());
             return Some(format!("UNAVAILABLE ({label})"));
@@ -221,7 +222,9 @@ fn review_meta_failure_reason_label(meta: &ReviewSessionMeta) -> Option<String> 
 }
 
 fn compact_review_failure_reason(reason: &str) -> Option<String> {
-    super::compact_wait_summary_text(&csa_session::redact_text_content(reason))
+    super::compact_wait_summary_text(
+        &crate::review_failure_context::sanitize_review_surface_text(reason),
+    )
 }
 
 fn summary_looks_clean_without_blockers(summary: &str) -> bool {

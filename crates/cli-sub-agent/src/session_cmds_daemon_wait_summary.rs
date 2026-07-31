@@ -242,7 +242,8 @@ fn format_failover_chain_label(
             && let Some(primary_failure) = artifact.primary_failure.as_deref()
             && !primary_failure.trim().is_empty()
         {
-            let redacted = csa_session::redact_text_content(primary_failure.trim());
+            let redacted =
+                crate::review_failure_context::sanitize_review_surface_text(primary_failure.trim());
             return Some(redacted);
         }
     }

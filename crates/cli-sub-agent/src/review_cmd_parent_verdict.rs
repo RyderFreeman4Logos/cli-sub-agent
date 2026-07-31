@@ -76,7 +76,7 @@ pub(in crate::review_cmd) fn unavailable_outcome_reason(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
         })?;
-    let redacted = csa_session::redact_text_content(raw);
+    let redacted = crate::review_failure_context::sanitize_review_surface_text(raw);
     let compact = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.is_empty() {
         return None;

@@ -133,10 +133,15 @@ fn finding_category(finding: &ReviewFinding) -> String {
     "review".to_string()
 }
 
-fn sanitize_finding_text(raw: &str, max_chars: usize) -> String {
+/// Redact credential-shaped secrets and relativize absolute filesystem paths.
+/// Shared by finding titles and UNAVAILABLE reason carriers (#2911 post-merge).
+pub(crate) fn sanitize_review_surface_text(raw: &str) -> String {
     let text = csa_session::redact_text_content(raw);
-    let text = relativize_absolute_paths(&text);
-    clip(text.trim(), max_chars)
+    relativize_absolute_paths(&text)
+}
+
+fn sanitize_finding_text(raw: &str, max_chars: usize) -> String {
+    clip(sanitize_review_surface_text(raw).trim(), max_chars)
 }
 
 fn finding_location(finding: &ReviewFinding) -> String {
