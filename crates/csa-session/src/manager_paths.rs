@@ -349,20 +349,26 @@ fn extract_project_path_from_state(content: &str) -> Option<String> {
     None
 }
 
-/// List all project session roots across all state directories.
+/// List all project session roots across all state epochs.
 ///
 /// Returns `Vec<(session_root, project_key)>` for each project that has sessions.
+///
+/// Uses [`paths::state_dir_all_roots`] so symlink-equivalent primary/legacy
+/// state dirs (e.g. `~/.local/state/csa` → `cli-sub-agent`) are visited once.
+/// Without that de-dupe, every active session is listed twice and host-memory
+/// admission projects double the real active-session charge (#2920).
 pub fn list_all_project_session_roots() -> Result<Vec<(PathBuf, String)>> {
-    let mut roots = Vec::new();
-
-    let primary_state_dir =
-        paths::state_dir_write().context("Failed to determine project directories")?;
-    collect_project_roots_under(&primary_state_dir, &mut roots)?;
-
-    if let Some(legacy_state_dir) = paths::legacy_state_dir() {
-        collect_project_roots_under(&legacy_state_dir, &mut roots)?;
+    let state_roots = paths::state_dir_all_roots();
+    if state_roots.is_empty() {
+        // Preserve the previous hard failure when no writable state dir exists.
+        let _ = paths::state_dir_write().context("Failed to determine project directories")?;
+        return Ok(Vec::new());
     }
 
+    let mut roots = Vec::new();
+    for state_dir in state_roots {
+        collect_project_roots_under(&state_dir, &mut roots)?;
+    }
     Ok(roots)
 }
 
@@ -399,6 +405,32 @@ fn collect_project_roots_under(state_dir: &Path, roots: &mut Vec<(PathBuf, Strin
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod project_root_list_tests {
+    use csa_config::paths;
+    use std::collections::HashSet;
+
+    #[test]
+    fn state_dir_all_roots_dedupes_symlink_equivalent_primary_and_legacy() {
+        // Host layout on this repo's CI/dev machines often has
+        // ~/.local/state/csa -> cli-sub-agent. Admission used to walk both.
+        let state_roots = paths::state_dir_all_roots();
+        let mut unique = HashSet::new();
+        for root in &state_roots {
+            let key = root
+                .canonicalize()
+                .unwrap_or_else(|_| root.clone())
+                .to_string_lossy()
+                .into_owned();
+            assert!(
+                unique.insert(key),
+                "state_dir_all_roots returned duplicate equivalent path: {}",
+                root.display()
+            );
+        }
+    }
 }
 
 /// Internal function for testing: get session directory with explicit base
