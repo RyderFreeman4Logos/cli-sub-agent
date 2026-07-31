@@ -124,6 +124,13 @@ pub(crate) fn resolve_review_tier_name(
         return Ok(Some(cli.to_string()));
     }
 
+    // #2911: --force-ignore-tier-setting must bypass default review.tier too.
+    // Otherwise a bare `--tool` recovery still fails candidate checks against the
+    // configured default tier even though no explicit --tier was passed.
+    if force_ignore_tier_setting {
+        return Ok(None);
+    }
+
     Ok(project_config
         .and_then(|cfg| cfg.review.as_ref())
         .and_then(|r| r.tier.as_deref())

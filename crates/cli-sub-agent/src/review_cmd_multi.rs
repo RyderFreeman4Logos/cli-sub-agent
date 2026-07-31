@@ -334,16 +334,23 @@ pub(super) async fn run_multi_reviewer_review(ctx: MultiReviewerReviewContext<'_
         agreement * 100.0,
     );
     for outcome in &outcomes {
+        let reason_suffix = outcome
+            .diagnostic
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|reason| format!("; reason: {reason}"))
+            .unwrap_or_default();
         if excluded_from_consensus.contains(&outcome.reviewer_index) {
             println!(
-                "- reviewer {} ({}) => {} (excluded_from_consensus: permanent quota unavailable)",
+                "- reviewer {} ({}) => {} (excluded_from_consensus: permanent quota unavailable){reason_suffix}",
                 outcome.reviewer_index + 1,
                 outcome.tool,
                 outcome.verdict
             );
         } else {
             println!(
-                "- reviewer {} ({}) => {}",
+                "- reviewer {} ({}) => {}{reason_suffix}",
                 outcome.reviewer_index + 1,
                 outcome.tool,
                 outcome.verdict

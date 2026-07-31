@@ -380,6 +380,50 @@ fn test_review_force_ignore_tier_allows_direct_tool() {
 }
 
 #[test]
+fn issue_2911_force_ignore_bypasses_default_review_tier_candidate_check() {
+    // Recovery path from opaque multi-reviewer UNAVAILABLE: alternate tool without
+    // explicit --tier must not still be rejected against configured review.tier.
+    let global = GlobalConfig {
+        review: csa_config::ReviewConfig {
+            tier: Some("tier-4-critical".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut cfg = review_config_with_tier(
+        "tier-4-critical",
+        vec!["codex/openai/gpt-5.4/high"],
+        &["codex", "opencode"],
+    );
+    cfg.review = Some(csa_config::ReviewConfig {
+        tier: Some("tier-4-critical".to_string()),
+        ..Default::default()
+    });
+
+    let tier = resolve_review_tier_name(Some(&cfg), &global, None, false, true)
+        .expect("force-ignore must resolve");
+    assert_eq!(
+        tier, None,
+        "default review.tier must be suppressed under --force-ignore-tier-setting"
+    );
+
+    let selection = resolve_review_selection(
+        Some(ToolName::Opencode),
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None, // no explicit --tier (the failing recovery command)
+        true, // --force-ignore-tier-setting
+        true,
+    )
+    .expect("force-ignore + non-candidate tool must not fail on default tier");
+    assert_eq!(selection.tool, ToolName::Opencode);
+}
+
+#[test]
 fn test_review_tool_plus_tier_and_force_ignore_errors_on_conflict() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
