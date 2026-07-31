@@ -257,10 +257,7 @@ async fn handle_review_inner(
     let explicit_tool_with_failover =
         (selection.direct_tool_requested && tier_active && !execution_no_failover).then_some(tool);
 
-    let explicit_multi_reviewer = args.reviewers.is_some() && args.requested_reviewers() > 1;
-    if !explicit_multi_reviewer
-        && !chunking::should_bypass_chunking(args.chunked_review, args.fix, args.session.is_some())
-    {
+    if chunking::should_attempt_auto_chunking(&args) {
         let chunking_config = chunking::ReviewChunkingConfig::for_args(args.chunked_review);
         match chunking::plan_review_chunks(&project_root, &scope, diff.as_ref(), &chunking_config) {
             Ok(Some(chunk_plan)) => {
