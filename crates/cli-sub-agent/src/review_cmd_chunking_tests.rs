@@ -151,23 +151,90 @@ fn config_helpers_and_bypass_predicate_match_cli_semantics() {
     assert!(should_bypass_chunking(
         ReviewChunkingMode::Off,
         false,
+        false,
         false
     ));
     assert!(should_bypass_chunking(
         ReviewChunkingMode::Auto,
         true,
+        false,
         false
     ));
     assert!(should_bypass_chunking(
         ReviewChunkingMode::Auto,
         false,
-        true
+        true,
+        false
     ));
     assert!(!should_bypass_chunking(
         ReviewChunkingMode::Auto,
         false,
+        false,
         false
     ));
+    // #2910: forced single-reviewer intent wins over large-diff auto-chunk multi-spawn.
+    assert!(should_bypass_chunking(
+        ReviewChunkingMode::Auto,
+        false,
+        false,
+        true
+    ));
+    assert!(should_bypass_chunking(
+        ReviewChunkingMode::Always,
+        false,
+        false,
+        true
+    ));
+}
+
+#[test]
+fn forced_single_reviewer_blocks_auto_chunk_multi_spawn() {
+    use clap::Parser;
+
+    fn parse(argv: &[&str]) -> ReviewArgs {
+        let cli = crate::cli::Cli::try_parse_from(argv).expect("review CLI args should parse");
+        match cli.command {
+            crate::cli::Commands::Review(args) => args,
+            _ => panic!("expected review subcommand"),
+        }
+    }
+
+    // Default large-range path may still attempt auto-chunking.
+    assert!(should_attempt_auto_chunking(&parse(&[
+        "csa",
+        "review",
+        "--range",
+        "main...HEAD"
+    ])));
+
+    // --single always wins.
+    assert!(!should_attempt_auto_chunking(&parse(&[
+        "csa",
+        "review",
+        "--range",
+        "main...HEAD",
+        "--single"
+    ])));
+
+    // Explicit --reviewers 1 wins (same class as --single).
+    assert!(!should_attempt_auto_chunking(&parse(&[
+        "csa",
+        "review",
+        "--range",
+        "main...HEAD",
+        "--reviewers",
+        "1"
+    ])));
+
+    // Explicit multi-reviewer keeps the non-chunk multi-reviewer path.
+    assert!(!should_attempt_auto_chunking(&parse(&[
+        "csa",
+        "review",
+        "--range",
+        "main...HEAD",
+        "--reviewers",
+        "3"
+    ])));
 }
 
 #[test]

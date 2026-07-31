@@ -194,8 +194,30 @@ pub(super) fn should_bypass_chunking(
     mode: ReviewChunkingMode,
     fix: bool,
     session_present: bool,
+    force_single_reviewer: bool,
 ) -> bool {
-    mode == ReviewChunkingMode::Off || fix || session_present
+    // Explicit single-reviewer intent must win over large-diff auto-chunk multi-spawn
+    // (which otherwise writes tool=consensus and issues N admission attempts).
+    mode == ReviewChunkingMode::Off || fix || session_present || force_single_reviewer
+}
+
+/// Whether the large-diff auto-chunk multi-spawn path may activate.
+///
+/// Explicit multi-reviewer requests keep the non-chunked multi-reviewer path.
+/// `--single` / explicit `--reviewers 1` force the single-reviewer path (#2910).
+pub(super) fn should_attempt_auto_chunking(args: &ReviewArgs) -> bool {
+    let explicit_multi_reviewer = args.reviewers.is_some() && args.requested_reviewers() > 1;
+    if explicit_multi_reviewer {
+        return false;
+    }
+    let force_single_reviewer =
+        args.single || (args.reviewers.is_some() && args.requested_reviewers() == 1);
+    !should_bypass_chunking(
+        args.chunked_review,
+        args.fix,
+        args.session.is_some(),
+        force_single_reviewer,
+    )
 }
 
 pub(super) fn plan_review_chunks(
