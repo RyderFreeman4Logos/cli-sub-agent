@@ -353,23 +353,45 @@ fn extract_project_path_from_state(content: &str) -> Option<String> {
 ///
 /// Returns `Vec<(session_root, project_key)>` for each project that has sessions.
 ///
-/// Uses [`paths::state_dir_all_roots`] so symlink-equivalent primary/legacy
-/// state dirs (e.g. `~/.local/state/csa` → `cli-sub-agent`) are visited once.
-/// Without that de-dupe, every active session is listed twice and host-memory
-/// admission projects double the real active-session charge (#2920).
+/// Always walks the writable state dir first so inaccessible roots still
+/// surface as errors (unlike `Path::exists()` filtering). Additional roots from
+/// [`paths::state_dir_all_roots`] are visited only when not path-equivalent to
+/// a root already walked — so a `~/.local/state/csa` → `cli-sub-agent` symlink
+/// cannot double-list every session for host-memory admission (#2920).
 pub fn list_all_project_session_roots() -> Result<Vec<(PathBuf, String)>> {
-    let state_roots = paths::state_dir_all_roots();
-    if state_roots.is_empty() {
-        // Preserve the previous hard failure when no writable state dir exists.
-        let _ = paths::state_dir_write().context("Failed to determine project directories")?;
-        return Ok(Vec::new());
-    }
+    let primary = paths::state_dir_write().context("Failed to determine project directories")?;
+    let mut state_dirs = vec![primary];
+    state_dirs.extend(paths::state_dir_all_roots());
+    collect_project_roots_across_state_dirs(state_dirs)
+}
 
+/// Walk each state dir once (symlink-equivalent spellings collapsed).
+fn collect_project_roots_across_state_dirs(
+    state_dirs: impl IntoIterator<Item = PathBuf>,
+) -> Result<Vec<(PathBuf, String)>> {
     let mut roots = Vec::new();
-    for state_dir in state_roots {
+    let mut visited: Vec<PathBuf> = Vec::new();
+    for state_dir in state_dirs {
+        if visited
+            .iter()
+            .any(|seen| state_dirs_equivalent(seen, &state_dir))
+        {
+            continue;
+        }
+        visited.push(state_dir.clone());
         collect_project_roots_under(&state_dir, &mut roots)?;
     }
     Ok(roots)
+}
+
+fn state_dirs_equivalent(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// Recursively find project directories that contain a `sessions/` subdirectory.
@@ -409,27 +431,46 @@ fn collect_project_roots_under(state_dir: &Path, roots: &mut Vec<(PathBuf, Strin
 
 #[cfg(test)]
 mod project_root_list_tests {
-    use csa_config::paths;
-    use std::collections::HashSet;
+    use super::{collect_project_roots_across_state_dirs, state_dirs_equivalent};
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use tempfile::tempdir;
 
     #[test]
-    fn state_dir_all_roots_dedupes_symlink_equivalent_primary_and_legacy() {
-        // Host layout on this repo's CI/dev machines often has
-        // ~/.local/state/csa -> cli-sub-agent. Admission used to walk both.
-        let state_roots = paths::state_dir_all_roots();
-        let mut unique = HashSet::new();
-        for root in &state_roots {
-            let key = root
-                .canonicalize()
-                .unwrap_or_else(|_| root.clone())
-                .to_string_lossy()
-                .into_owned();
-            assert!(
-                unique.insert(key),
-                "state_dir_all_roots returned duplicate equivalent path: {}",
-                root.display()
-            );
-        }
+    fn symlink_equivalent_state_dirs_yield_one_project_root() {
+        let td = tempdir().expect("tempdir");
+        let primary = td.path().join("primary");
+        let project = primary.join("proj");
+        fs::create_dir_all(project.join("sessions")).expect("sessions");
+        let legacy = td.path().join("legacy");
+        symlink(&primary, &legacy).expect("legacy -> primary");
+
+        assert!(state_dirs_equivalent(&primary, &legacy));
+
+        let roots =
+            collect_project_roots_across_state_dirs([primary.clone(), legacy]).expect("list roots");
+        assert_eq!(
+            roots.len(),
+            1,
+            "symlink-equivalent state roots must not double-list projects: {roots:?}"
+        );
+        assert_eq!(roots[0].0, primary.join("proj"));
+    }
+
+    #[test]
+    fn inaccessible_state_root_propagates_read_error() {
+        let td = tempdir().expect("tempdir");
+        let blocked = td.path().join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked");
+        // Remove search permission so read_dir fails (not NotFound).
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).expect("chmod");
+        let result = collect_project_roots_across_state_dirs([blocked.clone()]);
+        // Restore so tempdir cleanup can remove the tree.
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).expect("chmod restore");
+        assert!(
+            result.is_err(),
+            "inaccessible state root must not collapse to empty Ok: {result:?}"
+        );
     }
 }
 
