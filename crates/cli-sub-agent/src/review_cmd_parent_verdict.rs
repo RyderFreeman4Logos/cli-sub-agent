@@ -60,7 +60,9 @@ pub(super) fn aggregate_unavailable_reviewer_reasons(
     (primary, Some(unique.join("; ")))
 }
 
-pub(super) fn unavailable_outcome_reason(outcome: &ReviewerOutcome) -> Option<String> {
+pub(in crate::review_cmd) fn unavailable_outcome_reason(
+    outcome: &ReviewerOutcome,
+) -> Option<String> {
     let raw = outcome
         .diagnostic
         .as_deref()

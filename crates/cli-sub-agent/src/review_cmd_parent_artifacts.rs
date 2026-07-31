@@ -33,6 +33,8 @@ use parent_verdict::{
     write_parent_review_details, write_parent_review_summary, write_parent_review_verdict,
 };
 
+pub(super) use parent_verdict::unavailable_outcome_reason;
+
 pub(super) struct MultiReviewerConsensusArtifacts<'a> {
     pub(super) project_root: &'a Path,
     pub(super) reviewers: usize,
