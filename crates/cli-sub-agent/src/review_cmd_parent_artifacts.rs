@@ -248,7 +248,11 @@ fn write_multi_reviewer_parent_artifacts_with_diff_size(
     let parent_artifact = parent_artifact_for_decision(&consolidated, parent_decision);
     write_consolidated_artifact(&parent_artifact, &session_dir)?;
     write_parent_findings_toml(&session_dir, &parent_artifact)?;
-    let (primary_failure, failure_reason) = aggregate_unavailable_reviewer_reasons(outcomes);
+    let (primary_failure, failure_reason) = if parent_decision == ReviewDecision::Unavailable {
+        aggregate_unavailable_reviewer_reasons(outcomes)
+    } else {
+        (None, None)
+    };
     write_parent_review_verdict(
         &session_dir,
         &session_id,
@@ -345,7 +349,11 @@ pub(super) fn write_standalone_consensus_review_artifacts(
     let artifact = parent_artifact_for_decision(&consolidated, decision);
     write_consolidated_artifact(&artifact, &session_dir)?;
     write_parent_findings_toml(&session_dir, &artifact)?;
-    let (primary_failure, failure_reason) = aggregate_unavailable_reviewer_reasons(ctx.outcomes);
+    let (primary_failure, failure_reason) = if decision == ReviewDecision::Unavailable {
+        aggregate_unavailable_reviewer_reasons(ctx.outcomes)
+    } else {
+        (None, None)
+    };
     let meta = ReviewSessionMeta {
         session_id: target.session_id.clone(),
         head_sha: ctx.head_sha.to_string(),
