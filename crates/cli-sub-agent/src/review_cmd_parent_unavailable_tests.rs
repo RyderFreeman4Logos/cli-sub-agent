@@ -80,3 +80,31 @@ fn issue_2911_all_unavailable_parent_carries_actionable_reason() {
         artifact.failure_reason
     );
 }
+
+#[test]
+fn issue_2911_unavailable_reason_relativizes_absolute_paths() {
+    let absolute = "/home/alice/private-project/config.toml";
+    let reason = format!("provider failed reading {absolute} while launching reviewer");
+    let outcomes = vec![unavailable_outcome(0, &reason)];
+
+    let (primary, failure_reason) = aggregate_unavailable_reviewer_reasons(&outcomes);
+    let primary = primary.expect("primary reason");
+    let failure_reason = failure_reason.expect("failure reason");
+
+    assert!(
+        !primary.contains("/home/alice"),
+        "primary must not leak absolute home path: {primary}"
+    );
+    assert!(
+        !failure_reason.contains("/home/alice"),
+        "failure_reason must not leak absolute home path: {failure_reason}"
+    );
+    assert!(
+        primary.contains("private-project/config.toml"),
+        "primary should keep a relative path for actionability: {primary}"
+    );
+    assert!(
+        primary.contains("provider failed reading"),
+        "primary should keep the actionable diagnostic: {primary}"
+    );
+}

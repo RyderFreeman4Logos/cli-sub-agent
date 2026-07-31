@@ -54,7 +54,7 @@ pub(crate) fn review_unavailable_reason(
         .map(str::trim)
         .find(|text| !text.is_empty())
         .map(|text| {
-            let redacted = csa_session::redact_text_content(text);
+            let redacted = crate::review_failure_context::sanitize_review_surface_text(text);
             let compact = compact_visible_text(&redacted);
             UnavailableReason {
                 kind: actionable_unavailable_kind(&compact),
@@ -104,7 +104,7 @@ struct ReasonCandidate {
 fn provider_limit_candidate(text: &str) -> Option<ReasonCandidate> {
     let score = provider_limit_score(text)?;
     let excerpt = excerpt_around_first_limit_signal(text)?;
-    let redacted = csa_session::redact_text_content(&excerpt);
+    let redacted = crate::review_failure_context::sanitize_review_surface_text(&excerpt);
     let compact = compact_visible_text(&redacted);
     if compact.is_empty() {
         return None;
@@ -325,6 +325,21 @@ mod tests {
         let reason = review_unavailable_reason(&artifact).expect("auth reason");
         assert_eq!(reason.kind, "auth");
         assert!(reason.message.contains("API Key not found") || reason.message.contains("api_key"));
+    }
+
+    #[test]
+    fn review_unavailable_reason_relativizes_absolute_paths() {
+        let artifact = unavailable_artifact(
+            Some("provider_launch"),
+            Some(
+                "provider failed reading /home/alice/private-project/config.toml while launching reviewer",
+            ),
+        );
+
+        let reason = review_unavailable_reason(&artifact).expect("path reason");
+        assert!(!reason.message.contains("/home/alice"));
+        assert!(reason.message.contains("private-project/config.toml"));
+        assert!(reason.message.contains("provider failed reading"));
     }
 
     #[test]
