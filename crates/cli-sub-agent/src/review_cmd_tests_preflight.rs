@@ -124,6 +124,8 @@ fn review_host_memory_admission_is_rejected_before_session_creation() {
         ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
     let _tools_available =
         ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
     let mut config = project_config_with_quality_tier();
     config.resources.min_free_memory_mb = u64::MAX / 2;
     write_project_config(project_dir.path(), &config);
@@ -155,6 +157,8 @@ fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_se
         ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
     let _tools_available =
         ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
     let mut config = project_config_with_quality_tier();
     config.resources.memory_max_mb = Some(8_192);
     config.resources.soft_limit_percent = Some(70);

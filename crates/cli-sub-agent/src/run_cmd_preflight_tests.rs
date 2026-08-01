@@ -10,6 +10,8 @@ fn writer_soft_limit_floor_is_rejected_before_session_creation() {
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
     let _tools_available =
         ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
     let mut config = crate::review_cmd::tests::project_config_with_enabled_tools(&["codex"]);
     config.resources.memory_max_mb = Some(9_103);
     config.resources.min_free_memory_mb = 1;
