@@ -136,6 +136,17 @@ fn soft_limit_admission_diagnostic_memory(
         current_session_id,
         error.memory_max_mb(),
     );
+    let Ok(admission) = admission else {
+        return NoProviderLaunchMemoryDiagnostic {
+            effective_memory_max_mb: Some(error.memory_max_mb()),
+            soft_limit_percent: Some(error.soft_limit_percent()),
+            soft_threshold_mb: Some(error.threshold_mb()),
+            required_floor_mb: Some(error.required_threshold_mb()),
+            required_memory_max_mb: Some(error.required_memory_max_mb()),
+            projected_spawn_mb: Some(error.memory_max_mb()),
+            ..Default::default()
+        };
+    };
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
     });

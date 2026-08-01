@@ -1,11 +1,10 @@
 use std::{io, path::Path};
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
 use csa_resource::{ResourceGuard, ResourceLimits, SpawnMemoryAdmission};
 use csa_session::{MetaSessionState, SandboxInfo, SessionPhase, SessionTreeMemorySampler};
-use tracing::warn;
 
 use crate::run_resource_overrides::RunResourceOverrides;
 
@@ -173,31 +172,27 @@ pub(crate) fn build_spawn_memory_admission(
     project_root: &Path,
     current_session_id: &str,
     projected_spawn_mb: u64,
-) -> SpawnMemoryAdmission {
-    let active = match csa_session::list_all_sessions_all_projects() {
-        Ok(sessions) => aggregate_active_session_memory(
-            &sessions,
-            current_session_id,
-            Utc::now(),
-            sample_session_memory,
-        ),
-        Err(err) => {
-            warn!(
-                error = %err,
-                project_root = %project_root.display(),
-                "Failed to list active CSA sessions for host-memory admission"
-            );
-            ActiveSessionMemory::default()
-        }
-    };
+) -> Result<SpawnMemoryAdmission> {
+    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+        format!(
+            "Failed to list active CSA sessions for host-memory admission in {}",
+            project_root.display()
+        )
+    })?;
+    let active = aggregate_active_session_memory(
+        &sessions,
+        current_session_id,
+        Utc::now(),
+        sample_session_memory,
+    );
 
-    SpawnMemoryAdmission {
+    Ok(SpawnMemoryAdmission {
         projected_spawn_mb,
         active_session_rss_mb: active.sampled_rss_mb,
         active_session_projected_mb: active.projected_mb,
         active_session_count: active.active_count,
         sampled_session_count: active.sampled_count,
-    }
+    })
 }
 
 fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
@@ -327,23 +322,19 @@ fn recent_pending_projection_mb(
 pub(crate) fn active_session_count_for_balloon(
     project_root: &Path,
     current_session_id: &str,
-) -> u64 {
-    match csa_session::list_all_sessions_all_projects() {
-        Ok(sessions) => count_observable_active_sessions(
-            &sessions,
-            current_session_id,
-            Utc::now(),
-            sample_session_memory,
-        ),
-        Err(err) => {
-            warn!(
-                error = %err,
-                project_root = %project_root.display(),
-                "Failed to count active CSA sessions for memory-balloon admission"
-            );
-            0
-        }
-    }
+) -> Result<u64> {
+    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+        format!(
+            "Failed to count active CSA sessions for memory-balloon admission in {}",
+            project_root.display()
+        )
+    })?;
+    Ok(count_observable_active_sessions(
+        &sessions,
+        current_session_id,
+        Utc::now(),
+        sample_session_memory,
+    ))
 }
 
 fn count_observable_active_sessions(
@@ -365,6 +356,10 @@ fn count_observable_active_sessions(
 #[cfg(test)]
 #[path = "resource_admission_terminal_session_tests.rs"]
 mod terminal_session_tests;
+
+#[cfg(test)]
+#[path = "resource_admission_state_root_tests.rs"]
+mod state_root_tests;
 
 #[cfg(test)]
 mod tests {

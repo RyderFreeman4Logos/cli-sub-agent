@@ -81,8 +81,28 @@ pub(super) fn check_resources_before_spawn(
             },
         ));
     }
-    let admission =
-        build_spawn_memory_admission(project_root, &session.meta_session_id, projected_spawn_mb);
+    let admission = match build_spawn_memory_admission(
+        project_root,
+        &session.meta_session_id,
+        projected_spawn_mb,
+    ) {
+        Ok(admission) => admission,
+        Err(err) => {
+            return Err(persist_pipeline_pre_exec_failure(
+                project_root,
+                session,
+                executor.tool_name(),
+                err.context("Failed to build host-memory admission"),
+                cleanup_guard,
+                None,
+                PipelinePreExecFailureDetails {
+                    config,
+                    task_type,
+                    resource_overrides,
+                },
+            ));
+        }
+    };
 
     if !skip_host_memory_admission_for_test()
         && let Err(err) =

@@ -349,21 +349,63 @@ fn extract_project_path_from_state(content: &str) -> Option<String> {
     None
 }
 
-/// List all project session roots across all state directories.
+/// List all project session roots across all state epochs.
 ///
 /// Returns `Vec<(session_root, project_key)>` for each project that has sessions.
+///
+/// Walks the writable state dir and the legacy state dir (when present) once
+/// each. Symlink-equivalent spellings are collapsed so a
+/// `~/.local/state/csa` → `cli-sub-agent` layout cannot double-list every
+/// session for host-memory admission (#2920). Roots are walked even when
+/// `Path::exists()` would fail, so inaccessible directories still surface as
+/// read errors instead of silent empty inventory.
 pub fn list_all_project_session_roots() -> Result<Vec<(PathBuf, String)>> {
-    let mut roots = Vec::new();
+    let primary = paths::state_dir_write().context("Failed to determine project directories")?;
+    collect_project_roots_across_state_dirs(candidate_state_dirs_for_listing(
+        primary,
+        paths::legacy_state_dir(),
+    ))
+}
 
-    let primary_state_dir =
-        paths::state_dir_write().context("Failed to determine project directories")?;
-    collect_project_roots_under(&primary_state_dir, &mut roots)?;
-
-    if let Some(legacy_state_dir) = paths::legacy_state_dir() {
-        collect_project_roots_under(&legacy_state_dir, &mut roots)?;
+/// Candidate state dirs for global session inventory (primary then optional legacy).
+///
+/// Intentionally does **not** pre-filter with `Path::exists()` — that would
+/// hide permission errors and skip dangling-but-configured legacy roots.
+fn candidate_state_dirs_for_listing(primary: PathBuf, legacy: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = vec![primary];
+    if let Some(legacy) = legacy {
+        dirs.push(legacy);
     }
+    dirs
+}
 
+/// Walk each state dir once (symlink-equivalent spellings collapsed).
+fn collect_project_roots_across_state_dirs(
+    state_dirs: impl IntoIterator<Item = PathBuf>,
+) -> Result<Vec<(PathBuf, String)>> {
+    let mut roots = Vec::new();
+    let mut visited: Vec<PathBuf> = Vec::new();
+    for state_dir in state_dirs {
+        if visited
+            .iter()
+            .any(|seen| state_dirs_equivalent(seen, &state_dir))
+        {
+            continue;
+        }
+        visited.push(state_dir.clone());
+        collect_project_roots_under(&state_dir, &mut roots)?;
+    }
     Ok(roots)
+}
+
+fn state_dirs_equivalent(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 /// Recursively find project directories that contain a `sessions/` subdirectory.
@@ -399,6 +441,79 @@ fn collect_project_roots_under(state_dir: &Path, roots: &mut Vec<(PathBuf, Strin
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod project_root_list_tests {
+    use super::{
+        candidate_state_dirs_for_listing, collect_project_roots_across_state_dirs,
+        state_dirs_equivalent,
+    };
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn candidate_state_dirs_always_include_configured_legacy_without_exists_filter() {
+        let primary = PathBuf::from("/primary-state");
+        let legacy = PathBuf::from("/legacy-state-that-may-not-exist");
+        let dirs = candidate_state_dirs_for_listing(primary.clone(), Some(legacy.clone()));
+        assert_eq!(dirs, vec![primary, legacy]);
+    }
+
+    #[test]
+    fn candidate_state_dirs_omit_legacy_when_unset() {
+        let primary = PathBuf::from("/primary-state");
+        let dirs = candidate_state_dirs_for_listing(primary.clone(), None);
+        assert_eq!(dirs, vec![primary]);
+    }
+
+    #[test]
+    fn symlink_equivalent_state_dirs_yield_one_project_root() {
+        let td = tempdir().expect("tempdir");
+        let primary = td.path().join("primary");
+        let project = primary.join("proj");
+        fs::create_dir_all(project.join("sessions")).expect("sessions");
+        let legacy = td.path().join("legacy");
+        symlink(&primary, &legacy).expect("legacy -> primary");
+
+        assert!(state_dirs_equivalent(&primary, &legacy));
+        let roots = collect_project_roots_across_state_dirs(candidate_state_dirs_for_listing(
+            primary.clone(),
+            Some(legacy),
+        ))
+        .expect("list");
+        assert_eq!(
+            roots.len(),
+            1,
+            "symlink-equivalent primary/legacy must not double-list: {roots:?}"
+        );
+        assert_eq!(roots[0].0, primary.join("proj"));
+    }
+
+    #[test]
+    fn inaccessible_state_root_propagates_read_error() {
+        let td = tempdir().expect("tempdir");
+        let primary = td.path().join("primary");
+        fs::create_dir_all(primary.join("proj").join("sessions")).expect("primary sessions");
+        let blocked = td.path().join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked");
+        let mut perms = fs::metadata(&blocked).expect("meta").permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&blocked, perms).expect("chmod");
+
+        let result = collect_project_roots_across_state_dirs(candidate_state_dirs_for_listing(
+            primary,
+            Some(blocked.clone()),
+        ));
+
+        let _ = fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755));
+        assert!(
+            result.is_err(),
+            "inaccessible state root must not collapse to empty Ok: {result:?}"
+        );
+    }
 }
 
 /// Internal function for testing: get session directory with explicit base
