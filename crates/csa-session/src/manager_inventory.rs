@@ -1,5 +1,5 @@
 use super::{list_all_project_session_roots, load_session_in};
-use crate::state::MetaSessionState;
+use crate::{state::MetaSessionState, validate::validate_session_id};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io;
@@ -7,8 +7,8 @@ use std::path::Path;
 
 /// Strict read-only inventory for safety-critical admission.
 ///
-/// Missing state roots are empty; existing roots, entries, and session states
-/// must all be readable so callers never admit from a partial inventory.
+/// Missing state roots are empty; existing roots and entries must be readable,
+/// and every valid ULID session directory must contain readable, parseable state.
 pub fn list_all_sessions_all_projects_strict() -> Result<Vec<MetaSessionState>> {
     let roots = list_all_project_session_roots()?;
     let mut all_sessions = Vec::new();
@@ -37,14 +37,13 @@ fn list_sessions_in_strict(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
     let mut sessions = Vec::new();
     for entry in entries {
         let entry = entry.context("Failed to read directory entry")?;
-        let session_id = entry.file_name().to_string_lossy().to_string();
-        if !entry.file_type()?.is_dir()
-            || session_id.starts_with('.')
-            || matches!(
-                session_id.as_str(),
-                "run-pre-session-preflight" | "review-pre-session-preflight"
-            )
-        {
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let Ok(session_id) = entry.file_name().into_string() else {
+            continue;
+        };
+        if validate_session_id(&session_id).is_err() {
             continue;
         }
         sessions.push(load_session_in(base_dir, &session_id)?);

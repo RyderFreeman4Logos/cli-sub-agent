@@ -351,37 +351,29 @@ fn strict_all_project_inventory_rejects_state_read_failure_without_recovery() {
 }
 
 #[test]
-fn strict_all_project_inventory_rejects_malformed_session_id_while_tolerant_listing_skips_it() {
-    let td = tempdir().unwrap();
-    let _xdg = ScopedXdgOverride::new(&td);
-    let project = td.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let malformed = get_session_root(&project)
-        .unwrap()
-        .join("sessions")
-        .join("not-a-session-id");
-    std::fs::create_dir_all(&malformed).unwrap();
-
-    assert!(list_all_sessions_all_projects().unwrap().is_empty());
-    let error = list_all_sessions_all_projects_strict().unwrap_err();
-    assert!(format!("{error:#}").contains("Invalid session ID 'not-a-session-id'"));
-}
-
-#[test]
-fn strict_all_project_inventory_ignores_exact_historical_preflight_markers() {
+fn all_project_inventories_ignore_non_session_directories() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);
     let project = td.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let session = create_session(&project, Some("valid"), None, None).unwrap();
     let sessions_dir = get_session_root(&project).unwrap().join("sessions");
-    for marker in ["run-pre-session-preflight", "review-pre-session-preflight"] {
-        std::fs::create_dir_all(sessions_dir.join(marker).join("tmp").join("audit")).unwrap();
+    for artifact in [
+        "not-a-session-id",
+        "unknown",
+        "run-pre-session-preflight",
+        "review-pre-session-preflight",
+    ] {
+        std::fs::create_dir_all(sessions_dir.join(artifact).join("tmp").join("audit")).unwrap();
     }
 
-    let sessions = list_all_sessions_all_projects_strict().unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
+    for sessions in [
+        list_all_sessions_all_projects().unwrap(),
+        list_all_sessions_all_projects_strict().unwrap(),
+    ] {
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
+    }
 }
 
 #[test]
