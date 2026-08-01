@@ -354,10 +354,19 @@ run_invalidation_matrix() {
   assert_invalidation rust-toolchain-file \
     'printf "# changed toolchain contract\n" >>"$fixture/rust-toolchain.toml"'
   run_path_toolchain_canonicalization
-  local fixture counter first second target_spec
+  local fixture counter first second target_spec real_rustc rustc_wrapper
   run_mise_data_dir_invalidation
+  real_rustc="$(
+    cd "$repo_root"
+    realpath -e "$(env -u RUSTUP_TOOLCHAIN rustc --print sysroot)/bin/rustc"
+  )"
+  for rustc_wrapper in "$test_root/rustc-a" "$test_root/rustc-b"; do
+    printf '#!/usr/bin/env bash\n# %s\nexec %q "$@"\n' \
+      "${rustc_wrapper##*/}" "$real_rustc" >"$rustc_wrapper"
+    chmod +x "$rustc_wrapper"
+  done
   assert_invalidation rustc ':' \
-    "RUSTC=${test_root}/toolchain-a/bin/rustc" "RUSTC=${test_root}/toolchain-b/bin/rustc"
+    "RUSTC=${test_root}/rustc-a" "RUSTC=${test_root}/rustc-b"
   printf '#!/usr/bin/env bash\nexec "$@"\n' >"$test_root/wrapper-a"
   printf '#!/usr/bin/env bash\n# changed wrapper\nexec "$@"\n' >"$test_root/wrapper-b"
   chmod +x "$test_root/wrapper-a" "$test_root/wrapper-b"
