@@ -149,11 +149,26 @@ pub(crate) fn resolve_sandbox_options_with_overrides(
     input: SandboxResolveInput<'_>,
     resource_overrides: RunResourceOverrides,
 ) -> SandboxResolution {
+    let session_dir = resolve_session_dir_for_sandbox(input.project_root, input.session_id);
     resolve_sandbox_options_with_capability_source(
         input,
         resource_overrides,
         csa_resource::detect_resource_capability,
         csa_resource::detect_filesystem_capability,
+        Some(session_dir),
+    )
+}
+
+pub(crate) fn resolve_pre_session_sandbox_options_with_overrides(
+    input: SandboxResolveInput<'_>,
+    resource_overrides: RunResourceOverrides,
+) -> SandboxResolution {
+    resolve_sandbox_options_with_capability_source(
+        input,
+        resource_overrides,
+        csa_resource::detect_resource_capability,
+        csa_resource::detect_filesystem_capability,
+        None,
     )
 }
 
@@ -164,11 +179,13 @@ pub(crate) fn resolve_sandbox_options_with_capabilities(
     resource_capability: csa_resource::ResourceCapability,
     filesystem_capability: csa_resource::FilesystemCapability,
 ) -> SandboxResolution {
+    let session_dir = resolve_session_dir_for_sandbox(input.project_root, input.session_id);
     resolve_sandbox_options_with_capability_source(
         input,
         resource_overrides,
         || resource_capability,
         || filesystem_capability,
+        Some(session_dir),
     )
 }
 
@@ -177,6 +194,7 @@ fn resolve_sandbox_options_with_capability_source(
     resource_overrides: RunResourceOverrides,
     resource_capability: impl Fn() -> csa_resource::ResourceCapability,
     filesystem_capability: impl Fn() -> csa_resource::FilesystemCapability,
+    runtime_session_dir: Option<PathBuf>,
 ) -> SandboxResolution {
     let SandboxResolveInput {
         config,
@@ -257,7 +275,6 @@ fn resolve_sandbox_options_with_capability_source(
         }
 
         // Build IsolationPlan via builder (BestEffort for profile defaults).
-        let session_dir = resolve_session_dir_for_sandbox(project_root, session_id);
         let tool_state_dirs = csa_config::default_tool_state_dirs();
         let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
@@ -267,19 +284,21 @@ fn resolve_sandbox_options_with_capability_source(
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
-            .with_tool_defaults_and_state_dirs(
+            .with_readonly_project_root(readonly_project_root);
+        if let Some(session_dir) = runtime_session_dir.as_deref() {
+            builder = builder.with_tool_defaults_and_state_dirs(
                 tool_name,
                 project_root,
-                &session_dir,
+                session_dir,
                 Some(&tool_state_dirs),
-            )
-            .with_readonly_project_root(readonly_project_root);
+            );
+        }
         if allow_user_daemon_ipc {
             builder = builder.with_user_daemon_ipc();
         }
 
         // CSA runtime writable paths.
-        if !no_fs_sandbox {
+        if runtime_session_dir.is_some() && !no_fs_sandbox {
             builder = match add_execution_env_writable_paths(builder, execution_env, project_root) {
                 Ok(builder) => builder,
                 Err(message) => return SandboxResolution::RequiredButUnavailable(message),
@@ -330,7 +349,8 @@ fn resolve_sandbox_options_with_capability_source(
             return SandboxResolution::RequiredButUnavailable(message);
         }
         if allow_user_daemon_ipc
-            && let Err(message) = write_user_daemon_ipc_audit_artifact(&session_dir, &plan)
+            && let Some(session_dir) = runtime_session_dir.as_deref()
+            && let Err(message) = write_user_daemon_ipc_audit_artifact(session_dir, &plan)
         {
             return SandboxResolution::RequiredButUnavailable(message);
         }
@@ -436,14 +456,11 @@ fn resolve_sandbox_options_with_capability_source(
         csa_config::EnforcementMode::Off => {} // already filtered above
     }
 
-    // Resolve project root and session dir for tool-specific writable paths.
-    let session_dir = resolve_session_dir_for_sandbox(project_root, session_id);
-
     let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
     let pids_max = cfg.sandbox_pids_max();
 
     // Per-tool filesystem sandbox: check for REPLACE-semantics writable paths.
-    let per_tool_writable = if !no_fs_sandbox {
+    let per_tool_writable = if runtime_session_dir.is_some() && !no_fs_sandbox {
         match writable_sources::resolve_per_tool_writable_sources(cfg, tool_name, project_root) {
             Ok(paths) => paths,
             Err(message) => {
@@ -453,7 +470,7 @@ fn resolve_sandbox_options_with_capability_source(
     } else {
         None
     };
-    let per_tool_readable = if !no_fs_sandbox {
+    let per_tool_readable = if runtime_session_dir.is_some() && !no_fs_sandbox {
         cfg.sandbox_readable_paths(tool_name)
     } else {
         None
@@ -468,22 +485,24 @@ fn resolve_sandbox_options_with_capability_source(
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
-        .with_tool_defaults_and_state_dirs(
-            tool_name,
-            project_root,
-            &session_dir,
-            Some(&cfg.tool_state_dirs),
-        )
         .with_readonly_project_root(effective_readonly)
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
+    if let Some(session_dir) = runtime_session_dir.as_deref() {
+        builder = builder.with_tool_defaults_and_state_dirs(
+            tool_name,
+            project_root,
+            session_dir,
+            Some(&cfg.tool_state_dirs),
+        );
+    }
     if allow_user_daemon_ipc {
         builder = builder.with_user_daemon_ipc();
     }
 
     // CSA runtime paths must survive per-tool REPLACE semantics so fork-call
     // session creation and slot locks still work.
-    if !no_fs_sandbox {
+    if runtime_session_dir.is_some() && !no_fs_sandbox {
         builder = match add_execution_env_writable_paths(builder, execution_env, project_root) {
             Ok(builder) => builder,
             Err(message) => return SandboxResolution::RequiredButUnavailable(message),
@@ -496,7 +515,7 @@ fn resolve_sandbox_options_with_capability_source(
         }
     }
 
-    if !no_fs_sandbox {
+    if runtime_session_dir.is_some() && !no_fs_sandbox {
         if let Some(ref paths) = per_tool_writable {
             for path in paths {
                 builder = builder.with_writable_path(path.clone());
@@ -534,7 +553,7 @@ fn resolve_sandbox_options_with_capability_source(
     }
 
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
-    if !no_fs_sandbox && !extra_writable.is_empty() {
+    if runtime_session_dir.is_some() && !no_fs_sandbox && !extra_writable.is_empty() {
         let resolved = match writable_sources::resolve_and_prepare_writable_sources(
             extra_writable,
             project_root,
@@ -551,7 +570,7 @@ fn resolve_sandbox_options_with_capability_source(
     }
 
     // CLI --expose-readable paths: always appended after config resolution.
-    if !no_fs_sandbox && !extra_readable.is_empty() {
+    if runtime_session_dir.is_some() && !no_fs_sandbox && !extra_readable.is_empty() {
         if let Err(e) =
             csa_resource::isolation_plan::validate_readable_paths(extra_readable, project_root)
         {
@@ -580,7 +599,8 @@ fn resolve_sandbox_options_with_capability_source(
         return SandboxResolution::RequiredButUnavailable(message);
     }
     if allow_user_daemon_ipc
-        && let Err(message) = write_user_daemon_ipc_audit_artifact(&session_dir, &plan)
+        && let Some(session_dir) = runtime_session_dir.as_deref()
+        && let Err(message) = write_user_daemon_ipc_audit_artifact(session_dir, &plan)
     {
         return SandboxResolution::RequiredButUnavailable(message);
     }

@@ -230,15 +230,16 @@ fn validate_review_candidate_resources_before_session(
         extra_readable: &args.extra_readable,
         execution_env: execution_env.as_ref(),
     };
-    let execute_options = match crate::pipeline_sandbox::resolve_sandbox_options_with_overrides(
-        sandbox_input,
-        resource_overrides,
-    ) {
-        crate::pipeline_sandbox::SandboxResolution::Ok(options) => *options,
-        crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(message) => {
-            anyhow::bail!(message)
-        }
-    };
+    let execute_options =
+        match crate::pipeline_sandbox::resolve_pre_session_sandbox_options_with_overrides(
+            sandbox_input,
+            resource_overrides,
+        ) {
+            crate::pipeline_sandbox::SandboxResolution::Ok(options) => *options,
+            crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(message) => {
+                anyhow::bail!(message)
+            }
+        };
     crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
         Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         tool.as_str(),
