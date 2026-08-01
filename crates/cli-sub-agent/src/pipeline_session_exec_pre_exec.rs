@@ -84,7 +84,7 @@ pub(super) fn check_resources_before_spawn(
     }
     let admission = match build_spawn_memory_admission(
         project_root,
-        &session.meta_session_id,
+        Some(&session.meta_session_id),
         projected_spawn_mb,
     ) {
         Ok(admission) => admission,

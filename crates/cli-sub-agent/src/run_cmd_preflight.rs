@@ -90,7 +90,7 @@ pub(crate) fn validate_run_memory_soft_limit_before_session(
         let guidance =
             crate::no_provider_launch::soft_limit_admission_guidance_from_error_with_argv(
                 input.project_root,
-                RUN_PREFLIGHT_SESSION_ID,
+                None,
                 input.tool_name,
                 input.project_config,
                 input.resource_overrides,

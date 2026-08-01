@@ -171,7 +171,7 @@ pub(crate) fn clear_spawn_memory_projection(session: &mut MetaSessionState) -> b
 
 pub(crate) fn build_spawn_memory_admission(
     project_root: &Path,
-    current_session_id: &str,
+    current: Option<&str>,
     projected_spawn_mb: u64,
 ) -> Result<SpawnMemoryAdmission> {
     let sessions = csa_session::list_all_sessions_all_projects_strict().with_context(|| {
@@ -180,12 +180,8 @@ pub(crate) fn build_spawn_memory_admission(
             project_root.display()
         )
     })?;
-    let active = aggregate_active_session_memory(
-        &sessions,
-        current_session_id,
-        Utc::now(),
-        sample_session_memory,
-    );
+    let active =
+        aggregate_active_session_memory(&sessions, current, Utc::now(), sample_session_memory);
 
     Ok(SpawnMemoryAdmission {
         projected_spawn_mb,
@@ -198,7 +194,7 @@ pub(crate) fn build_spawn_memory_admission(
 
 fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
     let project_root = Path::new(&session.project_path);
-    // A result is terminal only after its writer/daemon exits; live results remain charged.
+    // Terminal only after its writer/daemon exits; live results remain charged.
     if csa_session::load_result(project_root, &session.meta_session_id)
         .ok()
         .flatten()
@@ -234,14 +230,14 @@ fn session_has_live_process_signal(project_root: &Path, session_id: &str) -> boo
 
 fn aggregate_active_session_memory(
     sessions: &[MetaSessionState],
-    current_session_id: &str,
+    current: Option<&str>,
     now: DateTime<Utc>,
     sample_memory: impl Fn(&MetaSessionState) -> SessionMemorySample,
 ) -> ActiveSessionMemory {
     let mut memory = ActiveSessionMemory::default();
 
     for session in sessions {
-        if session.meta_session_id == current_session_id {
+        if current.is_some_and(|id| session.meta_session_id == id) {
             continue;
         }
         if !matches!(session.phase, SessionPhase::Active) {
@@ -506,13 +502,17 @@ memory_max_mb = 16384
             active_session("b", now, Some(2048)),
         ];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |session| {
-            match session.meta_session_id.as_str() {
-                "a" => SessionMemorySample::RssMb(1024),
-                "b" => SessionMemorySample::RssMb(4096),
-                _ => SessionMemorySample::Unavailable,
-            }
-        });
+        let memory =
+            aggregate_active_session_memory(
+                &sessions,
+                Some("current"),
+                now,
+                |session| match session.meta_session_id.as_str() {
+                    "a" => SessionMemorySample::RssMb(1024),
+                    "b" => SessionMemorySample::RssMb(4096),
+                    _ => SessionMemorySample::Unavailable,
+                },
+            );
 
         assert_eq!(memory.active_count, 2);
         assert_eq!(memory.sampled_count, 2);
@@ -529,7 +529,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -547,7 +547,7 @@ memory_max_mb = 16384
             None,
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -565,7 +565,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -583,7 +583,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -600,7 +600,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::RssMb(1024)
         });
 
@@ -620,7 +620,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::UnsupportedLiveProcess
         });
 
@@ -640,7 +640,7 @@ memory_max_mb = 16384
             None,
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::UnsupportedLiveProcess
         });
 

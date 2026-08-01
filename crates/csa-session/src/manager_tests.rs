@@ -329,6 +329,23 @@ fn strict_all_project_inventory_rejects_corrupt_state_while_tolerant_listing_ski
 }
 
 #[test]
+fn strict_all_project_inventory_rejects_malformed_session_id_while_tolerant_listing_skips_it() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let malformed = get_session_root(&project)
+        .unwrap()
+        .join("sessions")
+        .join("not-a-session-id");
+    std::fs::create_dir_all(&malformed).unwrap();
+
+    assert!(list_all_sessions_all_projects().unwrap().is_empty());
+    let error = list_all_sessions_all_projects_strict().unwrap_err();
+    assert!(format!("{error:#}").contains("Invalid session ID 'not-a-session-id'"));
+}
+
+#[test]
 fn test_list_sessions_recovers_corrupt_state() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);

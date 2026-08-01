@@ -193,6 +193,7 @@ fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_se
 
     let msg = format!("{err:#}");
     assert!(msg.contains("memory_soft_limit_admission"), "{msg}");
+    assert!(!msg.contains("Invalid session ID"), "{msg}");
     assert!(msg.contains("soft-limit memory retry guidance"), "{msg}");
     assert!(msg.contains("Retry feasibility:"), "{msg}");
     assert!(msg.contains("lower_bound=11703MB (role/tool soft-limit floor)"));

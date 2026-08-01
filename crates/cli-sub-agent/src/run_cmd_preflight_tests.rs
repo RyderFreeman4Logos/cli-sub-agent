@@ -37,6 +37,7 @@ fn writer_soft_limit_floor_is_rejected_before_session_creation() {
     assert!(message.contains("memory_soft_limit_admission"), "{message}");
     assert!(message.contains("codex writer soft memory threshold is 8192MB"));
     assert!(message.contains("below required=9000MB"));
+    assert!(!message.contains("Invalid session ID"), "{message}");
     assert!(message.contains("writer soft-limit memory retry guidance before session creation"));
     assert!(message.contains("run preflight for writer tool 'codex'"));
     let sessions = csa_session::list_sessions(project_dir.path(), None).expect("list sessions");

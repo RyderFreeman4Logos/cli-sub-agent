@@ -252,7 +252,7 @@ fn validate_review_candidate_resources_before_session(
         let guidance =
             crate::no_provider_launch::soft_limit_admission_guidance_from_error_with_argv(
                 project_root,
-                REVIEW_PREFLIGHT_SESSION_ID,
+                None,
                 tool.as_str(),
                 project_config,
                 resource_overrides,
@@ -288,7 +288,7 @@ fn validate_host_memory_before_session(
     );
     let admission = crate::resource_admission::build_spawn_memory_admission(
         project_root,
-        REVIEW_PREFLIGHT_SESSION_ID,
+        None,
         projected_spawn_mb,
     )
     .context("Failed to build host-memory admission")?;

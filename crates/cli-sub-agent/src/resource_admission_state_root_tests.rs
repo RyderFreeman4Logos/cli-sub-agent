@@ -54,7 +54,7 @@ fn corrupt_session_inventory() -> (tempfile::TempDir, crate::test_env_lock::Scop
 #[test]
 fn spawn_memory_admission_fails_closed_when_legacy_state_root_is_inaccessible() {
     let (_temp, _state_home, legacy) = inaccessible_legacy_state_root();
-    let admission = build_spawn_memory_admission(Path::new("/project"), "current", 1024);
+    let admission = build_spawn_memory_admission(Path::new("/project"), Some("current"), 1024);
     restore_state_root_permissions(&legacy);
 
     assert!(
@@ -80,7 +80,7 @@ fn balloon_admission_fails_closed_when_legacy_state_root_is_inaccessible() {
 fn spawn_memory_admission_fails_closed_when_session_state_is_corrupt() {
     let (_temp, _state_home) = corrupt_session_inventory();
 
-    assert!(build_spawn_memory_admission(Path::new("/project"), "current", 1024).is_err());
+    assert!(build_spawn_memory_admission(Path::new("/project"), Some("current"), 1024).is_err());
 }
 
 #[test]

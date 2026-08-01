@@ -28,7 +28,7 @@ fn terminal_sessions_do_not_create_a_false_active_session_upper() {
         active_session("failed-two", now, 10_000),
     ];
 
-    let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+    let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
         SessionMemorySample::Terminal
     });
 
@@ -51,7 +51,7 @@ fn live_unsampleable_session_uses_fallback_and_counts_for_balloon() {
         ..Default::default()
     }];
 
-    let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+    let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
         SessionMemorySample::UnavailableLiveProcess
     });
     let count = count_observable_active_sessions(&sessions, "current", now, |_| {
@@ -127,8 +127,12 @@ fn result_with_live_daemon_remains_charged_for_memory_admission() {
         "test setup requires a live daemon signal"
     );
 
-    let memory =
-        aggregate_active_session_memory(&[session.clone()], "current", now, sample_session_memory);
+    let memory = aggregate_active_session_memory(
+        &[session.clone()],
+        Some("current"),
+        now,
+        sample_session_memory,
+    );
 
     child.kill().ok();
     child.wait().ok();

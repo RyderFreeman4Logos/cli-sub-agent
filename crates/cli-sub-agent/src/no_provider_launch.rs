@@ -43,7 +43,7 @@ fn from_soft_limit_admission(
 ) -> NoProviderLaunchDiagnostic {
     let memory = soft_limit_admission_diagnostic_memory(
         Path::new(&ctx.session.project_path),
-        &ctx.session.meta_session_id,
+        Some(&ctx.session.meta_session_id),
         ctx.config,
         ctx.resource_overrides,
         error,
@@ -102,7 +102,7 @@ pub(crate) fn host_memory_guidance_from_error(
 
 pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
     project_root: &Path,
-    current_session_id: &str,
+    current_session_id: Option<&str>,
     tool_name: &str,
     config: Option<&ProjectConfig>,
     resource_overrides: RunResourceOverrides,
@@ -126,7 +126,7 @@ pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
 
 fn soft_limit_admission_diagnostic_memory(
     project_root: &Path,
-    current_session_id: &str,
+    current_session_id: Option<&str>,
     config: Option<&ProjectConfig>,
     resource_overrides: RunResourceOverrides,
     error: &MemorySoftLimitAdmissionError,
