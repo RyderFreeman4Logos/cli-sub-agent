@@ -1,12 +1,18 @@
-use std::{io, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
 use csa_resource::{ResourceGuard, ResourceLimits, SpawnMemoryAdmission};
-use csa_session::{MetaSessionState, SandboxInfo, SessionPhase, SessionTreeMemorySampler};
+use csa_session::{MetaSessionState, SandboxInfo, SessionPhase};
 
 use crate::run_resource_overrides::RunResourceOverrides;
+
+#[path = "resource_admission_memory_sampling.rs"]
+mod memory_sampling;
+#[cfg(test)]
+use memory_sampling::classify_session_memory_sample;
+use memory_sampling::{SessionMemorySample, sample_session_memory};
 
 const FALLBACK_SPAWN_PROJECTION_MB: u64 = 4096;
 const MIN_DEFAULT_SPAWN_PROJECTION_MB: u64 = 256;
@@ -27,15 +33,6 @@ struct ActiveSessionMemory {
 struct ActiveSessionObservation {
     sampled_rss_mb: Option<u64>,
     projected_mb: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionMemorySample {
-    RssMb(u64),
-    UnsupportedLiveProcess,
-    UnavailableLiveProcess,
-    Terminal,
-    Unavailable,
 }
 
 fn spawn_memory_projection_mb_for_physical_available(
@@ -190,42 +187,6 @@ pub(crate) fn build_spawn_memory_admission(
         active_session_count: active.active_count,
         sampled_session_count: active.sampled_count,
     })
-}
-
-fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
-    let project_root = Path::new(&session.project_path);
-    // Terminal only after its writer/daemon exits; live results remain charged.
-    if csa_session::load_result(project_root, &session.meta_session_id)
-        .ok()
-        .flatten()
-        .is_some()
-        && !session_has_live_process_signal(project_root, &session.meta_session_id)
-    {
-        return SessionMemorySample::Terminal;
-    }
-
-    match SessionTreeMemorySampler::new(project_root, &session.meta_session_id)
-        .and_then(|sampler| sampler.sample_rss_mb())
-    {
-        Ok(rss_mb) => SessionMemorySample::RssMb(rss_mb),
-        Err(err) if session_has_live_process_signal(project_root, &session.meta_session_id) => {
-            if err.kind() == io::ErrorKind::Unsupported {
-                SessionMemorySample::UnsupportedLiveProcess
-            } else {
-                SessionMemorySample::UnavailableLiveProcess
-            }
-        }
-        Err(_) => SessionMemorySample::Unavailable,
-    }
-}
-
-fn session_has_live_process_signal(project_root: &Path, session_id: &str) -> bool {
-    let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
-        return false;
-    };
-
-    csa_process::ToolLiveness::has_live_process(&session_dir)
-        || csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir)
 }
 
 fn aggregate_active_session_memory(

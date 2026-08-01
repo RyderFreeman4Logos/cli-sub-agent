@@ -38,7 +38,13 @@ fn list_sessions_in_strict(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
     for entry in entries {
         let entry = entry.context("Failed to read directory entry")?;
         let session_id = entry.file_name().to_string_lossy().to_string();
-        if !entry.file_type()?.is_dir() || session_id.starts_with('.') {
+        if !entry.file_type()?.is_dir()
+            || session_id.starts_with('.')
+            || matches!(
+                session_id.as_str(),
+                "run-pre-session-preflight" | "review-pre-session-preflight"
+            )
+        {
             continue;
         }
         sessions.push(load_session_in(base_dir, &session_id)?);

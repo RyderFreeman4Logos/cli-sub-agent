@@ -329,6 +329,28 @@ fn strict_all_project_inventory_rejects_corrupt_state_while_tolerant_listing_ski
 }
 
 #[test]
+fn strict_all_project_inventory_rejects_state_read_failure_without_recovery() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("unreadable"), None, None).unwrap();
+    let session_dir = get_session_dir(&project, &session.meta_session_id).unwrap();
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    std::fs::remove_file(&state_path).unwrap();
+    std::fs::create_dir(&state_path).unwrap();
+    let sentinel = state_path.join("unchanged");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+
+    assert!(list_all_sessions_all_projects().unwrap().is_empty());
+    let error = list_all_sessions_all_projects_strict().unwrap_err();
+    assert!(format!("{error:#}").contains("Failed to read state file"));
+    assert!(state_path.is_dir());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
 fn strict_all_project_inventory_rejects_malformed_session_id_while_tolerant_listing_skips_it() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);
@@ -343,6 +365,23 @@ fn strict_all_project_inventory_rejects_malformed_session_id_while_tolerant_list
     assert!(list_all_sessions_all_projects().unwrap().is_empty());
     let error = list_all_sessions_all_projects_strict().unwrap_err();
     assert!(format!("{error:#}").contains("Invalid session ID 'not-a-session-id'"));
+}
+
+#[test]
+fn strict_all_project_inventory_ignores_exact_historical_preflight_markers() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("valid"), None, None).unwrap();
+    let sessions_dir = get_session_root(&project).unwrap().join("sessions");
+    for marker in ["run-pre-session-preflight", "review-pre-session-preflight"] {
+        std::fs::create_dir_all(sessions_dir.join(marker).join("tmp").join("audit")).unwrap();
+    }
+
+    let sessions = list_all_sessions_all_projects_strict().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
 }
 
 #[test]
