@@ -129,7 +129,7 @@ SH
   cat >"$toolchain_root/bin/cargo-fmt" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-test "${RUSTUP_TOOLCHAIN:-}" = 9.96.0-x86_64-unknown-linux-gnu
+test "${RUSTUP_TOOLCHAIN:-}" = 9.96.0
 test "${CARGO_NET_OFFLINE:-}" = true
 test ! -e .csa/state
 awk 'NR > 1 && $1 != "lo" { exit 1 }' /proc/net/route
@@ -416,7 +416,7 @@ SH
 #!/usr/bin/env bash
 set -euo pipefail
 test "\${1:-}" = fmt
-test "\${RUSTUP_TOOLCHAIN:-}" = "$selector"
+test "\${RUSTUP_TOOLCHAIN:-}" = 9.97.0
 test "\${CARGO_NET_OFFLINE:-}" = true
 test "\$(command -v cargo)" = /run/csa-bin/cargo
 test "\$(rustc --print sysroot)" = /run/csa-rust-toolchain
