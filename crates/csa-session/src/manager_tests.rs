@@ -351,7 +351,7 @@ fn strict_all_project_inventory_rejects_state_read_failure_without_recovery() {
 }
 
 #[test]
-fn all_project_inventories_ignore_non_session_directories() {
+fn all_project_inventories_ignore_non_session_and_incomplete_directories() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);
     let project = td.path().join("project");
@@ -366,6 +366,10 @@ fn all_project_inventories_ignore_non_session_directories() {
     ] {
         std::fs::create_dir_all(sessions_dir.join(artifact).join("tmp").join("audit")).unwrap();
     }
+    let incomplete_id = "01KTMZZZZZZZZZZZZZZZZZZZZY";
+    validate_session_id(incomplete_id).unwrap();
+    let incomplete_dir = sessions_dir.join(incomplete_id);
+    std::fs::create_dir_all(&incomplete_dir).unwrap();
 
     for sessions in [
         list_all_sessions_all_projects().unwrap(),
@@ -374,6 +378,8 @@ fn all_project_inventories_ignore_non_session_directories() {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
     }
+    assert!(incomplete_dir.is_dir());
+    assert!(!incomplete_dir.join(STATE_FILE_NAME).exists());
 }
 
 #[test]

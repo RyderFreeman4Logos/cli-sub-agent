@@ -1,4 +1,4 @@
-use super::{list_all_project_session_roots, load_session_in};
+use super::{STATE_FILE_NAME, list_all_project_session_roots, load_session_in};
 use crate::{state::MetaSessionState, validate::validate_session_id};
 use anyhow::{Context, Result};
 use std::fs;
@@ -7,8 +7,8 @@ use std::path::Path;
 
 /// Strict read-only inventory for safety-critical admission.
 ///
-/// Missing state roots are empty; existing roots and entries must be readable,
-/// and every valid ULID session directory must contain readable, parseable state.
+/// Missing state roots and absent state files are ignored; existing roots,
+/// entries, and state files must be readable, and state files must be parseable.
 pub fn list_all_sessions_all_projects_strict() -> Result<Vec<MetaSessionState>> {
     let roots = list_all_project_session_roots()?;
     let mut all_sessions = Vec::new();
@@ -46,7 +46,16 @@ fn list_sessions_in_strict(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
         if validate_session_id(&session_id).is_err() {
             continue;
         }
-        sessions.push(load_session_in(base_dir, &session_id)?);
+        let state_path = entry.path().join(STATE_FILE_NAME);
+        match fs::symlink_metadata(&state_path) {
+            Ok(_) => sessions.push(load_session_in(base_dir, &session_id)?),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to inspect state file: {}", state_path.display())
+                });
+            }
+        }
     }
     Ok(sessions)
 }
