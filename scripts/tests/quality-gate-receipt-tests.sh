@@ -120,9 +120,9 @@ run_exact_reuse() {
     && MISE_DATA_DIR="$fixture/target/mise-missing" RUSTUP_TOOLCHAIN=host-default \
     "${fixture}/scripts/cargo-env-normalize.sh" /bin/sh -c \
     'cd / && test "$RUSTUP_TOOLCHAIN" = 1.96.0')
-  first="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+  first="$(cd "$fixture" && RUSTUP_TOOLCHAIN=1.96.0 \
     "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
-  second="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+  second="$(cd "$fixture" && RUSTUP_TOOLCHAIN=1.96.0 \
     "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   first_status="$(printf '%s' "$first" | json_field status)"
   second_status="$(printf '%s' "$second" | json_field status)"
@@ -254,8 +254,10 @@ EOF
     # that can reorder PATH before the fixture compiler is observed.
     ln -s "$python_executable" "$toolchain_root/bin/python3"
   done
-  first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
-  second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
+  first="$(unset RUSTUP_TOOLCHAIN; \
+    invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
+  second="$(unset RUSTUP_TOOLCHAIN; \
+    invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
   assert_eq canonicalized-pinned-toolchain-identity "$first" "$second"
   runs="$(wc -c <"$counter")"
   assert_eq canonicalized-pinned-toolchain-gate-runs 1 "$runs"

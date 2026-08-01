@@ -530,7 +530,7 @@ def resolve_pinned_rust_tools(
                 {"rustc": (("-vV",), ("--print", "sysroot"))},
                 "exact",
             )
-            if direct.selector != exact_selector:
+            if exact_selector not in (channel, direct.selector):
                 raise ToolchainError("toolchain_invalid")
             return direct
 
