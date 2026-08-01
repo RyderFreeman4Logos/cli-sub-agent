@@ -41,6 +41,28 @@ fn terminal_sessions_do_not_create_a_false_active_session_upper() {
     );
 }
 
+#[test]
+fn live_unsampleable_session_uses_fallback_and_counts_for_balloon() {
+    let now = Utc::now();
+    let sessions = vec![MetaSessionState {
+        meta_session_id: "live".to_string(),
+        phase: SessionPhase::Active,
+        last_accessed: now - TimeDelta::hours(2),
+        ..Default::default()
+    }];
+
+    let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        SessionMemorySample::UnavailableLiveProcess
+    });
+    let count = count_observable_active_sessions(&sessions, "current", now, |_| {
+        SessionMemorySample::UnavailableLiveProcess
+    });
+
+    assert_eq!(memory.active_count, 1);
+    assert_eq!(memory.projected_mb, FALLBACK_SPAWN_PROJECTION_MB);
+    assert_eq!(count, 1);
+}
+
 #[cfg(target_os = "linux")]
 fn daemon_pid_record(pid: u32) -> String {
     let content = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("read /proc stat");

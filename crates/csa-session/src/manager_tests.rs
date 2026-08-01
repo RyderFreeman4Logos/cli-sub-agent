@@ -311,6 +311,24 @@ fn test_list_sessions_readonly_preserves_corrupt_state_without_recovery() {
 }
 
 #[test]
+fn strict_all_project_inventory_rejects_corrupt_state_while_tolerant_listing_skips_it() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("corrupt"), None, None).unwrap();
+    let state_path = get_session_dir(&project, &session.meta_session_id)
+        .unwrap()
+        .join(STATE_FILE_NAME);
+    let corrupt_state = b"not valid toml = [";
+    std::fs::write(&state_path, corrupt_state).unwrap();
+
+    assert!(list_all_sessions_all_projects().unwrap().is_empty());
+    assert!(list_all_sessions_all_projects_strict().is_err());
+    assert_eq!(std::fs::read(&state_path).unwrap(), corrupt_state);
+}
+
+#[test]
 fn test_list_sessions_recovers_corrupt_state() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);

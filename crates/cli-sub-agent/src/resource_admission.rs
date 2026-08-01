@@ -33,6 +33,7 @@ struct ActiveSessionObservation {
 enum SessionMemorySample {
     RssMb(u64),
     UnsupportedLiveProcess,
+    UnavailableLiveProcess,
     Terminal,
     Unavailable,
 }
@@ -173,7 +174,7 @@ pub(crate) fn build_spawn_memory_admission(
     current_session_id: &str,
     projected_spawn_mb: u64,
 ) -> Result<SpawnMemoryAdmission> {
-    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+    let sessions = csa_session::list_all_sessions_all_projects_strict().with_context(|| {
         format!(
             "Failed to list active CSA sessions for host-memory admission in {}",
             project_root.display()
@@ -211,11 +212,12 @@ fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
         .and_then(|sampler| sampler.sample_rss_mb())
     {
         Ok(rss_mb) => SessionMemorySample::RssMb(rss_mb),
-        Err(err)
-            if err.kind() == io::ErrorKind::Unsupported
-                && session_has_live_process_signal(project_root, &session.meta_session_id) =>
-        {
-            SessionMemorySample::UnsupportedLiveProcess
+        Err(err) if session_has_live_process_signal(project_root, &session.meta_session_id) => {
+            if err.kind() == io::ErrorKind::Unsupported {
+                SessionMemorySample::UnsupportedLiveProcess
+            } else {
+                SessionMemorySample::UnavailableLiveProcess
+            }
         }
         Err(_) => SessionMemorySample::Unavailable,
     }
@@ -282,7 +284,8 @@ fn active_session_observation(
                 projected_mb: rss_mb.max(sandbox_projection.unwrap_or(0)),
             });
         }
-        SessionMemorySample::UnsupportedLiveProcess => {
+        SessionMemorySample::UnsupportedLiveProcess
+        | SessionMemorySample::UnavailableLiveProcess => {
             return Some(ActiveSessionObservation {
                 sampled_rss_mb: None,
                 projected_mb: sandbox_projection.unwrap_or(FALLBACK_SPAWN_PROJECTION_MB),
@@ -323,7 +326,7 @@ pub(crate) fn active_session_count_for_balloon(
     project_root: &Path,
     current_session_id: &str,
 ) -> Result<u64> {
-    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+    let sessions = csa_session::list_all_sessions_all_projects_strict().with_context(|| {
         format!(
             "Failed to count active CSA sessions for memory-balloon admission in {}",
             project_root.display()

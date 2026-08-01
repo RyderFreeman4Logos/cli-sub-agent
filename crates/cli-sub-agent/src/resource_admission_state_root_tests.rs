@@ -32,6 +32,24 @@ fn restore_state_root_permissions(path: &Path) {
         .expect("restore legacy state-root permissions");
 }
 
+fn corrupt_session_inventory() -> (tempfile::TempDir, crate::test_env_lock::ScopedTestEnvVar) {
+    use std::fs;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let state_home = temp.path().join("state");
+    let state_home_guard =
+        crate::test_env_lock::ScopedTestEnvVar::set("XDG_STATE_HOME", &state_home);
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).expect("project");
+    let session =
+        csa_session::create_session(&project, Some("corrupt"), None, None).expect("create session");
+    let state_path = csa_session::get_session_dir(&project, &session.meta_session_id)
+        .expect("session dir")
+        .join("state.toml");
+    fs::write(state_path, b"not valid toml = [").expect("corrupt state");
+    (temp, state_home_guard)
+}
+
 #[cfg(unix)]
 #[test]
 fn spawn_memory_admission_fails_closed_when_legacy_state_root_is_inaccessible() {
@@ -56,4 +74,18 @@ fn balloon_admission_fails_closed_when_legacy_state_root_is_inaccessible() {
         count.is_err(),
         "inaccessible state inventory must block balloon admission, not yield zero active sessions"
     );
+}
+
+#[test]
+fn spawn_memory_admission_fails_closed_when_session_state_is_corrupt() {
+    let (_temp, _state_home) = corrupt_session_inventory();
+
+    assert!(build_spawn_memory_admission(Path::new("/project"), "current", 1024).is_err());
+}
+
+#[test]
+fn balloon_admission_fails_closed_when_session_state_is_corrupt() {
+    let (_temp, _state_home) = corrupt_session_inventory();
+
+    assert!(active_session_count_for_balloon(Path::new("/project"), "current").is_err());
 }
