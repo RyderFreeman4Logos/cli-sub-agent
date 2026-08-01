@@ -14,6 +14,7 @@ use crate::session_guard::{
     SessionCleanupGuard, write_pre_exec_error_result, write_pre_exec_error_result_with_no_provider,
 };
 
+#[cfg(debug_assertions)]
 const TEST_SKIP_HOST_MEMORY_ADMISSION_ENV: &str = "CSA_TEST_SKIP_HOST_MEMORY_ADMISSION";
 
 /// Integration fixtures that propagate a deliberately oversized parent contract
