@@ -116,6 +116,14 @@ printf '%s\n' \
 }
 
 #[cfg(unix)]
+fn install_rejecting_codex(bin_dir: &Path) -> PathBuf {
+    let bin_dir = install_noop_codex(bin_dir);
+    std::fs::write(bin_dir.join("codex"), "#!/bin/sh\nexit 86\n")
+        .expect("write rejecting ambient codex");
+    bin_dir
+}
+
+#[cfg(unix)]
 fn prepend_path(bin_dir: &Path) -> OsString {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![bin_dir.to_path_buf()];
@@ -138,16 +146,23 @@ fn noop_writer_session_leaves_zero_tracked_lefthook_drift() {
     let project = home.path().join("project");
     init_tracked_project(&project);
 
+    let fake_bin = install_noop_codex(&home.path().join("bin"));
+    let ambient_bin = install_rejecting_codex(&home.path().join("ambient-bin"));
     let config_path = global_config_path(home.path());
     std::fs::create_dir_all(config_path.parent().expect("global config parent"))
         .expect("create global config dir");
-    std::fs::write(config_path, "[hooks]\nauto_setup_review_gate = true\n")
-        .expect("enable launcher review-gate path");
+    std::fs::write(
+        config_path,
+        format!(
+            "[hooks]\nauto_setup_review_gate = true\n\n[tools.codex.env]\nPATH = \"{}\"\n",
+            fake_bin.display()
+        ),
+    )
+    .expect("enable launcher review-gate path with pinned fake Codex");
 
-    let fake_bin = install_noop_codex(&home.path().join("bin"));
     let output = csa_cmd(home.path())
         .current_dir(&project)
-        .env("PATH", prepend_path(&fake_bin))
+        .env("PATH", prepend_path(&ambient_bin))
         .args([
             "run",
             "--no-daemon",
