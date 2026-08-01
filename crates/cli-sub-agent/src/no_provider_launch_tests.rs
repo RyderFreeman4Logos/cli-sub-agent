@@ -102,7 +102,7 @@ fn soft_limit_writer_guidance_reports_feasible_unified_interval_and_retry_comman
         "9103".to_string(),
         "fix the retry guidance".to_string(),
     ];
-    let guidance = soft_limit_admission_guidance_with_argv("codex", &memory, &original_argv);
+    let guidance = soft_limit_admission_guidance_with_argv("codex", &memory, None, &original_argv);
     let joined = guidance.join("\n");
 
     assert!(joined.contains("soft-limit admission rejected before provider launch"));
@@ -194,6 +194,99 @@ fn soft_limit_diagnostic_reports_live_retry_interval_without_provider_side_effec
     assert!(guidance.contains("lower_bound=10000MB (role/tool soft-limit floor)"));
     assert!(guidance.contains("physical/reserve upper="));
     assert!(guidance.contains("Retry feasibility:"));
+}
+
+#[test]
+fn soft_limit_guidance_reports_unavailable_strict_inventory_without_zero_memory_claims() {
+    use csa_resource::{FilesystemCapability, IsolationPlan, ResourceCapability};
+
+    let project_dir = tempfile::tempdir().expect("temporary project");
+    let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new_blocking(&project_dir);
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let session = MetaSessionState {
+        meta_session_id: csa_session::new_session_id(),
+        project_path: project_root.display().to_string(),
+        ..Default::default()
+    };
+    csa_session::validate_session_id(&session.meta_session_id).expect("valid session ULID");
+    let session_dir = csa_session::get_session_root(project_root)
+        .expect("session root")
+        .join("sessions")
+        .join(&session.meta_session_id);
+    std::fs::create_dir_all(&session_dir).expect("session dir");
+    let state_path = session_dir.join("state.toml");
+    let complete_state = toml::to_string_pretty(&session).expect("serialize complete state");
+    std::fs::write(&state_path, complete_state).expect("write complete session state");
+    let corrupt_state = b"not valid toml = [";
+    std::fs::write(&state_path, corrupt_state).expect("corrupt complete session state");
+
+    let plan = IsolationPlan {
+        resource: ResourceCapability::CgroupV2,
+        filesystem: FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        readable_paths: Vec::new(),
+        env_overrides: std::collections::HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: Some(9_103),
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: true,
+        project_root: None,
+        soft_limit_percent: Some(90),
+        memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
+    };
+    let error = anyhow::Error::new(
+        crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
+            Some("run"),
+            "codex",
+            Some(&plan),
+        )
+        .expect_err("writer soft limit should be denied"),
+    );
+    let argv = vec!["csa".to_string(), "run".to_string()];
+    let preflight_guidance = soft_limit_admission_guidance_from_error_with_argv(
+        project_root,
+        None,
+        "codex",
+        None,
+        RunResourceOverrides::absent(),
+        &error,
+        &argv,
+    )
+    .expect("soft-limit preflight guidance");
+    let diagnostic = diagnostic_from_error(
+        NoProviderLaunchContext {
+            session: &session,
+            tool_name: "codex",
+            task_type: Some("run"),
+            config: None,
+            resource_overrides: RunResourceOverrides::absent(),
+        },
+        &error,
+    )
+    .expect("soft-limit no-provider diagnostic");
+
+    assert!(diagnostic.no_provider_launch);
+    assert!(!diagnostic.provider_side_effects);
+    assert_eq!(diagnostic.memory.available_memory_mb, None);
+    assert_eq!(diagnostic.memory.retry_combined_upper_mb, None);
+    assert_eq!(diagnostic.memory.retry_feasible, None);
+    for guidance in [preflight_guidance, diagnostic.guidance] {
+        let joined = guidance.join("\n");
+        assert!(joined.contains("active-session inventory is unavailable"));
+        assert!(joined.contains("Failed to list active CSA sessions for host-memory admission"));
+        assert!(joined.contains("Failed to parse state file"));
+        assert!(!joined.contains("physical MemAvailable 0MB"));
+        assert!(!joined.contains("current_upper=0MB"));
+        assert!(!joined.contains("Suggested retry command"));
+        assert!(!joined.contains("Do not retry with another memory_max_mb"));
+    }
+    assert_eq!(
+        std::fs::read(&state_path).expect("read corrupt state"),
+        corrupt_state
+    );
+    assert!(!state_path.with_file_name("state.toml.corrupt").exists());
 }
 
 #[test]
