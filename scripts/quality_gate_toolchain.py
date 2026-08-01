@@ -1,8 +1,9 @@
-"""Resolve the repository-pinned Rust toolchain without ambient proxies.
+"""Resolve repository-pinned gate tools without ambient dispatchers.
 
-The quality-gate sandbox consumes only verified executable realpaths from one
-complete, already-installed toolchain.  Resolution happens before namespace
-entry so the sandbox never needs rustup metadata or network capability.
+The quality-gate sandbox consumes only verified executable realpaths from
+already-installed toolchains. Resolution happens before namespace entry, so
+rustup and mise stay outside the sandbox and no manager metadata or network
+capability is required there.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ __all__ = (
     "PinnedRustToolchain",
     "SANDBOX_RUST_TOOLCHAIN_ROOT",
     "ToolchainError",
+    "resolve_pinned_nextest",
     "resolve_pinned_rust_tools",
 )
 
@@ -37,10 +39,12 @@ _RUST_TOOLS = (
     "rustdoc",
     "rustfmt",
 )
+_NEXTEST_MISE_TOOL = "cargo:cargo-nextest"
+_MISE = Path("/usr/local/bin/mise")
 
 
 class ToolchainError(RuntimeError):
-    """The pinned local Rust toolchain is incomplete or ambiguous."""
+    """The pinned local gate toolchain is incomplete or ambiguous."""
 
     def __init__(self, reason: str) -> None:
         super().__init__("pinned Rust toolchain unavailable")
@@ -327,6 +331,80 @@ def _validated_executable(candidate: Path, reason: str) -> Path:
         raise ToolchainError(reason) from error
     _validate_file_status(status, reason)
     return resolved
+
+
+def resolve_pinned_nextest(
+    repo: Path, environment: Mapping[str, str]
+) -> Path | None:
+    """Resolve and verify the exact installed cargo-nextest pinned by mise.toml."""
+
+    try:
+        with (repo / "mise.toml").open("rb") as handle:
+            configuration = tomllib.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ToolchainError("toolchain_invalid") from error
+    tools = configuration.get("tools", {})
+    if not isinstance(tools, dict):
+        raise ToolchainError("toolchain_invalid")
+    pin = tools.get(_NEXTEST_MISE_TOOL)
+    if pin is None:
+        return None
+    if not isinstance(pin, str) or not pin:
+        raise ToolchainError("toolchain_invalid")
+
+    mise = _validated_launcher(_MISE, "toolchain_component_missing")
+    query_environment = {
+        "HOME": environment.get("HOME", "/"),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "MISE_TRUSTED_CONFIG_PATHS": os.fspath(repo),
+        "PATH": "/usr/bin:/bin",
+    }
+    if mise_data := environment.get("MISE_DATA_DIR"):
+        query_environment["MISE_DATA_DIR"] = mise_data
+    completed = mise.run(
+        (
+            "which",
+            "cargo-nextest",
+            "--tool",
+            f"{_NEXTEST_MISE_TOOL}@{pin}",
+        ),
+        cwd=repo,
+        env=query_environment,
+        timeout=15,
+        reason="toolchain_component_missing",
+    )
+    if completed.returncode != 0 or len(completed.stdout) > 4096:
+        raise ToolchainError("toolchain_component_missing")
+    try:
+        lines = completed.stdout.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ToolchainError("toolchain_invalid") from error
+    if len(lines) != 1 or not os.path.isabs(lines[0]):
+        raise ToolchainError("toolchain_invalid")
+
+    nextest = _validated_launcher(Path(lines[0]), "toolchain_component_missing")
+    version = nextest.run(
+        ("--version",),
+        cwd=repo,
+        env={
+            "LANG": "C",
+            "LC_ALL": "C",
+            "MISE_DATA_DIR": "/run/csa-mise-disabled",
+            "PATH": "/usr/bin:/bin",
+        },
+        timeout=15,
+        reason="toolchain_invalid",
+    )
+    if (
+        version.returncode != 0
+        or len(version.stdout) > 4096
+        or version.stdout.split()[:2] != [b"cargo-nextest", os.fsencode(pin)]
+    ):
+        raise ToolchainError("toolchain_invalid")
+    return nextest.terminal
 
 
 def _run_launcher_query(
