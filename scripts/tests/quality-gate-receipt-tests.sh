@@ -116,8 +116,14 @@ run_exact_reuse() {
   local runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
 
-  first="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
-  second="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  (cd "$fixture/target" \
+    && MISE_DATA_DIR="$fixture/target/mise-missing" RUSTUP_TOOLCHAIN=host-default \
+    "${fixture}/scripts/cargo-env-normalize.sh" /bin/sh -c \
+    'cd / && test "$RUSTUP_TOOLCHAIN" = 1.96.0')
+  first="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  second="$(cd "$fixture" && env -u RUSTUP_TOOLCHAIN \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   first_status="$(printf '%s' "$first" | json_field status)"
   second_status="$(printf '%s' "$second" | json_field status)"
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
