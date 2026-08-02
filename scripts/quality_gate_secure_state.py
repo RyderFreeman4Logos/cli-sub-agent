@@ -16,6 +16,7 @@ import os
 import secrets
 import signal
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,10 @@ __all__ = (
 
 SCHEMA_VERSION = 2
 IMPLEMENTATION_VERSION = "8"
+# Outlast the supervised 60-minute gate plus its bounded teardown while still
+# preventing a stalled holder from blocking a git hook forever.
+LOCK_TIMEOUT_SECONDS = 65 * 60
+LOCK_POLL_SECONDS = 0.05
 MAX_RECEIPT_BYTES = 64 * 1024
 RENAME_NOREPLACE = 1
 
@@ -166,13 +171,24 @@ class SecureState:
             os.close(descriptor)
             raise
 
-    def acquire_lock(self, descriptor: int) -> None:
-        """Wait for exclusive ownership before inspecting or publishing a receipt."""
+    def acquire_lock(
+        self, descriptor: int, *, timeout_seconds: float = LOCK_TIMEOUT_SECONDS
+    ) -> bool:
+        """Acquire exclusive ownership before a fixed monotonic deadline."""
 
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        except OSError as error:
-            raise StateError("lock acquisition failed") from error
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(
+                    min(LOCK_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+                )
+            except OSError as error:
+                raise StateError("lock acquisition failed") from error
 
     def validate_receipt(
         self, name: str, identity: str, manifest: bytes

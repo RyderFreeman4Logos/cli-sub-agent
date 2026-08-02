@@ -8,6 +8,32 @@ receipt_contract_install_failure_trap quality-gate-receipt-hostile-tests.sh
 run_hostile_state() {
   local fixture counter runner victim output identity lock receipt code started elapsed
 
+  python3 - "$repo_root/scripts" <<'PY'
+import fcntl, sys, tempfile, threading, time
+
+sys.path.insert(0, sys.argv[1])
+from quality_gate_secure_state import SecureState
+
+with tempfile.NamedTemporaryFile() as holder, open(holder.name, "rb+") as contender:
+    state = SecureState(-1)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    release = threading.Timer(0.1, fcntl.flock, (holder, fcntl.LOCK_UN))
+    release.start()
+    started = time.monotonic()
+    try:
+        assert state.acquire_lock(contender, timeout_seconds=0.5)
+        assert 0.05 <= time.monotonic() - started < 1.0
+    finally:
+        release.join()
+
+    fcntl.flock(contender, fcntl.LOCK_UN)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    started = time.monotonic()
+    assert not state.acquire_lock(contender, timeout_seconds=0.2)
+    assert 0.15 <= time.monotonic() - started < 1.0
+PY
+  echo "PASS receipt-lock-deadline"
+
   fixture="$(new_fixture)"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
   runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
