@@ -19,6 +19,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     process::{Child, Command},
+    sync::oneshot,
     task::LocalSet,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -27,6 +28,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 struct HangingTestAgent {
     next_session_id: Cell<u64>,
     prompt_delay: Duration,
+    prompt_started: Rc<RefCell<Option<oneshot::Sender<()>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,10 +39,11 @@ enum PromptBehavior {
 }
 
 impl HangingTestAgent {
-    fn new(prompt_delay: Duration) -> Self {
+    fn new(prompt_delay: Duration, prompt_started: oneshot::Sender<()>) -> Self {
         Self {
             next_session_id: Cell::new(0),
             prompt_delay,
+            prompt_started: Rc::new(RefCell::new(Some(prompt_started))),
         }
     }
 }
@@ -76,6 +79,9 @@ impl agent_client_protocol::Agent for HangingTestAgent {
         &self,
         _args: PromptRequest,
     ) -> agent_client_protocol::Result<PromptResponse> {
+        if let Some(prompt_started) = self.prompt_started.borrow_mut().take() {
+            let _ = prompt_started.send(());
+        }
         tokio::time::sleep(self.prompt_delay).await;
         Ok(PromptResponse::new(StopReason::EndTurn))
     }
@@ -278,7 +284,8 @@ async fn build_test_connection(
             );
             tokio::task::spawn_local(io_task);
 
-            let agent = HangingTestAgent::new(prompt_delay);
+            let (prompt_started, wait_for_prompt_start) = oneshot::channel();
+            let agent = HangingTestAgent::new(prompt_delay, prompt_started);
             let (agent_conn, agent_io_task) = AgentSideConnection::new(
                 agent,
                 server_writer.compat_write(),
@@ -294,6 +301,9 @@ async fn build_test_connection(
 
             if !matches!(prompt_behavior, PromptBehavior::Silent) {
                 tokio::task::spawn_local(async move {
+                    wait_for_prompt_start
+                        .await
+                        .expect("test prompt request must start notification fixture");
                     let sleep_step = Duration::from_millis(40);
                     let deadline = tokio::time::Instant::now() + prompt_delay;
                     while tokio::time::Instant::now() < deadline {
