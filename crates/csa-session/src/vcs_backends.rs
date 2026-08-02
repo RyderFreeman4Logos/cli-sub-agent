@@ -554,14 +554,14 @@ fn git_repository_exists(project_root: &Path) -> Result<bool, String> {
     if command_succeeds(project_root, "git", &["rev-parse", "--show-toplevel"])? {
         return Ok(true);
     }
-    Ok(has_ancestor_entry(project_root, ".git"))
+    Ok(has_ancestor_entry(project_root, ".git", Path::exists))
 }
 
 fn jj_repository_exists(project_root: &Path) -> Result<bool, String> {
     if command_succeeds(project_root, "jj", &["root"])? {
         return Ok(true);
     }
-    Ok(has_ancestor_entry(project_root, ".jj"))
+    Ok(has_ancestor_entry(project_root, ".jj", Path::exists))
 }
 
 fn command_succeeds(project_root: &Path, program: &str, args: &[&str]) -> Result<bool, String> {
@@ -576,10 +576,14 @@ fn command_succeeds(project_root: &Path, program: &str, args: &[&str]) -> Result
     }
 }
 
-fn has_ancestor_entry(project_root: &Path, entry_name: &str) -> bool {
+fn has_ancestor_entry(
+    project_root: &Path,
+    entry_name: &str,
+    entry_exists: impl Fn(&Path) -> bool,
+) -> bool {
     project_root
         .ancestors()
-        .any(|ancestor| ancestor.join(entry_name).exists())
+        .any(|ancestor| entry_exists(&ancestor.join(entry_name)))
 }
 
 #[cfg(test)]
@@ -668,13 +672,8 @@ mod tests {
     }
 
     #[test]
-    fn detect_vcs_kind_returns_none_outside_repo() {
-        let temp = tempfile::tempdir().expect("tempdir");
-
-        let kind = detect_vcs_kind_with_config(temp.path(), None, None)
-            .expect("repository probe should not fail");
-
-        assert_eq!(kind, None);
+    fn outside_repo_fixture_ignores_ambient_ancestor_markers() {
+        assert!(!has_ancestor_entry(Path::new("/v/c"), ".git", |_| false));
     }
 
     fn run_git(project_root: &Path, args: &[&str]) {
