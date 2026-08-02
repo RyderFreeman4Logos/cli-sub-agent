@@ -77,14 +77,19 @@ fn attach_defers_legacy_complete_marker_while_daemon_pid_is_alive() {
 
     // Attach must keep waiting on the live daemon instead of consuming the
     // legacy marker as terminal success/failure (#2950).
-    let timed_out = rx.recv_timeout(Duration::from_secs(2)).is_err();
-    child.kill().ok();
-    let _ = child.wait();
-    let _ = handle.join();
-    assert!(
-        timed_out,
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Timeout),
         "attach must defer legacy .complete while daemon.pid remains live"
     );
+    child.kill().expect("kill daemon fixture");
+    child.wait().expect("reap daemon fixture");
+    let attach_result = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("attach worker should finish after daemon exit")
+        .expect("attach should succeed after daemon exit");
+    handle.join().expect("attach worker should not panic");
+    assert_eq!(attach_result, 143);
 }
 
 #[test]
