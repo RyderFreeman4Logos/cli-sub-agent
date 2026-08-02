@@ -16,7 +16,6 @@ import os
 import secrets
 import signal
 import stat
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,12 +30,6 @@ __all__ = (
 
 SCHEMA_VERSION = 2
 IMPLEMENTATION_VERSION = "8"
-# Provenance collection is intentionally serialized. Six concurrent receipt
-# readers can otherwise exhaust a two-second queue budget and fail open into
-# duplicate uncached gate executions even though a valid receipt already exists.
-# Five seconds preserves a bounded fallback while covering the expected queue.
-LOCK_TIMEOUT_SECONDS = 5.0
-LOCK_POLL_SECONDS = 0.05
 MAX_RECEIPT_BYTES = 64 * 1024
 RENAME_NOREPLACE = 1
 
@@ -173,22 +166,13 @@ class SecureState:
             os.close(descriptor)
             raise
 
-    def acquire_lock(self, descriptor: int) -> bool:
-        """Acquire an exclusive lock with a fixed monotonic deadline."""
+    def acquire_lock(self, descriptor: int) -> None:
+        """Wait for exclusive ownership before inspecting or publishing a receipt."""
 
-        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    return False
-                time.sleep(
-                    min(LOCK_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
-                )
-            except OSError as error:
-                raise StateError("lock acquisition failed") from error
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError as error:
+            raise StateError("lock acquisition failed") from error
 
     def validate_receipt(
         self, name: str, identity: str, manifest: bytes

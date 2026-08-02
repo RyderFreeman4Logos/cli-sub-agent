@@ -143,23 +143,22 @@ def run_receipt_gate_in_sandbox(
         try:
             state = SecureState.open(repo)
             collection_lock = state.open_lock("collection.lock")
-            if not state.acquire_lock(collection_lock):
-                fallback_reason = "lock_timeout"
-            else:
-                if not sandbox.host_attestation_matches():
-                    raise IsolationError("host source changed before collection")
-                manifest = sandbox.collect(command)
-                fields = manifest_fields(manifest)
-                if fields.get("source_snapshot_sha256") != sandbox.snapshot_fingerprint:
-                    raise IsolationError("sandbox source identity mismatch")
-                if fields.get("source_host_sha256") != sandbox.source_fingerprint:
-                    raise IsolationError("host source identity mismatch")
-                if not sandbox.host_attestation_matches():
-                    raise IsolationError("host source changed during collection")
-                identity = sha256_bytes(manifest)
-                identity_lock = state.open_lock(f"{identity}.lock")
-                if not state.acquire_lock(identity_lock):
-                    fallback_reason = "lock_timeout"
+            state.acquire_lock(collection_lock)
+            if not sandbox.host_attestation_matches():
+                raise IsolationError("host source changed before collection")
+            manifest = sandbox.collect(command)
+            fields = manifest_fields(manifest)
+            if fields.get("source_snapshot_sha256") != sandbox.snapshot_fingerprint:
+                raise IsolationError("sandbox source identity mismatch")
+            if fields.get("source_host_sha256") != sandbox.source_fingerprint:
+                raise IsolationError("host source identity mismatch")
+            if not sandbox.host_attestation_matches():
+                raise IsolationError("host source changed during collection")
+            os.close(collection_lock)
+            collection_lock = None
+            identity = sha256_bytes(manifest)
+            identity_lock = state.open_lock(f"{identity}.lock")
+            state.acquire_lock(identity_lock)
         except StateError:
             if manifest is None:
                 try:

@@ -103,14 +103,13 @@ PY
   kill "$lock" 2>/dev/null || true
   wait "$lock" 2>/dev/null || true
   unregister_child "$lock"
-  assert_eq hostile-collection-lock-timeout-exit 0 "$code"
-  # The enclosing `timeout 15` is the exact wall-clock bound.  `date +%s`
-  # reports whole seconds, so an execution that finishes just under that
-  # bound can span fifteen calendar-second ticks.
-  assert_num_lt hostile-collection-lock-timeout-elapsed 16 "$elapsed"
-  assert_eq hostile-collection-lock-timeout-reason lock_timeout \
+  assert_eq hostile-collection-lock-wait-exit 0 "$code"
+  assert_num_lt hostile-collection-lock-wait-elapsed 16 "$elapsed"
+  [ "$elapsed" -ge 10 ] || _receipt_test_fail \
+    hostile-collection-lock-wait-elapsed integer-at-least:10 "$elapsed"
+  assert_eq hostile-collection-lock-wait-reason receipt_missing \
     "$(printf '%s' "$output" | json_field rejection_reason)"
-  echo "PASS hostile-collection-lock-timeout"
+  echo "PASS hostile-collection-lock-wait"
 
   fixture="$(new_fixture)"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
@@ -143,13 +142,13 @@ PY
   kill "$lock" 2>/dev/null || true
   wait "$lock" 2>/dev/null || true
   unregister_child "$lock"
-  assert_eq hostile-identity-lock-timeout-exit 0 "$code"
-  # Keep the coarse elapsed-time assertion compatible with the outer timeout;
-  # the process must still exit successfully before `timeout 15` can fire.
-  assert_num_lt hostile-identity-lock-timeout-elapsed 16 "$elapsed"
-  assert_eq hostile-identity-lock-timeout-reason lock_timeout \
+  assert_eq hostile-identity-lock-wait-exit 0 "$code"
+  assert_num_lt hostile-identity-lock-wait-elapsed 16 "$elapsed"
+  [ "$elapsed" -ge 10 ] || _receipt_test_fail \
+    hostile-identity-lock-wait-elapsed integer-at-least:10 "$elapsed"
+  assert_eq hostile-identity-lock-wait-reason receipt_missing \
     "$(printf '%s' "$output" | json_field rejection_reason)"
-  echo "PASS hostile-lock-timeout"
+  echo "PASS hostile-lock-wait"
 
   fixture="$(new_fixture)"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
