@@ -41,15 +41,19 @@ fn from_soft_limit_admission(
     ctx: NoProviderLaunchContext<'_>,
     error: &MemorySoftLimitAdmissionError,
 ) -> NoProviderLaunchDiagnostic {
-    let memory = soft_limit_admission_diagnostic_memory(
+    let (memory, inventory_error) = soft_limit_admission_diagnostic_memory(
         Path::new(&ctx.session.project_path),
-        &ctx.session.meta_session_id,
+        Some(&ctx.session.meta_session_id),
         ctx.config,
         ctx.resource_overrides,
         error,
     );
     let mut guidance = error.guidance();
-    guidance.extend(soft_limit_admission_guidance(ctx.tool_name, &memory));
+    guidance.extend(soft_limit_admission_guidance(
+        ctx.tool_name,
+        &memory,
+        inventory_error.as_deref(),
+    ));
 
     base_diagnostic(
         &ctx,
@@ -102,7 +106,7 @@ pub(crate) fn host_memory_guidance_from_error(
 
 pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
     project_root: &Path,
-    current_session_id: &str,
+    current_session_id: Option<&str>,
     tool_name: &str,
     config: Option<&ProjectConfig>,
     resource_overrides: RunResourceOverrides,
@@ -110,7 +114,7 @@ pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
     argv: &[String],
 ) -> Option<Vec<String>> {
     let soft_limit = error.downcast_ref::<MemorySoftLimitAdmissionError>()?;
-    let memory = soft_limit_admission_diagnostic_memory(
+    let (memory, inventory_error) = soft_limit_admission_diagnostic_memory(
         project_root,
         current_session_id,
         config,
@@ -119,33 +123,42 @@ pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
     );
     let mut guidance = soft_limit.guidance();
     guidance.extend(soft_limit_admission_guidance_with_argv(
-        tool_name, &memory, argv,
+        tool_name,
+        &memory,
+        inventory_error.as_deref(),
+        argv,
     ));
     Some(guidance)
 }
 
 fn soft_limit_admission_diagnostic_memory(
     project_root: &Path,
-    current_session_id: &str,
+    current_session_id: Option<&str>,
     config: Option<&ProjectConfig>,
     resource_overrides: RunResourceOverrides,
     error: &MemorySoftLimitAdmissionError,
-) -> NoProviderLaunchMemoryDiagnostic {
+) -> (NoProviderLaunchMemoryDiagnostic, Option<String>) {
     let admission = crate::resource_admission::build_spawn_memory_admission(
         project_root,
         current_session_id,
         error.memory_max_mb(),
     );
-    let Ok(admission) = admission else {
-        return NoProviderLaunchMemoryDiagnostic {
-            effective_memory_max_mb: Some(error.memory_max_mb()),
-            soft_limit_percent: Some(error.soft_limit_percent()),
-            soft_threshold_mb: Some(error.threshold_mb()),
-            required_floor_mb: Some(error.required_threshold_mb()),
-            required_memory_max_mb: Some(error.required_memory_max_mb()),
-            projected_spawn_mb: Some(error.memory_max_mb()),
-            ..Default::default()
-        };
+    let admission = match admission {
+        Ok(admission) => admission,
+        Err(inventory_error) => {
+            return (
+                NoProviderLaunchMemoryDiagnostic {
+                    effective_memory_max_mb: Some(error.memory_max_mb()),
+                    soft_limit_percent: Some(error.soft_limit_percent()),
+                    soft_threshold_mb: Some(error.threshold_mb()),
+                    required_floor_mb: Some(error.required_threshold_mb()),
+                    required_memory_max_mb: Some(error.required_memory_max_mb()),
+                    projected_spawn_mb: Some(error.memory_max_mb()),
+                    ..Default::default()
+                },
+                Some(format!("{inventory_error:#}")),
+            );
+        }
     };
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
@@ -168,27 +181,30 @@ fn soft_limit_admission_diagnostic_memory(
             .is_some_and(|retry| lower_bound_mb <= retry.adjusted_upper_mb)
     });
 
-    NoProviderLaunchMemoryDiagnostic {
-        effective_memory_max_mb: Some(error.memory_max_mb()),
-        soft_limit_percent: Some(error.soft_limit_percent()),
-        soft_threshold_mb: Some(error.threshold_mb()),
-        required_floor_mb: Some(error.required_threshold_mb()),
-        required_memory_max_mb: Some(error.required_memory_max_mb()),
-        reserve_mb: Some(snapshot.reserve_mb),
-        available_memory_mb: Some(snapshot.available_phys_mb),
-        required_available_mb: retry_lower_bound_mb
-            .map(|lower_bound_mb| lower_bound_mb.saturating_add(snapshot.reserve_mb)),
-        projected_spawn_mb: Some(snapshot.admission.projected_spawn_mb),
-        active_session_rss_mb: Some(snapshot.admission.active_session_rss_mb),
-        active_session_projected_mb: Some(snapshot.admission.active_session_projected_mb),
-        active_session_count: Some(snapshot.admission.active_session_count),
-        sampled_session_count: Some(snapshot.admission.sampled_session_count),
-        retry_physical_upper_mb: Some(snapshot.retry_bounds.physical_upper_mb),
-        retry_active_session_upper_mb: snapshot.retry_bounds.active_session_upper_mb,
-        retry_combined_upper_mb: Some(snapshot.retry_bounds.combined_upper_mb),
-        retry_lower_bound_mb,
-        retry_feasible,
-    }
+    (
+        NoProviderLaunchMemoryDiagnostic {
+            effective_memory_max_mb: Some(error.memory_max_mb()),
+            soft_limit_percent: Some(error.soft_limit_percent()),
+            soft_threshold_mb: Some(error.threshold_mb()),
+            required_floor_mb: Some(error.required_threshold_mb()),
+            required_memory_max_mb: Some(error.required_memory_max_mb()),
+            reserve_mb: Some(snapshot.reserve_mb),
+            available_memory_mb: Some(snapshot.available_phys_mb),
+            required_available_mb: retry_lower_bound_mb
+                .map(|lower_bound_mb| lower_bound_mb.saturating_add(snapshot.reserve_mb)),
+            projected_spawn_mb: Some(snapshot.admission.projected_spawn_mb),
+            active_session_rss_mb: Some(snapshot.admission.active_session_rss_mb),
+            active_session_projected_mb: Some(snapshot.admission.active_session_projected_mb),
+            active_session_count: Some(snapshot.admission.active_session_count),
+            sampled_session_count: Some(snapshot.admission.sampled_session_count),
+            retry_physical_upper_mb: Some(snapshot.retry_bounds.physical_upper_mb),
+            retry_active_session_upper_mb: snapshot.retry_bounds.active_session_upper_mb,
+            retry_combined_upper_mb: Some(snapshot.retry_bounds.combined_upper_mb),
+            retry_lower_bound_mb,
+            retry_feasible,
+        },
+        None,
+    )
 }
 
 fn host_memory_diagnostic_memory(
@@ -303,22 +319,34 @@ fn role_from_task_type(task_type: Option<&str>) -> &'static str {
 fn soft_limit_admission_guidance(
     tool_name: &str,
     memory: &NoProviderLaunchMemoryDiagnostic,
+    inventory_error: Option<&str>,
 ) -> Vec<String> {
     let argv: Vec<String> = std::env::args().collect();
-    soft_limit_admission_guidance_with_argv(tool_name, memory, &argv)
+    soft_limit_admission_guidance_with_argv(tool_name, memory, inventory_error, &argv)
 }
 
 fn soft_limit_admission_guidance_with_argv(
     tool_name: &str,
     memory: &NoProviderLaunchMemoryDiagnostic,
+    inventory_error: Option<&str>,
     argv: &[String],
 ) -> Vec<String> {
+    let retry_guidance = inventory_error.map_or_else(
+        || host_memory_retry_feasibility(tool_name, memory, argv),
+        |inventory_error| {
+            format!(
+                "Retry feasibility: unavailable because active-session inventory is unavailable: \
+                 {inventory_error}. No host-memory retry bound was computed; repair or restore \
+                 readable session state before retrying."
+            )
+        },
+    );
     vec![
         "CSA: soft-limit admission rejected before provider launch; this is an \
          infrastructure/session-unavailable pre-exec denial and did not launch the provider or \
          mutate the worktree."
             .to_string(),
-        host_memory_retry_feasibility(tool_name, memory, argv),
+        retry_guidance,
     ]
 }
 

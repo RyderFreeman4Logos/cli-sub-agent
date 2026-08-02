@@ -1,4 +1,5 @@
 use super::handle_run;
+use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, TierStrategy, ToolConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
@@ -418,6 +419,10 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
 async fn handle_run_writer_memory_floor_with_user_daemon_ipc_creates_no_preflight_artifact() {
     let project_dir = tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
     let mut config = run_config_with_tier("default", vec!["codex/openai/gpt-5.5/high"], &["codex"]);
     config.resources.memory_max_mb = Some(9_103);
     config.resources.min_free_memory_mb = 1;

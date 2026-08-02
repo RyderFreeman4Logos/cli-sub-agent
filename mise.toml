@@ -1,2 +1,3 @@
 [tools]
+"cargo:cargo-nextest" = "0.9.140-b.1"
 lefthook = "2.1.4"

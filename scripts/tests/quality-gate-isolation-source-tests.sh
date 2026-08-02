@@ -13,6 +13,7 @@ run_ambient_input_isolation() {
   local fixture runner counter first second global_config excludes_file output code
   local just_victim first_identity second_identity external_target
   local explicit_tool_root variable basename tool_path missing_native_tool index
+  local nextest_dispatcher_bin nextest_version
   local -a explicit_variables explicit_basenames explicit_tool_env
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
@@ -255,6 +256,40 @@ SH
   assert_eq isolation-native-tool-missing-no-run 1 "$(wc -c <"$counter")"
   assert_eq isolation-native-tool-missing-no-receipt 1 \
     "$(current_receipt_count "$fixture")"
+
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  counter="$fixture/target/nextest-version"
+  nextest_dispatcher_bin="$test_root/nextest-dispatcher-bin"
+  mkdir -p "$nextest_dispatcher_bin"
+  cat >"$nextest_dispatcher_bin/cargo-nextest" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' mise-dispatcher
+SH
+  chmod +x "$nextest_dispatcher_bin/cargo-nextest"
+  cat >"$fixture/mise.toml" <<'TOML'
+[tools]
+"cargo:cargo-nextest" = "0.9.140-b.1"
+TOML
+  cat >"$fixture/scripts/hooks/nextest-pin-probe.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$(command -v cargo-nextest)" = /run/csa-bin/cargo-nextest
+test "${MISE_DATA_DIR:?}" = /run/csa-mise-disabled
+cargo-nextest --version >"$1"
+SH
+  chmod +x "$fixture/scripts/hooks/nextest-pin-probe.sh"
+  git -C "$fixture" add mise.toml scripts/hooks/nextest-pin-probe.sh
+  git -C "$fixture" commit -qm "test: add pinned nextest probe"
+  output="$(cd "$fixture" && PATH="$nextest_dispatcher_bin:$PATH" \
+    "$runner" -- scripts/hooks/nextest-pin-probe.sh target/nextest-version)"
+  nextest_version="$(<"$counter")"
+  assert_eq isolation-pinned-nextest-status executed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_contains isolation-pinned-nextest-version 'cargo-nextest 0.9.140-b.1' \
+    "$nextest_version"
+  assert_not_matches isolation-pinned-nextest-not-dispatcher \
+    '^mise-dispatcher$' "$nextest_version"
   echo "PASS isolation-ambient-inputs"
 }
 

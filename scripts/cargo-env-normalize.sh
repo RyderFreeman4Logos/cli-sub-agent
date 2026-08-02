@@ -70,13 +70,17 @@ elif rust_state_needs_override "${RUSTUP_HOME:-}"; then
     mkdir -p "$RUSTUP_HOME"
 fi
 
-if [ -f "${repo_root}/rust-toolchain.toml" ] && [ -d "${mise_rust_home}/toolchains" ]; then
+channel=""
+if [ -f "${repo_root}/rust-toolchain.toml" ]; then
     channel="$(
         sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
             "${repo_root}/rust-toolchain.toml" \
             | head -n 1
     )"
-    if [ -n "$channel" ]; then
+fi
+if [ -n "$channel" ]; then
+    export RUSTUP_TOOLCHAIN="$channel"
+    if [ -d "${mise_rust_home}/toolchains" ]; then
         for toolchain in "${mise_rust_home}/toolchains/${channel}"-* "${mise_rust_home}/toolchains/${channel}"; do
             if [ -x "${toolchain}/bin/cargo" ]; then
                 case ":${PATH}:" in

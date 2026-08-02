@@ -95,7 +95,7 @@ fn handle_session_wait_on_fix_finding_wrapper_rebinds_when_alias_appears_after_w
         )
         .expect("wait should complete after alias and completion appear")
     });
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    wait_until_wait_lock_is_held(&wrapper_dir);
 
     let mut fix_session = csa_session::create_session_fresh(
         project,

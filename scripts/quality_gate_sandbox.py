@@ -1,4 +1,4 @@
-"""Run static gates in an attested Bubblewrap projection."""
+"""Attested Bubblewrap sandbox for static gates."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from quality_gate_toolchain import (
     SANDBOX_RUST_TOOLCHAIN_ROOT,
     PinnedRustToolchain,
     ToolchainError,
+    resolve_pinned_nextest,
     resolve_pinned_rust_tools,
 )
 
@@ -188,8 +189,6 @@ def _copy_snapshot(
 def _projection_fingerprint(
     snapshot: Path, entries: Sequence[tuple[str, str]]
 ) -> str:
-    """Hash projected source."""
-
     digest = hashlib.sha256()
     digest.update(b"masked-prefix\0.csa\0")
     for mode, relative in entries:
@@ -214,9 +213,10 @@ def _selected_tools(
     rust_toolchain = resolve_pinned_rust_tools(repo, environment)
     selected: dict[str, Path] = {}
     search_path = environment.get("PATH", os.defpath)
+    pinned_nextest = resolve_pinned_nextest(repo, environment)
     for name in (*_REQUIRED_TOOLS, *_OPTIONAL_TOOLS):
-        candidate = _FIXED_TOOLS.get(name)
-        if candidate is None:
+        candidate = pinned_nextest if name == "cargo-nextest" else _FIXED_TOOLS.get(name)
+        if candidate is None and name != "cargo-nextest":
             located = shutil.which(name, path=search_path)
             if located:
                 candidate = Path(located)
@@ -236,8 +236,6 @@ def _selected_tools(
 
 
 def _visible_in_sandbox(repo: Path, path: Path) -> bool:
-    """Check sandbox visibility."""
-
     if path.is_relative_to(repo):
         return True
     return not any(
@@ -247,8 +245,6 @@ def _visible_in_sandbox(repo: Path, path: Path) -> bool:
 
 
 class GateSandbox:
-    """Static-gate sandbox plan."""
-
     def __init__(self, repo: Path, environment: Mapping[str, str]) -> None:
         self.repo = repo
         self._test_failure = environment.get("CSA_QUALITY_GATE_TEST_ISOLATION_FAILURE")
@@ -611,8 +607,6 @@ printf '%s\n%s\n' "$(readlink /proc/self/ns/mnt)" "$(readlink /proc/self/ns/net)
             raise IsolationError("required isolation unavailable")
 
     def collect(self, command: Sequence[str]) -> bytes:
-        """Collect sandbox provenance."""
-
         collector = (
             f"{PRIVATE_BIN_PATH}/python3",
             "scripts/quality-gate-state.py",

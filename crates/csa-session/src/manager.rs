@@ -14,6 +14,8 @@ mod manager_access;
 mod manager_audit;
 #[path = "manager_daemon.rs"]
 mod manager_daemon;
+#[path = "manager_inventory.rs"]
+mod manager_inventory;
 #[path = "manager_legacy.rs"]
 mod manager_legacy;
 #[path = "manager_paths.rs"]
@@ -34,6 +36,7 @@ pub use manager_access::{load_metadata, resolve_fork_source, validate_tool_acces
 pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
 pub use manager_daemon::{ResumeSessionResolution, create_session_with_daemon_env};
 use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id_from_env};
+pub use manager_inventory::list_all_sessions_all_projects_strict;
 pub use manager_legacy::decode_session_created_at;
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;

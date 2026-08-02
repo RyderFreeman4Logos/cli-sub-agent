@@ -311,6 +311,78 @@ fn test_list_sessions_readonly_preserves_corrupt_state_without_recovery() {
 }
 
 #[test]
+fn strict_all_project_inventory_rejects_corrupt_state_while_tolerant_listing_skips_it() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("corrupt"), None, None).unwrap();
+    let state_path = get_session_dir(&project, &session.meta_session_id)
+        .unwrap()
+        .join(STATE_FILE_NAME);
+    let corrupt_state = b"not valid toml = [";
+    std::fs::write(&state_path, corrupt_state).unwrap();
+
+    assert!(list_all_sessions_all_projects().unwrap().is_empty());
+    assert!(list_all_sessions_all_projects_strict().is_err());
+    assert_eq!(std::fs::read(&state_path).unwrap(), corrupt_state);
+}
+
+#[test]
+fn strict_all_project_inventory_rejects_state_read_failure_without_recovery() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("unreadable"), None, None).unwrap();
+    let session_dir = get_session_dir(&project, &session.meta_session_id).unwrap();
+    let state_path = session_dir.join(STATE_FILE_NAME);
+    std::fs::remove_file(&state_path).unwrap();
+    std::fs::create_dir(&state_path).unwrap();
+    let sentinel = state_path.join("unchanged");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+
+    assert!(list_all_sessions_all_projects().unwrap().is_empty());
+    let error = list_all_sessions_all_projects_strict().unwrap_err();
+    assert!(format!("{error:#}").contains("Failed to read state file"));
+    assert!(state_path.is_dir());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"unchanged");
+    assert!(!session_dir.join("state.toml.corrupt").exists());
+}
+
+#[test]
+fn all_project_inventories_ignore_non_session_and_incomplete_directories() {
+    let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let session = create_session(&project, Some("valid"), None, None).unwrap();
+    let sessions_dir = get_session_root(&project).unwrap().join("sessions");
+    for artifact in [
+        "not-a-session-id",
+        "unknown",
+        "run-pre-session-preflight",
+        "review-pre-session-preflight",
+    ] {
+        std::fs::create_dir_all(sessions_dir.join(artifact).join("tmp").join("audit")).unwrap();
+    }
+    let incomplete_id = "01KTMZZZZZZZZZZZZZZZZZZZZY";
+    validate_session_id(incomplete_id).unwrap();
+    let incomplete_dir = sessions_dir.join(incomplete_id);
+    std::fs::create_dir_all(&incomplete_dir).unwrap();
+
+    for sessions in [
+        list_all_sessions_all_projects().unwrap(),
+        list_all_sessions_all_projects_strict().unwrap(),
+    ] {
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].meta_session_id, session.meta_session_id);
+    }
+    assert!(incomplete_dir.is_dir());
+    assert!(!incomplete_dir.join(STATE_FILE_NAME).exists());
+}
+
+#[test]
 fn test_list_sessions_recovers_corrupt_state() {
     let td = tempdir().unwrap();
     let _xdg = ScopedXdgOverride::new(&td);

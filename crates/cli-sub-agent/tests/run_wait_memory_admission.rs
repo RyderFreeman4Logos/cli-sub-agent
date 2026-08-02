@@ -7,6 +7,7 @@ fn csa_cmd(tmp: &Path) -> Command {
     cmd.env("HOME", tmp)
         .env("XDG_STATE_HOME", tmp.join(".local/state"))
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
+        .env(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1")
         .env("TOKIO_WORKER_THREADS", "1")
         .env("CSA_DAEMON_INDEPENDENT_SCOPE", "0");
     cmd

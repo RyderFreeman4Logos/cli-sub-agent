@@ -28,6 +28,7 @@ repo="$(git -C "${repo}" rev-parse --show-toplevel)"
 
 candidates=()
 if [ "${home_only}" = "0" ]; then
+  candidates+=(/run/csa-bin/cargo)
   for mise_bin in /usr/local/bin/mise /opt/homebrew/bin/mise "${HOME}/.local/bin/mise"; do
     if [ -x "${mise_bin}" ]; then
       resolved="$(MISE_TRUSTED_CONFIG_PATHS="${repo}" "${mise_bin}" which cargo 2>/dev/null || true)"

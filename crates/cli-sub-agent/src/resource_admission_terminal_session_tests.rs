@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::test_session_sandbox::ScopedSessionSandbox;
+use std::io;
 #[cfg(target_os = "linux")]
 use tempfile::tempdir;
 
@@ -28,7 +29,7 @@ fn terminal_sessions_do_not_create_a_false_active_session_upper() {
         active_session("failed-two", now, 10_000),
     ];
 
-    let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+    let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
         SessionMemorySample::Terminal
     });
 
@@ -39,6 +40,35 @@ fn terminal_sessions_do_not_create_a_false_active_session_upper() {
         memory.projected_mb, 0,
         "terminal no-provider sessions must not create a false active-session upper=0MB"
     );
+}
+
+#[test]
+fn live_non_unsupported_sampler_error_uses_fallback_and_counts_for_balloon() {
+    let now = Utc::now();
+    let sessions = vec![MetaSessionState {
+        meta_session_id: "live".to_string(),
+        phase: SessionPhase::Active,
+        last_accessed: now - TimeDelta::hours(2),
+        ..Default::default()
+    }];
+
+    let classify = || {
+        classify_session_memory_sample(
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "deterministic sampler failure",
+            )),
+            true,
+        )
+    };
+    assert_eq!(classify(), SessionMemorySample::UnavailableLiveProcess);
+    let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| classify());
+    let count = count_observable_active_sessions(&sessions, "current", now, |_| classify());
+
+    assert_eq!(memory.active_count, 1);
+    assert_eq!(memory.sampled_count, 0);
+    assert_eq!(memory.projected_mb, FALLBACK_SPAWN_PROJECTION_MB);
+    assert_eq!(count, 1);
 }
 
 #[cfg(target_os = "linux")]
@@ -105,8 +135,12 @@ fn result_with_live_daemon_remains_charged_for_memory_admission() {
         "test setup requires a live daemon signal"
     );
 
-    let memory =
-        aggregate_active_session_memory(&[session.clone()], "current", now, sample_session_memory);
+    let memory = aggregate_active_session_memory(
+        &[session.clone()],
+        Some("current"),
+        now,
+        sample_session_memory,
+    );
 
     child.kill().ok();
     child.wait().ok();

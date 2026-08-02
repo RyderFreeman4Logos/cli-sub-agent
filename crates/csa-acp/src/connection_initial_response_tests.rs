@@ -19,6 +19,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     process::{Child, Command},
+    sync::oneshot,
     task::LocalSet,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -27,6 +28,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 struct HangingTestAgent {
     next_session_id: Cell<u64>,
     prompt_delay: Duration,
+    prompt_started: Rc<RefCell<Option<oneshot::Sender<()>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,10 +39,11 @@ enum PromptBehavior {
 }
 
 impl HangingTestAgent {
-    fn new(prompt_delay: Duration) -> Self {
+    fn new(prompt_delay: Duration, prompt_started: oneshot::Sender<()>) -> Self {
         Self {
             next_session_id: Cell::new(0),
             prompt_delay,
+            prompt_started: Rc::new(RefCell::new(Some(prompt_started))),
         }
     }
 }
@@ -76,6 +79,9 @@ impl agent_client_protocol::Agent for HangingTestAgent {
         &self,
         _args: PromptRequest,
     ) -> agent_client_protocol::Result<PromptResponse> {
+        if let Some(prompt_started) = self.prompt_started.borrow_mut().take() {
+            let _ = prompt_started.send(());
+        }
         tokio::time::sleep(self.prompt_delay).await;
         Ok(PromptResponse::new(StopReason::EndTurn))
     }
@@ -278,7 +284,8 @@ async fn build_test_connection(
             );
             tokio::task::spawn_local(io_task);
 
-            let agent = HangingTestAgent::new(prompt_delay);
+            let (prompt_started, wait_for_prompt_start) = oneshot::channel();
+            let agent = HangingTestAgent::new(prompt_delay, prompt_started);
             let (agent_conn, agent_io_task) = AgentSideConnection::new(
                 agent,
                 server_writer.compat_write(),
@@ -294,6 +301,9 @@ async fn build_test_connection(
 
             if !matches!(prompt_behavior, PromptBehavior::Silent) {
                 tokio::task::spawn_local(async move {
+                    wait_for_prompt_start
+                        .await
+                        .expect("test prompt request must start notification fixture");
                     let sleep_step = Duration::from_millis(40);
                     let deadline = tokio::time::Instant::now() + prompt_delay;
                     while tokio::time::Instant::now() < deadline {
@@ -440,7 +450,7 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
         spawn_test_child(
             "python3 -c 'import sys,time\nwhile True:\n sys.stderr.write(\"starting codex auth\\\\n\")\n sys.stderr.flush()\n time.sleep(0.05)'",
         ),
-        Duration::from_secs(5),
+        Duration::from_millis(220),
         PromptBehavior::Silent,
     )
     .await;
@@ -452,19 +462,22 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
         .await
         .expect("new session");
 
-    let prompt = connection.prompt_with_io(
-        &session_id,
-        "ping",
-        Duration::from_secs(5),
-        Some(Duration::from_millis(500)),
-        PromptIoOptions::default(),
-    );
-    let outcome = tokio::time::timeout(Duration::from_millis(1200), prompt).await;
+    let result = connection
+        .prompt_with_io(
+            &session_id,
+            "ping",
+            Duration::from_secs(5),
+            Some(Duration::from_millis(150)),
+            PromptIoOptions::default(),
+        )
+        .await
+        .expect("stderr activity must keep the prompt alive until completion");
 
     assert!(
-        outcome.is_err(),
+        !result.timed_out,
         "stderr activity before the first eligible event must keep the initial-response watchdog alive"
     );
+    assert_eq!(result.exit_reason.as_deref(), Some("end_turn"));
     connection.kill().await.expect("kill test child");
 }
 
@@ -555,19 +568,16 @@ async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() 
 
     cpu_fixture.begin_cpu_load().await;
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(700),
-        connection.prompt_with_io(
+    let result = connection
+        .prompt_with_io(
             &session_id,
             "ping",
             Duration::from_secs(5),
             Some(Duration::from_millis(150)),
             PromptIoOptions::default(),
-        ),
-    )
-    .await
-    .expect("CPU progress must not extend the initial-response watchdog")
-    .expect("prompt result");
+        )
+        .await
+        .expect("CPU progress must not extend the initial-response watchdog");
 
     assert!(
         result.timed_out,
@@ -660,19 +670,16 @@ async fn initial_response_timeout_stays_alive_for_eligible_event_stream() {
         .await
         .expect("new session");
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(700),
-        connection.prompt_with_io(
+    let result = connection
+        .prompt_with_io(
             &session_id,
             "ping",
             Duration::from_millis(300),
             Some(Duration::from_millis(150)),
             PromptIoOptions::default(),
-        ),
-    )
-    .await
-    .expect("eligible events should keep prompt alive until completion")
-    .expect("prompt result");
+        )
+        .await
+        .expect("eligible events should keep prompt alive until completion");
 
     assert!(!result.timed_out, "eligible events must prevent timeout");
     assert_eq!(result.exit_reason.as_deref(), Some("end_turn"));

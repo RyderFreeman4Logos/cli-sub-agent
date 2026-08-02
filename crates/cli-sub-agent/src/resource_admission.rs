@@ -1,12 +1,18 @@
-use std::{io, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
 use csa_resource::{ResourceGuard, ResourceLimits, SpawnMemoryAdmission};
-use csa_session::{MetaSessionState, SandboxInfo, SessionPhase, SessionTreeMemorySampler};
+use csa_session::{MetaSessionState, SandboxInfo, SessionPhase};
 
 use crate::run_resource_overrides::RunResourceOverrides;
+
+#[path = "resource_admission_memory_sampling.rs"]
+mod memory_sampling;
+#[cfg(test)]
+use memory_sampling::classify_session_memory_sample;
+use memory_sampling::{SessionMemorySample, sample_session_memory};
 
 const FALLBACK_SPAWN_PROJECTION_MB: u64 = 4096;
 const MIN_DEFAULT_SPAWN_PROJECTION_MB: u64 = 256;
@@ -27,14 +33,6 @@ struct ActiveSessionMemory {
 struct ActiveSessionObservation {
     sampled_rss_mb: Option<u64>,
     projected_mb: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionMemorySample {
-    RssMb(u64),
-    UnsupportedLiveProcess,
-    Terminal,
-    Unavailable,
 }
 
 fn spawn_memory_projection_mb_for_physical_available(
@@ -170,21 +168,17 @@ pub(crate) fn clear_spawn_memory_projection(session: &mut MetaSessionState) -> b
 
 pub(crate) fn build_spawn_memory_admission(
     project_root: &Path,
-    current_session_id: &str,
+    current: Option<&str>,
     projected_spawn_mb: u64,
 ) -> Result<SpawnMemoryAdmission> {
-    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+    let sessions = csa_session::list_all_sessions_all_projects_strict().with_context(|| {
         format!(
             "Failed to list active CSA sessions for host-memory admission in {}",
             project_root.display()
         )
     })?;
-    let active = aggregate_active_session_memory(
-        &sessions,
-        current_session_id,
-        Utc::now(),
-        sample_session_memory,
-    );
+    let active =
+        aggregate_active_session_memory(&sessions, current, Utc::now(), sample_session_memory);
 
     Ok(SpawnMemoryAdmission {
         projected_spawn_mb,
@@ -195,51 +189,16 @@ pub(crate) fn build_spawn_memory_admission(
     })
 }
 
-fn sample_session_memory(session: &MetaSessionState) -> SessionMemorySample {
-    let project_root = Path::new(&session.project_path);
-    // A result is terminal only after its writer/daemon exits; live results remain charged.
-    if csa_session::load_result(project_root, &session.meta_session_id)
-        .ok()
-        .flatten()
-        .is_some()
-        && !session_has_live_process_signal(project_root, &session.meta_session_id)
-    {
-        return SessionMemorySample::Terminal;
-    }
-
-    match SessionTreeMemorySampler::new(project_root, &session.meta_session_id)
-        .and_then(|sampler| sampler.sample_rss_mb())
-    {
-        Ok(rss_mb) => SessionMemorySample::RssMb(rss_mb),
-        Err(err)
-            if err.kind() == io::ErrorKind::Unsupported
-                && session_has_live_process_signal(project_root, &session.meta_session_id) =>
-        {
-            SessionMemorySample::UnsupportedLiveProcess
-        }
-        Err(_) => SessionMemorySample::Unavailable,
-    }
-}
-
-fn session_has_live_process_signal(project_root: &Path, session_id: &str) -> bool {
-    let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
-        return false;
-    };
-
-    csa_process::ToolLiveness::has_live_process(&session_dir)
-        || csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir)
-}
-
 fn aggregate_active_session_memory(
     sessions: &[MetaSessionState],
-    current_session_id: &str,
+    current: Option<&str>,
     now: DateTime<Utc>,
     sample_memory: impl Fn(&MetaSessionState) -> SessionMemorySample,
 ) -> ActiveSessionMemory {
     let mut memory = ActiveSessionMemory::default();
 
     for session in sessions {
-        if session.meta_session_id == current_session_id {
+        if current.is_some_and(|id| session.meta_session_id == id) {
             continue;
         }
         if !matches!(session.phase, SessionPhase::Active) {
@@ -282,7 +241,8 @@ fn active_session_observation(
                 projected_mb: rss_mb.max(sandbox_projection.unwrap_or(0)),
             });
         }
-        SessionMemorySample::UnsupportedLiveProcess => {
+        SessionMemorySample::UnsupportedLiveProcess
+        | SessionMemorySample::UnavailableLiveProcess => {
             return Some(ActiveSessionObservation {
                 sampled_rss_mb: None,
                 projected_mb: sandbox_projection.unwrap_or(FALLBACK_SPAWN_PROJECTION_MB),
@@ -323,7 +283,7 @@ pub(crate) fn active_session_count_for_balloon(
     project_root: &Path,
     current_session_id: &str,
 ) -> Result<u64> {
-    let sessions = csa_session::list_all_sessions_all_projects().with_context(|| {
+    let sessions = csa_session::list_all_sessions_all_projects_strict().with_context(|| {
         format!(
             "Failed to count active CSA sessions for memory-balloon admission in {}",
             project_root.display()
@@ -503,13 +463,17 @@ memory_max_mb = 16384
             active_session("b", now, Some(2048)),
         ];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |session| {
-            match session.meta_session_id.as_str() {
-                "a" => SessionMemorySample::RssMb(1024),
-                "b" => SessionMemorySample::RssMb(4096),
-                _ => SessionMemorySample::Unavailable,
-            }
-        });
+        let memory =
+            aggregate_active_session_memory(
+                &sessions,
+                Some("current"),
+                now,
+                |session| match session.meta_session_id.as_str() {
+                    "a" => SessionMemorySample::RssMb(1024),
+                    "b" => SessionMemorySample::RssMb(4096),
+                    _ => SessionMemorySample::Unavailable,
+                },
+            );
 
         assert_eq!(memory.active_count, 2);
         assert_eq!(memory.sampled_count, 2);
@@ -526,7 +490,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -544,7 +508,7 @@ memory_max_mb = 16384
             None,
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -562,7 +526,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -580,7 +544,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::Unavailable
         });
 
@@ -597,7 +561,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::RssMb(1024)
         });
 
@@ -617,7 +581,7 @@ memory_max_mb = 16384
             Some(12_288),
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::UnsupportedLiveProcess
         });
 
@@ -637,7 +601,7 @@ memory_max_mb = 16384
             None,
         )];
 
-        let memory = aggregate_active_session_memory(&sessions, "current", now, |_| {
+        let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::UnsupportedLiveProcess
         });
 

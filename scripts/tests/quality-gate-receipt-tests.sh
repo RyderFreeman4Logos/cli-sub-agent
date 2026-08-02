@@ -116,8 +116,14 @@ run_exact_reuse() {
   local runner="${fixture}/scripts/hooks/quality-gate-receipt.sh"
   counter="${fixture}/target/quality-gate-test-state/gate-counter"
 
-  first="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
-  second="$(cd "$fixture" && "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  (cd "$fixture/target" \
+    && MISE_DATA_DIR="$fixture/target/mise-missing" RUSTUP_TOOLCHAIN=host-default \
+    "${fixture}/scripts/cargo-env-normalize.sh" /bin/sh -c \
+    'cd / && test "$RUSTUP_TOOLCHAIN" = 1.96.0')
+  first="$(cd "$fixture" && RUSTUP_TOOLCHAIN=1.96.0 \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
+  second="$(cd "$fixture" && RUSTUP_TOOLCHAIN=1.96.0 \
+    "$runner" -- scripts/hooks/fake-quality-gate.sh "$counter")"
   first_status="$(printf '%s' "$first" | json_field status)"
   second_status="$(printf '%s' "$second" | json_field status)"
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
@@ -248,8 +254,10 @@ EOF
     # that can reorder PATH before the fixture compiler is observed.
     ln -s "$python_executable" "$toolchain_root/bin/python3"
   done
-  first="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
-  second="$(invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
+  first="$(unset RUSTUP_TOOLCHAIN; \
+    invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-a/bin:${PATH}")"
+  second="$(unset RUSTUP_TOOLCHAIN; \
+    invoke_identity "$fixture" "$counter" "PATH=${test_root}/toolchain-b/bin:${PATH}")"
   assert_eq canonicalized-pinned-toolchain-identity "$first" "$second"
   runs="$(wc -c <"$counter")"
   assert_eq canonicalized-pinned-toolchain-gate-runs 1 "$runs"
@@ -348,10 +356,19 @@ run_invalidation_matrix() {
   assert_invalidation rust-toolchain-file \
     'printf "# changed toolchain contract\n" >>"$fixture/rust-toolchain.toml"'
   run_path_toolchain_canonicalization
-  local fixture counter first second target_spec
+  local fixture counter first second target_spec real_rustc rustc_wrapper
   run_mise_data_dir_invalidation
+  real_rustc="$(
+    cd "$repo_root"
+    realpath -e "$(env -u RUSTUP_TOOLCHAIN rustc --print sysroot)/bin/rustc"
+  )"
+  for rustc_wrapper in "$test_root/rustc-a" "$test_root/rustc-b"; do
+    printf '#!/usr/bin/env bash\n# %s\nexec %q "$@"\n' \
+      "${rustc_wrapper##*/}" "$real_rustc" >"$rustc_wrapper"
+    chmod +x "$rustc_wrapper"
+  done
   assert_invalidation rustc ':' \
-    "RUSTC=${test_root}/toolchain-a/bin/rustc" "RUSTC=${test_root}/toolchain-b/bin/rustc"
+    "RUSTC=${test_root}/rustc-a" "RUSTC=${test_root}/rustc-b"
   printf '#!/usr/bin/env bash\nexec "$@"\n' >"$test_root/wrapper-a"
   printf '#!/usr/bin/env bash\n# changed wrapper\nexec "$@"\n' >"$test_root/wrapper-b"
   chmod +x "$test_root/wrapper-a" "$test_root/wrapper-b"

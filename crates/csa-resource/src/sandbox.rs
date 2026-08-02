@@ -33,8 +33,16 @@ impl std::fmt::Display for ResourceCapability {
 /// Process-wide cached probe result.
 static CAPABILITY: OnceLock<ResourceCapability> = OnceLock::new();
 
+/// Debug-only fixture hook for tests that specifically exercise cgroup-v2 admission.
+#[doc(hidden)]
+pub const TEST_ASSUME_CGROUP_V2_ENV: &str = "CSA_TEST_ASSUME_CGROUP_V2";
+
 /// Return the detected sandbox capability, probing only once per process.
 pub fn detect_resource_capability() -> ResourceCapability {
+    #[cfg(debug_assertions)]
+    if std::env::var(TEST_ASSUME_CGROUP_V2_ENV).is_ok_and(|value| value == "1") {
+        return ResourceCapability::CgroupV2;
+    }
     *CAPABILITY.get_or_init(probe_capability)
 }
 

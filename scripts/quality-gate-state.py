@@ -156,6 +156,8 @@ def run_receipt_gate_in_sandbox(
                     raise IsolationError("host source identity mismatch")
                 if not sandbox.host_attestation_matches():
                     raise IsolationError("host source changed during collection")
+                os.close(collection_lock)
+                collection_lock = None
                 identity = sha256_bytes(manifest)
                 identity_lock = state.open_lock(f"{identity}.lock")
                 if not state.acquire_lock(identity_lock):
