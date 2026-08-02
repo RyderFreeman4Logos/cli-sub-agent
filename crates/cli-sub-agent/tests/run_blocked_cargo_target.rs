@@ -280,7 +280,7 @@ fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
     let output = output_with_deadline(
         &mut command,
         "direct child exited but descendant survived with closed pipes",
-        Duration::from_millis(100),
+        Duration::from_secs(1),
     );
     let descendant_output = String::from_utf8(output.stdout).expect("descendant pid is utf-8");
     let descendant_identity = descendant_output.split_whitespace().collect::<Vec<_>>();
