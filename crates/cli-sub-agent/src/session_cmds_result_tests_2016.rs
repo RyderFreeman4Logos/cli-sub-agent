@@ -2,8 +2,8 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 #[test]
-fn handle_session_result_uses_legacy_complete_marker_143_even_while_daemon_alive()
--> anyhow::Result<()> {
+fn handle_session_result_defers_legacy_complete_marker_143_while_daemon_alive() -> anyhow::Result<()>
+{
     use std::process::Command;
 
     let tmp = tempdir()?;
@@ -38,17 +38,14 @@ fn handle_session_result_uses_legacy_complete_marker_143_even_while_daemon_alive
         StructuredOutputOpts::default(),
     )?;
 
-    let result = load_result(project, &session_id)?
-        .expect("session result should synthesize from legacy .complete");
-    assert_eq!(result.status, "signal");
-    assert_eq!(result.exit_code, 143);
+    assert!(
+        load_result(project, &session_id)?.is_none(),
+        "live daemon must prevent synthesizing a result from legacy .complete"
+    );
 
     let persisted = csa_session::load_session(project, &session_id)?;
-    assert_eq!(persisted.phase, csa_session::SessionPhase::Retired);
-    assert_eq!(
-        persisted.termination_reason.as_deref(),
-        Some("legacy_complete_marker")
-    );
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Active);
+    assert!(persisted.termination_reason.is_none());
 
     child.kill().ok();
     let _ = child.wait();
@@ -57,7 +54,7 @@ fn handle_session_result_uses_legacy_complete_marker_143_even_while_daemon_alive
 
 #[cfg(target_os = "linux")]
 #[test]
-fn handle_session_result_retires_existing_result_after_legacy_complete_marker_with_live_daemon_pid()
+fn handle_session_result_defers_existing_result_after_legacy_complete_marker_with_live_daemon_pid()
 -> anyhow::Result<()> {
     use std::process::Command;
 
@@ -104,14 +101,13 @@ fn handle_session_result_retires_existing_result_after_legacy_complete_marker_wi
         StructuredOutputOpts::default(),
     )?;
 
-    let result =
-        load_result(project, &session_id)?.expect("existing result should remain authoritative");
+    let result = load_result(project, &session_id)?.expect("existing result file remains on disk");
     assert_eq!(result.status, "success");
     assert_eq!(result.exit_code, 0);
 
     let persisted = csa_session::load_session(project, &session_id)?;
-    assert_eq!(persisted.phase, csa_session::SessionPhase::Retired);
-    assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
+    assert_eq!(persisted.phase, csa_session::SessionPhase::Active);
+    assert!(persisted.termination_reason.is_none());
 
     child.kill().ok();
     let _ = child.wait();

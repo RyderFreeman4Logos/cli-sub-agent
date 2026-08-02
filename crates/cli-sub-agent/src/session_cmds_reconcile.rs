@@ -170,8 +170,8 @@ fn dead_active_session_needs_terminal_result(
         return Ok(false);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    // Verified owned liveness outranks legacy `.complete` markers (#2950).
+    if liveness.blocks_synthesis {
         debug!(
             session_id = %session_id,
             trigger = %trigger,
@@ -226,8 +226,8 @@ where
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    // Verified owned liveness outranks legacy `.complete` markers (#2950).
+    if liveness.blocks_synthesis {
         debug!(
             session_id = %session_id,
             trigger = %trigger,
@@ -581,8 +581,8 @@ fn dead_session_with_result_needs_retire(
         return Ok(None);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    // Verified owned liveness outranks legacy `.complete` markers (#2950).
+    if liveness.blocks_synthesis {
         debug!(
             session_id = %session_id,
             reason = %liveness.reason,
@@ -608,8 +608,8 @@ fn retire_if_dead_with_result_impl(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    // Verified owned liveness outranks legacy `.complete` markers (#2950).
+    if liveness.blocks_synthesis {
         debug!(
             session_id = %session_id,
             reason = %liveness.reason,

@@ -124,9 +124,13 @@ pub(crate) fn finalize_daemon_completion_if_present(
     let Some(packet) = load_daemon_completion_packet(session_dir)? else {
         return Ok(None);
     };
-    if !packet.is_legacy_complete_marker() && super::session_has_terminal_process(session_dir) {
+    // Owned process/daemon/tool liveness outranks completion packets and legacy
+    // `.complete` markers. Legacy is only an input format, not higher-authority
+    // terminal evidence while verified owned work remains live (#2950).
+    if super::session_has_terminal_process(session_dir) {
         debug!(
             path = %daemon_completion_path(session_dir).display(),
+            legacy = packet.is_legacy_complete_marker(),
             "Ignoring daemon completion packet while session process is still live"
         );
         return Ok(None);

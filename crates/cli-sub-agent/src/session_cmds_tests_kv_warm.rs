@@ -125,7 +125,7 @@ fn handle_session_wait_kv_warm_exit_when_daemon_alive_at_cap() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
+fn rewait_after_kv_warm_defers_retired_result_while_lingering_liveness() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -184,7 +184,6 @@ fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
     retired.phase = SessionPhase::Retired;
     save_session(&retired).expect("save retired state");
 
-    let mut completed_signal = None;
     let second_exit = handle_session_wait_with_hooks(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
@@ -197,22 +196,20 @@ fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
             },
         },
         |_project_root, _current_session_id, _trigger| {
-            panic!("retired session with result must not be reconciled")
+            panic!("live owned work must not be reconciled")
         },
-        |sid, status, exit_code, synthetic, _mirror_to_stdout| {
-            completed_signal = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("stale Retired + result must not complete while owned liveness remains")
         },
     )
-    .expect("second wait should return retired result");
+    .expect("second wait should return KV-warm while owned work is live");
 
     let _ = child.kill();
     let _ = child.wait();
 
-    assert_eq!(second_exit, 0);
     assert_eq!(
-        completed_signal,
-        Some((session_id, "success".to_string(), 0, false)),
-        "Retired registry phase must make result.toml authoritative over lingering liveness"
+        second_exit, 0,
+        "verified owned liveness must defeat stale Retired + success result (#2950)"
     );
 }
 

@@ -15,8 +15,7 @@ use super::completion::{
 };
 use super::liveness::{resume_handoff_blocks_target_reconcile, session_has_live_execution};
 use super::registry_loss::{
-    emit_registry_state_loss_or_missing_result, session_registry_phase_retired,
-    session_registry_state_loss,
+    emit_registry_state_loss_or_missing_result, session_registry_state_loss,
 };
 use super::target::resolve_wait_target;
 pub(crate) use super::types::WaitEmitters;
@@ -199,13 +198,13 @@ pub(crate) fn handle_session_wait_with_emitters(
         let result_registry_state_loss =
             session_registry_state_loss(effective_root, result_session_id, result_session_dir);
         let result_uses_direct_session_dir = is_cross_project || result_registry_state_loss;
-        let result_session_is_retired = !result_registry_state_loss
-            && session_registry_phase_retired(effective_root, result_session_id);
-        let session_live = session_live && !result_session_is_retired;
+        // Stale Retired registry phase is not terminal while verified owned
+        // daemon/tool/worktree-lock liveness remains (#2950).
         let completion_packet = load_daemon_completion_packet(&session_dir)?;
-        if let Some(completion) = completion_packet
-            .filter(|completion| completion.is_legacy_complete_marker() || !session_live)
-        {
+        // Legacy `.complete` is only an input format. While the session still has
+        // verified owned liveness, defer completion instead of treating the
+        // marker as higher-authority terminal evidence (#2950).
+        if let Some(completion) = completion_packet.filter(|_| !session_live) {
             let refreshed_result = refresh_result_for_wait(
                 effective_root,
                 result_session_id,
@@ -525,7 +524,6 @@ pub(crate) fn handle_session_wait_with_emitters(
                 result_session_id,
             ) || csa_process::ToolLiveness::is_alive(result_session_dir)
                 || handoff_blocks_target_reconcile;
-            let session_alive = session_alive && !result_session_is_retired;
             return Ok(emit_wait_cap_outcome(
                 &resolved.session_id,
                 cd.as_deref(),
