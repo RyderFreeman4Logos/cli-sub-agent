@@ -401,8 +401,9 @@ fn install_editing_codex(bin_dir: &Path) -> PathBuf {
     std::fs::write(
         &codex,
         r#"#!/bin/sh
-printf 'provider reached\n' > provider-ran.txt
-printf 'dirty edit\n' > dirty-edit.txt
+set -eu
+printf 'provider reached\n' > "$CSA_PROJECT_ROOT/provider-ran.txt"
+printf 'dirty edit\n' > "$CSA_PROJECT_ROOT/dirty-edit.txt"
 printf '%s\n' \
   '{"type":"thread.started","thread_id":"blocked-cargo-target"}' \
   '{"type":"item.completed","item":{"type":"agent_message","text":"STATUS: BLOCKED; tests and commit omitted"}}' \
@@ -495,8 +496,9 @@ fn unconfirmed_zsh_gate_wrapper_is_terminal_failure_after_dirty_edit() {
     std::fs::write(
         &codex,
         r#"#!/bin/sh
-printf 'provider reached\n' > provider-ran.txt
-printf 'dirty edit\n' > dirty-edit.txt
+set -eu
+printf 'provider reached\n' > "$CSA_PROJECT_ROOT/provider-ran.txt"
+printf 'dirty edit\n' > "$CSA_PROJECT_ROOT/dirty-edit.txt"
 printf '%s\n' '{"type":"thread.started","thread_id":"unconfirmed-zsh-gate"}' '{"type":"item.completed","item":{"type":"agent_message","text":"zsh: read-only variable: status"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 "#,
     )
@@ -547,8 +549,9 @@ fn unmet_done_summary_is_terminal_failure_after_dirty_edit_without_blocked_marke
     std::fs::write(
         &codex,
         r#"#!/bin/sh
-printf 'provider reached\n' > provider-ran.txt
-printf 'dirty edit\n' > dirty-edit.txt
+set -eu
+printf 'provider reached\n' > "$CSA_PROJECT_ROOT/provider-ran.txt"
+printf 'dirty edit\n' > "$CSA_PROJECT_ROOT/dirty-edit.txt"
 printf '%s\n' '{"type":"thread.started","thread_id":"unmet-done"}' '{"type":"item.completed","item":{"type":"agent_message","text":"tests and commit omitted"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 "#,
     )
