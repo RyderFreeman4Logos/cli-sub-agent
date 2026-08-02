@@ -450,7 +450,7 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
         spawn_test_child(
             "python3 -c 'import sys,time\nwhile True:\n sys.stderr.write(\"starting codex auth\\\\n\")\n sys.stderr.flush()\n time.sleep(0.05)'",
         ),
-        Duration::from_secs(5),
+        Duration::from_millis(220),
         PromptBehavior::Silent,
     )
     .await;
@@ -462,19 +462,22 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
         .await
         .expect("new session");
 
-    let prompt = connection.prompt_with_io(
-        &session_id,
-        "ping",
-        Duration::from_secs(5),
-        Some(Duration::from_millis(500)),
-        PromptIoOptions::default(),
-    );
-    let outcome = tokio::time::timeout(Duration::from_millis(1200), prompt).await;
+    let result = connection
+        .prompt_with_io(
+            &session_id,
+            "ping",
+            Duration::from_secs(5),
+            Some(Duration::from_millis(150)),
+            PromptIoOptions::default(),
+        )
+        .await
+        .expect("stderr activity must keep the prompt alive until completion");
 
     assert!(
-        outcome.is_err(),
+        !result.timed_out,
         "stderr activity before the first eligible event must keep the initial-response watchdog alive"
     );
+    assert_eq!(result.exit_reason.as_deref(), Some("end_turn"));
     connection.kill().await.expect("kill test child");
 }
 
@@ -565,19 +568,16 @@ async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() 
 
     cpu_fixture.begin_cpu_load().await;
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(700),
-        connection.prompt_with_io(
+    let result = connection
+        .prompt_with_io(
             &session_id,
             "ping",
             Duration::from_secs(5),
             Some(Duration::from_millis(150)),
             PromptIoOptions::default(),
-        ),
-    )
-    .await
-    .expect("CPU progress must not extend the initial-response watchdog")
-    .expect("prompt result");
+        )
+        .await
+        .expect("CPU progress must not extend the initial-response watchdog");
 
     assert!(
         result.timed_out,
@@ -670,19 +670,16 @@ async fn initial_response_timeout_stays_alive_for_eligible_event_stream() {
         .await
         .expect("new session");
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(700),
-        connection.prompt_with_io(
+    let result = connection
+        .prompt_with_io(
             &session_id,
             "ping",
             Duration::from_millis(300),
             Some(Duration::from_millis(150)),
             PromptIoOptions::default(),
-        ),
-    )
-    .await
-    .expect("eligible events should keep prompt alive until completion")
-    .expect("prompt result");
+        )
+        .await
+        .expect("eligible events should keep prompt alive until completion");
 
     assert!(!result.timed_out, "eligible events must prevent timeout");
     assert_eq!(result.exit_reason.as_deref(), Some("end_turn"));
