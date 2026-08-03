@@ -335,6 +335,7 @@ async fn execute_gate_command(
     gate_mode: &GateMode,
     extra_env: Option<&HashMap<String, String>>,
 ) -> Result<GateResult> {
+    let _target_gc_admission = csa_lock::acquire_target_gc_admission(project_root)?;
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(command)

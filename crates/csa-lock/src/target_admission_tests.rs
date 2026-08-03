@@ -151,6 +151,47 @@ fn target_gc_admission_reports_busy_then_retries_after_gc_release() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn target_gc_admission_locks_existing_parent_before_inspecting_unmanaged_target() {
+    let fixture = ManagedTargetWorkspace::new();
+    fs::remove_file(fixture.workspace.path().join("target")).expect("remove managed target");
+    let holder = DirectoryFlock::exclusive(&fixture.canonical_parent);
+
+    let error = fixture
+        .acquire()
+        .expect_err("existing parent must be shared-locked before target inspection")
+        .to_string();
+    assert!(
+        error.contains("target GC admission busy"),
+        "unexpected error: {error}"
+    );
+
+    drop(holder);
+    assert!(
+        fixture
+            .acquire()
+            .expect("unmanaged target after shared admission")
+            .is_none()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn target_gc_admission_rejects_relative_workspace_path() {
+    let error = acquire_target_gc_admission_for_test(
+        Path::new("relative-workspace"),
+        Path::new("/mirror"),
+        || {},
+    )
+    .expect_err("relative workspace must fail")
+    .to_string();
+    assert!(
+        error.contains("requires an absolute workspace path"),
+        "unexpected error: {error}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn target_gc_admission_rejects_dangling_managed_target_without_creation() {
     let workspace = tempdir().expect("workspace tempdir");
     let mirror_root = tempdir().expect("mirror root tempdir");

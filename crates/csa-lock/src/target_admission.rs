@@ -58,11 +58,30 @@ fn acquire_target_gc_admission_at_root_after_lock(
 ) -> Result<Option<TargetGcAdmissionLease>> {
     let parent = expected_target_gc_parent_at_root(workspace, mirror_root)?;
     let expected_target = parent.join("target");
-    if !has_expected_target_symlink(workspace, &expected_target)? {
-        return Ok(None);
-    }
-
-    let file = open_directory_cloexec(&parent)?;
+    let file = match open_directory_cloexec(&parent) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The parent is absent, so only a lexical target probe can distinguish
+            // an unmanaged workspace from a dangling managed target. Never create it.
+            if has_expected_target_symlink(workspace, &expected_target)? {
+                return Err(error).with_context(|| {
+                    format!(
+                        "target GC admission failed to open canonical target parent '{}'",
+                        parent.display()
+                    )
+                });
+            }
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "target GC admission failed to open canonical target parent '{}'",
+                    parent.display()
+                )
+            });
+        }
+    };
     let fd = file.as_raw_fd();
     // SAFETY: `file` owns a valid directory fd. The result is handled below.
     if unsafe { libc::flock(fd, libc::LOCK_SH | libc::LOCK_NB) } != 0 {
@@ -115,14 +134,13 @@ fn acquire_target_gc_admission_at_root_after_lock(
 }
 
 fn expected_target_gc_parent_at_root(workspace: &Path, mirror_root: &Path) -> Result<PathBuf> {
-    let absolute = if workspace.is_absolute() {
-        workspace.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .context("target GC admission failed to determine current directory")?
-            .join(workspace)
-    };
-    let relative = absolute
+    if !workspace.is_absolute() {
+        anyhow::bail!(
+            "target GC admission requires an absolute workspace path, got '{}'",
+            workspace.display()
+        );
+    }
+    let relative = workspace
         .strip_prefix("/")
         .expect("absolute workspace has a root prefix");
     Ok(mirror_root.join(relative))
@@ -148,7 +166,7 @@ fn has_expected_target_symlink(workspace: &Path, expected_target: &Path) -> Resu
     }
 }
 
-fn open_directory_cloexec(parent: &Path) -> Result<File> {
+fn open_directory_cloexec(parent: &Path) -> std::io::Result<File> {
     let path = CString::new(parent.as_os_str().as_bytes())
         .expect("filesystem paths cannot contain an interior NUL");
     // SAFETY: `path` is NUL terminated and lives through the open call.
@@ -159,12 +177,7 @@ fn open_directory_cloexec(parent: &Path) -> Result<File> {
         )
     };
     if fd == -1 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
-            format!(
-                "target GC admission failed to open canonical target parent '{}'",
-                parent.display()
-            )
-        });
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: `open` succeeded, so this function transfers ownership of `fd` to File.
     Ok(unsafe { File::from_raw_fd(fd) })
