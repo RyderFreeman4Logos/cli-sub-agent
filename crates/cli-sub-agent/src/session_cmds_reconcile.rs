@@ -96,6 +96,17 @@ pub(crate) fn with_reconcile_lock<R>(
 
 fn noop_path(_: &Path) {}
 
+fn liveness_blocks_terminal_reconciliation(
+    liveness: &ReconcileLivenessDecision,
+    session_dir: &Path,
+) -> bool {
+    // Passive progress protects unfinished sessions; verified owned processes
+    // still outrank even a valid legacy completion marker (#2950).
+    liveness.blocks_synthesis
+        && (liveness.owned_process_is_live
+            || !crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir))
+}
+
 #[rustfmt::skip]
 fn push_sidecar_rollback_guard(guards: &mut Vec<ArtifactRollbackGuard>, label: &str, result: Result<Option<ArtifactRollbackGuard>>, session_id: &str, trigger: &str) { match result { Ok(Some(rollback_guard)) => guards.push(rollback_guard), Ok(None) => {}, Err(err) => warn!(session_id = %session_id, trigger = %trigger, recovery_sidecar = %label, error = %err, "Failed to persist recovery sidecar"), } }
 
@@ -170,8 +181,7 @@ fn dead_active_session_needs_terminal_result(
         return Ok(false);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    if liveness_blocks_terminal_reconciliation(&liveness, session_dir) {
         debug!(
             session_id = %session_id,
             trigger = %trigger,
@@ -184,7 +194,7 @@ fn dead_active_session_needs_terminal_result(
         session_id = %session_id,
         trigger = %trigger,
         reconciliation_reason = %liveness.reason,
-        "Dead-session reconciliation confirmed no pid/progress blocker before checking result.toml"
+        "Dead-session reconciliation confirmed no terminal blocker before checking result.toml"
     );
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     match load_result(project_root, session_id) {
@@ -226,8 +236,7 @@ where
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    if liveness_blocks_terminal_reconciliation(&liveness, session_dir) {
         debug!(
             session_id = %session_id,
             trigger = %trigger,
@@ -240,7 +249,7 @@ where
         session_id = %session_id,
         trigger = %trigger,
         reconciliation_reason = %liveness.reason,
-        "Dead-session reconciliation re-check confirmed no pid/progress blocker before synthesizing fallback"
+        "Dead-session reconciliation re-check confirmed no terminal blocker before synthesizing fallback"
     );
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     match load_result(project_root, session_id) {
@@ -581,8 +590,7 @@ fn dead_session_with_result_needs_retire(
         return Ok(None);
     }
     let liveness = reconcile_liveness_decision(session_dir);
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    if liveness_blocks_terminal_reconciliation(&liveness, session_dir) {
         debug!(
             session_id = %session_id,
             reason = %liveness.reason,
@@ -608,8 +616,7 @@ fn retire_if_dead_with_result_impl(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    let legacy_done = crate::session_cmds_daemon::legacy_complete_marker_is_valid(session_dir);
-    if liveness.blocks_synthesis && !legacy_done {
+    if liveness_blocks_terminal_reconciliation(&liveness, session_dir) {
         debug!(
             session_id = %session_id,
             reason = %liveness.reason,

@@ -36,7 +36,7 @@ fn wrapper_still_owns_handoff(wrapper_session_dir: &Path) -> bool {
 }
 
 fn wrapper_completion_is_terminal(wrapper_session_dir: &Path) -> bool {
-    let Some(packet) =
+    let Some(_packet) =
         crate::session_cmds_daemon::load_daemon_completion_packet(wrapper_session_dir)
             .ok()
             .flatten()
@@ -44,7 +44,9 @@ fn wrapper_completion_is_terminal(wrapper_session_dir: &Path) -> bool {
         return false;
     };
 
-    packet.is_legacy_complete_marker() || !wrapper_has_process_signal(wrapper_session_dir)
+    // Completion packets (including legacy `.complete`) are only terminal after
+    // the wrapper's verified process signal has exited (#2950).
+    !wrapper_has_process_signal(wrapper_session_dir)
 }
 
 fn wrapper_has_process_signal(wrapper_session_dir: &Path) -> bool {

@@ -201,11 +201,16 @@ pub(crate) fn handle_session_wait_with_emitters(
         let result_uses_direct_session_dir = is_cross_project || result_registry_state_loss;
         let result_session_is_retired = !result_registry_state_loss
             && session_registry_phase_retired(effective_root, result_session_id);
-        let session_live = session_live && !result_session_is_retired;
+        let session_has_passive_liveness = || {
+            !result_session_is_retired && csa_process::ToolLiveness::is_alive(result_session_dir)
+        };
+        // Stale Retired registry phase is not terminal while verified owned
+        // daemon/tool/worktree-lock liveness remains (#2950).
         let completion_packet = load_daemon_completion_packet(&session_dir)?;
-        if let Some(completion) = completion_packet
-            .filter(|completion| completion.is_legacy_complete_marker() || !session_live)
-        {
+        // Legacy `.complete` is only an input format. While the session still has
+        // verified owned liveness, defer completion instead of treating the
+        // marker as higher-authority terminal evidence (#2950).
+        if let Some(completion) = completion_packet.filter(|_| !session_live) {
             let refreshed_result = refresh_result_for_wait(
                 effective_root,
                 result_session_id,
@@ -311,10 +316,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 return Ok(exit_code);
             }
 
-            if session_live
-                || csa_process::ToolLiveness::is_alive(result_session_dir)
-                || handoff_blocks_target_reconcile
-            {
+            if session_live || session_has_passive_liveness() || handoff_blocks_target_reconcile {
                 tracing::debug!(
                     session_id = %result_session_id,
                     completion_status = %completion.status,
@@ -456,7 +458,7 @@ pub(crate) fn handle_session_wait_with_emitters(
                 );
                 return Ok(exit_code);
             }
-            if csa_process::ToolLiveness::is_alive(result_session_dir) {
+            if session_has_passive_liveness() {
                 // PID detection missed but filesystem liveness signals say alive;
                 // continue polling so the timeout (exit 124) fires instead of exit 1.
                 tracing::debug!(session_id = %result_session_id, "alive; no terminal PID");
@@ -523,9 +525,8 @@ pub(crate) fn handle_session_wait_with_emitters(
                 result_session_dir,
                 &resolved.session_id,
                 result_session_id,
-            ) || csa_process::ToolLiveness::is_alive(result_session_dir)
+            ) || session_has_passive_liveness()
                 || handoff_blocks_target_reconcile;
-            let session_alive = session_alive && !result_session_is_retired;
             return Ok(emit_wait_cap_outcome(
                 &resolved.session_id,
                 cd.as_deref(),

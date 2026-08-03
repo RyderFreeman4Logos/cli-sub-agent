@@ -414,6 +414,71 @@ fn retirement_with_stale_output_and_existing_result_still_retires() {
     assert_eq!(persisted.termination_reason.as_deref(), Some("completed"));
 }
 
+#[cfg(unix)]
+#[test]
+fn legacy_completion_outranks_passive_stale_snapshot_across_reconcile_guards() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+    fs::create_dir_all(
+        csa_session::get_session_root(project)
+            .expect("session root")
+            .join("sessions/.git"),
+    )
+    .expect("seed isolated sessions repository");
+
+    let session = create_session(project, Some("legacy-complete-stale-snapshot"), None, None)
+        .expect("create session");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+    let output_path = session_dir.join("output.log");
+    fs::write(&output_path, "old output bytes\n").expect("write output");
+    set_file_mtime_seconds_ago(&output_path, 31);
+    write_liveness_snapshot(
+        &session_dir,
+        ["spool_bytes_written=17", "observed_spool_bytes_written=0"],
+    );
+    fs::write(session_dir.join(".complete"), "0\n").expect("write legacy completion");
+
+    let first =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .expect("first reconciliation");
+    let second =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session logs")
+            .expect("second reconciliation");
+
+    assert!(first.result_became_available());
+    assert_eq!(second, DeadActiveSessionReconciliation::NoChange);
+    assert!(load_result(project, &session_id).unwrap().is_some());
+    assert_eq!(
+        load_session(project, &session_id).unwrap().phase,
+        csa_session::SessionPhase::Retired
+    );
+
+    let session = create_session(
+        project,
+        Some("legacy-complete-stale-snapshot-existing-result"),
+        None,
+        None,
+    )
+    .expect("create session with result");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir with result");
+    save_result(project, &session_id, &make_result("success", 0)).expect("save result");
+    write_liveness_snapshot(
+        &session_dir,
+        ["spool_bytes_written=17", "observed_spool_bytes_written=0"],
+    );
+    fs::write(session_dir.join(".complete"), "0\n").expect("write legacy completion");
+
+    assert!(retire_with_isolated_state(project, &session_id));
+    assert!(!retire_with_isolated_state(project, &session_id));
+    assert_eq!(
+        load_session(project, &session_id).unwrap().phase,
+        csa_session::SessionPhase::Retired
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn live_daemon_pid_still_blocks_synthesis() {

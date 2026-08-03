@@ -255,8 +255,7 @@ pub(crate) fn handle_session_attach_with_prompt(
         }
 
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
-            && (completion.is_legacy_complete_marker()
-                || !session_has_terminal_process(&session_dir))
+            && !session_has_terminal_process(&session_dir)
         {
             // Drain remaining stdout.
             loop {

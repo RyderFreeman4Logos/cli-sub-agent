@@ -29,7 +29,7 @@ fn daemon_pid_record(pid: u32) -> String {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn attach_consumes_legacy_complete_marker_even_with_live_daemon_pid() {
+fn attach_defers_legacy_complete_marker_while_daemon_pid_is_alive() {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -75,14 +75,21 @@ fn attach_consumes_legacy_complete_marker_even_with_live_daemon_pid() {
         let _ = tx.send(result);
     });
 
-    let exit_code = rx
+    // Attach must keep waiting on the live daemon instead of consuming the
+    // legacy marker as terminal success/failure (#2950).
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Timeout),
+        "attach must defer legacy .complete while daemon.pid remains live"
+    );
+    child.kill().expect("kill daemon fixture");
+    child.wait().expect("reap daemon fixture");
+    let attach_result = rx
         .recv_timeout(Duration::from_secs(2))
-        .expect("attach should consume legacy .complete without waiting on daemon.pid")
-        .expect("attach result");
-    child.kill().ok();
-    let _ = child.wait();
-    handle.join().expect("attach thread join");
-    assert_eq!(exit_code, 143);
+        .expect("attach worker should finish after daemon exit")
+        .expect("attach should succeed after daemon exit");
+    handle.join().expect("attach worker should not panic");
+    assert_eq!(attach_result, 143);
 }
 
 #[test]

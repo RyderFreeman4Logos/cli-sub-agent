@@ -505,25 +505,26 @@ fn check_session_stale_before_wait(
     ) {
         Ok(session) => {
             if matches!(session.phase, csa_session::SessionPhase::Active) {
-                // A durable terminal result or completion marker is authoritative.
+                // Verified owned liveness outranks result/completion/legacy markers
+                // for the stale precheck. Only treat durable completion evidence as
+                // authoritative after owned work has exited (#2950).
+                if csa_process::ToolLiveness::is_alive_read_only(session_dir)
+                    || any_session_holds_worktree_write_lock(
+                        worktree_lock_root,
+                        worktree_lock_session_ids,
+                    )
+                    || session_has_terminal_process(session_dir)
+                {
+                    return Ok(());
+                }
                 if super::legacy_complete_marker_is_valid(session_dir)
-                    || (super::daemon_completion_exists(session_dir)
-                        && !session_has_terminal_process(session_dir))
+                    || super::daemon_completion_exists(session_dir)
                 {
                     return Ok(());
                 }
                 match csa_session::load_result(project_root, session_id) {
                     Ok(Some(_)) | Err(_) => return Ok(()),
                     Ok(None) => {}
-                }
-
-                if csa_process::ToolLiveness::is_alive_read_only(session_dir)
-                    || any_session_holds_worktree_write_lock(
-                        worktree_lock_root,
-                        worktree_lock_session_ids,
-                    )
-                {
-                    return Ok(());
                 }
 
                 let elapsed = wait_options

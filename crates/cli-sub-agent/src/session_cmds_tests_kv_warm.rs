@@ -125,7 +125,7 @@ fn handle_session_wait_kv_warm_exit_when_daemon_alive_at_cap() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
+fn rewait_after_kv_warm_defers_retired_result_while_lingering_liveness() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let state_home = td.path().join("xdg-state");
@@ -184,7 +184,6 @@ fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
     retired.phase = SessionPhase::Retired;
     save_session(&retired).expect("save retired state");
 
-    let mut completed_signal = None;
     let second_exit = handle_session_wait_with_hooks(
         session_id.clone(),
         Some(project.to_string_lossy().into_owned()),
@@ -197,22 +196,78 @@ fn rewait_after_kv_warm_returns_retired_result_despite_lingering_liveness() {
             },
         },
         |_project_root, _current_session_id, _trigger| {
-            panic!("retired session with result must not be reconciled")
+            panic!("live owned work must not be reconciled")
         },
-        |sid, status, exit_code, synthetic, _mirror_to_stdout| {
-            completed_signal = Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("stale Retired + result must not complete while owned liveness remains")
         },
     )
-    .expect("second wait should return retired result");
+    .expect("second wait should return KV-warm while owned work is live");
 
     let _ = child.kill();
     let _ = child.wait();
 
-    assert_eq!(second_exit, 0);
     assert_eq!(
-        completed_signal,
-        Some((session_id, "success".to_string(), 0, false)),
-        "Retired registry phase must make result.toml authoritative over lingering liveness"
+        second_exit, 0,
+        "verified owned liveness must defeat stale Retired + success result (#2950)"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retired_session_without_result_rejects_passive_liveness() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(
+        project,
+        Some("wait-retired-passive-liveness"),
+        None,
+        Some("codex"),
+    )
+    .expect("create");
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).expect("session dir");
+
+    let mut retired = load_session(project, &session_id).expect("load session");
+    retired.phase = SessionPhase::Retired;
+    save_session(&retired).expect("save retired state");
+    std::fs::write(session_dir.join("stderr.log"), "passive diagnostic\n")
+        .expect("write passive diagnostic");
+    assert!(!session_dir.join("result.toml").exists());
+    assert!(csa_process::ToolLiveness::is_alive(&session_dir));
+
+    let exit_code = handle_session_wait_with_hooks(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        },
+        |_project_root, _current_session_id, _trigger| {
+            Ok(WaitReconciliationOutcome {
+                result_became_available: false,
+                synthetic: false,
+            })
+        },
+        |_sid, _status, _exit_code, _synthetic, _mirror_to_stdout| {
+            panic!("retired passive liveness must not emit a healthy completion")
+        },
+    )
+    .expect("wait should reject passive liveness");
+
+    assert_eq!(
+        exit_code, 1,
+        "Retired registry authority must suppress passive filesystem liveness"
     );
 }
 

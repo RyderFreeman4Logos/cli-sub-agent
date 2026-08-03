@@ -340,8 +340,8 @@ mod tests {
 
     #[test]
     fn interrupted_waitid_probe_is_retried() {
-        let mut child = Command::new("sh")
-            .args(["-c", "sleep 5"])
+        let mut child = Command::new("sleep")
+            .arg("5")
             .spawn()
             .expect("spawn waitid fixture");
         let mut calls = 0;

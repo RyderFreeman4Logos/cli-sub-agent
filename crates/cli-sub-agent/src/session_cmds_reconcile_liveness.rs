@@ -13,6 +13,7 @@ const RECENT_SESSION_WRITE_WINDOW_SECS: u64 = 30;
 
 pub(crate) struct ReconcileLivenessDecision {
     pub(crate) blocks_synthesis: bool,
+    pub(crate) owned_process_is_live: bool,
     pub(crate) reason: &'static str,
 }
 
@@ -45,23 +46,27 @@ pub(crate) fn reconcile_liveness_decision(session_dir: &Path) -> ReconcileLivene
     if ToolLiveness::has_live_process(session_dir) {
         return ReconcileLivenessDecision {
             blocks_synthesis: true,
+            owned_process_is_live: true,
             reason: "live_pid",
         };
     }
     if ToolLiveness::daemon_pid_is_alive(session_dir) {
         return ReconcileLivenessDecision {
             blocks_synthesis: true,
+            owned_process_is_live: true,
             reason: "live_daemon_pid",
         };
     }
     if has_reconcile_progress_signal(session_dir) {
         return ReconcileLivenessDecision {
             blocks_synthesis: true,
+            owned_process_is_live: false,
             reason: "progress_signal",
         };
     }
     ReconcileLivenessDecision {
         blocks_synthesis: false,
+        owned_process_is_live: false,
         reason: "no_pid_no_progress",
     }
 }

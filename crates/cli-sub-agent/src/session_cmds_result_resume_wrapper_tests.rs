@@ -143,7 +143,7 @@ fn handle_session_result_on_resume_wrapper_follows_worker_in_legacy_root() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn handle_session_result_on_resume_wrapper_defers_target_reconcile_while_wrapper_daemon_alive()
+fn handle_session_result_on_resume_wrapper_defers_target_reconcile_for_legacy_completion_while_wrapper_daemon_alive()
 -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let _env_lock = TEST_ENV_LOCK.blocking_lock();
@@ -179,6 +179,7 @@ fn handle_session_result_on_resume_wrapper_defers_target_reconcile_while_wrapper
         csa_process::ToolLiveness::daemon_pid_is_alive(&wrapper_dir),
         "test setup requires a live wrapper daemon.pid"
     );
+    std::fs::write(wrapper_dir.join(".complete"), "143\n")?;
     assert!(
         !target_dir
             .join(csa_session::result::RESULT_FILE_NAME)
