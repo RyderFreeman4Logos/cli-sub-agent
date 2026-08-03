@@ -23,15 +23,60 @@ pub(crate) enum TransportFailurePolicy {
     CleanRoom,
 }
 
+#[derive(Debug)]
+enum CancelledTransportCleanupError {
+    Failed,
+    TimedOut(Duration),
+}
+
+impl std::fmt::Display for CancelledTransportCleanupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed => formatter.write_str("cancelled transport cleanup failed"),
+            Self::TimedOut(timeout) => write!(
+                formatter,
+                "timed out waiting {timeout:?} for cancelled transport cleanup"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CancelledTransportCleanupError {}
+
 async fn await_cancelled_transport<T>(
-    execution: impl std::future::Future<Output = T>,
+    execution: impl std::future::Future<Output = Result<T>>,
     termination_grace_period: Duration,
-) {
-    let _ = tokio::time::timeout(
-        termination_grace_period.saturating_add(Duration::from_secs(1)),
-        execution,
-    )
-    .await;
+) -> Result<T> {
+    let cleanup_timeout = termination_grace_period.saturating_add(Duration::from_secs(1));
+    match tokio::time::timeout(cleanup_timeout, execution).await {
+        Ok(result) => result.map_err(|error| {
+            anyhow::Error::new(CancelledTransportCleanupError::Failed).context(error)
+        }),
+        Err(_) => Err(anyhow::Error::new(
+            CancelledTransportCleanupError::TimedOut(cleanup_timeout),
+        )),
+    }
+}
+
+fn is_cancelled_transport_cleanup_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CancelledTransportCleanupError>()
+            .is_some()
+    })
+}
+
+pub(crate) fn preserve_target_admission_on_cleanup_error<T, L>(
+    result: Result<T>,
+    target_gc_admission: &mut Option<L>,
+) -> Result<T> {
+    if let Err(error) = &result
+        && is_cancelled_transport_cleanup_error(error)
+        && let Some(lease) = target_gc_admission.take()
+    {
+        std::mem::forget(lease);
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -83,7 +128,8 @@ pub(crate) async fn execute_transport_with_signal(
             tokio::select! {
                 _ = sigterm.recv() => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     warn!(
                         session_id = %session.meta_session_id,
                         task_type = session.task_context.task_type.as_deref().unwrap_or("unknown"),
@@ -106,7 +152,8 @@ pub(crate) async fn execute_transport_with_signal(
                 }
                 _ = sigint.recv() => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     record_session_interruption_state(
                         project_root,
                         session,
@@ -122,7 +169,8 @@ pub(crate) async fn execute_transport_with_signal(
                 }
                 _ = &mut timeout_future => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     let summary = format!("Execution timed out after {timeout_secs}s");
                     warn!(
@@ -336,17 +384,20 @@ pub(crate) async fn execute_clean_transport_with_signal(
             tokio::select! {
                 _ = sigterm.recv() => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     Ok(signal_interrupted_transport_result(143, Some(libc::SIGTERM), "sigterm", "Execution interrupted by SIGTERM"))
                 },
                 _ = sigint.recv() => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     Ok(signal_interrupted_transport_result(130, Some(libc::SIGINT), "sigint", "Execution interrupted by SIGINT"))
                 },
                 _ = &mut timeout_future => {
                     cancellation.cancel();
-                    await_cancelled_transport(&mut execution, termination_grace_period).await;
+                    let _cleanup_result =
+                        await_cancelled_transport(&mut execution, termination_grace_period).await?;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     Ok(signal_interrupted_transport_result(
                         RUN_TIMEOUT_EXIT_CODE,
@@ -512,38 +563,5 @@ fn record_session_interruption_state(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn signal_interrupted_transport_result_models_sigterm_as_incomplete_turn() {
-        let result = signal_interrupted_transport_result(
-            143,
-            Some(libc::SIGTERM),
-            "sigterm",
-            "Execution interrupted by SIGTERM",
-        );
-
-        assert_eq!(result.execution.exit_code, 143);
-        assert_eq!(result.execution.raw_process_exit_code, Some(143));
-        assert_eq!(result.execution.exit_signal, Some(libc::SIGTERM));
-        assert_eq!(result.execution.terminal_reason.as_deref(), Some("sigterm"));
-        assert_eq!(result.execution.model_completed, Some(false));
-        assert!(result.events.is_empty());
-    }
-
-    #[tokio::test]
-    async fn wall_timeout_drops_noncooperating_transport_after_bounded_cleanup() {
-        let cancellation = csa_process::ExecutionCancellation::new();
-        let started = std::time::Instant::now();
-        cancellation.cancel();
-        await_cancelled_transport(std::future::pending::<()>(), Duration::from_millis(1)).await;
-
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(cancellation.is_cancelled());
-        assert_eq!(
-            timeout_transport_result(1).execution.exit_code,
-            RUN_TIMEOUT_EXIT_CODE
-        );
-    }
-}
+#[path = "pipeline_execute_tests.rs"]
+mod tests;

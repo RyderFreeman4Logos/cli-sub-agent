@@ -98,6 +98,7 @@ printf '%s' "$last"
     let source_before = std::fs::read(project.join("source.txt")).expect("source before");
     let holder = std::fs::File::open(&canonical_parent).expect("open canonical target parent");
     assert_eq!(
+        // SAFETY: `holder` owns a valid directory fd for this call, and the return is checked.
         unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0,
         "target GC test holder"

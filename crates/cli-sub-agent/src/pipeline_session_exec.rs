@@ -277,7 +277,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
             );
         }
     }
-    let target_gc_admission = acquire_target_gc_admission(project_root)?;
+    let mut target_gc_admission = acquire_target_gc_admission(project_root)?;
     tracing::Span::current().record("target_gc_admission", target_gc_admission.is_some());
     info!("Executing in session: {}", session.meta_session_id);
     let runtime = session_exec_runtime::prepare_session_runtime(
@@ -327,21 +327,24 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
     } = runtime;
     let execution_start_time = completion.execution_start_time;
     dispatch_executor.emit_catalog_warning();
-    let transport_result = crate::pipeline_execute::execute_transport_with_signal(
-        executor,
-        &effective_prompt,
-        tool_state.as_ref(),
-        &session,
-        completion.merged_env_ref(),
-        execute_options,
-        session_config,
-        project_root,
-        &mut cleanup_guard,
-        execution_start_time,
-        wall_timeout,
-    )
-    .await
-    .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
+    let transport_result = crate::pipeline_execute::preserve_target_admission_on_cleanup_error(
+        crate::pipeline_execute::execute_transport_with_signal(
+            executor,
+            &effective_prompt,
+            tool_state.as_ref(),
+            &session,
+            completion.merged_env_ref(),
+            execute_options,
+            session_config,
+            project_root,
+            &mut cleanup_guard,
+            execution_start_time,
+            wall_timeout,
+        )
+        .await
+        .with_context(|| format!("meta_session_id={}", session.meta_session_id)),
+        &mut target_gc_admission,
+    )?;
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }
