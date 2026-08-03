@@ -195,6 +195,22 @@ impl ExecutionCancellation {
     }
 }
 
+/// Wait for a retry backoff unless the owning execution is cancelled first.
+/// Returns `true` when cancellation won and no retry should be spawned.
+pub async fn retry_backoff_cancelled(
+    cancellation: Option<&ExecutionCancellation>,
+    backoff: Duration,
+) -> bool {
+    let Some(cancellation) = cancellation else {
+        tokio::time::sleep(backoff).await;
+        return false;
+    };
+    tokio::select! {
+        _ = tokio::time::sleep(backoff) => false,
+        _ = cancellation.cancelled() => true,
+    }
+}
+
 impl Default for SpawnOptions {
     fn default() -> Self {
         Self {
@@ -257,6 +273,8 @@ pub async fn wait_and_capture(
     .await
 }
 
+#[path = "lib_wait_after_capture.rs"]
+mod wait_after_capture;
 #[path = "lib_wait_capture.rs"]
 mod wait_capture;
 pub use wait_capture::wait_and_capture_with_idle_timeout;

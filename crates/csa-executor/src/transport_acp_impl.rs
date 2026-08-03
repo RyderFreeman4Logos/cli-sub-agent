@@ -162,7 +162,14 @@ impl Transport for AcpTransport {
                         phase_desc = gemini_phase_desc(attempt),
                         "gemini-cli ACP rate limited; advancing phase"
                     );
-                    tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
+                    if csa_process::retry_backoff_cancelled(
+                        options.cancellation.as_ref(),
+                        gemini_rate_limit_backoff(attempt),
+                    )
+                    .await
+                    {
+                        anyhow::bail!("ACP execution cancelled");
+                    }
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
@@ -198,7 +205,14 @@ impl Transport for AcpTransport {
                     phase_desc = gemini_phase_desc(attempt),
                     "gemini-cli ACP rate limited; advancing phase"
                 );
-                tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
+                if csa_process::retry_backoff_cancelled(
+                    options.cancellation.as_ref(),
+                    gemini_rate_limit_backoff(attempt),
+                )
+                .await
+                {
+                    anyhow::bail!("ACP execution cancelled");
+                }
                 attempt = attempt.saturating_add(1);
                 continue;
             }

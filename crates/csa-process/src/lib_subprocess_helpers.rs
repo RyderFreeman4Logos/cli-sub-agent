@@ -5,7 +5,7 @@ use tokio::process::Command;
 pub(crate) async fn terminate_child_process_group(
     child: &mut tokio::process::Child,
     termination_grace_period: Duration,
-) {
+) -> Option<std::process::ExitStatus> {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
@@ -20,12 +20,12 @@ pub(crate) async fn terminate_child_process_group(
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
-            let _ = child.wait().await;
-            return;
+            return child.wait().await.ok();
         }
     }
 
     let _ = child.start_kill();
+    child.wait().await.ok()
 }
 
 /// Check if a tool is installed by attempting to locate it.

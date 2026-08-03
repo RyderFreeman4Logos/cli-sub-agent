@@ -58,15 +58,6 @@ set -e
 }
 [ ! -s "$log" ] || { echo "FAIL Cargo started without target lease helper"; exit 1; }
 
-# Public/non-GC hosts retain direct execution when the marker is absent.
-rm "$marker"
-: >"$log"
-run_normalizer
-[ "$(cat "$log")" = "cargo metadata target=$repo/target" ] || {
-    echo "FAIL absent marker direct argv=$(cat "$log")"; exit 1;
-}
-
-# A discovered helper receives exactly `-- cargo metadata` and controls status.
 cat >"$bin/cargo-target-lease" <<'EOF'
 #!/usr/bin/env bash
 printf 'lease' >>"${CSA_TEST_LOG:?}"
@@ -75,6 +66,29 @@ printf ' target=<%s>\n' "${CARGO_TARGET_DIR:?}" >>"${CSA_TEST_LOG:?}"
 exit 23
 EOF
 chmod +x "$bin/cargo-target-lease"
+
+# A PATH helper is ignored on an unprovisioned public host; Cargo gets the
+# original argv and logical workspace target directly.
+rm -rf "$mirror$repo"
+: >"$log"
+run_normalizer
+[ "$(cat "$log")" = "cargo metadata target=$repo/target" ] || {
+    echo "FAIL public host direct argv=$(cat "$log")"; exit 1;
+}
+
+# An explicit helper remains forced even when the canonical parent is absent.
+: >"$log"
+set +e
+CSA_CARGO_TARGET_LEASE="$bin/cargo-target-lease" run_normalizer
+explicit_rc=$?
+set -e
+[ "$explicit_rc" = 23 ] || { echo "FAIL explicit lease status=$explicit_rc"; exit 1; }
+[ "$(cat "$log")" = "lease <--> <cargo> <metadata> target=<$mirror$repo/target>" ] || {
+    echo "FAIL explicit lease argv=$(cat "$log")"; exit 1;
+}
+
+# PATH discovery is enabled once the lexical canonical parent exists.
+mkdir -p "$mirror$repo"
 : >"$log"
 set +e
 run_normalizer

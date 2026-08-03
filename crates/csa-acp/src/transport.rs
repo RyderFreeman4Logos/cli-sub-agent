@@ -122,6 +122,9 @@ impl AcpSession {
             init_timeout,
             termination_grace_period,
         } = create;
+        if cancellation.is_some_and(ExecutionCancellation::is_cancelled) {
+            return Err(crate::error::AcpError::Cancelled);
+        }
         let connection = AcpConnection::spawn_with_options(
             command,
             args,
@@ -133,57 +136,63 @@ impl AcpSession {
             },
         )
         .await?;
-        cancel_acp_step(&connection, cancellation, connection.initialize()).await?;
+        let setup = async {
+            cancel_acp_step(&connection, cancellation, connection.initialize()).await?;
 
-        // Inject fork metadata into the meta map when present.
-        let meta = build_session_meta(
-            session_start.meta.clone(),
-            session_start.fork_session_id,
-            session_start.resume_at_message,
-        );
+            // Inject fork metadata into the meta map when present.
+            let meta = build_session_meta(
+                session_start.meta.clone(),
+                session_start.fork_session_id,
+                session_start.resume_at_message,
+            );
 
-        let session_id = if let Some(resume_id) = session_start.resume_session_id {
-            tracing::debug!(resume_session_id = resume_id, "loading ACP session");
-            match cancel_acp_step(
-                &connection,
-                cancellation,
-                connection.load_session(resume_id, Some(working_dir)),
-            )
-            .await
-            {
-                Ok(id) => {
-                    tracing::debug!(session_id = %id, "Resumed ACP session");
-                    id
-                }
-                Err(error) => {
-                    if matches!(error, crate::error::AcpError::Cancelled) {
-                        return Err(error);
+            if let Some(resume_id) = session_start.resume_session_id {
+                tracing::debug!(resume_session_id = resume_id, "loading ACP session");
+                match cancel_acp_step(
+                    &connection,
+                    cancellation,
+                    connection.load_session(resume_id, Some(working_dir)),
+                )
+                .await
+                {
+                    Ok(id) => {
+                        tracing::debug!(session_id = %id, "Resumed ACP session");
+                        Ok(id)
                     }
-                    tracing::warn!(
-                        resume_session_id = resume_id,
-                        error = %error,
-                        "Failed to resume ACP session, creating new session"
-                    );
-                    cancel_acp_step(
-                        &connection,
-                        cancellation,
-                        connection.new_session(
-                            session_start.system_prompt,
-                            Some(working_dir),
-                            meta.clone(),
-                        ),
-                    )
-                    .await?
+                    Err(error) if matches!(error, crate::error::AcpError::Cancelled) => Err(error),
+                    Err(error) => {
+                        tracing::warn!(
+                            resume_session_id = resume_id,
+                            error = %error,
+                            "Failed to resume ACP session, creating new session"
+                        );
+                        cancel_acp_step(
+                            &connection,
+                            cancellation,
+                            connection.new_session(
+                                session_start.system_prompt,
+                                Some(working_dir),
+                                meta.clone(),
+                            ),
+                        )
+                        .await
+                    }
                 }
+            } else {
+                tracing::debug!("creating new ACP session");
+                cancel_acp_step(
+                    &connection,
+                    cancellation,
+                    connection.new_session(session_start.system_prompt, Some(working_dir), meta),
+                )
+                .await
             }
-        } else {
-            tracing::debug!("creating new ACP session");
-            cancel_acp_step(
-                &connection,
-                cancellation,
-                connection.new_session(session_start.system_prompt, Some(working_dir), meta),
-            )
-            .await?
+        }
+        .await;
+        let session_id = match setup {
+            Ok(session_id) => session_id,
+            Err(error) if matches!(error, crate::error::AcpError::Cancelled) => return Err(error),
+            Err(error) => return cleanup_after_acp_error(&connection, error).await,
         };
 
         Ok(Self {
@@ -331,18 +340,16 @@ pub async fn run_prompt_with_io(
     .await
     {
         Ok(result) => result,
-        Err(error) => {
-            if !has_resume_session {
-                let _ = session.connection().kill().await;
-            }
-            return Err(error);
-        }
+        Err(error) => return cleanup_after_acp_error(session.connection(), error).await,
     };
 
     // ACP processes may stay alive across prompts. If the prompt itself succeeded
     // (no error above), a still-running process is normal — default to exit_code=0.
     // Only report the actual exit code when the process has already exited (e.g., crash).
-    let mut exit_code = session.connection().exit_code().await?.unwrap_or(0);
+    let mut exit_code = match session.connection().exit_code().await {
+        Ok(exit_code) => exit_code.unwrap_or(0),
+        Err(error) => return cleanup_after_acp_error(session.connection(), error).await,
+    };
     let mut stderr = session.connection().stderr();
     if result.timed_out {
         exit_code = 137;
@@ -387,6 +394,16 @@ pub async fn run_prompt_with_io(
     })
 }
 
+async fn cleanup_after_acp_error<T>(
+    connection: &AcpConnection,
+    error: crate::error::AcpError,
+) -> AcpResult<T> {
+    if let Err(cleanup_error) = connection.kill().await {
+        tracing::warn!(error = %cleanup_error, "failed to reap ACP process after terminal error");
+    }
+    Err(error)
+}
+
 async fn cancel_acp_step<T>(
     connection: &AcpConnection,
     cancellation: Option<&ExecutionCancellation>,
@@ -398,7 +415,9 @@ async fn cancel_acp_step<T>(
     tokio::select! {
         result = step => result,
         _ = cancellation.cancelled() => {
-            connection.kill().await?;
+            if let Err(cleanup_error) = connection.kill().await {
+                tracing::warn!(error = %cleanup_error, "failed to reap cancelled ACP process");
+            }
             Err(crate::error::AcpError::Cancelled)
         }
     }
@@ -432,6 +451,109 @@ fn build_session_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    async fn assert_dead_or_zombie(pid: i32) {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        assert!(
+            stat.is_empty() || stat.split_whitespace().nth(2) == Some("Z"),
+            "ACP descendant must be dead before return; stat={stat}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malformed_initialize_reaps_term_resistant_descendant() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("descendant.pid");
+        let args = vec![
+            "-c".to_string(),
+            format!(
+                "trap '' TERM; sh -c 'trap \"\" TERM; echo $$ > \"{}\"; while :; do :; done' & printf 'not-json\\n'; exec 1>&- 2>&-; while :; do :; done",
+                pid_file.display()
+            ),
+        ];
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            AcpSession::new_with_cancellation(
+                AcpSessionCreate {
+                    command: "sh",
+                    args: &args,
+                    working_dir: temp.path(),
+                    env: &HashMap::new(),
+                    session_start: AcpSessionStart::default(),
+                    init_timeout: Duration::from_millis(100),
+                    termination_grace_period: Duration::from_millis(20),
+                },
+                None,
+            ),
+        )
+        .await;
+        let error = match result.expect("malformed setup must return bounded") {
+            Ok(_) => panic!("malformed initialization must fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::error::AcpError::InitializationFailed(_)
+        ));
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("descendant publishes pid")
+            .trim()
+            .parse()
+            .expect("numeric descendant pid");
+        assert_dead_or_zombie(pid).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_during_acp_step_reaps_before_returning_cancelled() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("descendant.pid");
+        let args = vec![
+            "-c".to_string(),
+            format!(
+                "trap '' TERM; sh -c 'trap \"\" TERM; echo $$ > \"{}\"; while :; do :; done' & while :; do :; done",
+                pid_file.display()
+            ),
+        ];
+        let connection = AcpConnection::spawn_with_options(
+            "sh",
+            &args,
+            temp.path(),
+            &HashMap::new(),
+            crate::connection::AcpConnectionOptions {
+                init_timeout: Duration::from_secs(1),
+                termination_grace_period: Duration::from_millis(20),
+            },
+        )
+        .await
+        .expect("spawn ACP fixture");
+        let cancellation = ExecutionCancellation::new();
+        let canceller = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            canceller.cancel();
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            cancel_acp_step(
+                &connection,
+                Some(&cancellation),
+                std::future::pending::<AcpResult<()>>(),
+            ),
+        )
+        .await
+        .expect("cancellation must return bounded")
+        .expect_err("cancelled ACP step must fail");
+        assert!(matches!(error, crate::error::AcpError::Cancelled));
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("descendant publishes pid")
+            .trim()
+            .parse()
+            .expect("numeric descendant pid");
+        assert_dead_or_zombie(pid).await;
+    }
 
     #[test]
     fn test_acp_session_start_default_has_no_fork_fields() {

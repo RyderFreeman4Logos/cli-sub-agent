@@ -164,11 +164,6 @@ pub async fn wait_and_capture_with_idle_timeout(
                             stderr_done = true;
                         }
                         Ok(n) => {
-                            // NOTE: Do NOT set received_first_output here.
-                            // Only stdout counts as "first output" — stderr
-                            // often contains diagnostic banners (e.g. systemd-run's
-                            // "Running scope as unit...") that should not reset
-                            // the initial_response_timeout.
                             last_activity = Instant::now();
                             last_heartbeat = last_activity;
                             idle_watchdog_state.reset_on_activity();
@@ -392,7 +387,40 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
     }
 
-    let status = child.wait().await.context("Failed to wait for command")?;
+    let status = if child_wait_consumed
+        || idle_timed_out
+        || persistent_rate_limit_note.is_some()
+        || workspace_boundary_timed_out
+        || spawn_options
+            .cancellation
+            .as_ref()
+            .is_some_and(ExecutionCancellation::is_cancelled)
+    {
+        child.wait().await.context("Failed to wait for command")?
+    } else {
+        let (waited_status, timeout) = crate::wait_after_capture::wait_after_output_eof(
+            &mut child,
+            received_first_output,
+            &mut last_activity,
+            last_stdout_activity,
+            execution_start,
+            &mut last_heartbeat,
+            idle_timeout,
+            initial_response_timeout,
+            liveness_dead_timeout,
+            session_dir,
+            heartbeat_interval,
+            &mut idle_watchdog_state,
+            &spawn_options,
+            termination_grace_period,
+        )
+        .await?;
+        if let Some(note) = timeout {
+            idle_timed_out = true;
+            timeout_note = note;
+        }
+        waited_status
+    };
     let process_exit = process_exit_status(status);
     let mut exit_code = process_exit.code;
     if let Some(note) = persistent_rate_limit_note.as_deref() {
@@ -444,12 +472,6 @@ pub async fn wait_and_capture_with_idle_timeout(
         failure_summary(&output, &stderr_output, exit_code)
     };
 
-    // Session-outcome signals for the classifier, derived from the raw output
-    // before sanitization. Timeouts force non-completion (we killed the turn);
-    // otherwise an explicit terminal envelope (codex `turn.completed`,
-    // claude-code `result`) is authoritative, even if the process then exited
-    // "early". With no envelope and an early exit the turn did not complete; a
-    // clean exit with no envelope (e.g. gemini-cli) stays undetermined (`None`).
     let raw_process_exit_code = exit_code;
     let terminal_reason = if idle_timed_out || workspace_boundary_timed_out {
         Some("idle_timeout".to_string())
