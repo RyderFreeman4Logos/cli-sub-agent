@@ -102,7 +102,10 @@ if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" != "1" ]; then
     fi
 
     if [ -n "$target_lease" ]; then
-        exec "$target_lease" -- "$@"
+        # The helper derives the lock parent lexically.  Hand it the canonical
+        # root target even when this normalizer was invoked from a subdirectory;
+        # the path resolves to the same physical cache as repo_root/target.
+        exec env CARGO_TARGET_DIR="/ssd/mirror-rootfs${repo_root}/target" "$target_lease" -- "$@"
     fi
 
     # Use the lexical workspace path: /ssd and /mnt/ssd aliases must not alter

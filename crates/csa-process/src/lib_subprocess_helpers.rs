@@ -14,14 +14,13 @@ pub(crate) async fn terminate_child_process_group(
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
             tokio::time::sleep(termination_grace_period).await;
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
+            // Do not reap the leader before the final group signal: its unreaped
+            // PID anchors the PGID even when it exited on SIGTERM.
             // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
-            let _ = child.start_kill();
+            let _ = child.wait().await;
             return;
         }
     }

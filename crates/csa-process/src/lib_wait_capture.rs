@@ -1,15 +1,6 @@
 use super::*;
 use crate::signal_exit::{append_signal_exit_note, process_exit_status};
 
-/// Wait for a spawned child process, capturing output and enforcing idle-timeout.
-///
-/// The process is killed only when there is no stdout/stderr output for the full
-/// `idle_timeout` duration.
-///
-/// When `output_spool` is `Some`, each stdout chunk is also written to the given
-/// file path with an explicit flush after each write.  This ensures partial output
-/// survives OOM kills or other ungraceful terminations — the caller can recover
-/// output from the spool file even if this function never returns.
 #[expect(
     clippy::too_many_arguments,
     reason = "timeout params are flat for caller convenience"
@@ -211,6 +202,10 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = watchdog_tick.tick() => {
+                    if spawn_options.cancellation.as_ref().is_some_and(|flag| flag.is_cancelled()) {
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        break;
+                    }
                     let effective_idle = if !received_first_output {
                         initial_response_timeout.unwrap_or(idle_timeout)
                     } else {
@@ -324,6 +319,10 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = watchdog_tick.tick() => {
+                    if spawn_options.cancellation.as_ref().is_some_and(|flag| flag.is_cancelled()) {
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        break;
+                    }
                     let effective_idle = if !received_first_output {
                         initial_response_timeout.unwrap_or(idle_timeout)
                     } else {

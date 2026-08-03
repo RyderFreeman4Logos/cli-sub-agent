@@ -32,12 +32,20 @@ impl Drop for TargetGcAdmissionLease {
     }
 }
 
-/// Acquire a shared, non-blocking target-GC admission lease when `workspace`
-/// is configured with the managed canonical `target` symlink.
+/// Acquire a shared, non-blocking target-GC admission lease when the canonical
+/// parent for `workspace` exists.
 ///
-/// Unmanaged workspaces return `Ok(None)`. A managed but inaccessible or
-/// exclusively locked canonical parent fails closed rather than running Cargo
-/// against a target GC may replace.
+/// A present canonical parent is sufficient: a wrapper may expose the managed
+/// symlink after this check, so dropping a successful shared lock based on the
+/// mutable workspace `target` entry would race that opt-in. The workspace link
+/// is therefore only consulted when the parent is absent, to fail closed for an
+/// exact dangling managed link. Unmanaged workspaces whose parent is absent
+/// return `Ok(None)`.
+///
+/// This is a cooperating advisory-lock protocol. All managed GC, fix-target,
+/// and launcher actors must flock this same parent before mutating its
+/// parent/target topology. A raw rename that bypasses that protocol is hostile
+/// replacement and is not protected by `flock`.
 pub fn acquire_target_gc_admission(workspace: &Path) -> Result<Option<TargetGcAdmissionLease>> {
     acquire_target_gc_admission_at_root_after_lock(workspace, Path::new(MIRROR_ROOT), || {})
 }
@@ -126,10 +134,6 @@ fn acquire_target_gc_admission_at_root_after_lock(
             parent.display()
         );
     }
-    if !has_expected_target_symlink(workspace, &expected_target)? {
-        return Ok(None);
-    }
-
     Ok(Some(TargetGcAdmissionLease { file, parent }))
 }
 

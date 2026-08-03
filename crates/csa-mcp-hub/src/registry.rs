@@ -564,6 +564,7 @@ impl BackendTransport {
                         keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
                         // MCP Hub server spawn has no idle watchdog; field is inert here.
                         error_marker_scan_enabled: true,
+                        cancellation: None,
                     },
                     Some(&plan),
                     &config.name,

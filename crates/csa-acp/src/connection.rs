@@ -497,6 +497,7 @@ impl AcpConnection {
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
         Ok(status.and_then(|s| s.code()))
     }
+    #[allow(clippy::await_holding_refcell_ref)]
     pub async fn kill(&self) -> AcpResult<()> {
         let termination_grace_period = self.termination_grace_period;
         let child_pid = {
@@ -510,20 +511,16 @@ impl AcpConnection {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
             tokio::time::sleep(termination_grace_period).await;
-            let exited = self
-                .child
-                .borrow_mut()
-                .try_wait()
-                .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
-                .is_some();
-            if exited {
-                return Ok(());
-            }
+            // Keep the unreaped leader as the PGID identity anchor until the
+            // final signal covers descendants that ignore SIGTERM.
             // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
-            let _ = self.child.borrow_mut().start_kill();
+            // `child` is local to this connection's LocalSet; keep ownership
+            // through reap so the PGID cannot be reused before cleanup completes.
+            #[allow(clippy::await_holding_refcell_ref)]
+            let _ = self.child.borrow_mut().wait().await;
             return Ok(());
         }
 

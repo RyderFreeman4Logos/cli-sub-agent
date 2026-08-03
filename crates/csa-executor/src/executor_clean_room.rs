@@ -111,6 +111,7 @@ impl Executor {
             thinking_budget: self.thinking_budget().cloned(),
             subtree_pin: None,
             allow_git_push: false,
+            cancellation: options.cancellation.clone(),
         };
         let mut result = transport
             .execute_with_command_isolation(

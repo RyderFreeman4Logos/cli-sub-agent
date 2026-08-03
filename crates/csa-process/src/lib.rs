@@ -2,6 +2,10 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
@@ -126,7 +130,7 @@ pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Spawn-time process control options.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SpawnOptions {
     /// Max duration allowed for writing prompt payload to child stdin.
     pub stdin_write_timeout: Duration,
@@ -147,6 +151,26 @@ pub struct SpawnOptions {
     /// the marker-based fatal classification is bypassed for this session; the
     /// idle-timeout and wall-clock timeout still apply (#1745 opt-out).
     pub error_marker_scan_enabled: bool,
+    /// Cooperative cancellation from the caller that owns the target admission.
+    pub cancellation: Option<ExecutionCancellation>,
+}
+
+/// Cloneable cancellation state checked by the process wait loop.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionCancellation(Arc<AtomicBool>);
+
+impl ExecutionCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 impl Default for SpawnOptions {
@@ -157,6 +181,7 @@ impl Default for SpawnOptions {
             spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
             error_marker_scan_enabled: true,
+            cancellation: None,
         }
     }
 }

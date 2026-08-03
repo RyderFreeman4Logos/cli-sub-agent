@@ -461,6 +461,7 @@ impl Executor {
             thinking_budget: self.thinking_budget().cloned(),
             subtree_pin: options.subtree_pin.clone(),
             allow_git_push: options.allow_git_push,
+            cancellation: options.cancellation.clone(),
         };
         let transport = self.transport(session_config)?;
         let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;

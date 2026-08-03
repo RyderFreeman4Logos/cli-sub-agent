@@ -262,6 +262,7 @@ impl Transport for OpenaiCompatTransport {
                 thinking_budget: None,
                 subtree_pin: subtree_pin.cloned(),
                 allow_git_push,
+                cancellation: None,
             },
         )
         .await

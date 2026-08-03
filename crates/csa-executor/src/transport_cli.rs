@@ -195,7 +195,7 @@ impl ClaudeCodeCliTransport {
         let (child, _sandbox_handle) = spawn_tool_sandboxed(
             cmd,
             None,
-            request.spawn_options,
+            request.spawn_options.clone(),
             isolation_plan,
             tool_name,
             session_id,
@@ -247,7 +247,6 @@ struct ExecuteOnceRequest<'a> {
     initial_response_timeout: ResolvedTimeout,
     spawn_options: SpawnOptions,
     output_spool: Option<&'a Path>,
-    /// Sandbox configuration propagated from [`TransportOptions::sandbox`].
     /// `None` matches the unsandboxed `execute_in` (testing) path; `Some`
     /// matches the production `execute` path when a sandbox is configured.
     sandbox: Option<&'a SandboxTransportConfig>,
@@ -292,6 +291,7 @@ impl Transport for ClaudeCodeCliTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
             error_marker_scan_enabled: options.error_marker_scan_enabled,
+            cancellation: options.cancellation.clone(),
         };
 
         self.execute_once(ExecuteOnceRequest {

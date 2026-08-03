@@ -38,6 +38,9 @@ pub(crate) async fn execute_transport_with_signal(
     wall_timeout: Option<Duration>,
 ) -> Result<TransportResult> {
     let failure_policy = TransportFailurePolicy::Legacy;
+    let cancellation = csa_process::ExecutionCancellation::new();
+    let mut execute_options = execute_options;
+    execute_options.cancellation = Some(cancellation.clone());
     let exec_result = {
         #[cfg(unix)]
         {
@@ -55,8 +58,19 @@ pub(crate) async fn execute_transport_with_signal(
                 }
             };
             tokio::pin!(timeout_future);
+            let execution = executor.execute_with_transport(
+                effective_prompt,
+                tool_state,
+                session,
+                merged_env_ref,
+                execute_options,
+                session_config,
+            );
+            tokio::pin!(execution);
             tokio::select! {
                 _ = sigterm.recv() => {
+                    cancellation.cancel();
+                    let _ = execution.await;
                     warn!(
                         session_id = %session.meta_session_id,
                         task_type = session.task_context.task_type.as_deref().unwrap_or("unknown"),
@@ -78,6 +92,8 @@ pub(crate) async fn execute_transport_with_signal(
                     ));
                 }
                 _ = sigint.recv() => {
+                    cancellation.cancel();
+                    let _ = execution.await;
                     record_session_interruption_state(
                         project_root,
                         session,
@@ -92,6 +108,8 @@ pub(crate) async fn execute_transport_with_signal(
                     ));
                 }
                 _ = &mut timeout_future => {
+                    cancellation.cancel();
+                    let _ = execution.await;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     let summary = format!("Execution timed out after {timeout_secs}s");
                     warn!(
@@ -114,14 +132,7 @@ pub(crate) async fn execute_transport_with_signal(
                         &summary,
                     ));
                 }
-                exec = executor.execute_with_transport(
-                    effective_prompt,
-                    tool_state,
-                    session,
-                    merged_env_ref,
-                    execute_options,
-                    session_config,
-                ) => exec,
+                exec = &mut execution => exec,
             }
         }
         #[cfg(not(unix))]
@@ -277,6 +288,9 @@ pub(crate) async fn execute_clean_transport_with_signal(
     wall_timeout: Option<Duration>,
 ) -> Result<TransportResult> {
     let failure_policy = TransportFailurePolicy::CleanRoom;
+    let cancellation = csa_process::ExecutionCancellation::new();
+    let mut execute_options = execute_options;
+    execute_options.cancellation = Some(cancellation.clone());
     let exec_result = {
         #[cfg(unix)]
         {
@@ -294,20 +308,30 @@ pub(crate) async fn execute_clean_transport_with_signal(
                 }
             };
             tokio::pin!(timeout_future);
+            let execution = executor.execute_with_command_isolation(
+                effective_prompt,
+                None,
+                session,
+                None,
+                execute_options,
+                None,
+                CommandIsolationPolicy::CleanRoom(command),
+            );
+            tokio::pin!(execution);
             tokio::select! {
-                _ = sigterm.recv() => Ok(signal_interrupted_transport_result(
-                    143,
-                    Some(libc::SIGTERM),
-                    "sigterm",
-                    "Execution interrupted by SIGTERM",
-                )),
-                _ = sigint.recv() => Ok(signal_interrupted_transport_result(
-                    130,
-                    Some(libc::SIGINT),
-                    "sigint",
-                    "Execution interrupted by SIGINT",
-                )),
+                _ = sigterm.recv() => {
+                    cancellation.cancel();
+                    let _ = execution.await;
+                    Ok(signal_interrupted_transport_result(143, Some(libc::SIGTERM), "sigterm", "Execution interrupted by SIGTERM"))
+                },
+                _ = sigint.recv() => {
+                    cancellation.cancel();
+                    let _ = execution.await;
+                    Ok(signal_interrupted_transport_result(130, Some(libc::SIGINT), "sigint", "Execution interrupted by SIGINT"))
+                },
                 _ = &mut timeout_future => {
+                    cancellation.cancel();
+                    let _ = execution.await;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     Ok(signal_interrupted_transport_result(
                         RUN_TIMEOUT_EXIT_CODE,
@@ -316,15 +340,7 @@ pub(crate) async fn execute_clean_transport_with_signal(
                         &format!("Execution timed out after {timeout_secs}s"),
                     ))
                 },
-                result = executor.execute_with_command_isolation(
-                    effective_prompt,
-                    None,
-                    session,
-                    None,
-                    execute_options,
-                    None,
-                    CommandIsolationPolicy::CleanRoom(command),
-                ) => result,
+                result = &mut execution => result,
             }
         }
         #[cfg(not(unix))]

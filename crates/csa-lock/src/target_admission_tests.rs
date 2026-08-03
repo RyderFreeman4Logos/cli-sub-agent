@@ -151,7 +151,7 @@ fn target_gc_admission_reports_busy_then_retries_after_gc_release() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn target_gc_admission_locks_existing_parent_before_inspecting_unmanaged_target() {
+fn target_gc_admission_retains_existing_parent_lease_for_later_managed_opt_in() {
     let fixture = ManagedTargetWorkspace::new();
     fs::remove_file(fixture.workspace.path().join("target")).expect("remove managed target");
     let holder = DirectoryFlock::exclusive(&fixture.canonical_parent);
@@ -166,11 +166,13 @@ fn target_gc_admission_locks_existing_parent_before_inspecting_unmanaged_target(
     );
 
     drop(holder);
+    let lease = fixture
+        .acquire()
+        .expect("existing canonical parent must retain admission")
+        .expect("mutable workspace target must not release shared admission");
     assert!(
-        fixture
-            .acquire()
-            .expect("unmanaged target after shared admission")
-            .is_none()
+        child_exclusive_lock_is_blocked(&fixture.canonical_parent, lease.file.as_raw_fd()),
+        "cooperating GC exclusive lock must remain blocked while workspace opts in"
     );
 }
 

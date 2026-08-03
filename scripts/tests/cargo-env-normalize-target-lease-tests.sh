@@ -71,7 +71,7 @@ cat >"$bin/cargo-target-lease" <<'EOF'
 #!/usr/bin/env bash
 printf 'lease' >>"${CSA_TEST_LOG:?}"
 for arg in "$@"; do printf ' <%s>' "$arg" >>"${CSA_TEST_LOG:?}"; done
-printf '\n' >>"${CSA_TEST_LOG:?}"
+printf ' target=<%s>\n' "${CARGO_TARGET_DIR:?}" >>"${CSA_TEST_LOG:?}"
 exit 23
 EOF
 chmod +x "$bin/cargo-target-lease"
@@ -81,8 +81,36 @@ run_normalizer
 lease_rc=$?
 set -e
 [ "$lease_rc" = 23 ] || { echo "FAIL lease status=$lease_rc"; exit 1; }
-[ "$(cat "$log")" = "lease <--> <cargo> <metadata>" ] || {
+[ "$(cat "$log")" = "lease <--> <cargo> <metadata> target=<$mirror$repo/target>" ] || {
     echo "FAIL lease argv=$(cat "$log")"; exit 1;
+}
+
+# A checked-in normalizer invoked from a repository subdirectory must give a
+# s-compatible helper the root parent, never a subdirectory-derived parent.
+subdir="$repo/crates/member"
+mkdir -p "$subdir"
+cat >"$bin/cargo-target-lease" <<'EOF'
+#!/usr/bin/env bash
+parent="${CARGO_TARGET_DIR%/target}"
+touch "$parent/.rust-target-gc-admission-v1"
+printf 'lease' >>"${CSA_TEST_LOG:?}"
+for arg in "$@"; do printf ' <%s>' "$arg" >>"${CSA_TEST_LOG:?}"; done
+printf ' target=<%s>\n' "${CARGO_TARGET_DIR:?}" >>"${CSA_TEST_LOG:?}"
+exit 23
+EOF
+chmod +x "$bin/cargo-target-lease"
+: >"$log"
+set +e
+(cd "$subdir" && run_normalizer)
+subdir_rc=$?
+set -e
+[ "$subdir_rc" = 23 ] || { echo "FAIL subdir lease status=$subdir_rc"; exit 1; }
+[ "$(cat "$log")" = "lease <--> <cargo> <metadata> target=<$mirror$repo/target>" ] || {
+    echo "FAIL subdir lease argv=$(cat "$log")"; exit 1;
+}
+[ -e "$marker" ] || { echo "FAIL root marker missing"; exit 1; }
+[ ! -e "$mirror$subdir/.rust-target-gc-admission-v1" ] || {
+    echo "FAIL subdir marker created"; exit 1;
 }
 
 # Scratch target preservation deliberately bypasses the helper, even with marker.
