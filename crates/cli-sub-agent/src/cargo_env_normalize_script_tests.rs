@@ -203,3 +203,82 @@ fn cargo_env_normalize_preserves_explicit_writable_rust_state_except_target_dir(
         Some(fake_cargo.to_str().unwrap())
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn cargo_env_normalize_delegates_default_target_to_target_lease() {
+    let repo = TempDir::new().expect("create temp repo");
+    let capture = repo.path().join("lease.argv");
+    let lease = repo.path().join("cargo-target-lease");
+    install_executable(
+        &lease,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"${CSA_CAPTURE_ARGS:?}"
+"#,
+    );
+
+    let output = Command::new("bash")
+        .arg(workspace_root().join("scripts/cargo-env-normalize.sh"))
+        .args(["cargo", "metadata"])
+        .current_dir(repo.path())
+        .env("CSA_CAPTURE_ARGS", &capture)
+        .env("CSA_CARGO_TARGET_LEASE", &lease)
+        .output()
+        .expect("normalizer should execute lease helper");
+
+    assert!(
+        output.status.success(),
+        "normalizer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(capture).unwrap(),
+        "--\ncargo\nmetadata\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn cargo_env_normalize_preserve_target_bypasses_target_lease() {
+    let repo = TempDir::new().expect("create temp repo");
+    let capture = repo.path().join("capture.env");
+    let fake_bin = repo.path().join("fake-bin");
+    let fake_cargo = fake_bin.join("cargo");
+    let target = repo.path().join("scratch-target");
+    let lease = repo.path().join("cargo-target-lease");
+    fs::create_dir_all(&target).expect("create scratch target");
+    install_capture_cargo(&fake_cargo);
+    install_executable(&lease, "#!/usr/bin/env bash\nexit 42\n");
+
+    let output = Command::new("bash")
+        .arg(workspace_root().join("scripts/cargo-env-normalize.sh"))
+        .args(["cargo", "metadata"])
+        .current_dir(repo.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fake_bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("CSA_CAPTURE_ENV", &capture)
+        .env("CSA_CARGO_TARGET_LEASE", &lease)
+        .env("CSA_PRESERVE_CARGO_TARGET_DIR", "1")
+        .env("CARGO_TARGET_DIR", &target)
+        .output()
+        .expect("normalizer should bypass lease helper");
+
+    assert!(
+        output.status.success(),
+        "normalizer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        read_capture(&capture)
+            .get("CARGO_TARGET_DIR")
+            .map(String::as_str),
+        Some(target.to_str().unwrap())
+    );
+}

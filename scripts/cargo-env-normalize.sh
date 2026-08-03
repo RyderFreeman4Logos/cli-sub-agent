@@ -93,4 +93,25 @@ if [ -n "$channel" ]; then
     fi
 fi
 
+if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" != "1" ]; then
+    target_lease="${CSA_CARGO_TARGET_LEASE:-}"
+    if [ -z "$target_lease" ]; then
+        target_lease="$(command -v cargo-target-lease 2>/dev/null || true)"
+    elif [ ! -x "$target_lease" ]; then
+        target_lease="$(command -v "$target_lease" 2>/dev/null || true)"
+    fi
+
+    if [ -n "$target_lease" ]; then
+        exec "$target_lease" -- "$@"
+    fi
+
+    # Use the lexical workspace path: /ssd and /mnt/ssd aliases must not alter
+    # the managed-marker decision.
+    marker_parent="/ssd/mirror-rootfs${repo_root}"
+    if [ -e "$marker_parent/.rust-target-gc-admission-v1" ]; then
+        echo "error: target GC admission helper is unavailable for managed target '$marker_parent'; refusing Cargo execution" >&2
+        exit 1
+    fi
+fi
+
 exec "$@"
