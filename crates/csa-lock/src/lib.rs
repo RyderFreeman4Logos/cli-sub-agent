@@ -10,8 +10,10 @@
 //! owns the fd). `Drop` calls `flock(fd, LOCK_UN)` to release.
 
 pub mod slot;
+mod target_admission;
 mod worktree;
 
+pub use target_admission::{TargetGcAdmissionLease, acquire_target_gc_admission};
 pub use worktree::{
     WorktreeWriteLock, acquire_worktree_write_lock, worktree_write_lock_is_held_by_session,
 };
