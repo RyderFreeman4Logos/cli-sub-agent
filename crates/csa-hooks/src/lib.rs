@@ -88,7 +88,7 @@ pub use pre_session::{
     format_pre_session_reminder, global_pre_session_config_path,
     load_global_pre_session_hook_config, load_global_pre_session_hook_invocation,
     load_pre_session_hook_config_from_path, parse_pre_session_hook_config,
-    prepend_pre_session_stdout, run_pre_session_hook,
+    prepend_pre_session_stdout, run_pre_session_hook, run_pre_session_hook_with_cancellation,
 };
 pub use runner::{run_hook, run_hook_capturing, run_hooks_for_event};
 pub use waiver::{Waiver, WaiverSet};

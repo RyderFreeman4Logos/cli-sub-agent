@@ -190,7 +190,7 @@ env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
 rc=$?
 set -e
 assert_eq "$rc" "0" "lease-wrapped clean exit 0"
-assert_contains "$(cat "$order_lease")" $'just install '"$install_dir_lease"$'\nlease -- '"$tmp_lease/tools/cargo"$' clean\ncargo clean' "clean wrapper preserves injected cargo executable and argv"
+assert_eq "$(cat "$order_lease")" $'just install '"$install_dir_lease"$'\nlease -- /bin/sh -c mkdir -p "$CARGO_INSTALL_ROOT"; exec "$@" cargo-env-normalize '"$tmp_lease/tools/cargo"$' clean\ncargo clean' "clean wrapper preserves injected cargo executable and argv"
 
 echo "== trusted install policy handles PATH-selected user-local csa =="
 tmp_policy="$tmp_root/policy"

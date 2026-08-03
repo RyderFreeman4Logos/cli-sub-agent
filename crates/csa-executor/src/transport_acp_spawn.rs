@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AcpPromptRunRequest {
     tool_name: String,
     acp_command: String,
@@ -230,7 +230,6 @@ impl AcpTransport {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn execute_gemini_acp_with_degraded_mcp_retry<
         T,
         Spawn,
@@ -240,9 +239,7 @@ impl AcpTransport {
         Classify,
     >(
         runtime_home: &Path,
-        path_override: Option<std::ffi::OsString>,
-        allow_degraded_mcp: bool,
-        cancellation: Option<&csa_process::ExecutionCancellation>,
+        request: &AcpPromptRunRequest,
         mut spawn_once: Spawn,
         diagnose: Diagnose,
         disable: Disable,
@@ -255,9 +252,12 @@ impl AcpTransport {
         Disable: Fn(&Path, &McpInitDiagnostic, bool) -> Result<()>,
         Classify: Fn(&anyhow::Error) -> Option<GeminiAcpInitFailureClassification>,
     {
+        let path_override = request.env.get("PATH").map(std::ffi::OsStr::new);
+        let allow_degraded_mcp = gemini_allow_degraded_mcp(&request.env);
+        let cancellation = request.cancellation.as_ref();
         let issue_url = "https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/840";
         let mut warning_summary = None;
-        let preflight = diagnose(runtime_home, path_override.as_deref());
+        let preflight = diagnose(runtime_home, path_override);
         let mut already_degraded = false;
 
         if allow_degraded_mcp && !preflight.unhealthy_servers.is_empty() {
@@ -289,7 +289,7 @@ impl AcpTransport {
                     return Err(error);
                 }
 
-                let diagnostic = diagnose(runtime_home, path_override.as_deref());
+                let diagnostic = diagnose(runtime_home, path_override);
                 let disable_all = diagnostic.unhealthy_servers.is_empty();
                 disable(runtime_home, &diagnostic, disable_all)?;
                 warning_summary = Some(format_mcp_init_warning_summary(&diagnostic, disable_all));

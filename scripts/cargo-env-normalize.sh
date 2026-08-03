@@ -46,11 +46,6 @@ if rust_state_needs_override "${CARGO_HOME:-}"; then
     fi
 fi
 
-if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
-    export CARGO_INSTALL_ROOT="${repo_root}/target/cargo-install-root"
-    mkdir -p "$CARGO_INSTALL_ROOT"
-fi
-
 if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" = "1" ]; then
     if [ -z "${CARGO_TARGET_DIR:-}" ] || ! ensure_writable_dir "${CARGO_TARGET_DIR}"; then
         echo "error: CSA_PRESERVE_CARGO_TARGET_DIR=1 requires an explicit writable CARGO_TARGET_DIR" >&2
@@ -58,6 +53,12 @@ if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" = "1" ]; then
     fi
 else
     export CARGO_TARGET_DIR="${repo_root}/target"
+fi
+
+create_cargo_install_root=0
+if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
+    export CARGO_INSTALL_ROOT="${CARGO_TARGET_DIR}/cargo-install-root"
+    create_cargo_install_root=1
 fi
 
 mise_rust_home="${MISE_DATA_DIR:-/usr/local/share/mise}/installs/rust/stable"
@@ -111,6 +112,11 @@ if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" != "1" ]; then
         # The helper derives the lock parent lexically. Hand it the canonical
         # root target even when this normalizer was invoked from a subdirectory;
         # the path resolves to the same physical cache as repo_root/target.
+        if [ "$create_cargo_install_root" = "1" ]; then
+            exec env CARGO_TARGET_DIR="/ssd/mirror-rootfs${repo_root}/target" \
+                "$target_lease" -- /bin/sh -c 'mkdir -p "$CARGO_INSTALL_ROOT"; exec "$@"' \
+                cargo-env-normalize "$@"
+        fi
         exec env CARGO_TARGET_DIR="/ssd/mirror-rootfs${repo_root}/target" "$target_lease" -- "$@"
     fi
 
@@ -120,4 +126,7 @@ if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" != "1" ]; then
     fi
 fi
 
+if [ "$create_cargo_install_root" = "1" ]; then
+    mkdir -p "$CARGO_INSTALL_ROOT"
+fi
 exec "$@"

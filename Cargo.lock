@@ -811,6 +811,7 @@ dependencies = [
  "chrono",
  "csa-config",
  "csa-memory",
+ "csa-process",
  "libc",
  "serde",
  "serde_json",

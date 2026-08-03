@@ -6,9 +6,10 @@ use std::{
 use tokio::{process::Child, time::MissedTickBehavior};
 
 use crate::{
-    ExecutionCancellation, IDLE_POLL_INTERVAL, IdleWatchdogState, SpawnOptions, idle_timeout_note,
-    maybe_emit_heartbeat, should_terminate_for_idle_with_state,
-    should_terminate_for_initial_response_with_state, terminate_child_process_group,
+    ChildWaitState, ExecutionCancellation, IDLE_POLL_INTERVAL, IdleWatchdogState, SpawnOptions,
+    idle_timeout_note, inspect_child_without_reaping, maybe_emit_heartbeat,
+    should_terminate_for_idle_with_state, should_terminate_for_initial_response_with_state,
+    terminate_child_process_group,
 };
 
 #[macro_export]
@@ -56,11 +57,14 @@ pub(crate) async fn wait_after_output_eof(
     let mut tick = tokio::time::interval(IDLE_POLL_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        if let Some(status) = input
-            .child
-            .try_wait()
-            .context("Failed to poll command after output EOF")?
-        {
+        if matches!(
+            inspect_child_without_reaping(input.child)
+                .context("Failed to poll command after output EOF")?,
+            ChildWaitState::Exited(_)
+        ) {
+            let status = terminate_child_process_group(input.child, Duration::ZERO)
+                .await
+                .context("Failed to terminate completed command process group")?;
             return Ok((status, None));
         }
         if input
@@ -71,7 +75,7 @@ pub(crate) async fn wait_after_output_eof(
         {
             let status = terminate_child_process_group(input.child, input.termination_grace_period)
                 .await
-                .context("Failed to reap cancelled command")?;
+                .context("Failed to terminate cancelled command process group")?;
             return Ok((status, None));
         }
         let effective_idle = if !input.received_first_output {
@@ -114,7 +118,7 @@ pub(crate) async fn wait_after_output_eof(
             );
             let status = terminate_child_process_group(input.child, input.termination_grace_period)
                 .await
-                .context("Failed to reap timed-out command")?;
+                .context("Failed to terminate timed-out command process group")?;
             return Ok((status, Some(note)));
         }
         tick.tick().await;

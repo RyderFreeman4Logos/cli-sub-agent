@@ -1,5 +1,4 @@
 use super::*;
-use crate::signal_exit::{append_signal_exit_note, process_exit_status};
 
 #[expect(clippy::too_many_arguments, reason = "flat parameters")]
 pub async fn wait_and_capture_with_idle_timeout(
@@ -81,8 +80,8 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut persistent_rate_limit_tracker = PersistentRateLimitTracker::default();
     let mut child_exited_early = false;
     let mut child_exited_early_note = String::new();
+    let mut terminated_status = None;
     let mut zombie_first_detected_at: Option<Instant> = None;
-    let mut child_wait_consumed = false;
     macro_rules! kill_on_persistent_rate_limit {
         ($appended:expr, $stream:literal) => {
             if let Some(note) = persistent_rate_limit_tracker.observe_appended_output($appended) {
@@ -92,7 +91,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                     "Killing child due to persistent repeated 429/quota output"
                 );
                 persistent_rate_limit_note = Some(note);
-                terminate_child_process_group(&mut child, termination_grace_period).await;
+                terminated_status = Some(
+                    terminate_child_process_group(&mut child, termination_grace_period)
+                        .await
+                        .context("Failed to terminate rate-limited command process group")?,
+                );
                 break;
             }
         };
@@ -195,7 +198,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                 }
                 _ = watchdog_tick.tick() => {
                     if spawn_options.cancellation.as_ref().is_some_and(|flag| flag.is_cancelled()) {
-                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        terminated_status = Some(
+                            terminate_child_process_group(&mut child, termination_grace_period)
+                                .await
+                                .context("Failed to terminate cancelled command process group")?,
+                        );
                         break;
                     }
                     let effective_idle = if !received_first_output {
@@ -243,23 +250,33 @@ pub async fn wait_and_capture_with_idle_timeout(
                             timeout_kind,
                             "Killing child due to {timeout_kind}"
                         );
-                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        terminated_status = Some(
+                            terminate_child_process_group(&mut child, termination_grace_period)
+                                .await
+                                .context("Failed to terminate timed-out command process group")?,
+                        );
                         break;
                     }
-                    if !stdout_done && poll_child_exited(&mut child, &mut child_wait_consumed) {
+                    if (!stdout_done || !stderr_done)
+                        && matches!(
+                            inspect_child_without_reaping(&mut child)
+                                .context("Failed to poll command while an output pipe remained open")?,
+                            ChildWaitState::Exited(_)
+                        )
+                    {
                         let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
                         if first.elapsed() >= IDLE_POLL_INTERVAL {
                             child_exited_early = true;
                             child_exited_early_note = format!(
-                                "child process (pid {}) exited while stdout pipe still open; \
-                                 possible auto-compaction spawned a subprocess that inherited stdout — \
+                                "child process (pid {}) exited while an output pipe remained open; \
+                                 possible auto-compaction spawned a subprocess that inherited output — \
                                  CSA detected process death and broke out of the read loop early",
                                 child_pid.unwrap_or(0)
                             );
-                            warn!(pid = child_pid.unwrap_or(0), "child process exited while stdout pipe still open; breaking read loop");
+                            warn!(pid = child_pid.unwrap_or(0), "child process exited while an output pipe remained open; breaking read loop");
                             break;
                         }
-                    } else if !stdout_done {
+                    } else if !stdout_done || !stderr_done {
                         zombie_first_detected_at = None;
                     }
                 }
@@ -312,7 +329,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                 }
                 _ = watchdog_tick.tick() => {
                     if spawn_options.cancellation.as_ref().is_some_and(|flag| flag.is_cancelled()) {
-                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        terminated_status = Some(
+                            terminate_child_process_group(&mut child, termination_grace_period)
+                                .await
+                                .context("Failed to terminate cancelled command process group")?,
+                        );
                         break;
                     }
                     let effective_idle = if !received_first_output {
@@ -360,20 +381,28 @@ pub async fn wait_and_capture_with_idle_timeout(
                             timeout_kind,
                             "Killing child due to {timeout_kind}"
                         );
-                        terminate_child_process_group(&mut child, termination_grace_period).await;
+                        terminated_status = Some(
+                            terminate_child_process_group(&mut child, termination_grace_period)
+                                .await
+                                .context("Failed to terminate timed-out command process group")?,
+                        );
                         break;
                     }
-                    if poll_child_exited(&mut child, &mut child_wait_consumed) {
+                    if matches!(
+                        inspect_child_without_reaping(&mut child)
+                            .context("Failed to poll command while an output pipe remained open")?,
+                        ChildWaitState::Exited(_)
+                    ) {
                         let first = zombie_first_detected_at.get_or_insert_with(Instant::now);
                         if first.elapsed() >= IDLE_POLL_INTERVAL {
                             child_exited_early = true;
                             child_exited_early_note = format!(
-                                "child process (pid {}) exited while stdout pipe still open; \
-                                 possible auto-compaction spawned a subprocess that inherited stdout — \
+                                "child process (pid {}) exited while an output pipe remained open; \
+                                 possible auto-compaction spawned a subprocess that inherited output — \
                                  CSA detected process death and broke out of the read loop early",
                                 child_pid.unwrap_or(0)
                             );
-                            warn!(pid = child_pid.unwrap_or(0), "child process exited while stdout pipe still open; breaking read loop");
+                            warn!(pid = child_pid.unwrap_or(0), "child process exited while an output pipe remained open; breaking read loop");
                             break;
                         }
                     } else {
@@ -384,8 +413,11 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
     }
 
-    let status = if child_wait_consumed
-        || idle_timed_out
+    let status = if child_exited_early {
+        terminate_child_process_group(&mut child, Duration::ZERO)
+            .await
+            .context("Failed to terminate completed command process group")?
+    } else if idle_timed_out
         || persistent_rate_limit_note.is_some()
         || workspace_boundary_timed_out
         || spawn_options
@@ -393,7 +425,12 @@ pub async fn wait_and_capture_with_idle_timeout(
             .as_ref()
             .is_some_and(ExecutionCancellation::is_cancelled)
     {
-        child.wait().await.context("Failed to wait for command")?
+        match terminated_status {
+            Some(status) => status,
+            None => terminate_child_process_group(&mut child, termination_grace_period)
+                .await
+                .context("Failed to terminate command process group")?,
+        }
     } else {
         let (waited_status, timeout) =
             crate::wait_after_capture::wait_after_output_eof(crate::output_eof_wait!(
@@ -419,118 +456,21 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
         waited_status
     };
-    let process_exit = process_exit_status(status);
-    let mut exit_code = process_exit.code;
-    if let Some(note) = persistent_rate_limit_note.as_deref() {
-        exit_code = 1;
-        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-            stderr_output.push('\n');
-        }
-        stderr_output.push_str(note);
-        stderr_output.push('\n');
-    } else if idle_timed_out {
-        exit_code = 137;
-        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-            stderr_output.push('\n');
-        }
-        stderr_output.push_str(&timeout_note);
-        stderr_output.push('\n');
-    } else if child_exited_early {
-        if exit_code == 0 {
-            exit_code = 1;
-        }
-        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-            stderr_output.push('\n');
-        }
-        stderr_output.push_str(&child_exited_early_note);
-        stderr_output.push('\n');
-    } else if workspace_boundary_timed_out {
-        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
-            stderr_output.push('\n');
-        }
-        stderr_output.push_str(&workspace_boundary_note);
-        stderr_output.push('\n');
-    } else if let Some(note) = process_exit.note.as_deref() {
-        append_signal_exit_note(&mut stderr_output, note);
-    }
 
-    let summary = if let Some(note) = persistent_rate_limit_note {
-        note
-    } else if idle_timed_out {
-        timeout_note
-    } else if child_exited_early {
-        child_exited_early_note.clone()
-    } else if let Some(note) = process_exit.note.clone() {
-        note
-    } else if exit_code == 0 {
-        extract_summary(&output)
-    } else if workspace_boundary_timed_out {
-        workspace_boundary_note
-    } else {
-        failure_summary(&output, &stderr_output, exit_code)
-    };
-
-    let raw_process_exit_code = exit_code;
-    let terminal_reason = if idle_timed_out || workspace_boundary_timed_out {
-        Some("idle_timeout".to_string())
-    } else if process_exit.signal.is_some() {
-        Some("signal".to_string())
-    } else {
-        parse_legacy_terminal_reason(&output)
-    };
-    let model_completed =
-        if idle_timed_out || workspace_boundary_timed_out || process_exit.signal.is_some() {
-            Some(false)
-        } else if terminal_reason.is_some() {
-            crate::model_completed_from_terminal_reason(terminal_reason.as_deref())
-        } else if child_exited_early {
-            Some(false)
-        } else {
-            None
-        };
-
-    let output = sanitize_opaque_object_payloads(&output);
-    let mut stderr_output = sanitize_opaque_object_payloads(&stderr_output);
-    let actionable_detail = resolve_actionable_failure_detail(&summary, exit_code);
-    stderr_output = append_actionable_detail_for_opaque_payload(&stderr_output, &actionable_detail);
-
-    let output_spool_plan = spool_file.take().map(|rotator| rotator.finalize());
-    let stderr_spool_plan = stderr_spool_file.take().map(|rotator| rotator.finalize());
-    if let Some(plan_result) = output_spool_plan {
-        match plan_result {
-            Ok(plan) => {
-                if let Err(e) = sanitize_spool_plan(plan, None) {
-                    warn!(error = %e, "Failed to sanitize output spool tail");
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to finalize output spool file");
-            }
-        }
-    }
-    if let Some(plan_result) = stderr_spool_plan {
-        match plan_result {
-            Ok(plan) => {
-                if let Err(e) = sanitize_spool_plan(plan, Some(&actionable_detail)) {
-                    warn!(error = %e, "Failed to sanitize stderr spool tail");
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to finalize stderr spool file");
-            }
-        }
-    }
-
-    Ok(ExecutionResult {
-        output,
-        stderr_output,
-        summary,
-        exit_code,
-        raw_process_exit_code: Some(raw_process_exit_code),
-        model_completed,
-        terminal_reason,
-        exit_signal: process_exit.signal,
-        peak_memory_mb: None,
-        ..Default::default()
-    })
+    Ok(super::wait_capture_result::finalize_captured_execution(
+        super::wait_capture_result::CapturedExecution {
+            output,
+            stderr_output,
+            persistent_rate_limit_note,
+            idle_timed_out,
+            timeout_note,
+            child_exited_early,
+            child_exited_early_note,
+            workspace_boundary_timed_out,
+            workspace_boundary_note,
+            status,
+            spool_file,
+            stderr_spool_file,
+        },
+    ))
 }

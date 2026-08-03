@@ -175,7 +175,8 @@ pub(crate) async fn execute_clean_room_session(
     global_config: Option<&GlobalConfig>,
     limits: CleanRoomExecutionLimits,
 ) -> Result<SessionExecutionResult> {
-    let _target_gc_admission = csa_lock::acquire_target_gc_admission(contract.project_root())?;
+    let _target_gc_admission =
+        csa_lock::acquire_target_gc_admission(contract.command.working_directory().as_path())?;
     let admitted_identity = admitted.resolved_model_spec();
     if admitted_identity.tool != tool.as_str() || admitted.tool_name() != tool.as_str() {
         bail!(

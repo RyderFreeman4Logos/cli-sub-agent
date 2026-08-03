@@ -12,7 +12,8 @@ use agent_client_protocol::{
 #[cfg(test)]
 use csa_process::SpoolRotator;
 use csa_process::{
-    DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, ProcessTreeActivity, ProcessTreeStatus,
+    ChildWaitState, DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, ProcessTreeActivity,
+    ProcessTreeStatus, inspect_child_without_reaping, terminate_child_process_group,
 };
 use tokio::{process::Child, task::LocalSet};
 
@@ -125,7 +126,7 @@ impl AcpConnection {
             }
             None => {
                 let stderr = self.stderr();
-                let _ = self.kill().await;
+                self.kill().await?;
                 Err(AcpError::InitializationFailed(format!(
                     "ACP initialize timed out after {}s{}; \
                      consider increasing [acp] init_timeout_seconds in .csa/config.toml",
@@ -173,7 +174,7 @@ impl AcpConnection {
             }
             None => {
                 let stderr = self.stderr();
-                let _ = self.kill().await;
+                self.kill().await?;
                 Err(AcpError::SessionFailed(format!(
                     "ACP session/new timed out after {}s{}; \
                      consider increasing [acp] init_timeout_seconds in .csa/config.toml",
@@ -433,7 +434,7 @@ impl AcpConnection {
                 Err(AcpError::PromptFailed(format!("{err}{stderr_detail}")))
             }
             PromptOutcome::IdleTimeout => {
-                let _ = self.kill().await;
+                self.kill().await?;
                 let exit_reason =
                     if !saw_initial_response_event && initial_response_timeout.is_some() {
                         "initial_response_timeout"
@@ -460,10 +461,12 @@ impl AcpConnection {
         let Some(child) = child.as_mut() else {
             return Ok(None);
         };
-        let status = child
-            .try_wait()
-            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
-        Ok(status.and_then(|status| status.code()))
+        match inspect_child_without_reaping(child)
+            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
+        {
+            ChildWaitState::Running => Ok(None),
+            ChildWaitState::Exited(status) => Ok(status.code()),
+        }
     }
 
     pub async fn kill(&self) -> AcpResult<()> {
@@ -471,47 +474,33 @@ impl AcpConnection {
             Some(child) => child,
             None => return Ok(()),
         };
-        let child_pid = child.id();
-        #[cfg(unix)]
-        if let Some(pid) = child_pid {
-            // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
-            tokio::time::sleep(self.termination_grace_period).await;
-            // Keep the unreaped leader as the PGID identity anchor until the
-            // final signal covers descendants that ignore SIGTERM.
-            // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-            // Ownership remains local through reap, so the PGID cannot be reused early.
-            let _ = child.wait().await;
-            return Ok(());
+        if let Err(error) =
+            terminate_child_process_group(&mut child, self.termination_grace_period).await
+        {
+            self.child.borrow_mut().replace(child);
+            return Err(AcpError::ConnectionFailed(format!(
+                "failed to terminate ACP process group: {error:#}"
+            )));
         }
-
-        child
-            .start_kill()
-            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))
+        Ok(())
     }
 
     pub fn stderr(&self) -> String {
         self.stderr_buf.borrow().clone()
     }
     async fn ensure_process_running(&self) -> AcpResult<()> {
-        let status = {
+        let state = {
             let mut child = self.child.borrow_mut();
             let Some(child) = child.as_mut() else {
                 return Err(AcpError::ConnectionFailed(
                     "ACP process has already been reaped".to_string(),
                 ));
             };
-            child
-                .try_wait()
+            inspect_child_without_reaping(child)
                 .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
         };
 
-        if let Some(status) = status {
+        if let ChildWaitState::Exited(status) = state {
             self.drain_stderr_tail().await;
             let stderr = self.stderr();
             return Err(process_exited_error(status, stderr));

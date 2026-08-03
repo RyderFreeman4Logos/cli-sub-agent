@@ -58,8 +58,10 @@ use output_helpers::{
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
-pub use subprocess_helpers::check_tool_installed;
-use subprocess_helpers::terminate_child_process_group;
+pub use subprocess_helpers::{
+    ChildWaitState, check_tool_installed, inspect_child_without_reaping,
+    terminate_child_process_group,
+};
 use tool_liveness::record_spool_bytes_written;
 pub use tool_liveness::reset_liveness_scope;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness, write_fatal_error_markers};
@@ -205,9 +207,13 @@ pub async fn retry_backoff_cancelled(
         tokio::time::sleep(backoff).await;
         return false;
     };
+    if cancellation.is_cancelled() {
+        return true;
+    }
     tokio::select! {
-        _ = tokio::time::sleep(backoff) => false,
+        biased;
         _ = cancellation.cancelled() => true,
+        _ = tokio::time::sleep(backoff) => cancellation.is_cancelled(),
     }
 }
 
@@ -277,6 +283,8 @@ pub async fn wait_and_capture(
 mod wait_after_capture;
 #[path = "lib_wait_capture.rs"]
 mod wait_capture;
+#[path = "lib_wait_capture_result.rs"]
+mod wait_capture_result;
 pub use wait_capture::wait_and_capture_with_idle_timeout;
 /// Execute a command and capture output.
 ///
@@ -312,20 +320,6 @@ pub async fn run_and_capture_with_stdin(
         None,
     )
     .await
-}
-
-/// Poll whether a child process has exited using Tokio's built-in try_wait().
-///
-/// Sets `*consumed = true` on first success so callers never call try_wait()
-/// again on an already-reaped child (which would return an ECHILD error).
-fn poll_child_exited(child: &mut tokio::process::Child, consumed: &mut bool) -> bool {
-    if *consumed {
-        return true;
-    }
-    if matches!(child.try_wait(), Ok(Some(_))) {
-        *consumed = true;
-    }
-    *consumed
 }
 
 #[cfg(test)]

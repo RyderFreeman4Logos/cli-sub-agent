@@ -68,7 +68,9 @@ async fn spawn_tool_with_pre_exec(
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(move || {
-            libc::setsid();
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
 
             // Resource isolation (rlimits / OOM score).
             match pre_exec_policy {

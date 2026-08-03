@@ -42,6 +42,17 @@ run_normalizer() {
         bash "$normalizer" cargo metadata
 }
 
+run_normalizer_with_default_install_root() {
+    env \
+        PATH="$bin:/usr/bin:/bin" \
+        HOME="$home" \
+        CSA_TEST_REPO_ROOT="$repo" \
+        CSA_TEST_LOG="$log" \
+        CARGO_HOME="$tmp/cargo-home" \
+        RUSTUP_HOME="$tmp/rustup-home" \
+        bash "$normalizer" cargo metadata
+}
+
 marker="$mirror$repo/.rust-target-gc-admission-v1"
 
 # Missing helper + managed marker must stop before Cargo.
@@ -60,6 +71,10 @@ set -e
 
 cat >"$bin/cargo-target-lease" <<'EOF'
 #!/usr/bin/env bash
+if [ -e "${CSA_TEST_REPO_ROOT:?}/target" ]; then
+    printf 'pre-lease-target-mutation\n' >>"${CSA_TEST_LOG:?}"
+    exit 97
+fi
 printf 'lease' >>"${CSA_TEST_LOG:?}"
 for arg in "$@"; do printf ' <%s>' "$arg" >>"${CSA_TEST_LOG:?}"; done
 printf ' target=<%s>\n' "${CARGO_TARGET_DIR:?}" >>"${CSA_TEST_LOG:?}"
@@ -86,6 +101,19 @@ set -e
 [ "$(cat "$log")" = "lease <--> <cargo> <metadata> target=<$mirror$repo/target>" ] || {
     echo "FAIL explicit lease argv=$(cat "$log")"; exit 1;
 }
+
+# The default install root is created only by the command running under the
+# lease, never while the helper still waits to acquire it.
+rm -rf "$repo/target"
+: >"$log"
+set +e
+CSA_CARGO_TARGET_LEASE="$bin/cargo-target-lease" run_normalizer_with_default_install_root
+install_root_rc=$?
+set -e
+[ "$install_root_rc" = 23 ] || {
+    echo "FAIL pre-lease install-root mutation status=$install_root_rc log=$(cat "$log")"; exit 1;
+}
+[ ! -e "$repo/target" ] || { echo "FAIL target mutated before lease helper"; exit 1; }
 
 # PATH discovery is enabled once the lexical canonical parent exists.
 mkdir -p "$mirror$repo"

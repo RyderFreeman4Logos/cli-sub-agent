@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use anyhow::Result;
 use csa_session::state::MetaSessionState;
 
 use super::{ExecuteOptions, Executor};
@@ -10,14 +11,14 @@ impl Executor {
         prompt: &'a str,
         session: &MetaSessionState,
         options: &ExecuteOptions,
-    ) -> Cow<'a, str> {
+    ) -> Result<Cow<'a, str>> {
         let Some(invocation) = options.pre_session_hook.as_ref() else {
-            return Cow::Borrowed(prompt);
+            return Ok(Cow::Borrowed(prompt));
         };
         let config = invocation.config();
         if !config.enabled {
             tracing::debug!("pre_session hook disabled");
-            return Cow::Borrowed(prompt);
+            return Ok(Cow::Borrowed(prompt));
         }
         if !config.matches_transport(self.tool_name()) {
             tracing::debug!(
@@ -25,11 +26,11 @@ impl Executor {
                 configured = ?config.transports,
                 "pre_session hook skipped by transport filter"
             );
-            return Cow::Borrowed(prompt);
+            return Ok(Cow::Borrowed(prompt));
         }
         if !invocation.claim_first_fire() {
             tracing::debug!("pre_session hook already fired for this invocation");
-            return Cow::Borrowed(prompt);
+            return Ok(Cow::Borrowed(prompt));
         }
         let working_dir = if session.project_path.is_empty() {
             std::env::current_dir()
@@ -46,9 +47,13 @@ impl Executor {
             user_prompt: prompt,
         };
 
-        csa_hooks::run_pre_session_hook(config, &context)
-            .await
-            .map_or(Cow::Borrowed(prompt), Cow::Owned)
+        Ok(csa_hooks::run_pre_session_hook_with_cancellation(
+            config,
+            &context,
+            options.cancellation.as_ref(),
+        )
+        .await?
+        .map_or(Cow::Borrowed(prompt), Cow::Owned))
     }
 }
 
@@ -59,7 +64,7 @@ mod tests {
     use csa_session::state::{
         ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext,
     };
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     fn test_session() -> MetaSessionState {
         let now = chrono::Utc::now();
@@ -117,13 +122,103 @@ mod tests {
 
         let result = executor
             .apply_pre_session_hook("hello", &session, &options)
-            .await;
+            .await
+            .expect("hook execution");
 
         // The hook output should contain /tmp (the session project_path),
         // not the process's current working directory.
         assert!(
             result.contains("/tmp"),
             "hook cwd should be session.project_path (/tmp), got: {result}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_during_pre_session_hook_terminates_group_before_transport_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("descendant.pid");
+        let ready_file = temp.path().join("descendant.ready");
+        let marker = temp.path().join("transport-started");
+        let bin = temp.path().join("bin");
+        std::fs::create_dir(&bin).expect("create bin dir");
+        let transport = bin.join("opencode");
+        std::fs::write(&transport, "#!/bin/sh\nprintf started > \"$MARKER\"\n")
+            .expect("write fake transport");
+        let mut permissions = std::fs::metadata(&transport)
+            .expect("transport metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&transport, permissions).expect("make transport executable");
+
+        let config = csa_hooks::PreSessionHookConfig {
+            command: Some(format!(
+                "sh -c 'trap \"\" TERM; echo $$ > \"{}\"; : > \"{}\"; sleep 5' >/dev/null 2>&1 & while [ ! -e \"{}\" ]; do sleep 0.01; done; sleep 5",
+                pid_file.display(),
+                ready_file.display(),
+                ready_file.display()
+            )),
+            transports: vec!["opencode".to_string()],
+            timeout_seconds: 10,
+            ..Default::default()
+        };
+        let cancellation = csa_process::ExecutionCancellation::new();
+        let invocation = csa_hooks::PreSessionHookInvocation::new(config);
+        let mut options =
+            ExecuteOptions::new(StreamMode::BufferOnly, 60).with_pre_session_hook(invocation);
+        options.cancellation = Some(cancellation.clone());
+        let executor = Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        };
+        let mut session = test_session();
+        session.project_path = temp.path().display().to_string();
+        let extra_env = HashMap::from([
+            ("PATH".to_string(), bin.display().to_string()),
+            ("MARKER".to_string(), marker.display().to_string()),
+        ]);
+        let cancel_after_ready = async {
+            while !ready_file.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let pid = std::fs::read_to_string(&pid_file)
+                .expect("descendant publishes pid after TERM trap")
+                .trim()
+                .parse::<i32>()
+                .expect("numeric descendant pid");
+            cancellation.cancel();
+            pid
+        };
+
+        let (result, pid) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                executor.execute_with_transport(
+                    "hello",
+                    None,
+                    &session,
+                    Some(&extra_env),
+                    options,
+                    None,
+                ),
+                cancel_after_ready
+            )
+        })
+        .await
+        .expect("cancellation must bound the full execution boundary");
+
+        let error = result.expect_err("cancelled execution must fail");
+        assert!(error.to_string().contains("cancelled"), "error={error:#}");
+        assert!(
+            !marker.exists(),
+            "transport child must not start after cancellation"
+        );
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        assert!(
+            stat.is_empty() || stat.split_whitespace().nth(2) == Some("Z"),
+            "hook descendant must be terminated before return; stat={stat}"
         );
     }
 
@@ -148,10 +243,12 @@ mod tests {
 
         let first = executor
             .apply_pre_session_hook("first prompt", &session, &options)
-            .await;
+            .await
+            .expect("first hook execution");
         let second = executor
             .apply_pre_session_hook("second prompt", &session, &second_options)
-            .await;
+            .await
+            .expect("second hook execution");
 
         assert!(
             first

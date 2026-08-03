@@ -307,7 +307,6 @@ pub async fn run_prompt_with_io(
     prompt: &str,
     options: AcpRunOptions<'_>,
 ) -> AcpResult<AcpOutput> {
-    let has_resume_session = session_start.resume_session_id.is_some();
     let session = AcpSession::new_with_cancellation(
         AcpSessionCreate {
             command,
@@ -376,11 +375,8 @@ pub async fn run_prompt_with_io(
         stderr.push('\n');
     }
 
-    // Kill ACP process immediately for single-prompt usage (no session resumption).
-    // In session mode (resume_session_id is Some), the process stays alive for reuse.
-    if !has_resume_session {
-        let _ = session.connection().kill().await;
-    }
+    // This helper owns a one-prompt connection; no caller can reuse it after return.
+    session.connection().kill().await?;
 
     Ok(AcpOutput {
         output: result.output,
@@ -398,9 +394,7 @@ async fn cleanup_after_acp_error<T>(
     connection: &AcpConnection,
     error: crate::error::AcpError,
 ) -> AcpResult<T> {
-    if let Err(cleanup_error) = connection.kill().await {
-        tracing::warn!(error = %cleanup_error, "failed to reap ACP process after terminal error");
-    }
+    connection.kill().await?;
     Err(error)
 }
 
@@ -415,9 +409,7 @@ async fn cancel_acp_step<T>(
     tokio::select! {
         result = step => result,
         _ = cancellation.cancelled() => {
-            if let Err(cleanup_error) = connection.kill().await {
-                tracing::warn!(error = %cleanup_error, "failed to reap cancelled ACP process");
-            }
+            connection.kill().await?;
             Err(crate::error::AcpError::Cancelled)
         }
     }
@@ -457,19 +449,110 @@ mod tests {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         assert!(
             stat.is_empty() || stat.split_whitespace().nth(2) == Some("Z"),
-            "ACP descendant must be dead before return; stat={stat}"
+            "ACP descendant must be terminated before return; stat={stat}"
         );
     }
 
     #[cfg(unix)]
+    fn acp_process_fixture(pid_file: &Path, ready_file: &Path, prompt_error: bool) -> String {
+        let prompt_response = if prompt_error {
+            r#"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"prompt failed"}}\n' "$id""#
+        } else {
+            r#"printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id""#
+        };
+        r#"
+trap '' TERM
+sh -c 'trap "" TERM; echo $$ > "__PID__"; : > "__READY__"; while :; do sleep 1; done' &
+while [ ! -e "__READY__" ]; do sleep 0.01; done
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[ ]*\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[]}}\n' "$id"
+      ;;
+    *'"session/new"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fixture-session"}}\n' "$id"
+      ;;
+    *'"session/load"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+      ;;
+    *'"session/prompt"'*)
+      __PROMPT_RESPONSE__
+      ;;
+  esac
+done
+"#
+        .replace("__PID__", &pid_file.display().to_string())
+        .replace("__READY__", &ready_file.display().to_string())
+        .replace("__PROMPT_RESPONSE__", prompt_response)
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
-    async fn malformed_initialize_reaps_term_resistant_descendant() {
+    async fn acp_completion_outcomes_terminate_term_resistant_descendants() {
+        for (name, resume_session_id, prompt_error) in [
+            ("new-success", None, false),
+            ("resumed-success", Some("resume-session"), false),
+            ("resumed-error", Some("resume-session"), true),
+        ] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let pid_file = temp.path().join(format!("{name}.pid"));
+            let ready_file = temp.path().join(format!("{name}.ready"));
+            let args = vec![
+                "-c".to_string(),
+                acp_process_fixture(&pid_file, &ready_file, prompt_error),
+            ];
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                run_prompt_with_io(
+                    "sh",
+                    &args,
+                    temp.path(),
+                    &HashMap::new(),
+                    AcpSessionStart {
+                        resume_session_id,
+                        ..Default::default()
+                    },
+                    "prompt",
+                    AcpRunOptions {
+                        idle_timeout: Duration::from_secs(1),
+                        init_timeout: Duration::from_secs(1),
+                        termination_grace_period: Duration::from_millis(20),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await
+            .expect("ACP outcome must return bounded");
+
+            if prompt_error {
+                assert!(
+                    matches!(&result, Err(crate::error::AcpError::PromptFailed(_))),
+                    "{name}: result={result:?}"
+                );
+            } else {
+                let output = result.expect("successful ACP prompt");
+                assert_eq!(output.exit_reason.as_deref(), Some("end_turn"), "{name}");
+            }
+            let pid = std::fs::read_to_string(&pid_file)
+                .expect("descendant publishes pid after TERM trap")
+                .trim()
+                .parse()
+                .expect("numeric descendant pid");
+            assert_dead_or_zombie(pid).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn malformed_initialize_terminates_term_resistant_descendant() {
         let temp = tempfile::tempdir().expect("tempdir");
         let pid_file = temp.path().join("descendant.pid");
         let args = vec![
             "-c".to_string(),
             format!(
-                "trap '' TERM; sh -c 'trap \"\" TERM; echo $$ > \"{}\"; while :; do :; done' & printf 'not-json\\n'; exec 1>&- 2>&-; while :; do :; done",
+                "trap '' TERM; sh -c 'trap \"\" TERM; echo $$ > \"{}\"; while :; do sleep 1; done' & while [ ! -s \"{}\" ]; do sleep 0.01; done; printf 'not-json\\n'; exec 1>&- 2>&-; while :; do sleep 1; done",
+                pid_file.display(),
                 pid_file.display()
             ),
         ];
@@ -507,7 +590,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn cancellation_during_acp_step_reaps_before_returning_cancelled() {
+    async fn cancellation_during_acp_step_terminates_before_returning_cancelled() {
         let temp = tempfile::tempdir().expect("tempdir");
         let pid_file = temp.path().join("descendant.pid");
         let args = vec![
@@ -531,8 +614,11 @@ mod tests {
         .expect("spawn ACP fixture");
         let cancellation = ExecutionCancellation::new();
         let canceller = cancellation.clone();
+        let ready_pid_file = pid_file.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(30)).await;
+            while !ready_pid_file.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             canceller.cancel();
         });
         let error = tokio::time::timeout(

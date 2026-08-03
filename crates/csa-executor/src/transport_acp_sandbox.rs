@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
@@ -168,73 +167,71 @@ pub(super) async fn run_acp_sandboxed(
     }
 
     // Enrich error with OOM diagnosis if applicable.
-    let result = match inner_result {
-        Ok((prompt_result, acp_session_id)) => {
-            let mut exit_code = match connection.exit_code().await {
-                Ok(code) => code.unwrap_or(0),
-                Err(e) => {
-                    return AcpSandboxedResult {
-                        result: Err(e),
-                        peak_memory_mb,
-                        sandbox_spawn_failed: false,
-                    };
-                }
-            };
-            let mut stderr = connection.stderr();
-            if prompt_result.timed_out {
-                exit_code = 137;
-                if !stderr.is_empty() && !stderr.ends_with('\n') {
-                    stderr.push('\n');
-                }
-                let is_initial =
-                    prompt_result.exit_reason.as_deref() == Some("initial_response_timeout");
-                let timeout_secs = if is_initial {
-                    initial_response_timeout.unwrap_or(idle_timeout).as_secs()
-                } else {
-                    idle_timeout.as_secs()
-                };
-                let label = if is_initial {
-                    "initial response timeout"
-                } else {
-                    "idle timeout"
-                };
-                stderr.push_str(&format!(
-                    "{label}: no ACP events/stderr for {timeout_secs}s; process killed",
-                ));
-                stderr.push('\n');
-            }
-
-            Ok(csa_acp::transport::AcpOutput {
-                output: prompt_result.output,
-                stderr,
-                events: prompt_result.events,
-                session_id: acp_session_id,
-                exit_code,
-                exit_reason: prompt_result.exit_reason,
-                metadata: prompt_result.metadata,
-                peak_memory_mb,
-            })
-        }
-        Err(e) => {
-            if let Some(hint) = &oom_diagnosis {
-                // Construct a typed ProcessExited error so callers retain
-                // programmatic access to exit code and signal fields.
+    let mut result = async {
+        match inner_result {
+            Ok((prompt_result, acp_session_id)) => {
+                let mut exit_code = connection.exit_code().await?.unwrap_or(0);
                 let mut stderr = connection.stderr();
-                if !stderr.is_empty() && !stderr.ends_with('\n') {
+                if prompt_result.timed_out {
+                    exit_code = 137;
+                    if !stderr.is_empty() && !stderr.ends_with('\n') {
+                        stderr.push('\n');
+                    }
+                    let is_initial =
+                        prompt_result.exit_reason.as_deref() == Some("initial_response_timeout");
+                    let timeout_secs = if is_initial {
+                        initial_response_timeout.unwrap_or(idle_timeout).as_secs()
+                    } else {
+                        idle_timeout.as_secs()
+                    };
+                    let label = if is_initial {
+                        "initial response timeout"
+                    } else {
+                        "idle timeout"
+                    };
+                    stderr.push_str(&format!(
+                        "{label}: no ACP events/stderr for {timeout_secs}s; process killed",
+                    ));
                     stderr.push('\n');
                 }
-                stderr.push_str(&format!("OOM detected: {hint}\n"));
-                stderr.push_str(&format!("original error: {e}\n"));
-                Err(csa_acp::AcpError::ProcessExited {
-                    code: 137,
-                    signal: Some(9),
+
+                Ok(csa_acp::transport::AcpOutput {
+                    output: prompt_result.output,
                     stderr,
+                    events: prompt_result.events,
+                    session_id: acp_session_id,
+                    exit_code,
+                    exit_reason: prompt_result.exit_reason,
+                    metadata: prompt_result.metadata,
+                    peak_memory_mb,
                 })
-            } else {
-                Err(e)
+            }
+            Err(e) => {
+                if let Some(hint) = &oom_diagnosis {
+                    // Construct a typed ProcessExited error so callers retain
+                    // programmatic access to exit code and signal fields.
+                    let mut stderr = connection.stderr();
+                    if !stderr.is_empty() && !stderr.ends_with('\n') {
+                        stderr.push('\n');
+                    }
+                    stderr.push_str(&format!("OOM detected: {hint}\n"));
+                    stderr.push_str(&format!("original error: {e}\n"));
+                    Err(csa_acp::AcpError::ProcessExited {
+                        code: 137,
+                        signal: Some(9),
+                        stderr,
+                    })
+                } else {
+                    Err(e)
+                }
             }
         }
-    };
+    }
+    .await;
+
+    if let Err(cleanup_error) = connection.kill().await {
+        result = Err(cleanup_error);
+    }
 
     // sandbox_handle dropped here, cleaning up cgroup scope if applicable.
     AcpSandboxedResult {
@@ -305,37 +302,12 @@ async fn run_acp_sandboxed_inner(
         )
         .await;
 
-    kill_after_fresh_sandboxed_prompt_error(result.is_err(), resume_session_id, || async {
-        let _ = connection.kill().await;
-    })
-    .await;
-
     // Stop memory monitor before capturing peak memory (done by caller).
     if let Some(monitor) = memory_monitor {
         monitor.stop().await;
     }
 
     result.map(|r| (r, acp_session_id))
-}
-
-fn sandboxed_prompt_error_should_kill_session(
-    prompt_failed: bool,
-    resume_session_id: Option<&str>,
-) -> bool {
-    prompt_failed && resume_session_id.is_none()
-}
-
-async fn kill_after_fresh_sandboxed_prompt_error<F, Fut>(
-    prompt_failed: bool,
-    resume_session_id: Option<&str>,
-    kill: F,
-) where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = ()>,
-{
-    if sandboxed_prompt_error_should_kill_session(prompt_failed, resume_session_id) {
-        kill().await;
-    }
 }
 
 pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
@@ -371,87 +343,109 @@ fn truncate_line(line: &str, max_chars: usize) -> String {
     line.chars().take(max_chars).collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use super::*;
 
-    use super::{
-        kill_after_fresh_sandboxed_prompt_error, sandboxed_prompt_error_should_kill_session,
-    };
-
-    #[test]
-    fn kills_fresh_sandboxed_acp_session_after_prompt_error() {
-        assert!(sandboxed_prompt_error_should_kill_session(true, None));
+    fn acp_fixture(pid_file: &Path, prompt_error: bool) -> String {
+        let prompt_response = if prompt_error {
+            r#"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"prompt failed"}}\n' "$id""#
+        } else {
+            r#"printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\n' "$id""#
+        };
+        r#"
+trap '' TERM
+sh -c 'while :; do sleep 1; done' &
+printf '%s\n' "$!" > "__PID__"
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[ ]*\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{},"authMethods":[]}}\n' "$id"
+      ;;
+    *'"session/new"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fixture-session"}}\n' "$id"
+      ;;
+    *'"session/prompt"'*)
+      __PROMPT_RESPONSE__
+      ;;
+  esac
+done
+"#
+        .replace("__PID__", &pid_file.display().to_string())
+        .replace("__PROMPT_RESPONSE__", prompt_response)
     }
 
-    #[test]
-    fn preserves_resumed_sandboxed_acp_session_after_prompt_error() {
-        assert!(!sandboxed_prompt_error_should_kill_session(
-            true,
-            Some("provider-session-id")
-        ));
-    }
-
-    #[test]
-    fn does_not_kill_successful_sandboxed_acp_prompt() {
-        assert!(!sandboxed_prompt_error_should_kill_session(false, None));
-    }
-
-    #[tokio::test]
-    async fn kills_fresh_sandboxed_acp_connection_after_prompt_error() {
-        let kills = Arc::new(AtomicUsize::new(0));
-        let kills_for_closure = Arc::clone(&kills);
-
-        kill_after_fresh_sandboxed_prompt_error(true, None, move || async move {
-            kills_for_closure.fetch_add(1, Ordering::SeqCst);
-        })
-        .await;
-
-        assert_eq!(
-            kills.load(Ordering::SeqCst),
-            1,
-            "fresh sandboxed ACP prompt errors must kill the child connection"
+    async fn assert_terminated(pid: i32) {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        assert!(
+            stat.is_empty() || stat.split_whitespace().nth(2) == Some("Z"),
+            "sandboxed ACP descendant must be terminated before return; stat={stat}"
         );
     }
 
     #[tokio::test]
-    async fn preserves_resumed_sandboxed_acp_connection_after_prompt_error() {
-        let kills = Arc::new(AtomicUsize::new(0));
-        let kills_for_closure = Arc::clone(&kills);
+    async fn non_cgroup_sandbox_outcomes_terminate_term_resistant_descendants() {
+        let plan = csa_resource::IsolationPlanBuilder::new(csa_resource::EnforcementMode::Off)
+            .build()
+            .expect("non-cgroup isolation plan");
+        assert_eq!(plan.resource, csa_resource::ResourceCapability::None);
 
-        kill_after_fresh_sandboxed_prompt_error(
-            true,
-            Some("provider-session-id"),
-            move || async move {
-                kills_for_closure.fetch_add(1, Ordering::SeqCst);
-            },
-        )
-        .await;
+        for (name, prompt_error) in [("success", false), ("error", true)] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let pid_file = temp.path().join(format!("{name}.pid"));
+            let args = vec!["-c".to_string(), acp_fixture(&pid_file, prompt_error)];
+            let sandboxed = tokio::time::timeout(
+                Duration::from_secs(5),
+                run_acp_sandboxed(
+                    "sh",
+                    &args,
+                    temp.path(),
+                    &HashMap::new(),
+                    None,
+                    None,
+                    None,
+                    "prompt",
+                    Duration::from_secs(1),
+                    None,
+                    Duration::from_secs(1),
+                    Duration::from_millis(20),
+                    &plan,
+                    "fixture",
+                    "session",
+                    false,
+                    None,
+                    1024,
+                    false,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "sandboxed ACP outcome must return bounded: name={name} pid={:?}",
+                    std::fs::read_to_string(&pid_file).ok()
+                )
+            });
 
-        assert_eq!(
-            kills.load(Ordering::SeqCst),
-            0,
-            "resumed sandboxed ACP prompt errors must leave the child connection alive"
-        );
-    }
-
-    #[tokio::test]
-    async fn does_not_kill_successful_sandboxed_acp_connection() {
-        let kills = Arc::new(AtomicUsize::new(0));
-        let kills_for_closure = Arc::clone(&kills);
-
-        kill_after_fresh_sandboxed_prompt_error(false, None, move || async move {
-            kills_for_closure.fetch_add(1, Ordering::SeqCst);
-        })
-        .await;
-
-        assert_eq!(
-            kills.load(Ordering::SeqCst),
-            0,
-            "successful sandboxed ACP prompts must not use the prompt-error kill path"
-        );
+            assert!(!sandboxed.sandbox_spawn_failed, "{name}");
+            if prompt_error {
+                assert!(
+                    matches!(&sandboxed.result, Err(csa_acp::AcpError::PromptFailed(_))),
+                    "{name}: result={:?}",
+                    sandboxed.result
+                );
+            } else {
+                let output = sandboxed.result.expect("successful sandboxed ACP prompt");
+                assert_eq!(output.exit_reason.as_deref(), Some("end_turn"));
+            }
+            let pid = std::fs::read_to_string(&pid_file)
+                .expect("descendant publishes pid after TERM trap")
+                .trim()
+                .parse()
+                .expect("numeric descendant pid");
+            assert_terminated(pid).await;
+        }
     }
 }

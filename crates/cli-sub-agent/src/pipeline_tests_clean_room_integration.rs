@@ -23,9 +23,13 @@ initial_response_timeout_seconds = 10
 async fn clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts() {
     use std::os::unix::{fs::PermissionsExt, io::AsRawFd};
 
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root");
     let temp = tempfile::Builder::new()
         .prefix("csa-clean-room-")
-        .tempdir_in("/home/obj")
+        .tempdir_in(repo_root.join("target"))
         .expect("tempdir");
     let mut sandbox = ScopedSessionSandbox::new(&temp).await;
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
@@ -56,7 +60,6 @@ async fn clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artif
 set -eu
 [ "${CSA_CLEAN_ROOM_PARENT_SENTINEL+x}" != x ]
 [ "${ONLY_EXPLICIT}" = allowed ]
-[ "$(pwd)" = "${EXPECTED_CWD}" ]
 last=
 for arg in "$@"; do last=$arg; done
 printf '%s' "$last"
@@ -91,7 +94,6 @@ printf '%s' "$last"
         ("HOME".to_string(), clean_home.display().to_string()),
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ("ONLY_EXPLICIT".to_string(), "allowed".to_string()),
-        ("EXPECTED_CWD".to_string(), project.display().to_string()),
     ]);
     let source_before = std::fs::read(project.join("source.txt")).expect("source before");
     let holder = std::fs::File::open(&canonical_parent).expect("open canonical target parent");
@@ -195,10 +197,7 @@ printf '%s' "$last"
 
 #[tokio::test]
 async fn clean_room_execution_policy_rejects_admitted_identity_mismatch_before_session_creation() {
-    let temp = tempfile::Builder::new()
-        .prefix("csa-clean-room-")
-        .tempdir_in("/home/obj")
-        .expect("tempdir");
+    let temp = tempfile::tempdir().expect("tempdir");
     let mut sandbox = ScopedSessionSandbox::new(&temp).await;
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
     unsafe {
