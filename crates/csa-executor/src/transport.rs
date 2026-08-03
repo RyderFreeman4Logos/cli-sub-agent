@@ -417,6 +417,7 @@ impl AcpTransport {
             memory_max_mb: options
                 .sandbox
                 .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb),
+            cancellation: options.cancellation.clone(),
         };
 
         let (mut output, gemini_warning_summary) = if self.tool_name == "gemini-cli" {
@@ -428,6 +429,7 @@ impl AcpTransport {
                 &runtime_home,
                 path_override,
                 gemini_allow_degraded_mcp(&spawn_request.env),
+                spawn_request.cancellation.as_ref(),
                 || Self::run_acp_prompt(spawn_request.clone()),
                 diagnose_mcp_init_failure,
                 disable_mcp_servers_in_runtime,

@@ -10,6 +10,8 @@ pub enum AcpError {
     SessionFailed(String),
     #[error("ACP prompt failed: {0}")]
     PromptFailed(String),
+    #[error("ACP execution cancelled")]
+    Cancelled,
     #[error(
         "ACP process exited unexpectedly: {}{}",
         format_exit_info(*code, *signal),

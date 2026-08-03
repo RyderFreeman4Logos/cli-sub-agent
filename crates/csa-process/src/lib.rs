@@ -9,7 +9,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
-use tokio::time::MissedTickBehavior;
+use tokio::{sync::Notify, time::MissedTickBehavior};
 use tracing::warn;
 pub mod command_environment;
 pub use command_environment::{
@@ -155,9 +155,15 @@ pub struct SpawnOptions {
     pub cancellation: Option<ExecutionCancellation>,
 }
 
-/// Cloneable cancellation state checked by the process wait loop.
+/// Cloneable cancellation state shared by process and transport wait loops.
 #[derive(Debug, Clone, Default)]
-pub struct ExecutionCancellation(Arc<AtomicBool>);
+pub struct ExecutionCancellation(Arc<ExecutionCancellationState>);
+
+#[derive(Debug, Default)]
+struct ExecutionCancellationState {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
 
 impl ExecutionCancellation {
     pub fn new() -> Self {
@@ -165,11 +171,27 @@ impl ExecutionCancellation {
     }
 
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.notify.notify_waiters();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wait until cancellation, without losing a cancellation that races setup.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let notified = self.0.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
     }
 }
 

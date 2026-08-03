@@ -731,6 +731,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        cancellation: None,
     };
 
     let result = transport

@@ -45,9 +45,21 @@ pub(super) async fn run_acp_sandboxed(
     output_spool_max_bytes: u64,
     output_spool_keep_rotated: bool,
     tool_output_compaction: Option<csa_acp::ToolOutputCompactionConfig>,
+    cancellation: Option<csa_process::ExecutionCancellation>,
 ) -> AcpSandboxedResult {
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
+
+    if cancellation
+        .as_ref()
+        .is_some_and(|cancellation| cancellation.is_cancelled())
+    {
+        return AcpSandboxedResult {
+            result: Err(csa_acp::AcpError::Cancelled),
+            peak_memory_mb: None,
+            sandbox_spawn_failed: false,
+        };
+    }
 
     let diagnostic_path =
         super::transport_meta::memory_soft_limit_diagnostic_path(working_dir, session_id);
@@ -103,7 +115,7 @@ pub(super) async fn run_acp_sandboxed(
 
     // Inner block: all fallible operations after spawn. peak_memory_mb is
     // captured regardless of success or failure.
-    let inner_result = run_acp_sandboxed_inner(
+    let inner = run_acp_sandboxed_inner(
         &connection,
         memory_monitor,
         system_prompt,
@@ -118,8 +130,20 @@ pub(super) async fn run_acp_sandboxed(
         output_spool_keep_rotated,
         tool_output_compaction,
         working_dir,
-    )
-    .await;
+    );
+    let inner_result = if let Some(cancellation) = cancellation.as_ref() {
+        tokio::select! {
+            result = inner => result,
+            _ = cancellation.cancelled() => {
+                match connection.kill().await {
+                    Ok(()) => Err(csa_acp::AcpError::Cancelled),
+                    Err(error) => Err(error),
+                }
+            }
+        }
+    } else {
+        inner.await
+    };
 
     let exit_signal = match &inner_result {
         Err(csa_acp::AcpError::ProcessExited { signal, .. }) => *signal,

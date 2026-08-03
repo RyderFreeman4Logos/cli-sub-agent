@@ -12,6 +12,7 @@ async fn test_gemini_acp_falls_back_to_degraded_mcp_when_preflight_detects_unhea
         &runtime_home,
         Some(std::ffi::OsString::from("/prepared/bin")),
         true,
+        None,
         {
             let steps = std::sync::Arc::clone(&steps);
             let observed_settings = std::sync::Arc::clone(&observed_settings);
@@ -98,6 +99,7 @@ async fn test_gemini_acp_retries_with_degraded_mcp_on_generic_init_crash() {
             &runtime_home,
             Some(std::ffi::OsString::from("/prepared/bin")),
             true,
+            None,
             {
                 let spawn_calls = std::sync::Arc::clone(&spawn_calls);
                 let settings_after_retry = std::sync::Arc::clone(&settings_after_retry);
@@ -216,6 +218,7 @@ async fn test_gemini_acp_no_retry_when_first_spawn_succeeds() {
         &runtime_home,
         Some(std::ffi::OsString::from("/prepared/bin")),
         true,
+        None,
         {
             let spawn_calls = std::sync::Arc::clone(&spawn_calls);
             move || {
@@ -255,4 +258,32 @@ async fn test_gemini_acp_no_retry_when_first_spawn_succeeds() {
     assert_eq!(*diagnose_calls.lock().expect("diagnose calls lock"), 1);
     assert_eq!(*disable_calls.lock().expect("disable calls lock"), 0);
     assert_eq!(*spawn_calls.lock().expect("spawn calls lock"), 1);
+}
+
+#[tokio::test]
+async fn test_gemini_acp_cancellation_stops_retry_before_another_spawn() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cancellation = csa_process::ExecutionCancellation::new();
+    cancellation.cancel();
+    let spawns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let spawned = std::sync::Arc::clone(&spawns);
+
+    let error = AcpTransport::execute_gemini_acp_with_degraded_mcp_retry(
+        temp.path(), None, true, Some(&cancellation),
+        move || {
+            let spawned = std::sync::Arc::clone(&spawned);
+            async move {
+                spawned.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, anyhow::Error>(())
+            }
+        },
+        |_, _| McpInitDiagnostic::default(),
+        |_, _, _| Ok(()),
+        |_| None,
+    )
+    .await
+    .expect_err("cancelled retry must not spawn");
+
+    assert!(error.to_string().contains("cancelled"));
+    assert_eq!(spawns.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

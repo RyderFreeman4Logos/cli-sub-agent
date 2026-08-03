@@ -3,6 +3,33 @@ use crate::{
     wait_and_capture_with_idle_timeout,
 };
 use std::{process::Command, time::Duration};
+use tokio::time::timeout;
+
+#[tokio::test]
+async fn cancellation_notifies_waiter_when_cancelled_before_wait() {
+    let cancellation = ExecutionCancellation::new();
+    cancellation.cancel();
+
+    timeout(Duration::from_millis(50), cancellation.cancelled())
+        .await
+        .expect("cancel-before-wait must not miss notification");
+}
+
+#[tokio::test]
+async fn cancellation_notifies_waiter_when_cancelled_after_wait_begins() {
+    let cancellation = ExecutionCancellation::new();
+    let waiter = {
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move { cancellation.cancelled().await })
+    };
+
+    tokio::task::yield_now().await;
+    cancellation.cancel();
+    timeout(Duration::from_millis(50), waiter)
+        .await
+        .expect("cancel-after-wait must notify")
+        .expect("wait task must not panic");
+}
 
 #[cfg(unix)]
 #[tokio::test]

@@ -1,7 +1,7 @@
 use std::time::Duration;
 use std::{collections::HashMap, path::Path};
 
-use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES};
+use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, ExecutionCancellation};
 
 use crate::{
     client::SessionEvent,
@@ -70,6 +70,8 @@ pub struct AcpRunOptions<'a> {
     pub initial_response_timeout: Option<Duration>,
     pub init_timeout: Duration,
     pub termination_grace_period: Duration,
+    /// Pipeline cancellation shared with the spawned ACP process group.
+    pub cancellation: Option<ExecutionCancellation>,
     pub io: AcpOutputIoOptions<'a>,
 }
 
@@ -80,6 +82,7 @@ impl Default for AcpRunOptions<'_> {
             initial_response_timeout: None,
             init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
+            cancellation: None,
             io: AcpOutputIoOptions::default(),
         }
     }
@@ -103,6 +106,13 @@ pub struct AcpSession {
 
 impl AcpSession {
     pub async fn new(create: AcpSessionCreate<'_>) -> AcpResult<Self> {
+        Self::new_with_cancellation(create, None).await
+    }
+
+    async fn new_with_cancellation(
+        create: AcpSessionCreate<'_>,
+        cancellation: Option<&ExecutionCancellation>,
+    ) -> AcpResult<Self> {
         let AcpSessionCreate {
             command,
             args,
@@ -123,7 +133,7 @@ impl AcpSession {
             },
         )
         .await?;
-        connection.initialize().await?;
+        cancel_acp_step(&connection, cancellation, connection.initialize()).await?;
 
         // Inject fork metadata into the meta map when present.
         let meta = build_session_meta(
@@ -134,27 +144,46 @@ impl AcpSession {
 
         let session_id = if let Some(resume_id) = session_start.resume_session_id {
             tracing::debug!(resume_session_id = resume_id, "loading ACP session");
-            match connection.load_session(resume_id, Some(working_dir)).await {
+            match cancel_acp_step(
+                &connection,
+                cancellation,
+                connection.load_session(resume_id, Some(working_dir)),
+            )
+            .await
+            {
                 Ok(id) => {
                     tracing::debug!(session_id = %id, "Resumed ACP session");
                     id
                 }
                 Err(error) => {
+                    if matches!(error, crate::error::AcpError::Cancelled) {
+                        return Err(error);
+                    }
                     tracing::warn!(
                         resume_session_id = resume_id,
                         error = %error,
                         "Failed to resume ACP session, creating new session"
                     );
-                    connection
-                        .new_session(session_start.system_prompt, Some(working_dir), meta.clone())
-                        .await?
+                    cancel_acp_step(
+                        &connection,
+                        cancellation,
+                        connection.new_session(
+                            session_start.system_prompt,
+                            Some(working_dir),
+                            meta.clone(),
+                        ),
+                    )
+                    .await?
                 }
             }
         } else {
             tracing::debug!("creating new ACP session");
-            connection
-                .new_session(session_start.system_prompt, Some(working_dir), meta)
-                .await?
+            cancel_acp_step(
+                &connection,
+                cancellation,
+                connection.new_session(session_start.system_prompt, Some(working_dir), meta),
+            )
+            .await?
         };
 
         Ok(Self {
@@ -253,6 +282,7 @@ pub async fn run_prompt(
             initial_response_timeout: None,
             init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
+            cancellation: None,
             io: AcpOutputIoOptions::default(),
         },
     )
@@ -269,18 +299,23 @@ pub async fn run_prompt_with_io(
     options: AcpRunOptions<'_>,
 ) -> AcpResult<AcpOutput> {
     let has_resume_session = session_start.resume_session_id.is_some();
-    let session = AcpSession::new(AcpSessionCreate {
-        command,
-        args,
-        working_dir,
-        env,
-        session_start,
-        init_timeout: options.init_timeout,
-        termination_grace_period: options.termination_grace_period,
-    })
+    let session = AcpSession::new_with_cancellation(
+        AcpSessionCreate {
+            command,
+            args,
+            working_dir,
+            env,
+            session_start,
+            init_timeout: options.init_timeout,
+            termination_grace_period: options.termination_grace_period,
+        },
+        options.cancellation.as_ref(),
+    )
     .await?;
-    let result = match session
-        .prompt_with_idle_timeout_and_io(
+    let result = match cancel_acp_step(
+        session.connection(),
+        options.cancellation.as_ref(),
+        session.prompt_with_idle_timeout_and_io(
             prompt,
             options.idle_timeout,
             options.initial_response_timeout,
@@ -291,8 +326,9 @@ pub async fn run_prompt_with_io(
                 keep_rotated_spool: options.io.keep_rotated_spool,
                 tool_output_compaction: options.io.tool_output_compaction,
             },
-        )
-        .await
+        ),
+    )
+    .await
     {
         Ok(result) => result,
         Err(error) => {
@@ -349,6 +385,23 @@ pub async fn run_prompt_with_io(
         metadata: result.metadata,
         peak_memory_mb: None,
     })
+}
+
+async fn cancel_acp_step<T>(
+    connection: &AcpConnection,
+    cancellation: Option<&ExecutionCancellation>,
+    step: impl std::future::Future<Output = AcpResult<T>>,
+) -> AcpResult<T> {
+    let Some(cancellation) = cancellation else {
+        return step.await;
+    };
+    tokio::select! {
+        result = step => result,
+        _ = cancellation.cancelled() => {
+            connection.kill().await?;
+            Err(crate::error::AcpError::Cancelled)
+        }
+    }
 }
 
 /// Merge fork metadata into the session meta map. Returns the (possibly new) meta.
