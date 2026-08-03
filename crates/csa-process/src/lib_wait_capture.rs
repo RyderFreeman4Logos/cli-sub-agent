@@ -1,10 +1,7 @@
 use super::*;
 use crate::signal_exit::{append_signal_exit_note, process_exit_status};
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "timeout params are flat for caller convenience"
-)]
+#[expect(clippy::too_many_arguments, reason = "flat parameters")]
 pub async fn wait_and_capture_with_idle_timeout(
     mut child: tokio::process::Child,
     stream_mode: StreamMode,
@@ -75,10 +72,10 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut workspace_boundary_timed_out = false;
     let mut workspace_boundary_error_hits = 0usize;
     let mut workspace_boundary_warned = false;
-    let workspace_boundary_threshold = resolve_workspace_boundary_threshold();
+    let boundary_threshold = resolve_workspace_boundary_threshold();
     let mut timeout_note = String::new();
     let workspace_boundary_note = format!(
-        "workspace boundary hits crossed threshold {workspace_boundary_threshold}; session continued (non-fatal)"
+        "workspace boundary hits crossed threshold {boundary_threshold}; session continued (non-fatal)"
     );
     let mut persistent_rate_limit_note: Option<String> = None;
     let mut persistent_rate_limit_tracker = PersistentRateLimitTracker::default();
@@ -141,7 +138,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             drain_if_over_high_water(&mut output);
                             note_workspace_boundary_threshold(
                                 workspace_boundary_error_hits,
-                                workspace_boundary_threshold,
+                                boundary_threshold,
                                 &mut workspace_boundary_warned,
                                 &mut workspace_boundary_timed_out,
                                 &mut output,
@@ -180,7 +177,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             drain_if_over_high_water(&mut stderr_output);
                             note_workspace_boundary_threshold(
                                 workspace_boundary_error_hits,
-                                workspace_boundary_threshold,
+                                boundary_threshold,
                                 &mut workspace_boundary_warned,
                                 &mut workspace_boundary_timed_out,
                                 &mut output,
@@ -301,7 +298,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                             drain_if_over_high_water(&mut output);
                             note_workspace_boundary_threshold(
                                 workspace_boundary_error_hits,
-                                workspace_boundary_threshold,
+                                boundary_threshold,
                                 &mut workspace_boundary_warned,
                                 &mut workspace_boundary_timed_out,
                                 &mut output,
@@ -398,23 +395,24 @@ pub async fn wait_and_capture_with_idle_timeout(
     {
         child.wait().await.context("Failed to wait for command")?
     } else {
-        let (waited_status, timeout) = crate::wait_after_capture::wait_after_output_eof(
-            &mut child,
-            received_first_output,
-            &mut last_activity,
-            last_stdout_activity,
-            execution_start,
-            &mut last_heartbeat,
-            idle_timeout,
-            initial_response_timeout,
-            liveness_dead_timeout,
-            session_dir,
-            heartbeat_interval,
-            &mut idle_watchdog_state,
-            &spawn_options,
-            termination_grace_period,
-        )
-        .await?;
+        let (waited_status, timeout) =
+            crate::wait_after_capture::wait_after_output_eof(crate::output_eof_wait!(
+                &mut child,
+                received_first_output,
+                &mut last_activity,
+                last_stdout_activity,
+                execution_start,
+                &mut last_heartbeat,
+                idle_timeout,
+                initial_response_timeout,
+                liveness_dead_timeout,
+                session_dir,
+                heartbeat_interval,
+                &mut idle_watchdog_state,
+                &spawn_options,
+                termination_grace_period,
+            ))
+            .await?;
         if let Some(note) = timeout {
             idle_timed_out = true;
             timeout_note = note;

@@ -172,7 +172,7 @@ fn has_expected_target_symlink(workspace: &Path, expected_target: &Path) -> Resu
 
 fn open_directory_cloexec(parent: &Path) -> std::io::Result<File> {
     let path = CString::new(parent.as_os_str().as_bytes())
-        .expect("filesystem paths cannot contain an interior NUL");
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     // SAFETY: `path` is NUL terminated and lives through the open call.
     let fd = unsafe {
         libc::open(

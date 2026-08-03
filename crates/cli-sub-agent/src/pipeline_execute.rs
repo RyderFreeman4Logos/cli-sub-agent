@@ -23,6 +23,17 @@ pub(crate) enum TransportFailurePolicy {
     CleanRoom,
 }
 
+async fn await_cancelled_transport<T>(
+    execution: impl std::future::Future<Output = T>,
+    termination_grace_period: Duration,
+) {
+    let _ = tokio::time::timeout(
+        termination_grace_period.saturating_add(Duration::from_secs(1)),
+        execution,
+    )
+    .await;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_transport_with_signal(
     executor: &Executor,
@@ -40,6 +51,8 @@ pub(crate) async fn execute_transport_with_signal(
     let failure_policy = TransportFailurePolicy::Legacy;
     let cancellation = csa_process::ExecutionCancellation::new();
     let mut execute_options = execute_options;
+    let termination_grace_period =
+        Duration::from_secs(execute_options.termination_grace_period_seconds);
     execute_options.cancellation = Some(cancellation.clone());
     let exec_result = {
         #[cfg(unix)]
@@ -70,7 +83,7 @@ pub(crate) async fn execute_transport_with_signal(
             tokio::select! {
                 _ = sigterm.recv() => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     warn!(
                         session_id = %session.meta_session_id,
                         task_type = session.task_context.task_type.as_deref().unwrap_or("unknown"),
@@ -93,7 +106,7 @@ pub(crate) async fn execute_transport_with_signal(
                 }
                 _ = sigint.recv() => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     record_session_interruption_state(
                         project_root,
                         session,
@@ -109,7 +122,7 @@ pub(crate) async fn execute_transport_with_signal(
                 }
                 _ = &mut timeout_future => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     let summary = format!("Execution timed out after {timeout_secs}s");
                     warn!(
@@ -290,6 +303,8 @@ pub(crate) async fn execute_clean_transport_with_signal(
     let failure_policy = TransportFailurePolicy::CleanRoom;
     let cancellation = csa_process::ExecutionCancellation::new();
     let mut execute_options = execute_options;
+    let termination_grace_period =
+        Duration::from_secs(execute_options.termination_grace_period_seconds);
     execute_options.cancellation = Some(cancellation.clone());
     let exec_result = {
         #[cfg(unix)]
@@ -321,17 +336,17 @@ pub(crate) async fn execute_clean_transport_with_signal(
             tokio::select! {
                 _ = sigterm.recv() => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     Ok(signal_interrupted_transport_result(143, Some(libc::SIGTERM), "sigterm", "Execution interrupted by SIGTERM"))
                 },
                 _ = sigint.recv() => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     Ok(signal_interrupted_transport_result(130, Some(libc::SIGINT), "sigint", "Execution interrupted by SIGINT"))
                 },
                 _ = &mut timeout_future => {
                     cancellation.cancel();
-                    let _ = execution.await;
+                    await_cancelled_transport(&mut execution, termination_grace_period).await;
                     let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
                     Ok(signal_interrupted_transport_result(
                         RUN_TIMEOUT_EXIT_CODE,
@@ -405,6 +420,16 @@ fn signal_interrupted_transport_result(
         events: Vec::new(),
         metadata: StreamingMetadata::default(),
     }
+}
+
+#[cfg(test)]
+fn timeout_transport_result(timeout_secs: u64) -> TransportResult {
+    signal_interrupted_transport_result(
+        RUN_TIMEOUT_EXIT_CODE,
+        None,
+        "timeout",
+        &format!("Execution timed out after {timeout_secs}s"),
+    )
 }
 
 fn log_signal_exit_diagnostic(
@@ -505,5 +530,20 @@ mod tests {
         assert_eq!(result.execution.terminal_reason.as_deref(), Some("sigterm"));
         assert_eq!(result.execution.model_completed, Some(false));
         assert!(result.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wall_timeout_drops_noncooperating_transport_after_bounded_cleanup() {
+        let cancellation = csa_process::ExecutionCancellation::new();
+        let started = std::time::Instant::now();
+        cancellation.cancel();
+        await_cancelled_transport(std::future::pending::<()>(), Duration::from_millis(1)).await;
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(cancellation.is_cancelled());
+        assert_eq!(
+            timeout_transport_result(1).execution.exit_code,
+            RUN_TIMEOUT_EXIT_CODE
+        );
     }
 }

@@ -1,6 +1,7 @@
 use crate::target_admission::acquire_target_gc_admission_for_test;
 use crate::{TargetGcAdmissionLease, acquire_target_gc_admission};
 use std::fs::{self, File, OpenOptions};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -79,20 +80,21 @@ impl Drop for DirectoryFlock {
 
 #[cfg(target_os = "linux")]
 fn child_exclusive_lock_is_blocked(parent: &Path, inherited_fd: std::os::unix::io::RawFd) -> bool {
-    // SAFETY: fork has no Rust-side work in the child except raw syscalls and immediate exit.
+    let probe = OpenOptions::new()
+        .read(true)
+        .open(parent)
+        .expect("open independent probe before fork");
+    let probe_fd = probe.as_raw_fd();
+    // SAFETY: the child only closes inherited fds, flocks its pre-opened probe, and exits.
     let pid = unsafe { libc::fork() };
     assert_ne!(pid, -1, "fork should succeed");
     if pid == 0 {
-        // SAFETY: this is the inherited lease fd; closing it leaves an independent probe.
-        unsafe { libc::close(inherited_fd) };
-        let file = OpenOptions::new()
-            .read(true)
-            .open(parent)
-            .expect("child open parent");
-        // SAFETY: `file` owns a valid directory fd.
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        // SAFETY: exit immediately after raw syscall-only child work.
-        unsafe { libc::_exit(if rc == 0 { 0 } else { 1 }) };
+        // SAFETY: these fds were opened before fork; only async-signal-safe syscalls run here.
+        unsafe {
+            libc::close(inherited_fd);
+            let rc = libc::flock(probe_fd, libc::LOCK_EX | libc::LOCK_NB);
+            libc::_exit(if rc == 0 { 0 } else { 1 });
+        }
     }
     let mut status = 0;
     // SAFETY: waiting for the child PID returned by fork.
@@ -257,4 +259,20 @@ fn target_gc_admission_rejects_parent_identity_replacement() {
 
     fs::remove_dir(&fixture.canonical_parent).expect("remove replacement");
     fs::rename(&replaced_parent, &fixture.canonical_parent).expect("restore original parent");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn target_gc_admission_rejects_interior_nul_path_without_panicking() {
+    let workspace = PathBuf::from(std::ffi::OsString::from_vec(b"/workspace\0suffix".to_vec()));
+    let mirror_root = tempdir().expect("mirror root tempdir");
+    let error = acquire_target_gc_admission_for_test(&workspace, mirror_root.path(), || {})
+        .expect_err("interior NUL must be rejected")
+        .context("expected invalid-input error");
+
+    assert!(error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::InvalidInput)
+    }));
 }

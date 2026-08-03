@@ -53,42 +53,18 @@ use crate::{
 const DEFAULT_HEARTBEAT_SECS: u64 = 15;
 const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
-#[derive(Debug, Clone, Default)]
-pub struct PromptResult {
-    /// Agent output text (tail-only for large sessions; full output stays in the spool file).
-    pub output: String,
-    pub events: Vec<SessionEvent>,
-    pub exit_reason: Option<String>,
-    pub timed_out: bool,
-    /// Incrementally collected metadata from the event stream.
-    pub metadata: StreamingMetadata,
-}
+#[path = "connection_prompt_types.rs"]
+mod prompt_types;
+pub use prompt_types::{PromptIoOptions, PromptResult};
 
-#[derive(Debug, Clone)]
-pub struct PromptIoOptions<'a> {
-    pub stream_stdout_to_stderr: bool,
-    pub output_spool: Option<&'a Path>,
-    pub spool_max_bytes: u64,
-    pub keep_rotated_spool: bool,
-    pub tool_output_compaction: Option<ToolOutputCompactionConfig>,
-}
-
-impl Default for PromptIoOptions<'_> {
-    fn default() -> Self {
-        Self {
-            stream_stdout_to_stderr: false,
-            output_spool: None,
-            spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
-            keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
-            tool_output_compaction: None,
-        }
-    }
-}
+#[path = "connection_parts.rs"]
+mod parts;
+pub(crate) use parts::AcpConnectionParts;
 
 pub struct AcpConnection {
     local_set: LocalSet,
     connection: ClientSideConnection,
-    child: Rc<RefCell<Child>>,
+    child: Rc<RefCell<Option<Child>>>,
     events: SharedEvents,
     last_activity: SharedActivity,
     last_meaningful_activity: SharedActivity,
@@ -108,31 +84,19 @@ impl AcpConnection {
     pub(crate) const STRIPPED_ENV_VARS: &[&str] = connection_env::STRIPPED_ENV_VARS;
 
     /// Internal constructor used by `connection_spawn` after assembling parts.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_from_parts(
-        local_set: LocalSet,
-        connection: ClientSideConnection,
-        child: Child,
-        events: SharedEvents,
-        last_activity: SharedActivity,
-        last_meaningful_activity: SharedActivity,
-        tool_output_compactor: SharedToolOutputCompactor,
-        stderr_buf: Rc<RefCell<String>>,
-        default_working_dir: PathBuf,
-        options: AcpConnectionOptions,
-    ) -> Self {
+    pub(crate) fn new_from_parts(parts: AcpConnectionParts) -> Self {
         Self {
-            local_set,
-            connection,
-            child: Rc::new(RefCell::new(child)),
-            events,
-            last_activity,
-            last_meaningful_activity,
-            tool_output_compactor,
-            stderr_buf,
-            default_working_dir,
-            init_timeout: options.init_timeout,
-            termination_grace_period: options.termination_grace_period,
+            local_set: parts.local_set,
+            connection: parts.connection,
+            child: Rc::new(RefCell::new(Some(parts.child))),
+            events: parts.events,
+            last_activity: parts.last_activity,
+            last_meaningful_activity: parts.last_meaningful_activity,
+            tool_output_compactor: parts.tool_output_compactor,
+            stderr_buf: parts.stderr_buf,
+            default_working_dir: parts.default_working_dir,
+            init_timeout: parts.options.init_timeout,
+            termination_grace_period: parts.options.termination_grace_period,
         }
     }
 
@@ -488,43 +452,44 @@ impl AcpConnection {
     }
 
     pub fn child_pid(&self) -> Option<u32> {
-        self.child.borrow().id()
+        self.child.borrow().as_ref().and_then(Child::id)
     }
+
     pub async fn exit_code(&self) -> AcpResult<Option<i32>> {
         let mut child = self.child.borrow_mut();
+        let Some(child) = child.as_mut() else {
+            return Ok(None);
+        };
         let status = child
             .try_wait()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
-        Ok(status.and_then(|s| s.code()))
+        Ok(status.and_then(|status| status.code()))
     }
-    #[allow(clippy::await_holding_refcell_ref)]
+
     pub async fn kill(&self) -> AcpResult<()> {
-        let termination_grace_period = self.termination_grace_period;
-        let child_pid = {
-            let child = self.child.borrow();
-            child.id()
+        let mut child = match self.child.borrow_mut().take() {
+            Some(child) => child,
+            None => return Ok(()),
         };
+        let child_pid = child.id();
         #[cfg(unix)]
         if let Some(pid) = child_pid {
             // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGTERM);
             }
-            tokio::time::sleep(termination_grace_period).await;
+            tokio::time::sleep(self.termination_grace_period).await;
             // Keep the unreaped leader as the PGID identity anchor until the
             // final signal covers descendants that ignore SIGTERM.
             // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
-            // `child` is local to this connection's LocalSet; keep ownership
-            // through reap so the PGID cannot be reused before cleanup completes.
-            #[allow(clippy::await_holding_refcell_ref)]
-            let _ = self.child.borrow_mut().wait().await;
+            // Ownership remains local through reap, so the PGID cannot be reused early.
+            let _ = child.wait().await;
             return Ok(());
         }
 
-        let mut child = self.child.borrow_mut();
         child
             .start_kill()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))
@@ -534,11 +499,17 @@ impl AcpConnection {
         self.stderr_buf.borrow().clone()
     }
     async fn ensure_process_running(&self) -> AcpResult<()> {
-        let status = self
-            .child
-            .borrow_mut()
-            .try_wait()
-            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
+        let status = {
+            let mut child = self.child.borrow_mut();
+            let Some(child) = child.as_mut() else {
+                return Err(AcpError::ConnectionFailed(
+                    "ACP process has already been reaped".to_string(),
+                ));
+            };
+            child
+                .try_wait()
+                .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
+        };
 
         if let Some(status) = status {
             self.drain_stderr_tail().await;
@@ -560,79 +531,12 @@ impl AcpConnection {
     }
 }
 
-fn process_tree_made_cpu_progress(process_activity: Option<&mut ProcessTreeActivity>) -> bool {
-    process_activity.is_some_and(|activity| {
-        matches!(activity.observe(), ProcessTreeStatus::AliveWithCpuProgress)
-    })
-}
-
-fn resolve_heartbeat_interval() -> Option<Duration> {
-    let raw = std::env::var(HEARTBEAT_INTERVAL_ENV).ok();
-    let secs = match raw {
-        Some(value) => match value.trim().parse::<u64>() {
-            Ok(0) => return None,
-            Ok(parsed) => parsed,
-            Err(_) => DEFAULT_HEARTBEAT_SECS,
-        },
-        None => DEFAULT_HEARTBEAT_SECS,
-    };
-    Some(Duration::from_secs(secs))
-}
-
-/// Indicates which timeout phase the heartbeat is reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TimeoutPhase {
-    /// Waiting for the first response from the backend tool.
-    InitialResponse,
-    /// Normal idle timeout (after first output received, or no initial-response-timeout configured).
-    Idle,
-}
-
-fn maybe_emit_heartbeat(
-    heartbeat_interval: Option<Duration>,
-    execution_start: Instant,
-    last_activity: Instant,
-    last_heartbeat: &mut Instant,
-    effective_timeout: Duration,
-    phase: TimeoutPhase,
-) {
-    let Some(interval) = heartbeat_interval else {
-        return;
-    };
-
-    let now = Instant::now();
-    let idle_for = now.saturating_duration_since(last_activity);
-    if idle_for < interval {
-        return;
-    }
-    if now.saturating_duration_since(*last_heartbeat) < interval {
-        return;
-    }
-
-    let elapsed = now.saturating_duration_since(execution_start);
-    let phase_label = match phase {
-        TimeoutPhase::InitialResponse => "initial-response-timeout",
-        TimeoutPhase::Idle => "idle-timeout",
-    };
-    eprintln!(
-        "[csa-heartbeat] ACP prompt still running: elapsed={}s idle={}s {phase_label}={}s",
-        elapsed.as_secs(),
-        idle_for.as_secs(),
-        effective_timeout.as_secs()
-    );
-    *last_heartbeat = now;
-}
-
-fn stop_reason_to_string(reason: StopReason) -> String {
-    match reason {
-        StopReason::EndTurn => "end_turn".to_string(),
-        StopReason::MaxTokens => "max_tokens".to_string(),
-        StopReason::MaxTurnRequests => "max_turn_requests".to_string(),
-        StopReason::Refusal => "refusal".to_string(),
-        StopReason::Cancelled => "cancelled".to_string(),
-        _ => "unknown".to_string(),
-    }
-}
+#[path = "connection_watchdog.rs"]
+mod watchdog;
+use watchdog::{
+    TimeoutPhase, maybe_emit_heartbeat, process_tree_made_cpu_progress, resolve_heartbeat_interval,
+    stop_reason_to_string,
+};
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]

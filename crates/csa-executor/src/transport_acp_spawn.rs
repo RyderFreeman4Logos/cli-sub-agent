@@ -36,9 +36,7 @@ struct GeminiAcpMcpRetryOutcome<T> {
 }
 
 impl AcpTransport {
-    async fn run_acp_prompt(
-        request: AcpPromptRunRequest,
-    ) -> Result<csa_acp::transport::AcpOutput> {
+    async fn run_acp_prompt(request: AcpPromptRunRequest) -> Result<csa_acp::transport::AcpOutput> {
         let classify_request = request.clone();
         let output =
             tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
@@ -294,8 +292,7 @@ impl AcpTransport {
                 let diagnostic = diagnose(runtime_home, path_override.as_deref());
                 let disable_all = diagnostic.unhealthy_servers.is_empty();
                 disable(runtime_home, &diagnostic, disable_all)?;
-                warning_summary =
-                    Some(format_mcp_init_warning_summary(&diagnostic, disable_all));
+                warning_summary = Some(format_mcp_init_warning_summary(&diagnostic, disable_all));
                 tracing::warn!(
                     issue = issue_url,
                     unhealthy_servers = %if diagnostic.unhealthy_servers.is_empty() {
@@ -308,10 +305,10 @@ impl AcpTransport {
                 );
 
                 if cancellation.is_some_and(csa_process::ExecutionCancellation::is_cancelled) {
-            anyhow::bail!("ACP execution cancelled");
-        }
+                    anyhow::bail!("ACP execution cancelled");
+                }
 
-        match spawn_once().await {
+                match spawn_once().await {
                     Ok(value) => Ok(GeminiAcpMcpRetryOutcome {
                         value,
                         warning_summary,

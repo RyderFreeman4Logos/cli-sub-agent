@@ -26,7 +26,7 @@ use crate::{
     error::{AcpError, AcpResult},
 };
 
-use super::{AcpConnection, AcpSandboxHandle};
+use super::{AcpConnection, AcpConnectionParts, AcpSandboxHandle};
 
 fn append_stderr_tail(stderr_buf: &mut String, chunk: &str) {
     stderr_buf.push_str(chunk);
@@ -557,7 +557,7 @@ impl AcpConnection {
             })
             .await;
 
-        Ok(Self::new_from_parts(
+        Ok(Self::new_from_parts(AcpConnectionParts {
             local_set,
             connection,
             child,
@@ -566,9 +566,9 @@ impl AcpConnection {
             last_meaningful_activity,
             tool_output_compactor,
             stderr_buf,
-            working_dir.to_path_buf(),
+            default_working_dir: working_dir.to_path_buf(),
             options,
-        ))
+        }))
     }
 }
 
