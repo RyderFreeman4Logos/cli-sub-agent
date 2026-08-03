@@ -72,7 +72,7 @@ async fn test_compaction_death_detected_before_idle_timeout() {
     assert!(
         result
             .summary
-            .contains("exited while stdout pipe still open"),
+            .contains("exited while an output pipe remained open"),
         "summary should describe compaction death scenario, got: {:?}",
         result.summary
     );
@@ -81,7 +81,7 @@ async fn test_compaction_death_detected_before_idle_timeout() {
     assert!(
         result
             .stderr_output
-            .contains("exited while stdout pipe still open"),
+            .contains("exited while an output pipe remained open"),
         "stderr_output should contain compaction death diagnostic, got: {:?}",
         result.stderr_output
     );
@@ -142,7 +142,7 @@ async fn test_normal_exit_does_not_set_child_exited_early() {
     assert!(
         !result
             .stderr_output
-            .contains("exited while stdout pipe still open"),
+            .contains("exited while an output pipe remained open"),
         "normal exit must not set child_exited_early, stderr={:?}",
         result.stderr_output
     );
