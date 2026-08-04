@@ -175,6 +175,8 @@ pub(crate) async fn execute_clean_room_session(
     global_config: Option<&GlobalConfig>,
     limits: CleanRoomExecutionLimits,
 ) -> Result<SessionExecutionResult> {
+    let mut target_gc_admission =
+        csa_lock::acquire_target_gc_admission(contract.command.working_directory().as_path())?;
     let admitted_identity = admitted.resolved_model_spec();
     if admitted_identity.tool != tool.as_str() || admitted.tool_name() != tool.as_str() {
         bail!(
@@ -184,16 +186,19 @@ pub(crate) async fn execute_clean_room_session(
         );
     }
     super::clean_room::validate_clean_room_sandbox_capability()?;
-    super::execute_clean_room_session_core(
-        admitted,
-        tool,
-        prompt,
-        SessionExecutionPolicy::CleanRoom(contract),
-        config,
-        global_config,
-        limits,
+    crate::pipeline_execute::preserve_target_admission_on_cleanup_error(
+        super::execute_clean_room_session_core(
+            admitted,
+            tool,
+            prompt,
+            SessionExecutionPolicy::CleanRoom(contract),
+            config,
+            global_config,
+            limits,
+        )
+        .await,
+        &mut target_gc_admission,
     )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]

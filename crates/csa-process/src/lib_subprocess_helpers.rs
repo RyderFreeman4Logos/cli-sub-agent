@@ -1,32 +1,136 @@
 use anyhow::{Context, Result};
-use std::time::Duration;
+use std::{process::ExitStatus, time::Duration};
 use tokio::process::Command;
 
-pub(crate) async fn terminate_child_process_group(
+const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug)]
+pub enum ChildWaitState {
+    Running,
+    Exited(ExitStatus),
+}
+
+/// Inspect a child without releasing its PID/process-group identity on Unix.
+pub fn inspect_child_without_reaping(
     child: &mut tokio::process::Child,
-    termination_grace_period: Duration,
-) {
+) -> std::io::Result<ChildWaitState> {
     #[cfg(unix)]
     {
-        if let Some(pid) = child.id() {
-            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
+        use std::os::unix::process::ExitStatusExt;
+
+        let Some(pid) = child.id() else {
+            return child.try_wait()?.map_or_else(
+                || Err(std::io::Error::other("child PID unavailable before exit")),
+                |status| Ok(ChildWaitState::Exited(status)),
+            );
+        };
+        loop {
+            // SAFETY: zero is the documented no-state-change sentinel for
+            // siginfo_t returned by waitid with WNOHANG.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            match waitid_without_reaping(pid as libc::id_t, &mut info) {
+                Ok(()) => {
+                    // SAFETY: waitid initialized info; si_pid == 0 means no state change.
+                    if unsafe { info.si_pid() } == 0 {
+                        return Ok(ChildWaitState::Running);
+                    }
+                    // SAFETY: this is a SIGCHLD result from waitid(P_PID, ...).
+                    let status = unsafe { info.si_status() };
+                    let raw_status = match info.si_code {
+                        libc::CLD_EXITED => status << 8,
+                        libc::CLD_KILLED => status,
+                        libc::CLD_DUMPED => status | 0x80,
+                        code => {
+                            return Err(std::io::Error::other(format!(
+                                "unexpected waitid exit code {code}"
+                            )));
+                        }
+                    };
+                    return Ok(ChildWaitState::Exited(ExitStatus::from_raw(raw_status)));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
             }
-            tokio::time::sleep(termination_grace_period).await;
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-            let _ = child.start_kill();
-            return;
         }
     }
 
-    let _ = child.start_kill();
+    #[cfg(not(unix))]
+    {
+        Ok(match child.try_wait()? {
+            Some(status) => ChildWaitState::Exited(status),
+            None => ChildWaitState::Running,
+        })
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn waitid_without_reaping(
+    id: libc::id_t,
+    info: &mut libc::siginfo_t,
+) -> std::io::Result<()> {
+    // SAFETY: info points to writable siginfo_t storage. WNOWAIT leaves an
+    // exited child waitable, preserving its PID as the process-group anchor.
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            id,
+            info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group: i32, signal: libc::c_int) -> Result<()> {
+    // SAFETY: the negative PID targets the still-owned child's process group.
+    let rc = unsafe { libc::kill(-process_group, signal) };
+    if rc == 0 {
+        return Ok(());
+    }
+
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error).with_context(|| format!("failed to signal process group {process_group}"))
+}
+
+async fn wait_for_child_exit(child: &mut tokio::process::Child) -> Result<ExitStatus> {
+    tokio::time::timeout(CHILD_REAP_TIMEOUT, child.wait())
+        .await
+        .context("timed out waiting for child process to exit")?
+        .context("failed to wait for child process")
+}
+
+pub async fn terminate_child_process_group(
+    child: &mut tokio::process::Child,
+    termination_grace_period: Duration,
+) -> Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            let process_group = i32::try_from(pid).context("child PID exceeds pid_t range")?;
+            signal_process_group(process_group, libc::SIGTERM)?;
+            if !termination_grace_period.is_zero() {
+                tokio::time::sleep(termination_grace_period).await;
+            }
+            // Do not reap the leader before the final group signal: its unreaped
+            // PID anchors the PGID even when it exited on SIGTERM.
+            signal_process_group(process_group, libc::SIGKILL)?;
+            return wait_for_child_exit(child).await;
+        }
+    }
+
+    #[cfg(not(unix))]
+    if child.id().is_some() {
+        child.start_kill().context("failed to kill child process")?;
+    }
+    wait_for_child_exit(child).await
 }
 
 /// Check if a tool is installed by attempting to locate it.

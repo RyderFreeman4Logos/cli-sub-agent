@@ -133,6 +133,7 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        cancellation: None,
     };
 
     let result = transport

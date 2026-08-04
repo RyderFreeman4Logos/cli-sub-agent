@@ -113,6 +113,17 @@ struct PreSessionHookOutput {
     stderr: String,
 }
 
+#[derive(Debug)]
+struct PreSessionCleanupError(String);
+
+impl std::fmt::Display for PreSessionCleanupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PreSessionCleanupError {}
+
 #[derive(Debug, Deserialize)]
 struct GlobalHooksEnvelope {
     #[serde(default)]
@@ -194,14 +205,27 @@ pub fn prepend_pre_session_stdout(prompt: &str, stdout: &str) -> Option<String> 
 }
 
 /// Run a pre-session hook opportunistically and return a prompt with injected
-/// context when the hook succeeds and writes non-empty stdout.
+/// context when the hook succeeds and writes non-empty stdout. Cleanup failures
+/// are returned so callers cannot continue with a live hook process group.
 pub async fn run_pre_session_hook(
     config: &PreSessionHookConfig,
     context: &PreSessionHookContext<'_>,
-) -> Option<String> {
+) -> Result<Option<String>> {
+    run_pre_session_hook_with_cancellation(config, context, None).await
+}
+
+/// Run a pre-session hook while observing the owning execution's cancellation.
+pub async fn run_pre_session_hook_with_cancellation(
+    config: &PreSessionHookConfig,
+    context: &PreSessionHookContext<'_>,
+    cancellation: Option<&csa_process::ExecutionCancellation>,
+) -> Result<Option<String>> {
+    if cancellation.is_some_and(csa_process::ExecutionCancellation::is_cancelled) {
+        bail!("pre_session hook cancelled");
+    }
     if !config.enabled {
         tracing::debug!("pre_session hook disabled");
-        return None;
+        return Ok(None);
     }
     if !config.matches_transport(context.transport) {
         tracing::debug!(
@@ -209,7 +233,7 @@ pub async fn run_pre_session_hook(
             configured = ?config.transports,
             "pre_session hook skipped by transport filter"
         );
-        return None;
+        return Ok(None);
     }
 
     let Some(command) = config
@@ -220,10 +244,11 @@ pub async fn run_pre_session_hook(
         tracing::warn!(
             "pre_session hook enabled but command is missing; continuing without injection"
         );
-        return None;
+        return Ok(None);
     };
 
-    match run_pre_session_hook_command(command, config.timeout_seconds, context).await {
+    match run_pre_session_hook_command(command, config.timeout_seconds, context, cancellation).await
+    {
         Ok(output) => {
             if !output.stderr.trim().is_empty() {
                 tracing::warn!(
@@ -231,14 +256,22 @@ pub async fn run_pre_session_hook(
                     "pre_session hook wrote to stderr"
                 );
             }
-            prepend_pre_session_stdout(context.user_prompt, &output.stdout)
+            Ok(prepend_pre_session_stdout(
+                context.user_prompt,
+                &output.stdout,
+            ))
         }
         Err(error) => {
+            if error.downcast_ref::<PreSessionCleanupError>().is_some()
+                || cancellation.is_some_and(csa_process::ExecutionCancellation::is_cancelled)
+            {
+                return Err(error);
+            }
             tracing::warn!(
                 error = %error,
                 "pre_session hook failed; continuing without injection"
             );
-            None
+            Ok(None)
         }
     }
 }
@@ -247,6 +280,7 @@ async fn run_pre_session_hook_command(
     command: &str,
     timeout_seconds: u64,
     context: &PreSessionHookContext<'_>,
+    cancellation: Option<&csa_process::ExecutionCancellation>,
 ) -> Result<PreSessionHookOutput> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
@@ -268,7 +302,6 @@ async fn run_pre_session_hook_command(
     let mut child = cmd
         .spawn()
         .with_context(|| "failed to spawn pre_session hook")?;
-    let child_pid = child.id();
 
     let prompt = context.user_prompt.as_bytes().to_vec();
     let stdin_writer = child.stdin.take().map(|mut stdin| {
@@ -298,25 +331,71 @@ async fn run_pre_session_hook_command(
         stderr.read_to_end(&mut output).await.map(|_| output)
     });
 
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(wait_result) => {
-            wait_result.with_context(|| "failed while waiting for pre_session hook")?
+    enum HookStop {
+        Exited,
+        Cancelled,
+        TimedOut,
+        WaitFailed(std::io::Error),
+    }
+
+    let cancellation_wait = async {
+        if let Some(cancellation) = cancellation {
+            cancellation.cancelled().await;
+        } else {
+            std::future::pending::<()>().await;
         }
-        Err(_) => {
-            kill_pre_session_hook_child(&mut child, child_pid).await;
-            if let Some(stdin_writer) = stdin_writer {
-                stdin_writer.abort();
-                let _ = stdin_writer.await;
+    };
+    tokio::pin!(cancellation_wait);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let mut child_poll = tokio::time::interval(Duration::from_millis(10));
+    let stop = loop {
+        tokio::select! {
+            biased;
+            _ = &mut cancellation_wait => break HookStop::Cancelled,
+            _ = &mut deadline => break HookStop::TimedOut,
+            _ = child_poll.tick() => {
+                match csa_process::inspect_child_without_reaping(&mut child) {
+                    Ok(csa_process::ChildWaitState::Running) => {}
+                    Ok(csa_process::ChildWaitState::Exited(_)) => break HookStop::Exited,
+                    Err(error) => break HookStop::WaitFailed(error),
+                }
             }
-            stdout_reader.abort();
-            stderr_reader.abort();
-            let _ = stdout_reader.await;
-            let _ = stderr_reader.await;
-            tracing::warn!(
-                timeout_seconds = timeout.as_secs(),
-                "pre_session hook timed out; killed child"
-            );
-            bail!("pre_session hook timed out after {}s", timeout.as_secs());
+        }
+    };
+
+    let status = if matches!(&stop, HookStop::Exited) {
+        csa_process::terminate_child_process_group(&mut child, Duration::ZERO)
+            .await
+            .context("failed to terminate completed pre_session hook process group")
+            .map_err(|error| PreSessionCleanupError(format!("{error:#}")))?
+    } else {
+        let cleanup = csa_process::terminate_child_process_group(&mut child, Duration::ZERO)
+            .await
+            .context("failed to terminate stopped pre_session hook process group")
+            .map_err(|error| PreSessionCleanupError(format!("{error:#}")));
+        if let Some(stdin_writer) = stdin_writer {
+            stdin_writer.abort();
+            let _ = stdin_writer.await;
+        }
+        stdout_reader.abort();
+        stderr_reader.abort();
+        let _ = stdout_reader.await;
+        let _ = stderr_reader.await;
+        cleanup?;
+        match stop {
+            HookStop::Cancelled => bail!("pre_session hook cancelled"),
+            HookStop::TimedOut => {
+                tracing::warn!(
+                    timeout_seconds = timeout.as_secs(),
+                    "pre_session hook timed out; terminated process group"
+                );
+                bail!("pre_session hook timed out after {}s", timeout.as_secs());
+            }
+            HookStop::WaitFailed(error) => {
+                return Err(error).context("failed while waiting for pre_session hook");
+            }
+            HookStop::Exited => unreachable!(),
         }
     };
 
@@ -347,26 +426,6 @@ async fn read_hook_pipe(
         .await
         .with_context(|| format!("pre_session hook {pipe_name} reader task failed to join"))?
         .with_context(|| format!("failed to read pre_session hook {pipe_name}"))
-}
-
-async fn kill_pre_session_hook_child(child: &mut tokio::process::Child, child_pid: Option<u32>) {
-    #[cfg(unix)]
-    {
-        if let Some(pid) = child_pid {
-            // SAFETY: negative PID targets the process group created with
-            // process_group(0) for this child.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        } else {
-            let _ = child.start_kill();
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.start_kill();
-    }
-    let _ = child.wait().await;
 }
 
 #[cfg(test)]
@@ -465,6 +524,7 @@ timeout_secs = 7
 
         let injected = run_pre_session_hook(&config, &context("original prompt"))
             .await
+            .expect("hook execution")
             .expect("hook should inject");
 
         assert!(injected.contains("seen:original prompt"));
@@ -482,6 +542,7 @@ timeout_secs = 7
         assert!(
             run_pre_session_hook(&config, &context("original prompt"))
                 .await
+                .expect("hook execution")
                 .is_none()
         );
     }
@@ -497,6 +558,7 @@ timeout_secs = 7
         assert!(
             run_pre_session_hook(&config, &context("original prompt"))
                 .await
+                .expect("hook execution")
                 .is_none()
         );
     }
@@ -512,6 +574,7 @@ timeout_secs = 7
 
         let injected = run_pre_session_hook(&config, &context("original prompt"))
             .await
+            .expect("hook execution")
             .expect("large hook stdout should inject");
 
         assert!(injected.starts_with("<system-reminder>\n"));
@@ -528,6 +591,7 @@ timeout_secs = 7
         assert!(
             run_pre_session_hook(&config, &context("original prompt"))
                 .await
+                .expect("hook execution")
                 .is_none()
         );
     }

@@ -68,7 +68,9 @@ async fn spawn_tool_with_pre_exec(
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(move || {
-            libc::setsid();
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
 
             // Resource isolation (rlimits / OOM score).
             match pre_exec_policy {
@@ -565,6 +567,9 @@ fn build_cgroup_scope_command(
     tokio_cmd
 }
 
+#[cfg(test)]
+#[path = "lib_cancellation_tests.rs"]
+mod cancellation_tests;
 #[cfg(test)]
 #[path = "lib_spawn_tests.rs"]
 mod tests;

@@ -116,12 +116,13 @@ impl LegacyTransport {
             keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
             // execute_in (ephemeral/testing path) keeps the #1652 scan enabled.
             error_marker_scan_enabled: true,
+            cancellation: None,
         };
         let initial_response_timeout_seconds =
             consume_resolved_execute_in_initial_response_timeout_seconds(
                 request.resolved_initial_response_timeout,
             );
-        let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
+        let child = spawn_tool_with_options(cmd, stdin_data, spawn_options.clone()).await?;
         let child_pid = child.id();
         let execution = wait_and_capture_with_idle_timeout(
             child,
@@ -164,6 +165,16 @@ impl LegacyTransport {
         attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        // Shared attempt boundary: degraded-MCP / OAuth / initial-stall retries
+        // all re-enter here. Fail closed if the owning execution was cancelled
+        // after the previous attempt returned.
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(csa_process::ExecutionCancellation::is_cancelled)
+        {
+            anyhow::bail!("cancelled");
+        }
         let clean_contract = attempt_env.clean_contract;
         // Stage the antigravity-cli `model` field in
         // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,
@@ -236,6 +247,7 @@ impl LegacyTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
             error_marker_scan_enabled: options.error_marker_scan_enabled,
+            cancellation: options.cancellation.clone(),
         };
         let initial_response_timeout_seconds =
             Self::consume_resolved_transport_initial_response_timeout_seconds(
@@ -245,7 +257,7 @@ impl LegacyTransport {
             csa_process::spawn_tool_sandboxed_in_environment(
                 cmd,
                 stdin_data.clone(),
-                spawn_options,
+                spawn_options.clone(),
                 isolation_plan,
                 tool_name,
                 session_id,
@@ -256,7 +268,7 @@ impl LegacyTransport {
             spawn_tool_sandboxed(
                 cmd,
                 stdin_data.clone(),
-                spawn_options,
+                spawn_options.clone(),
                 isolation_plan,
                 tool_name,
                 session_id,
@@ -280,7 +292,8 @@ impl LegacyTransport {
                     )
                     .0;
                 let child =
-                    spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options).await?;
+                    spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options.clone())
+                        .await?;
                 (child, csa_process::SandboxHandle::None)
             }
             Err(e) => return Err(e),

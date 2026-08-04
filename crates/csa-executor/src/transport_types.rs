@@ -76,6 +76,7 @@ pub struct TransportOptions<'a> {
     /// Transports must ignore any generic/inherited git-push authorization env
     /// and write `CSA_GIT_PUSH_ALLOWED=true` only when this is true.
     pub allow_git_push: bool,
+    pub cancellation: Option<csa_process::ExecutionCancellation>,
 }
 
 #[derive(Debug, Clone)]

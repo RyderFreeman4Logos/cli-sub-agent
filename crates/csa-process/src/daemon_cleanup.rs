@@ -8,6 +8,8 @@ use std::cell::RefCell;
 use anyhow::{Context, Result};
 
 use super::DaemonSpawnMode;
+#[cfg(unix)]
+use crate::subprocess_helpers::waitid_without_reaping;
 
 const SCOPE_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_TERM_GRACE: Duration = Duration::from_millis(100);
@@ -133,25 +135,6 @@ fn inspect_spawned_process_with_waitid(
                 return Err(error).context("failed to inspect spawned daemon with waitid(WNOWAIT)");
             }
         }
-    }
-}
-
-#[cfg(unix)]
-fn waitid_without_reaping(id: libc::id_t, info: &mut libc::siginfo_t) -> std::io::Result<()> {
-    // SAFETY: info points to writable siginfo_t storage. WNOWAIT leaves an
-    // exited child waitable, preserving its PID as the process-group anchor.
-    let rc = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            id,
-            info,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if rc == -1 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
     }
 }
 

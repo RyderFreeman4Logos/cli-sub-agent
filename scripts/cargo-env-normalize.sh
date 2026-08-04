@@ -46,11 +46,6 @@ if rust_state_needs_override "${CARGO_HOME:-}"; then
     fi
 fi
 
-if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
-    export CARGO_INSTALL_ROOT="${repo_root}/target/cargo-install-root"
-    mkdir -p "$CARGO_INSTALL_ROOT"
-fi
-
 if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" = "1" ]; then
     if [ -z "${CARGO_TARGET_DIR:-}" ] || ! ensure_writable_dir "${CARGO_TARGET_DIR}"; then
         echo "error: CSA_PRESERVE_CARGO_TARGET_DIR=1 requires an explicit writable CARGO_TARGET_DIR" >&2
@@ -58,6 +53,12 @@ if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" = "1" ]; then
     fi
 else
     export CARGO_TARGET_DIR="${repo_root}/target"
+fi
+
+create_cargo_install_root=0
+if rust_state_needs_override "${CARGO_INSTALL_ROOT:-}"; then
+    export CARGO_INSTALL_ROOT="${CARGO_TARGET_DIR}/cargo-install-root"
+    create_cargo_install_root=1
 fi
 
 mise_rust_home="${MISE_DATA_DIR:-/usr/local/share/mise}/installs/rust/stable"
@@ -93,4 +94,39 @@ if [ -n "$channel" ]; then
     fi
 fi
 
+if [ "${CSA_PRESERVE_CARGO_TARGET_DIR:-0}" != "1" ]; then
+    # Use the lexical workspace path: /ssd and /mnt/ssd aliases must not alter
+    # the managed-marker decision.
+    marker_parent="/ssd/mirror-rootfs${repo_root}"
+    target_lease="${CSA_CARGO_TARGET_LEASE:-}"
+    if [ -n "$target_lease" ]; then
+        # An explicit override is policy, not discovery: preserve its failure.
+        if [ ! -x "$target_lease" ]; then
+            target_lease="$(command -v "$target_lease" 2>/dev/null || printf '%s' "$target_lease")"
+        fi
+    elif [ -d "$marker_parent" ]; then
+        target_lease="$(command -v cargo-target-lease 2>/dev/null || true)"
+    fi
+
+    if [ -n "$target_lease" ]; then
+        # The helper derives the lock parent lexically. Hand it the canonical
+        # root target even when this normalizer was invoked from a subdirectory;
+        # the path resolves to the same physical cache as repo_root/target.
+        if [ "$create_cargo_install_root" = "1" ]; then
+            exec env CARGO_TARGET_DIR="/ssd/mirror-rootfs${repo_root}/target" \
+                "$target_lease" -- /bin/sh -c 'mkdir -p "$CARGO_INSTALL_ROOT"; exec "$@"' \
+                cargo-env-normalize "$@"
+        fi
+        exec env CARGO_TARGET_DIR="/ssd/mirror-rootfs${repo_root}/target" "$target_lease" -- "$@"
+    fi
+
+    if [ -e "$marker_parent/.rust-target-gc-admission-v1" ]; then
+        echo "error: target GC admission helper is unavailable for managed target '$marker_parent'; refusing Cargo execution" >&2
+        exit 1
+    fi
+fi
+
+if [ "$create_cargo_install_root" = "1" ]; then
+    mkdir -p "$CARGO_INSTALL_ROOT"
+fi
 exec "$@"

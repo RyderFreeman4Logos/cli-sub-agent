@@ -354,21 +354,21 @@ async fn build_test_connection(
         })
         .await;
 
-    TestConnectionGuard::new(AcpConnection::new_from_parts(
+    TestConnectionGuard::new(AcpConnection::new_from_parts(AcpConnectionParts {
         local_set,
         connection,
         child,
         events,
         last_activity,
         last_meaningful_activity,
-        Rc::new(RefCell::new(None)),
+        tool_output_compactor: Rc::new(RefCell::new(None)),
         stderr_buf,
-        std::env::current_dir().expect("cwd"),
-        AcpConnectionOptions {
+        default_working_dir: std::env::current_dir().expect("cwd"),
+        options: AcpConnectionOptions {
             termination_grace_period: Duration::ZERO,
             ..AcpConnectionOptions::default()
         },
-    ))
+    }))
 }
 
 #[test]

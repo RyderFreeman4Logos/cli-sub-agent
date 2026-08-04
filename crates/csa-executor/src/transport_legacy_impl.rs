@@ -254,7 +254,9 @@ impl Transport for LegacyTransport {
                     phase_desc,
                     "gemini-cli rate limited; advancing phase"
                 );
-                tokio::time::sleep(backoff).await;
+                if csa_process::retry_backoff_cancelled(options.cancellation.as_ref(), backoff).await {
+                    anyhow::bail!("cancelled");
+                }
                 attempt = attempt.saturating_add(1);
                 continue;
             }
@@ -269,7 +271,9 @@ impl Transport for LegacyTransport {
                     delay_secs = backoff.as_secs(),
                     "codex transient 429 rate limit detected; retrying with backoff"
                 );
-                tokio::time::sleep(backoff).await;
+                if csa_process::retry_backoff_cancelled(options.cancellation.as_ref(), backoff).await {
+                    anyhow::bail!("cancelled");
+                }
                 codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
                 continue;
             }
@@ -361,11 +365,6 @@ impl Transport for LegacyTransport {
 }
 
 impl LegacyTransport {
-    /// Execute the legacy direct-entry path.
-    ///
-    /// `initial_response_timeout_seconds` is already resolved by
-    /// `Executor::execute_in_with_transport()`: `None` means disabled, and positive values are
-    /// concrete watchdog durations. This layer must not re-apply executor defaults.
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_in(
         &self,

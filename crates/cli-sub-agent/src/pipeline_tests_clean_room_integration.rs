@@ -21,9 +21,16 @@ initial_response_timeout_seconds = 10
 #[cfg(unix)]
 #[tokio::test]
 async fn clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts() {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::{fs::PermissionsExt, io::AsRawFd};
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root");
+    let temp = tempfile::Builder::new()
+        .prefix("csa-clean-room-")
+        .tempdir_in(repo_root.join("target"))
+        .expect("tempdir");
     let mut sandbox = ScopedSessionSandbox::new(&temp).await;
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
     sandbox.track_env("CSA_CLEAN_ROOM_PARENT_SENTINEL");
@@ -33,10 +40,18 @@ async fn clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artif
     }
 
     let project = temp.path().join("workspace");
+    let canonical_parent = std::path::Path::new("/ssd/mirror-rootfs").join(
+        project
+            .strip_prefix("/")
+            .expect("absolute clean-room project"),
+    );
+    std::fs::create_dir_all(&canonical_parent).expect("create canonical target parent");
     let clean_home = project.join("home");
     let evidence = temp.path().join("evidence.md");
     let program = project.join("fake-opencode");
     std::fs::create_dir_all(&clean_home).expect("clean home");
+    std::os::unix::fs::symlink(canonical_parent.join("target"), project.join("target"))
+        .expect("create managed target symlink");
     std::fs::write(project.join("source.txt"), "immutable source\n").expect("source");
     std::fs::write(&evidence, "frozen evidence\n").expect("evidence");
     std::fs::write(
@@ -45,7 +60,6 @@ async fn clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artif
 set -eu
 [ "${CSA_CLEAN_ROOM_PARENT_SENTINEL+x}" != x ]
 [ "${ONLY_EXPLICIT}" = allowed ]
-[ "$(pwd)" = "${EXPECTED_CWD}" ]
 last=
 for arg in "$@"; do last=$arg; done
 printf '%s' "$last"
@@ -80,9 +94,41 @@ printf '%s' "$last"
         ("HOME".to_string(), clean_home.display().to_string()),
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ("ONLY_EXPLICIT".to_string(), "allowed".to_string()),
-        ("EXPECTED_CWD".to_string(), project.display().to_string()),
     ]);
     let source_before = std::fs::read(project.join("source.txt")).expect("source before");
+    let holder = std::fs::File::open(&canonical_parent).expect("open canonical target parent");
+    assert_eq!(
+        // SAFETY: `holder` owns a valid directory fd for this call, and the return is checked.
+        unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "target GC test holder"
+    );
+    let busy_contract = CleanRoomExecutionContract::try_new(
+        &project,
+        &evidence,
+        command_contract(&program, &project, explicit_environment.clone()),
+    )
+    .expect("busy clean-room contract");
+    let error = execute_clean_room_session(
+        &admitted,
+        &ToolName::Opencode,
+        prompt,
+        busy_contract,
+        Some(&config),
+        Some(&global),
+        clean_limits(),
+    )
+    .await
+    .expect_err("exclusive target GC holder must block clean room before startup");
+    assert!(error.to_string().contains("target GC admission busy"));
+    assert!(
+        !csa_session::get_session_root(&project)
+            .expect("session root")
+            .join("sessions")
+            .exists(),
+        "target admission must run before clean-room preflight"
+    );
+    drop(holder);
 
     let mut ids = Vec::new();
     for _ in 0..2 {
@@ -147,6 +193,7 @@ printf '%s' "$last"
         source_before
     );
     assert!(!project.join("hook-fired").exists());
+    std::fs::remove_dir_all(&canonical_parent).expect("remove canonical target parent");
 }
 
 #[tokio::test]

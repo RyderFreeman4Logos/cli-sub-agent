@@ -461,9 +461,26 @@ impl Executor {
             thinking_budget: self.thinking_budget().cloned(),
             subtree_pin: options.subtree_pin.clone(),
             allow_git_push: options.allow_git_push,
+            cancellation: options.cancellation.clone(),
         };
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(csa_process::ExecutionCancellation::is_cancelled)
+        {
+            anyhow::bail!("execution cancelled before pre_session hook");
+        }
         let transport = self.transport(session_config)?;
-        let effective_prompt = self.apply_pre_session_hook(prompt, session, &options).await;
+        let effective_prompt = self
+            .apply_pre_session_hook(prompt, session, &options)
+            .await?;
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(csa_process::ExecutionCancellation::is_cancelled)
+        {
+            anyhow::bail!("execution cancelled before transport spawn");
+        }
         let mut result = transport
             .execute(
                 &effective_prompt,
@@ -471,68 +488,6 @@ impl Executor {
                 session,
                 extra_env,
                 transport_options,
-            )
-            .await?;
-        result.execution.consolidate_stderr_retries();
-        Ok(result)
-    }
-
-    /// Execute in a specific directory (ephemeral sessions, `extra_env` for API keys etc.).
-    ///
-    /// `subtree_pin` carries CSA's authoritative subtree model pin (#1741),
-    /// out-of-band from `extra_env`; it is the only channel that may set the
-    /// pin keys on the child. Pass `None` when CSA did not decide to pin.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn execute_in(
-        &self,
-        prompt: &str,
-        work_dir: &Path,
-        extra_env: Option<&HashMap<String, String>>,
-        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
-        allow_git_push: bool,
-        stream_mode: csa_process::StreamMode,
-        idle_timeout_seconds: u64,
-        initial_response_timeout: ResolvedTimeout,
-    ) -> Result<ExecutionResult> {
-        Ok(self
-            .execute_in_with_transport(
-                prompt,
-                work_dir,
-                extra_env,
-                subtree_pin,
-                allow_git_push,
-                stream_mode,
-                idle_timeout_seconds,
-                initial_response_timeout,
-            )
-            .await?
-            .execution)
-    }
-
-    /// Execute in a specific directory and keep transport metadata.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn execute_in_with_transport(
-        &self,
-        prompt: &str,
-        work_dir: &Path,
-        extra_env: Option<&HashMap<String, String>>,
-        subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
-        allow_git_push: bool,
-        stream_mode: csa_process::StreamMode,
-        idle_timeout_seconds: u64,
-        initial_response_timeout: ResolvedTimeout,
-    ) -> Result<TransportResult> {
-        let transport = self.transport(None)?;
-        let mut result = transport
-            .execute_in(
-                prompt,
-                work_dir,
-                extra_env,
-                subtree_pin,
-                allow_git_push,
-                stream_mode,
-                idle_timeout_seconds,
-                initial_response_timeout,
             )
             .await?;
         result.execution.consolidate_stderr_retries();

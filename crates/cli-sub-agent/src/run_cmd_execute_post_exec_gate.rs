@@ -564,6 +564,7 @@ where
         }
     }
 
+    let _target_gc_admission = csa_lock::acquire_target_gc_admission(project_root)?;
     let gate_outcome = match maybe_run_post_exec_gate_with_runner(
         project_root,
         prompt_text,

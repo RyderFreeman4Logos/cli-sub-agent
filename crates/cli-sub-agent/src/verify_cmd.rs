@@ -215,6 +215,7 @@ fn placeholder_result(args: &VerifyArgs, method: VerifyMethod, instructions: &st
 }
 
 fn run_cargo_test(project_root: &Path) -> Result<CommandMeasurement> {
+    let _target_gc_admission = csa_lock::acquire_target_gc_admission(project_root)?;
     let output = Command::new("cargo")
         .arg("test")
         .current_dir(project_root)

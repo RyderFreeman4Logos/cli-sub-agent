@@ -277,6 +277,7 @@ echo "ok persistent"
                     thinking_budget: None,
                     subtree_pin: None,
                     allow_git_push: false,
+                    cancellation: None,
                 },
             )
             .await

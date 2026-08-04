@@ -10,7 +10,7 @@ use crate::startup_env::StartupSubtreeEnv;
 use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_lock::acquire_lock;
+use csa_lock::{acquire_lock, acquire_target_gc_admission};
 use csa_session::get_session_dir;
 use std::{
     path::{Path, PathBuf},
@@ -96,7 +96,10 @@ pub(crate) fn clean_room_runtime_prompt_for_test(prompt: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]
+#[tracing::instrument(
+    skip_all,
+    fields(tool = %tool, parent_session_source = ?parent_session_source, target_gc_admission = tracing::field::Empty)
+)]
 pub(crate) async fn execute_with_session_and_meta_with_parent_source<
     D: DispatchExecutor + ?Sized,
 >(
@@ -274,6 +277,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
             );
         }
     }
+    let mut target_gc_admission = acquire_target_gc_admission(project_root)?;
+    tracing::Span::current().record("target_gc_admission", target_gc_admission.is_some());
     info!("Executing in session: {}", session.meta_session_id);
     let runtime = session_exec_runtime::prepare_session_runtime(
         session_exec_runtime::SessionRuntimeInput {
@@ -322,25 +327,28 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
     } = runtime;
     let execution_start_time = completion.execution_start_time;
     dispatch_executor.emit_catalog_warning();
-    let transport_result = crate::pipeline_execute::execute_transport_with_signal(
-        executor,
-        &effective_prompt,
-        tool_state.as_ref(),
-        &session,
-        completion.merged_env_ref(),
-        execute_options,
-        session_config,
-        project_root,
-        &mut cleanup_guard,
-        execution_start_time,
-        wall_timeout,
-    )
-    .await
-    .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
+    let transport_result = crate::pipeline_execute::preserve_target_admission_on_cleanup_error(
+        crate::pipeline_execute::execute_transport_with_signal(
+            executor,
+            &effective_prompt,
+            tool_state.as_ref(),
+            &session,
+            completion.merged_env_ref(),
+            execute_options,
+            session_config,
+            project_root,
+            &mut cleanup_guard,
+            execution_start_time,
+            wall_timeout,
+        )
+        .await
+        .with_context(|| format!("meta_session_id={}", session.meta_session_id)),
+        &mut target_gc_admission,
+    )?;
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }
-    session_exec_completion::complete_session_execution(
+    let completion_result = session_exec_completion::complete_session_execution(
         session_exec_completion::CompletionInput {
             executor,
             tool,
@@ -359,5 +367,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
         },
         &mut session,
     )
-    .await
+    .await;
+    drop(target_gc_admission);
+    completion_result
 }

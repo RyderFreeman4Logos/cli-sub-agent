@@ -32,6 +32,8 @@ else
 fi
 JUST_CMD="${CSA_POST_MERGE_JUST:-just}"
 CARGO_CMD="${CSA_POST_MERGE_CARGO:-cargo}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CARGO_NORMALIZER="${SCRIPT_DIR}/cargo-env-normalize.sh"
 
 # Skip if install target is not writable
 if [ ! -w "$INSTALL_DIR" ]; then
@@ -46,7 +48,7 @@ echo "[post-merge] Rebuilding csa (install_dir=$INSTALL_DIR)..."
 if "$JUST_CMD" install "$INSTALL_DIR"; then
     echo "[post-merge] csa active-binary provenance verified."
     echo "[post-merge] Cleaning cargo target..."
-    if "$CARGO_CMD" clean; then
+    if "$CARGO_NORMALIZER" "$CARGO_CMD" clean; then
         echo "[post-merge] cargo clean completed."
         echo "[post-merge] Post-merge rebuild finished successfully."
         exit 0

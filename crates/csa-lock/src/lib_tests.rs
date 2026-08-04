@@ -545,3 +545,6 @@ fn assert_fd_cloexec(fd: std::os::unix::io::RawFd) {
         "lock fd should be marked close-on-exec"
     );
 }
+
+#[path = "target_admission_tests.rs"]
+mod target_admission_tests;

@@ -91,6 +91,21 @@ echo "unexpected cargo args: \$*" >&2
 exit 99
 EOF
     chmod +x "$bin_dir/just" "$bin_dir/cargo"
+    cat >"$bin_dir/cargo-target-lease" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+order_file="${CSA_TEST_ORDER_FILE:?}"
+{
+    printf 'lease'
+    for arg in "$@"; do
+        printf ' %s' "$arg"
+    done
+    printf '\n'
+} >>"$order_file"
+[ "${1:-}" = "--" ] && shift
+exec "$@"
+EOF
+    chmod +x "$bin_dir/cargo-target-lease"
 }
 
 run_hook() {
@@ -155,6 +170,27 @@ assert_eq "$rc" "0" "success exit 0"
 order_body="$(cat "$order")"
 assert_contains "$order_body" $'just install '"$install_dir"$'\ncargo clean' "order success install then clean"
 assert_not_contains "$order_body" "install_dir=" "hook uses positional install_dir, not install_dir= keyword-as-positional"
+
+echo "== post-merge clean uses target lease wrapper =="
+tmp_lease="$tmp_root/lease"
+mkdir -p "$tmp_lease"
+install_dir_lease="$tmp_lease/bin"
+mkdir -p "$install_dir_lease"
+order_lease="$tmp_lease/order"
+: >"$order_lease"
+setup_fake_tools "$tmp_lease/tools" 0 0
+set +e
+env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+    CSA_TEST_ORDER_FILE="$order_lease" \
+    CSA_POST_MERGE_INSTALL_DIR="$install_dir_lease" \
+    CSA_POST_MERGE_JUST="$tmp_lease/tools/just" \
+    CSA_POST_MERGE_CARGO="$tmp_lease/tools/cargo" \
+    CSA_CARGO_TARGET_LEASE="$tmp_lease/tools/cargo-target-lease" \
+    bash "$HOOK"
+rc=$?
+set -e
+assert_eq "$rc" "0" "lease-wrapped clean exit 0"
+assert_eq "$(cat "$order_lease")" $'just install '"$install_dir_lease"$'\nlease -- /bin/sh -c mkdir -p "$CARGO_INSTALL_ROOT"; exec "$@" cargo-env-normalize '"$tmp_lease/tools/cargo"$' clean\ncargo clean' "clean wrapper preserves injected cargo executable and argv"
 
 echo "== trusted install policy handles PATH-selected user-local csa =="
 tmp_policy="$tmp_root/policy"

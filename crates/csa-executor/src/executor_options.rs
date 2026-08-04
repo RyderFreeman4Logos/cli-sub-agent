@@ -49,6 +49,8 @@ pub struct ExecuteOptions {
     /// Defaults to `false`. Generic env maps are scrubbed; this typed option is
     /// the only executor-side source that may set `CSA_GIT_PUSH_ALLOWED=true`.
     pub allow_git_push: bool,
+    /// Cancel and reap the session-owned process group before returning.
+    pub cancellation: Option<csa_process::ExecutionCancellation>,
 }
 
 /// Sandbox configuration resolved from project/tool config.
@@ -89,6 +91,7 @@ impl ExecuteOptions {
             pre_session_hook: None,
             subtree_pin: None,
             allow_git_push: false,
+            cancellation: None,
         }
     }
 

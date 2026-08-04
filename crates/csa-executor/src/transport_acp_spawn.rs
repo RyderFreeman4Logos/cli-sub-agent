@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AcpPromptRunRequest {
     tool_name: String,
     acp_command: String,
@@ -26,6 +26,7 @@ struct AcpPromptRunRequest {
     gemini_classification_env: Option<HashMap<String, String>>,
     gemini_env_allowlist_applied: String,
     memory_max_mb: Option<u64>,
+    cancellation: Option<csa_process::ExecutionCancellation>,
 }
 
 #[derive(Debug)]
@@ -35,9 +36,7 @@ struct GeminiAcpMcpRetryOutcome<T> {
 }
 
 impl AcpTransport {
-    async fn run_acp_prompt(
-        request: AcpPromptRunRequest,
-    ) -> Result<csa_acp::transport::AcpOutput> {
+    async fn run_acp_prompt(request: AcpPromptRunRequest) -> Result<csa_acp::transport::AcpOutput> {
         let classify_request = request.clone();
         let output =
             tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
@@ -74,6 +73,7 @@ impl AcpTransport {
                         request.output_spool_max_bytes,
                         request.output_spool_keep_rotated,
                         request.tool_output_compaction.clone(),
+                        request.cancellation.clone(),
                     ));
                     match sr {
                         transport_acp_sandbox::AcpSandboxedResult {
@@ -117,6 +117,7 @@ impl AcpTransport {
                                     termination_grace_period: std::time::Duration::from_secs(
                                         request.termination_grace_period_seconds,
                                     ),
+                                    cancellation: request.cancellation.clone(),
                                     io: csa_acp::transport::AcpOutputIoOptions {
                                         stream_stdout_to_stderr: request.stream_stdout_to_stderr,
                                         output_spool: request.output_spool.as_deref(),
@@ -163,6 +164,7 @@ impl AcpTransport {
                             termination_grace_period: std::time::Duration::from_secs(
                                 request.termination_grace_period_seconds,
                             ),
+                            cancellation: request.cancellation.clone(),
                             io: csa_acp::transport::AcpOutputIoOptions {
                                 stream_stdout_to_stderr: request.stream_stdout_to_stderr,
                                 output_spool: request.output_spool.as_deref(),
@@ -237,8 +239,7 @@ impl AcpTransport {
         Classify,
     >(
         runtime_home: &Path,
-        path_override: Option<std::ffi::OsString>,
-        allow_degraded_mcp: bool,
+        request: &AcpPromptRunRequest,
         mut spawn_once: Spawn,
         diagnose: Diagnose,
         disable: Disable,
@@ -251,9 +252,12 @@ impl AcpTransport {
         Disable: Fn(&Path, &McpInitDiagnostic, bool) -> Result<()>,
         Classify: Fn(&anyhow::Error) -> Option<GeminiAcpInitFailureClassification>,
     {
+        let path_override = request.env.get("PATH").map(std::ffi::OsStr::new);
+        let allow_degraded_mcp = gemini_allow_degraded_mcp(&request.env);
+        let cancellation = request.cancellation.as_ref();
         let issue_url = "https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/840";
         let mut warning_summary = None;
-        let preflight = diagnose(runtime_home, path_override.as_deref());
+        let preflight = diagnose(runtime_home, path_override);
         let mut already_degraded = false;
 
         if allow_degraded_mcp && !preflight.unhealthy_servers.is_empty() {
@@ -265,6 +269,10 @@ impl AcpTransport {
                 unhealthy_servers = %preflight.unhealthy_servers.join(","),
                 "gemini-cli ACP preflight found unhealthy MCP servers; degrading mirrored runtime before spawn"
             );
+        }
+
+        if cancellation.is_some_and(csa_process::ExecutionCancellation::is_cancelled) {
+            anyhow::bail!("ACP execution cancelled");
         }
 
         match spawn_once().await {
@@ -281,11 +289,10 @@ impl AcpTransport {
                     return Err(error);
                 }
 
-                let diagnostic = diagnose(runtime_home, path_override.as_deref());
+                let diagnostic = diagnose(runtime_home, path_override);
                 let disable_all = diagnostic.unhealthy_servers.is_empty();
                 disable(runtime_home, &diagnostic, disable_all)?;
-                warning_summary =
-                    Some(format_mcp_init_warning_summary(&diagnostic, disable_all));
+                warning_summary = Some(format_mcp_init_warning_summary(&diagnostic, disable_all));
                 tracing::warn!(
                     issue = issue_url,
                     unhealthy_servers = %if diagnostic.unhealthy_servers.is_empty() {
@@ -296,6 +303,10 @@ impl AcpTransport {
                     disable_all,
                     "gemini-cli ACP init crash matched generic bucket; retrying once with degraded MCP"
                 );
+
+                if cancellation.is_some_and(csa_process::ExecutionCancellation::is_cancelled) {
+                    anyhow::bail!("ACP execution cancelled");
+                }
 
                 match spawn_once().await {
                     Ok(value) => Ok(GeminiAcpMcpRetryOutcome {

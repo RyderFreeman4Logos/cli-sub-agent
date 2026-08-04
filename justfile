@@ -111,6 +111,7 @@ pre-commit-fast:
     just find-monolith-files
     just monolith-test
     just exact-build-test
+    bash scripts/tests/cargo-env-normalize-target-lease-tests.sh
     bash scripts/tests/post-merge-rebuild-tests.sh
     just check-path-includes
     just check-generated-artifacts

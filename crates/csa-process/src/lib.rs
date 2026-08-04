@@ -2,10 +2,14 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
-use tokio::time::MissedTickBehavior;
+use tokio::{sync::Notify, time::MissedTickBehavior};
 use tracing::warn;
 pub mod command_environment;
 pub use command_environment::{
@@ -54,8 +58,10 @@ use output_helpers::{
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
-pub use subprocess_helpers::check_tool_installed;
-use subprocess_helpers::terminate_child_process_group;
+pub use subprocess_helpers::{
+    ChildWaitState, check_tool_installed, inspect_child_without_reaping,
+    terminate_child_process_group,
+};
 use tool_liveness::record_spool_bytes_written;
 pub use tool_liveness::reset_liveness_scope;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness, write_fatal_error_markers};
@@ -126,7 +132,7 @@ pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Spawn-time process control options.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SpawnOptions {
     /// Max duration allowed for writing prompt payload to child stdin.
     pub stdin_write_timeout: Duration,
@@ -147,6 +153,68 @@ pub struct SpawnOptions {
     /// the marker-based fatal classification is bypassed for this session; the
     /// idle-timeout and wall-clock timeout still apply (#1745 opt-out).
     pub error_marker_scan_enabled: bool,
+    /// Cooperative cancellation from the caller that owns the target admission.
+    pub cancellation: Option<ExecutionCancellation>,
+}
+
+/// Cloneable cancellation state shared by process and transport wait loops.
+#[derive(Debug, Clone, Default)]
+pub struct ExecutionCancellation(Arc<ExecutionCancellationState>);
+
+#[derive(Debug, Default)]
+struct ExecutionCancellationState {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+impl ExecutionCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.notify.notify_waiters();
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wait until cancellation, without losing a cancellation that races setup.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let notified = self.0.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
+    }
+}
+
+/// Wait for a retry backoff unless the owning execution is cancelled first.
+/// Returns `true` when cancellation won and no retry should be spawned.
+pub async fn retry_backoff_cancelled(
+    cancellation: Option<&ExecutionCancellation>,
+    backoff: Duration,
+) -> bool {
+    let Some(cancellation) = cancellation else {
+        tokio::time::sleep(backoff).await;
+        return false;
+    };
+    if cancellation.is_cancelled() {
+        return true;
+    }
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => true,
+        _ = tokio::time::sleep(backoff) => cancellation.is_cancelled(),
+    }
 }
 
 impl Default for SpawnOptions {
@@ -157,6 +225,7 @@ impl Default for SpawnOptions {
             spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
             keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
             error_marker_scan_enabled: true,
+            cancellation: None,
         }
     }
 }
@@ -210,8 +279,12 @@ pub async fn wait_and_capture(
     .await
 }
 
+#[path = "lib_wait_after_capture.rs"]
+mod wait_after_capture;
 #[path = "lib_wait_capture.rs"]
 mod wait_capture;
+#[path = "lib_wait_capture_result.rs"]
+mod wait_capture_result;
 pub use wait_capture::wait_and_capture_with_idle_timeout;
 /// Execute a command and capture output.
 ///
@@ -247,20 +320,6 @@ pub async fn run_and_capture_with_stdin(
         None,
     )
     .await
-}
-
-/// Poll whether a child process has exited using Tokio's built-in try_wait().
-///
-/// Sets `*consumed = true` on first success so callers never call try_wait()
-/// again on an already-reaped child (which would return an ECHILD error).
-fn poll_child_exited(child: &mut tokio::process::Child, consumed: &mut bool) -> bool {
-    if *consumed {
-        return true;
-    }
-    if matches!(child.try_wait(), Ok(Some(_))) {
-        *consumed = true;
-    }
-    *consumed
 }
 
 #[cfg(test)]

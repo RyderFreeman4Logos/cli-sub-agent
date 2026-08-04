@@ -417,17 +417,16 @@ impl AcpTransport {
             memory_max_mb: options
                 .sandbox
                 .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb),
+            cancellation: options.cancellation.clone(),
         };
 
         let (mut output, gemini_warning_summary) = if self.tool_name == "gemini-cli" {
             let runtime_home = gemini_runtime_home
                 .clone()
                 .expect("gemini runtime home should exist for ACP execution");
-            let path_override = spawn_request.env.get("PATH").map(std::ffi::OsString::from);
             let outcome = Self::execute_gemini_acp_with_degraded_mcp_retry(
                 &runtime_home,
-                path_override,
-                gemini_allow_degraded_mcp(&spawn_request.env),
+                &spawn_request,
                 || Self::run_acp_prompt(spawn_request.clone()),
                 diagnose_mcp_init_failure,
                 disable_mcp_servers_in_runtime,

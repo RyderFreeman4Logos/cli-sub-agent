@@ -26,7 +26,7 @@ use crate::{
     error::{AcpError, AcpResult},
 };
 
-use super::{AcpConnection, AcpSandboxHandle};
+use super::{AcpConnection, AcpConnectionParts, AcpSandboxHandle};
 
 fn append_stderr_tail(stderr_buf: &mut String, chunk: &str) {
     stderr_buf.push_str(chunk);
@@ -283,7 +283,9 @@ impl AcpConnection {
                 {
                     unsafe {
                         cmd.pre_exec(move || {
-                            libc::setsid();
+                            if libc::setsid() == -1 {
+                                return Err(std::io::Error::last_os_error());
+                            }
                             Ok(())
                         });
                     }
@@ -325,7 +327,9 @@ impl AcpConnection {
                     let ll_paths = landlock_paths.take();
                     unsafe {
                         cmd.pre_exec(move || {
-                            libc::setsid();
+                            if libc::setsid() == -1 {
+                                return Err(std::io::Error::last_os_error());
+                            }
                             csa_resource::rlimit::apply_rlimits(rlimit_memory, rlimit_pids)
                                 .map_err(std::io::Error::other)?;
                             if let Some(ref paths) = ll_paths {
@@ -370,7 +374,9 @@ impl AcpConnection {
                         let ll_paths = landlock_paths.take();
                         unsafe {
                             cmd.pre_exec(move || {
-                                libc::setsid();
+                                if libc::setsid() == -1 {
+                                    return Err(std::io::Error::last_os_error());
+                                }
                                 csa_resource::rlimit::apply_oom_score_adj()
                                     .map_err(std::io::Error::other)?;
                                 if let Some(ref paths) = ll_paths {
@@ -421,7 +427,9 @@ impl AcpConnection {
         #[cfg(unix)]
         unsafe {
             cmd.pre_exec(|| {
-                libc::setsid();
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -557,7 +565,7 @@ impl AcpConnection {
             })
             .await;
 
-        Ok(Self::new_from_parts(
+        Ok(Self::new_from_parts(AcpConnectionParts {
             local_set,
             connection,
             child,
@@ -566,9 +574,9 @@ impl AcpConnection {
             last_meaningful_activity,
             tool_output_compactor,
             stderr_buf,
-            working_dir.to_path_buf(),
+            default_working_dir: working_dir.to_path_buf(),
             options,
-        ))
+        }))
     }
 }
 

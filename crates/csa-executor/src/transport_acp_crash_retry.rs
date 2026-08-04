@@ -516,7 +516,14 @@ pub(super) async fn execute_with_crash_retry(
                             delay_secs = backoff.as_secs(),
                             "codex ACP transient 429 rate limit detected; retrying with backoff"
                         );
-                        tokio::time::sleep(backoff).await;
+                        if csa_process::retry_backoff_cancelled(
+                            options.cancellation.as_ref(),
+                            backoff,
+                        )
+                        .await
+                        {
+                            anyhow::bail!("ACP execution cancelled");
+                        }
                         codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
                         continue;
                     }
@@ -537,7 +544,14 @@ pub(super) async fn execute_with_crash_retry(
                         thinking_budget = ?options.thinking_budget,
                         "ACP idle disconnect detected; retrying with original thinking budget"
                     );
-                    tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                    if csa_process::retry_backoff_cancelled(
+                        options.cancellation.as_ref(),
+                        Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS),
+                    )
+                    .await
+                    {
+                        anyhow::bail!("ACP execution cancelled");
+                    }
                     match transport
                         .execute_acp_attempt(prompt, session, extra_env, options, &retry_args, None)
                         .await
@@ -597,7 +611,14 @@ pub(super) async fn execute_with_crash_retry(
                             max_attempts,
                             "retrying codex ACP after initial-response stall"
                         );
-                        tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                        if csa_process::retry_backoff_cancelled(
+                            options.cancellation.as_ref(),
+                            Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS),
+                        )
+                        .await
+                        {
+                            anyhow::bail!("ACP execution cancelled");
+                        }
                         attempt = attempt.saturating_add(1);
                         continue;
                     }
@@ -627,7 +648,14 @@ pub(super) async fn execute_with_crash_retry(
                             delay_secs = backoff.as_secs(),
                             "codex ACP transient 429 transport error detected; retrying with backoff"
                         );
-                        tokio::time::sleep(backoff).await;
+                        if csa_process::retry_backoff_cancelled(
+                            options.cancellation.as_ref(),
+                            backoff,
+                        )
+                        .await
+                        {
+                            anyhow::bail!("ACP execution cancelled");
+                        }
                         codex_rate_limit_retries = codex_rate_limit_retries.saturating_add(1);
                         continue;
                     }
@@ -647,7 +675,14 @@ pub(super) async fn execute_with_crash_retry(
                         "ACP server crashed; retrying with fresh process \
                          in {ACP_CRASH_RETRY_DELAY_SECS}s"
                     );
-                    tokio::time::sleep(Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS)).await;
+                    if csa_process::retry_backoff_cancelled(
+                        options.cancellation.as_ref(),
+                        Duration::from_secs(ACP_CRASH_RETRY_DELAY_SECS),
+                    )
+                    .await
+                    {
+                        anyhow::bail!("ACP execution cancelled");
+                    }
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
