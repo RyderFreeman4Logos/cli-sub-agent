@@ -413,13 +413,14 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
     }
 
+    // Workspace-boundary threshold is non-fatal diagnostics only: it must not
+    // enter the process-group termination branch after output EOF.
     let status = if child_exited_early {
         terminate_child_process_group(&mut child, Duration::ZERO)
             .await
             .context("Failed to terminate completed command process group")?
     } else if idle_timed_out
         || persistent_rate_limit_note.is_some()
-        || workspace_boundary_timed_out
         || spawn_options
             .cancellation
             .as_ref()

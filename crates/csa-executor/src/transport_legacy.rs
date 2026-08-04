@@ -165,6 +165,16 @@ impl LegacyTransport {
         attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        // Shared attempt boundary: degraded-MCP / OAuth / initial-stall retries
+        // all re-enter here. Fail closed if the owning execution was cancelled
+        // after the previous attempt returned.
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(csa_process::ExecutionCancellation::is_cancelled)
+        {
+            anyhow::bail!("cancelled");
+        }
         let clean_contract = attempt_env.clean_contract;
         // Stage the antigravity-cli `model` field in
         // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,

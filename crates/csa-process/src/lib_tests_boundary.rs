@@ -40,11 +40,18 @@ async fn test_wait_and_capture_repeated_workspace_boundary_errors_warns_but_does
     unsafe { std::env::remove_var(WORKSPACE_BOUNDARY_THRESHOLD_ENV) };
 
     let phrase = boundary_error_echo_phrase();
-    // Feed 25 boundary lines to cross the default threshold of 20, then exit cleanly.
+    // Cross the default threshold of 20, close both output pipes, then sleep
+    // before exiting. Post-EOF capture must not TERM/KILL this still-live process.
     let mut cmd = Command::new("bash");
     cmd.args([
         "-c",
-        &format!(r#"for _ in $(seq 1 25); do echo "{phrase}"; done; echo final_marker"#),
+        &format!(
+            r#"for _ in $(seq 1 25); do echo "{phrase}"; done
+exec 1>&-
+exec 2>&-
+sleep 0.3
+exit 0"#
+        ),
     ]);
 
     let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
@@ -87,12 +94,6 @@ async fn test_wait_and_capture_repeated_workspace_boundary_errors_warns_but_does
     assert_eq!(
         hint_count, 1,
         "hint should fire exactly once per session, got {hint_count} in: {}",
-        result.output
-    );
-    // Process was allowed to finish — the post-threshold echo survived.
-    assert!(
-        result.output.contains("final_marker"),
-        "session should continue past threshold, output: {}",
         result.output
     );
     assert!(

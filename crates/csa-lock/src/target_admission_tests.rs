@@ -164,7 +164,10 @@ fn target_gc_admission_lease_owner_subprocess() {
         assert!(Instant::now() < deadline, "descendant did not publish pid");
         std::thread::sleep(Duration::from_millis(10));
     }
-    std::mem::forget(lease);
+    // Drop the owner lease normally. Explicit LOCK_UN would free the shared
+    // open-file-description lock; closing the FD must leave the inherited
+    // descendant FD holding LOCK_SH until that descendant exits.
+    drop(lease);
     std::process::exit(0);
 }
 

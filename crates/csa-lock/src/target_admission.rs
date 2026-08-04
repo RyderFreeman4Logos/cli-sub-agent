@@ -15,6 +15,11 @@ const MIRROR_ROOT: &str = "/ssd/mirror-rootfs";
 /// The lease fd is intentionally **not** close-on-exec. Session descendants must
 /// inherit the shared flock across `fork`/`exec` so process exit of an ancestor
 /// cannot free the parent-inode admission while unreaped descendants still run.
+///
+/// Do **not** call `flock(LOCK_UN)` on drop: Linux advisory locks are keyed by
+/// open file description. Explicit unlock would release every inherited FD that
+/// still shares this description. Closing the owner FD leaves descendant locks
+/// intact until those FDs close.
 pub struct TargetGcAdmissionLease {
     pub(crate) file: File,
     parent: PathBuf,
@@ -24,14 +29,10 @@ impl std::fmt::Debug for TargetGcAdmissionLease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TargetGcAdmissionLease")
             .field("parent", &self.parent)
+            // Keep the open FD live for the shared flock; expose it in Debug so
+            // the holding field is intentionally read (not dead after Drop removal).
+            .field("fd", &self.file.as_raw_fd())
             .finish()
-    }
-}
-
-impl Drop for TargetGcAdmissionLease {
-    fn drop(&mut self) {
-        // SAFETY: `file` owns the fd that holds this advisory lock.
-        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
