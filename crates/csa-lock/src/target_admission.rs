@@ -1,10 +1,9 @@
-use crate::set_fd_cloexec;
 use anyhow::{Context, Result};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 
 const MIRROR_ROOT: &str = "/ssd/mirror-rootfs";
@@ -12,6 +11,10 @@ const MIRROR_ROOT: &str = "/ssd/mirror-rootfs";
 /// Shared parent-directory admission held while a Rust session may use Cargo's
 /// canonical target. The external GC wrapper owns the marker and its exclusive
 /// lock; this guard only owns a shared flock on the same parent directory inode.
+///
+/// The lease fd is intentionally **not** close-on-exec. Session descendants must
+/// inherit the shared flock across `fork`/`exec` so process exit of an ancestor
+/// cannot free the parent-inode admission while unreaped descendants still run.
 pub struct TargetGcAdmissionLease {
     pub(crate) file: File,
     parent: PathBuf,
@@ -107,7 +110,9 @@ fn acquire_target_gc_admission_at_root_after_lock(
             )
         });
     }
-    set_fd_cloexec(fd, &parent)?;
+    // Open used O_CLOEXEC for safety during setup; clear it so session
+    // descendants inherit the shared admission flock across exec.
+    clear_fd_cloexec(fd, &parent)?;
 
     after_lock();
     let mut fd_stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -185,4 +190,22 @@ fn open_directory_cloexec(parent: &Path) -> std::io::Result<File> {
     }
     // SAFETY: `open` succeeded, so this function transfers ownership of `fd` to File.
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn clear_fd_cloexec(fd: RawFd, path: &Path) -> Result<()> {
+    // SAFETY: `fd` is owned by a live `File`; F_GETFD reads descriptor flags.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("Failed to read fd flags for {}", path.display()));
+    }
+
+    // SAFETY: `fd` is valid; F_SETFD updates only close-on-exec flags.
+    let ret = unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+    if ret == -1 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("Failed to clear FD_CLOEXEC on {}", path.display()));
+    }
+
+    Ok(())
 }
