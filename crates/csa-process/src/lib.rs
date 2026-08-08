@@ -39,6 +39,8 @@ mod output_helpers;
 mod signal_exit;
 #[path = "lib_subprocess_helpers.rs"]
 mod subprocess_helpers;
+#[cfg(all(test, unix))]
+mod test_process_group;
 mod tool_liveness;
 mod workspace_boundary;
 #[cfg(unix)]
