@@ -7,6 +7,8 @@ use super::runtime_path::{
     normalize_path_components, xdg_runtime_root,
 };
 
+const SSD_MIRROR_ROOTS: [&str; 2] = ["/ssd/mirror-rootfs", "/mnt/ssd/mirror-rootfs"];
+
 /// Strictly validate writable sandbox paths against default safe roots.
 /// # Errors
 ///
@@ -28,6 +30,7 @@ fn resolve_writable_paths_impl(
     project_root: &Path,
     allow_outside_default_roots: bool,
 ) -> anyhow::Result<Vec<PathBuf>> {
+    let mirror_roots = default_ssd_mirror_roots();
     validate_sandbox_paths(
         paths,
         project_root,
@@ -40,6 +43,7 @@ fn resolve_writable_paths_impl(
             allow_requested_path_for_allowlist: true,
             allow_outside_default_roots,
         },
+        &mirror_roots,
     )
 }
 
@@ -50,20 +54,34 @@ fn resolve_writable_paths_impl(
 /// paths are validated against the canonical target to prevent bind-mounting a
 /// safe-looking path that resolves somewhere outside the allowlist.
 pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+    let mirror_roots = default_ssd_mirror_roots();
+    validate_readable_paths_with_mirror_roots(paths, project_root, &mirror_roots)
+}
+
+pub(super) fn validate_readable_paths_with_mirror_roots(
+    paths: &[PathBuf],
+    project_root: &Path,
+    mirror_roots: &[PathBuf],
+) -> anyhow::Result<()> {
     validate_sandbox_paths(
         paths,
         project_root,
-        PathValidationOptions {
-            kind: "readable_paths",
-            require_absolute: true,
-            require_exists: true,
-            reject_tmp_root: true,
-            canonicalize_for_allowlist: true,
-            allow_requested_path_for_allowlist: false,
-            allow_outside_default_roots: false,
-        },
+        readable_path_validation_options(),
+        mirror_roots,
     )
     .map(|_| ())
+}
+
+fn readable_path_validation_options() -> PathValidationOptions<'static> {
+    PathValidationOptions {
+        kind: "readable_paths",
+        require_absolute: true,
+        require_exists: true,
+        reject_tmp_root: true,
+        canonicalize_for_allowlist: true,
+        allow_requested_path_for_allowlist: false,
+        allow_outside_default_roots: false,
+    }
 }
 
 /// Canonicalize `path` through its deepest existing ancestor.
@@ -137,12 +155,21 @@ struct PathValidationOptions<'a> {
     allow_outside_default_roots: bool,
 }
 
+fn default_ssd_mirror_roots() -> [PathBuf; 2] {
+    SSD_MIRROR_ROOTS.map(PathBuf::from)
+}
+
 fn validate_sandbox_paths(
     paths: &[PathBuf],
     project_root: &Path,
     options: PathValidationOptions<'_>,
+    mirror_roots: &[PathBuf],
 ) -> anyhow::Result<Vec<PathBuf>> {
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let lexical_allowed_roots = [
+        normalize_path_components(project_root.to_path_buf()),
+        normalize_path_components(home.clone()),
+    ];
     let project_root = canonicalize_or_fallback(project_root);
     let project_root_for_join = project_root.clone();
     let home = canonicalize_or_fallback(home.as_path());
@@ -182,6 +209,12 @@ fn validate_sandbox_paths(
             || allowed_parents
                 .iter()
                 .any(|parent| validated.resolved.starts_with(parent))
+            || is_ssd_mirror_path_for_allowed_root(
+                &validated.requested,
+                &validated.resolved,
+                &lexical_allowed_roots,
+                mirror_roots,
+            )
             || (options.allow_requested_path_for_allowlist
                 && allowed_parents
                     .iter()
@@ -206,6 +239,40 @@ fn validate_sandbox_paths(
         options.kind,
         rejected.join(", ")
     );
+}
+
+fn is_ssd_mirror_path_for_allowed_root(
+    requested: &Path,
+    resolved: &Path,
+    lexical_allowed_roots: &[PathBuf],
+    mirror_roots: &[PathBuf],
+) -> bool {
+    mirror_roots.iter().any(|mirror_root| {
+        let canonical_mirror_root = canonicalize_or_fallback(mirror_root);
+        let requested_mirror_path_is_allowed = requested
+            .strip_prefix(mirror_root)
+            .ok()
+            .map(|suffix| Path::new("/").join(suffix))
+            .is_some_and(|path| {
+                resolved.starts_with(&canonical_mirror_root)
+                    && lexical_allowed_roots
+                        .iter()
+                        .any(|allowed_root| path.starts_with(allowed_root))
+            });
+        let allowed_path_resolves_in_mirror = lexical_allowed_roots.iter().any(|allowed_root| {
+            requested
+                .strip_prefix(allowed_root)
+                .ok()
+                .is_some_and(|suffix| {
+                    let expected = mirror_root
+                        .join(allowed_root.strip_prefix("/").unwrap_or(allowed_root))
+                        .join(suffix);
+                    resolved.starts_with(canonicalize_or_fallback(&expected))
+                })
+        });
+
+        requested_mirror_path_is_allowed || allowed_path_resolves_in_mirror
+    })
 }
 
 struct ValidatedPath {
