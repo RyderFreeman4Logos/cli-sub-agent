@@ -117,6 +117,60 @@ fn soft_limit_writer_guidance_reports_feasible_unified_interval_and_retry_comman
 }
 
 #[test]
+fn soft_limit_writer_guidance_reports_one_infeasible_interval_without_raise_hint() {
+    let memory = NoProviderLaunchMemoryDiagnostic {
+        effective_memory_max_mb: Some(8_000),
+        soft_limit_percent: Some(90),
+        soft_threshold_mb: Some(7_200),
+        required_floor_mb: Some(9_000),
+        required_memory_max_mb: Some(10_000),
+        reserve_mb: Some(1_000),
+        available_memory_mb: Some(9_277),
+        projected_spawn_mb: Some(10_000),
+        retry_physical_upper_mb: Some(8_277),
+        retry_active_session_upper_mb: Some(20_000),
+        retry_combined_upper_mb: Some(8_277),
+        retry_lower_bound_mb: Some(10_000),
+        retry_feasible: Some(false),
+        ..Default::default()
+    };
+    let guidance = soft_limit_admission_initial_guidance(
+        vec!["Raise --memory-max-mb to at least 10000MB".to_string()],
+        &memory,
+    );
+    let joined = guidance.join("\n");
+
+    assert!(
+        joined.contains("No floor-compliant retry envelope exists"),
+        "{joined}"
+    );
+    assert!(!joined.contains("Raise --memory-max-mb"), "{joined}");
+
+    let argv = vec![
+        "csa".to_string(),
+        "run".to_string(),
+        "--memory-max-mb".to_string(),
+        "8000".to_string(),
+        "fix the retry interval".to_string(),
+    ];
+    let retry_guidance = soft_limit_admission_guidance_with_argv("codex", &memory, None, &argv);
+    let retry_joined = retry_guidance.join("\n");
+
+    assert!(
+        retry_joined.contains("Retry feasibility: infeasible"),
+        "{retry_joined}"
+    );
+    assert!(
+        retry_joined
+            .contains("lower_bound=10000MB (role/tool soft-limit floor); current_upper=8277MB")
+    );
+    assert!(
+        !retry_joined.contains("Suggested retry command:"),
+        "{retry_joined}"
+    );
+}
+
+#[test]
 fn soft_limit_diagnostic_reports_live_retry_interval_without_provider_side_effects() {
     use csa_resource::{FilesystemCapability, IsolationPlan, ResourceCapability};
 

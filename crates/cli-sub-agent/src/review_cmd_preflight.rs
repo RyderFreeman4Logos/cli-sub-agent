@@ -283,6 +283,7 @@ fn validate_host_memory_before_session(
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(project_config),
     });
     let projected_spawn_mb = crate::resource_admission::spawn_memory_projection_mb_with_overrides(
+        Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         project_config,
         tool.as_str(),
         resource_overrides,

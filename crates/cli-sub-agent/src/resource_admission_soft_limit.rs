@@ -93,19 +93,10 @@ impl SoftLimitAdmissionDenial {
 
     fn message(self, tool_name: &str) -> String {
         let required_memory_max_mb = self.required_memory_max_mb;
-        let recommendation = match self.session_kind {
-            CodexSoftLimitAdmissionKind::Reviewer => format!(
-                "Raise --memory-max-mb, resources.memory_max_mb, or \
-                 tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB, remove a lower \
-                 memory override so Codex can use its 16384MB default, or raise \
-                 resources.soft_limit_percent only when host RAM makes that safe."
-            ),
-            CodexSoftLimitAdmissionKind::Writer => format!(
-                "Raise --memory-max-mb, resources.memory_max_mb, or \
-                 tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB, or raise \
-                 resources.soft_limit_percent only when host RAM makes that safe."
-            ),
-        };
+        let recommendation = format!(
+            "A floor-compliant envelope needs memory_max_mb at least {required_memory_max_mb}MB; \
+             retry guidance will confirm whether the current host can admit that envelope."
+        );
         format!(
             "CSA: {reason} denied -- {tool_name} {session_kind} soft memory threshold is \
              {threshold}MB, below required={required}MB \

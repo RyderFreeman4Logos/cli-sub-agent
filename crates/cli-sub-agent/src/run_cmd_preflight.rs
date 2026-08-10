@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_process::StreamMode;
+use csa_resource::{ResourceGuard, ResourceLimits};
 use std::path::{Path, PathBuf};
 
 use csa_core::types::ToolArg;
@@ -107,7 +108,45 @@ pub(crate) fn validate_run_memory_soft_limit_before_session(
             err
         }
     })
-    .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))
+    .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))?;
+
+    let mut resource_guard = ResourceGuard::new(ResourceLimits {
+        min_free_memory_mb: input
+            .resource_overrides
+            .resolve_min_free_memory_mb(input.project_config),
+    });
+    let projected_spawn_mb = crate::resource_admission::spawn_memory_projection_mb_with_overrides(
+        Some("run"),
+        input.project_config,
+        input.tool_name,
+        input.resource_overrides,
+    );
+    let admission = crate::resource_admission::build_spawn_memory_admission(
+        input.project_root,
+        None,
+        projected_spawn_mb,
+    )
+    .context("Failed to build host-memory admission")?;
+    resource_guard
+        .check_availability_with_admission(input.tool_name, Some(admission))
+        .map_err(|err| {
+            let guidance = crate::no_provider_launch::host_memory_guidance_from_error(
+                Some("run"),
+                input.tool_name,
+                input.project_config,
+                input.resource_overrides,
+                &err,
+            );
+            if let Some(guidance) = guidance {
+                err.context(format!(
+                    "writer host-memory retry guidance before session creation:\n- {}",
+                    guidance.join("\n- ")
+                ))
+            } else {
+                err
+            }
+        })
+        .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))
 }
 
 #[derive(Clone, Copy)]

@@ -48,7 +48,7 @@ fn from_soft_limit_admission(
         ctx.resource_overrides,
         error,
     );
-    let mut guidance = error.guidance();
+    let mut guidance = soft_limit_admission_initial_guidance(error.guidance(), &memory);
     guidance.extend(soft_limit_admission_guidance(
         ctx.tool_name,
         &memory,
@@ -121,7 +121,7 @@ pub(crate) fn soft_limit_admission_guidance_from_error_with_argv(
         resource_overrides,
         soft_limit,
     );
-    let mut guidance = soft_limit.guidance();
+    let mut guidance = soft_limit_admission_initial_guidance(soft_limit.guidance(), &memory);
     guidance.extend(soft_limit_admission_guidance_with_argv(
         tool_name,
         &memory,
@@ -141,7 +141,7 @@ fn soft_limit_admission_diagnostic_memory(
     let admission = crate::resource_admission::build_spawn_memory_admission(
         project_root,
         current_session_id,
-        error.memory_max_mb(),
+        error.memory_max_mb().max(error.required_memory_max_mb()),
     );
     let admission = match admission {
         Ok(admission) => admission,
@@ -314,6 +314,20 @@ fn role_from_task_type(task_type: Option<&str>) -> &'static str {
         Some("run") | None => "writer",
         Some(_) => "session",
     }
+}
+
+fn soft_limit_admission_initial_guidance(
+    admission_guidance: Vec<String>,
+    memory: &NoProviderLaunchMemoryDiagnostic,
+) -> Vec<String> {
+    if memory.retry_feasible == Some(false) {
+        return vec![
+            "No floor-compliant retry envelope exists for the current host snapshot; do not \
+             raise or lower memory_max_mb until host capacity or active-session pressure changes."
+                .to_string(),
+        ];
+    }
+    admission_guidance
 }
 
 fn soft_limit_admission_guidance(

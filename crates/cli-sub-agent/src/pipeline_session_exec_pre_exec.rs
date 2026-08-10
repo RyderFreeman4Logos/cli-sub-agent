@@ -61,8 +61,12 @@ pub(super) fn check_resources_before_spawn(
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
     });
-    let projected_spawn_mb =
-        spawn_memory_projection_mb_with_overrides(config, executor.tool_name(), resource_overrides);
+    let projected_spawn_mb = spawn_memory_projection_mb_with_overrides(
+        task_type,
+        config,
+        executor.tool_name(),
+        resource_overrides,
+    );
     if let Err(err) = crate::resource_admission::persist_spawn_memory_projection(
         session,
         projected_spawn_mb,
