@@ -65,4 +65,16 @@ impl<'a> RunMemoryAdmission<'a> {
             },
         )
     }
+
+    pub(super) fn validate_host_memory_after_slot_acquisition(
+        &self,
+        tool_name: &str,
+    ) -> Result<()> {
+        crate::run_cmd_preflight::validate_run_host_memory_after_slot_acquisition(
+            self.project_root,
+            self.project_config,
+            tool_name,
+            self.resource_overrides,
+        )
+    }
 }

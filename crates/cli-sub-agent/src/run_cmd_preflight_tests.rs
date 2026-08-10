@@ -55,3 +55,35 @@ fn writer_soft_limit_floor_is_rejected_before_session_creation() {
         "memory floor preflight must not create a writer session"
     );
 }
+
+#[test]
+fn writer_soft_limit_preflight_does_not_admit_host_memory() {
+    let project_dir = tempfile::tempdir().expect("temp project");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
+    let mut config = crate::review_cmd::tests::project_config_with_enabled_tools(&["codex"]);
+    config.resources.memory_max_mb = Some(10_000);
+    config.resources.min_free_memory_mb = u64::MAX;
+    config.resources.soft_limit_percent = Some(90);
+    let global_config = GlobalConfig::default();
+
+    validate_run_memory_soft_limit_before_session(RunMemorySoftLimitPreflight {
+        project_root: project_dir.path(),
+        project_config: Some(&config),
+        global_config: &global_config,
+        tool_name: "codex",
+        resource_overrides: RunResourceOverrides::absent(),
+        stream_mode: csa_process::StreamMode::BufferOnly,
+        idle_timeout_seconds: 120,
+        initial_response_timeout_seconds: Some(120),
+        build_jobs: Some(1),
+        no_fs_sandbox: false,
+        allow_user_daemon_ipc: true,
+        extra_writable: &[],
+        extra_readable: &[],
+    })
+    .expect("static writer preflight must not inspect dynamic host memory");
+}

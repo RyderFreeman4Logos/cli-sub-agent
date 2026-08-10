@@ -40,10 +40,10 @@ pub(crate) fn validate_run_prompt_file(path: Option<&Path>) -> Result<()> {
 
 /// Resolve the writer's actual sandbox plan before creating a fresh session.
 ///
-/// This deliberately uses the same resolved limits and soft-limit admission
-/// gate as session execution. A cap that is adequate for a reviewer may still
-/// be below the writer's role-specific floor; returning that error here keeps
-/// the caller from receiving a new, guaranteed-to-fail session.
+/// A cap that is adequate for a reviewer may still be below the writer's
+/// role-specific floor; returning that error here keeps the caller from
+/// receiving a new, guaranteed-to-fail session. Dynamic host-memory admission
+/// waits until the attempt holds a tool slot.
 pub(crate) fn validate_run_memory_soft_limit_before_session(
     input: RunMemorySoftLimitPreflight<'_>,
 ) -> Result<()> {
@@ -110,31 +110,39 @@ pub(crate) fn validate_run_memory_soft_limit_before_session(
     })
     .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))?;
 
+    Ok(())
+}
+
+/// Validate dynamic host memory after a writer attempt has acquired its slot.
+pub(crate) fn validate_run_host_memory_after_slot_acquisition(
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    tool_name: &str,
+    resource_overrides: crate::run_resource_overrides::RunResourceOverrides,
+) -> Result<()> {
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
-        min_free_memory_mb: input
-            .resource_overrides
-            .resolve_min_free_memory_mb(input.project_config),
+        min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(project_config),
     });
     let projected_spawn_mb = crate::resource_admission::spawn_memory_projection_mb_with_overrides(
         Some("run"),
-        input.project_config,
-        input.tool_name,
-        input.resource_overrides,
+        project_config,
+        tool_name,
+        resource_overrides,
     );
     let admission = crate::resource_admission::build_spawn_memory_admission(
-        input.project_root,
+        project_root,
         None,
         projected_spawn_mb,
     )
     .context("Failed to build host-memory admission")?;
     resource_guard
-        .check_availability_with_admission(input.tool_name, Some(admission))
+        .check_availability_with_admission(tool_name, Some(admission))
         .map_err(|err| {
             let guidance = crate::no_provider_launch::host_memory_guidance_from_error(
                 Some("run"),
-                input.tool_name,
-                input.project_config,
-                input.resource_overrides,
+                tool_name,
+                project_config,
+                resource_overrides,
                 &err,
             );
             if let Some(guidance) = guidance {
@@ -146,7 +154,7 @@ pub(crate) fn validate_run_memory_soft_limit_before_session(
                 err
             }
         })
-        .with_context(|| format!("run preflight for writer tool '{}'", input.tool_name))
+        .with_context(|| format!("run preflight for writer tool '{tool_name}'"))
 }
 
 #[derive(Clone, Copy)]

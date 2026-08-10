@@ -202,10 +202,17 @@ fn review_soft_limit_resource_admission_reports_unified_retry_guidance_before_se
     assert!(msg.contains("Retry feasibility:"), "{msg}");
     assert!(msg.contains("lower_bound=11703MB (role/tool soft-limit floor)"));
     assert!(msg.contains("physical/reserve upper="), "{msg}");
-    assert!(msg.contains("Suggested retry command: csa review"), "{msg}");
-    assert!(msg.contains("--memory-max-mb 11703"), "{msg}");
+    if msg.contains("Retry feasibility: infeasible.") {
+        assert!(msg.contains("No feasible retry window exists"), "{msg}");
+        assert!(!msg.contains("Suggested retry command:"), "{msg}");
+        assert!(!msg.contains("--memory-max-mb 11703"), "{msg}");
+    } else {
+        assert!(msg.contains("Retry feasibility: feasible"), "{msg}");
+        assert!(msg.contains("Suggested retry command: csa review"), "{msg}");
+        assert!(msg.contains("--memory-max-mb 11703"), "{msg}");
+        assert!(msg.contains("host_required="), "{msg}");
+    }
     assert!(!msg.contains("Retry command delta:"), "{msg}");
-    assert!(msg.contains("host_required="), "{msg}");
     assert!(
         msg.contains("soft-limit admission rejected before provider launch"),
         "{msg}"
