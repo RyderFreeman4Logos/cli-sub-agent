@@ -150,6 +150,63 @@ fn test_validate_readable_paths_rejects_unrelated_and_sensitive_paths_with_ssd_m
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_validate_readable_paths_rejects_ssd_mirror_symlink_escapes() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home/current");
+    let project = home.join("project");
+    let mirror_root = temp.path().join("mirror-rootfs");
+    let mirror_home = mirror_root.join(home.strip_prefix("/").expect("absolute home"));
+    let mirror_etc = mirror_root.join("etc");
+    let direct_escape = mirror_home.join("direct-escape");
+    let mirror_lexical_escape = mirror_home.join("lexical-escape");
+    let lexical_escape = home.join("lexical-escape");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&mirror_home).expect("create mirror home");
+    std::fs::create_dir_all(&mirror_etc).expect("create mirror etc");
+    symlink(&mirror_etc, &direct_escape).expect("create direct mirror escape");
+    symlink(&mirror_etc, &mirror_lexical_escape).expect("create mirrored lexical escape");
+    symlink(&mirror_lexical_escape, &lexical_escape).expect("create lexical mirror escape");
+    let _home_env = ScopedEnvVar::set("HOME", &home);
+
+    for path in [direct_escape, lexical_escape] {
+        super::validation::validate_readable_paths_with_mirror_roots(
+            std::slice::from_ref(&path),
+            &project,
+            std::slice::from_ref(&mirror_root),
+        )
+        .expect_err("mirror symlinks must stay in the authorized logical subtree");
+    }
+}
+
+#[test]
+fn test_validate_readable_paths_rejects_mnt_ssd_mirror_alias() {
+    validate_readable_paths(
+        &[PathBuf::from("/mnt/ssd/mirror-rootfs/home/obj")],
+        Path::new("/home/obj/project"),
+    )
+    .expect_err("only the lexical /ssd/mirror-rootfs request root is allowed");
+}
+
+#[test]
+fn test_validate_writable_paths_rejects_ssd_mirror_exception() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let project = home.join("project");
+    let mirror_home =
+        Path::new("/ssd/mirror-rootfs").join(home.strip_prefix("/").expect("absolute home"));
+    std::fs::create_dir_all(&project).expect("create project");
+    let _home_env = ScopedEnvVar::set("HOME", &home);
+
+    validate_writable_paths(&[mirror_home], &project)
+        .expect_err("the SSD mirror exception is readable-only");
+}
+
 #[test]
 fn test_validate_writable_allows_xdg_runtime_child_but_rejects_root() {
     let _guard = ENV_LOCK.lock().unwrap();
