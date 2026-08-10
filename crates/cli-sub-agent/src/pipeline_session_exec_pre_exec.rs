@@ -66,6 +66,7 @@ pub(super) fn check_resources_before_spawn(
         config,
         executor.tool_name(),
         resource_overrides,
+        csa_resource::detect_resource_capability(),
     );
     if let Err(err) = crate::resource_admission::persist_spawn_memory_projection(
         session,

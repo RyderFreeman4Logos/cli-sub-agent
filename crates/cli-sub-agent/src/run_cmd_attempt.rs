@@ -87,9 +87,9 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
         let needs_admission = (effective_session_arg.is_none() || is_fork)
             && executed_session_id.is_none()
             && pre_created_fork_session_id.is_none();
-        if needs_admission {
-            memory_admission.validate(tool_name_str, initial_response_timeout_seconds)?;
-        }
+        let resource_capability = needs_admission
+            .then(|| memory_admission.validate(tool_name_str, initial_response_timeout_seconds))
+            .transpose()?;
         let max_concurrent = request.global_config.max_concurrent(tool_name_str);
         let mut _slot_guard = match acquire_attempt_slot(
             AttemptSlotRequest {
@@ -160,8 +160,9 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             }
         }
 
-        if needs_admission {
-            memory_admission.validate_host_memory_after_slot_acquisition(tool_name_str)?;
+        if let Some(resource_capability) = resource_capability {
+            memory_admission
+                .validate_host_memory_after_slot_acquisition(tool_name_str, resource_capability)?;
         }
 
         if is_fork && fork_resolution.is_none() {

@@ -1,4 +1,7 @@
-use super::{RunMemorySoftLimitPreflight, validate_run_memory_soft_limit_before_session};
+use super::{
+    RunMemorySoftLimitPreflight, validate_run_host_memory_after_slot_acquisition,
+    validate_run_memory_soft_limit_before_session,
+};
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -86,4 +89,50 @@ fn writer_soft_limit_preflight_does_not_admit_host_memory() {
         extra_readable: &[],
     })
     .expect("static writer preflight must not inspect dynamic host memory");
+}
+
+#[test]
+fn writer_host_memory_admission_is_deferred_to_the_post_slot_path() {
+    let project_dir = tempfile::tempdir().expect("temp project");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _tools_available =
+        ScopedEnvVarRestore::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1");
+    let _resource_capability =
+        ScopedEnvVarRestore::set(csa_resource::sandbox::TEST_ASSUME_CGROUP_V2_ENV, "1");
+    let mut config = crate::review_cmd::tests::project_config_with_enabled_tools(&["codex"]);
+    config.resources.memory_max_mb = Some(10_000);
+    config.resources.min_free_memory_mb = u64::MAX;
+    config.resources.soft_limit_percent = Some(90);
+    let global_config = GlobalConfig::default();
+
+    let resource_capability =
+        validate_run_memory_soft_limit_before_session(RunMemorySoftLimitPreflight {
+            project_root: project_dir.path(),
+            project_config: Some(&config),
+            global_config: &global_config,
+            tool_name: "codex",
+            resource_overrides: RunResourceOverrides::absent(),
+            stream_mode: csa_process::StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            initial_response_timeout_seconds: Some(120),
+            build_jobs: Some(1),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: true,
+            extra_writable: &[],
+            extra_readable: &[],
+        })
+        .expect("static writer preflight must not inspect dynamic host memory");
+    assert_eq!(
+        resource_capability,
+        csa_resource::ResourceCapability::CgroupV2
+    );
+
+    validate_run_host_memory_after_slot_acquisition(
+        project_dir.path(),
+        Some(&config),
+        "codex",
+        RunResourceOverrides::absent(),
+        resource_capability,
+    )
+    .expect_err("dynamic host-memory admission belongs to the post-slot path");
 }
