@@ -87,17 +87,22 @@ pub(crate) fn waitid_without_reaping(
 
 #[cfg(unix)]
 fn signal_process_group(process_group: i32, signal: libc::c_int) -> Result<()> {
-    // SAFETY: the negative PID targets the still-owned child's process group.
-    let rc = unsafe { libc::kill(-process_group, signal) };
-    if rc == 0 {
-        return Ok(());
-    }
+    loop {
+        // SAFETY: the negative PID targets the still-owned child's process group.
+        let rc = unsafe { libc::kill(-process_group, signal) };
+        if rc == 0 {
+            return Ok(());
+        }
 
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error)
+                .with_context(|| format!("failed to signal process group {process_group}"));
+        }
     }
-    Err(error).with_context(|| format!("failed to signal process group {process_group}"))
 }
 
 async fn wait_for_child_exit(child: &mut tokio::process::Child) -> Result<ExitStatus> {
@@ -105,6 +110,23 @@ async fn wait_for_child_exit(child: &mut tokio::process::Child) -> Result<ExitSt
         .await
         .context("timed out waiting for child process to exit")?
         .context("failed to wait for child process")
+}
+
+#[cfg(target_os = "linux")]
+async fn wait_for_process_group_termination(process_group: i32) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + CHILD_REAP_TIMEOUT;
+    loop {
+        match crate::process_activity::process_group_has_live_members(process_group) {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("failed to inspect child process group"),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for child process group to terminate");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 pub async fn terminate_child_process_group(
@@ -122,6 +144,8 @@ pub async fn terminate_child_process_group(
             // Do not reap the leader before the final group signal: its unreaped
             // PID anchors the PGID even when it exited on SIGTERM.
             signal_process_group(process_group, libc::SIGKILL)?;
+            #[cfg(target_os = "linux")]
+            wait_for_process_group_termination(process_group).await?;
             return wait_for_child_exit(child).await;
         }
     }

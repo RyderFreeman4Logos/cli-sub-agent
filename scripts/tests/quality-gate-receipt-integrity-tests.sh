@@ -41,24 +41,61 @@ assert_single_json() {
     '/tmp/|example\.invalid|credential|secret-token' "$record"
 }
 
-wait_for_pid_bounded() {
-  local pid="$1"
-  if ! timeout 10 tail --pid="$pid" -f /dev/null; then
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-    unregister_child "$pid"
-    _receipt_test_fail fixture-process-timeout completed-within-10s timed-out
-    return 1
-  fi
-  local code
-  if wait "$pid"; then
-    unregister_child "$pid"
-    return 0
-  else
-    code=$?
-  fi
-  unregister_child "$pid"
-  _receipt_test_fail fixture-process-exit 0 "$code"
+wait_for_pids_bounded() {
+  local -a pending=("$@") remaining
+  local completed pid code
+  while [ "${#pending[@]}" -gt 0 ]; do
+    # Lock acquisition order is nondeterministic, so reap whichever exact child
+    # exits next instead of imposing launch order on serialized fixture writers.
+    if ! completed="$(python3 - "${pending[@]}" <<'PY'
+import os
+import select
+import sys
+
+pidfds = {}
+try:
+    poller = select.poll()
+    for value in sys.argv[1:]:
+        try:
+            descriptor = os.pidfd_open(int(value))
+        except ProcessLookupError:
+            print(value)
+            raise SystemExit
+        pidfds[descriptor] = value
+        poller.register(descriptor, select.POLLIN)
+    ready = poller.poll(10_000)
+    if not ready:
+        raise SystemExit(124)
+    print(pidfds[ready[0][0]])
+finally:
+    for descriptor in pidfds:
+        os.close(descriptor)
+PY
+    )"; then
+      for pid in "${pending[@]}"; do
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        unregister_child "$pid"
+      done
+      _receipt_test_fail fixture-process-timeout completed-within-10s timed-out
+      return 1
+    fi
+    if wait "$completed"; then
+      code=0
+    else
+      code=$?
+    fi
+    unregister_child "$completed"
+    if [ "$code" -ne 0 ]; then
+      _receipt_test_fail fixture-process-exit 0 "$code"
+      return 1
+    fi
+    remaining=()
+    for pid in "${pending[@]}"; do
+      [ "$pid" = "$completed" ] || remaining+=("$pid")
+    done
+    pending=("${remaining[@]}")
+  done
 }
 
 run_integrity_concurrency() {
@@ -179,8 +216,7 @@ PY'
   local writer_two=$!
   register_child "$writer_two"
   touch "$fixture/target/quality-gate-test-state/release"
-  wait_for_pid_bounded "$writer_one"
-  wait_for_pid_bounded "$writer_two"
+  wait_for_pids_bounded "$writer_one" "$writer_two"
   assert_eq integrity-concurrency-initial-gate-runs 1 "$(wc -c <"$counter")"
   assert_eq integrity-concurrency-receipt-count 1 \
     "$(find "$receipt_dir" -maxdepth 1 -type f -name '*.json' | wc -l)"
@@ -197,10 +233,7 @@ PY'
     writers+=("$!")
     register_child "$!"
   done
-  local writer
-  for writer in "${writers[@]}"; do
-    wait_for_pid_bounded "$writer"
-  done
+  wait_for_pids_bounded "${writers[@]}"
   assert_eq integrity-concurrency-final-gate-runs 1 "$(wc -c <"$counter")"
   echo "PASS integrity-concurrency"
 

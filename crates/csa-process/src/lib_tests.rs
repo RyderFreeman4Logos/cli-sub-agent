@@ -337,13 +337,13 @@ fn test_tool_liveness_true_for_live_pid_and_output_growth() {
 #[test]
 fn test_tool_liveness_matches_daemon_pid_by_session_dir_path() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut child = std::process::Command::new("sh")
+    let mut command = std::process::Command::new("sh");
+    command
         .arg("-c")
         .arg("while true; do sleep 1; done")
         .arg("session-runner")
-        .arg(tmp.path())
-        .spawn()
-        .expect("spawn sleeper");
+        .arg(tmp.path());
+    let child = crate::test_process_group::ProcessGroupFixture::spawn(command);
     std::fs::write(tmp.path().join("daemon.pid"), child.id().to_string()).expect("write pid");
 
     let expected_pid = child.id();
@@ -355,9 +355,6 @@ fn test_tool_liveness_matches_daemon_pid_by_session_dir_path() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-
-    let _ = child.kill();
-    let _ = child.wait();
 
     assert_eq!(observed_pid, Some(expected_pid));
 }

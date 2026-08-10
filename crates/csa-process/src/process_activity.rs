@@ -62,7 +62,7 @@ struct ProcStat {
 
 #[cfg(target_os = "linux")]
 fn platform_process_tree_cpu_ticks(root_pid: u32) -> Option<u64> {
-    let stats = read_all_proc_stats();
+    let stats = read_all_proc_stats().ok()?;
     let root = stats.iter().find(|stat| stat.pid == root_pid).copied();
     let root_pgrp = root.and_then(|stat| (stat.pgrp == root_pid as i32).then_some(stat.pgrp));
     let parents: HashMap<u32, u32> = stats.iter().map(|stat| (stat.pid, stat.ppid)).collect();
@@ -108,18 +108,27 @@ fn is_descendant_of(pid: u32, root_pid: u32, parents: &HashMap<u32, u32>) -> boo
 }
 
 #[cfg(target_os = "linux")]
-fn read_all_proc_stats() -> Vec<ProcStat> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-
-    entries
+fn read_all_proc_stats() -> std::io::Result<Vec<ProcStat>> {
+    Ok(std::fs::read_dir("/proc")?
         .flatten()
         .filter_map(|entry| {
             let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
             read_proc_stat(pid)
         })
-        .collect()
+        .collect())
+}
+
+#[cfg(target_os = "linux")]
+/// Report whether an anchored process group still has a non-terminal member.
+pub(crate) fn process_group_has_live_members(process_group: i32) -> std::io::Result<bool> {
+    Ok(read_all_proc_stats()?
+        .into_iter()
+        .any(|stat| stat.pgrp == process_group && !matches!(stat.state, 'Z' | 'X')))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn process_group_has_live_members(_process_group: i32) -> std::io::Result<bool> {
+    Ok(false)
 }
 
 #[cfg(target_os = "linux")]

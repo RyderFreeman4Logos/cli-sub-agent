@@ -521,18 +521,14 @@ fn test_is_working_reads_proc_stat() {
     let locks_dir = tmp.path().join("locks");
     std::fs::create_dir_all(&locks_dir).expect("create locks dir");
     // Use a spawned process with 'tool' in cmdline to satisfy context check.
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("sleep 60 # tool")
-        .spawn()
-        .unwrap();
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg("sleep 60 # tool");
+    let child = crate::test_process_group::ProcessGroupFixture::spawn(command);
     let pid = child.id();
     std::fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {}}}", pid))
         .expect("write lock");
 
     let working = ToolLiveness::is_working(tmp.path());
-    child.kill().ok();
-    child.wait().ok();
     assert!(
         working,
         "is_working should return true for a running process with correct context"

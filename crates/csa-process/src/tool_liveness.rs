@@ -33,7 +33,6 @@ struct DaemonPidRecord {
 #[derive(Debug, Clone, Copy)]
 struct ProcessMetadata {
     state: char,
-    pgrp: i32,
     start_time_ticks: u64,
 }
 
@@ -327,41 +326,22 @@ fn read_process_metadata(pid: u32) -> Option<ProcessMetadata> {
     let mut parts = after_comm.split_whitespace();
     let state = parts.next()?.chars().next()?;
     let _ppid = parts.next()?;
-    let pgrp = parts.next()?.parse::<i32>().ok()?;
+    parts.next()?;
     for _ in 0..16 {
         parts.next()?;
     }
     let start_time_ticks = parts.next()?.parse::<u64>().ok()?;
     Some(ProcessMetadata {
         state,
-        pgrp,
         start_time_ticks,
     })
 }
 
 #[cfg(unix)]
 fn has_live_process_group_member(leader_pid: u32) -> bool {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return false;
-    };
-    let target_pgrp = leader_pid as i32;
-
-    for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(pid) = name.parse::<u32>() else {
-            continue;
-        };
-        let Some(ProcessMetadata { state, pgrp, .. }) = read_process_metadata(pid) else {
-            continue;
-        };
-        if pgrp == target_pgrp && !matches!(state, 'Z' | 'X') {
-            return true;
-        }
-    }
-
-    false
+    i32::try_from(leader_pid).is_ok_and(|process_group| {
+        crate::process_activity::process_group_has_live_members(process_group).unwrap_or(false)
+    })
 }
 
 fn has_live_pid_signal(session_dir: &Path) -> bool {

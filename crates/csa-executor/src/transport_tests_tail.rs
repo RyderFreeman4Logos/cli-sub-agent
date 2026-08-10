@@ -546,6 +546,7 @@ fn build_test_meta_session(project_path: &str) -> MetaSessionState {
     }
 }
 
+include!("transport_tests_gemini_fixture.rs");
 fn setup_fake_gemini_environment(
     success_on: u32,
 ) -> (
@@ -590,7 +591,6 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' "${model}" >>"${MODEL_LOG_FILE}"
 
-# Log auth mode: if GEMINI_API_KEY is set, auth is api_key; otherwise oauth
 if [ -n "${GEMINI_API_KEY:-}" ]; then
   printf 'api_key\n' >>"${AUTH_LOG_FILE}"
 else
@@ -618,6 +618,7 @@ printf 'ok attempt=%s model=%s\n' "${count}" "${model}"
         "PATH".to_string(),
         format!("{}:{old_path}", temp.path().display()),
     );
+    configure_fake_gemini_cache(&temp, &mut env);
     env.insert(
         "CSA_TEST_DISABLE_GEMINI_DIRECT_LAUNCH".to_string(),
         "1".to_string(),

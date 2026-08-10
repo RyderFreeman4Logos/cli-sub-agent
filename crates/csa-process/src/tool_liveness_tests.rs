@@ -47,11 +47,9 @@ fn is_working_returns_true_for_own_process() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let locks_dir = tmp.path().join("locks");
     fs::create_dir_all(&locks_dir).expect("create locks dir");
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("sleep 60 # codex")
-        .spawn()
-        .unwrap();
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg("sleep 60 # codex");
+    let child = crate::test_process_group::ProcessGroupFixture::spawn(command);
     let pid = child.id();
     fs::write(
         locks_dir.join("codex.lock"),
@@ -60,8 +58,6 @@ fn is_working_returns_true_for_own_process() {
     .expect("write lock");
 
     let working = ToolLiveness::is_working(tmp.path());
-    child.kill().ok();
-    child.wait().ok();
     assert!(working);
 }
 
@@ -82,17 +78,13 @@ fn find_session_pid_returns_own_pid() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let locks_dir = tmp.path().join("locks");
     fs::create_dir_all(&locks_dir).expect("create locks dir");
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("sleep 60 # tool")
-        .spawn()
-        .unwrap();
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg("sleep 60 # tool");
+    let child = crate::test_process_group::ProcessGroupFixture::spawn(command);
     let pid = child.id();
     fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
 
     let found_pid = find_session_pid(tmp.path());
-    child.kill().ok();
-    child.wait().ok();
     assert_eq!(found_pid, Some(pid));
 }
 
@@ -688,17 +680,12 @@ fn find_session_pid_ignores_reconcile_lock_in_parent_dir() {
     let reconcile_lock = tmp.path().join(".reconcile.lock");
     fs::write(&reconcile_lock, "{\"pid\": 12345}").expect("write lock");
 
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("sleep 60 # tool")
-        .spawn()
-        .unwrap();
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg("sleep 60 # tool");
+    let child = crate::test_process_group::ProcessGroupFixture::spawn(command);
     let pid = child.id();
     fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
 
     let found_pid = find_session_pid(tmp.path());
-    child.kill().ok();
-    child.wait().ok();
-
     assert_eq!(found_pid, Some(pid));
 }

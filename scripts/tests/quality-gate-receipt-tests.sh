@@ -438,7 +438,7 @@ run_invalidation_matrix() {
   fi
   printf 'drift\n' >>"$fixture/Cargo.toml"
   touch "$fixture/target/quality-gate-test-state/drift-release"
-  wait_for_pid_bounded "$drift_writer"
+  wait_for_pids_bounded "$drift_writer"
   after="$(<"$fixture/target/quality-gate-test-state/drift-output.json")"
   local after_identity
   after_identity="$(printf '%s' "$after" | json_field receipt_identity)"
