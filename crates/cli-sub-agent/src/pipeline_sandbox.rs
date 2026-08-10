@@ -28,13 +28,19 @@ use crate::pipeline::{
 mod memory_balloon;
 #[path = "pipeline_sandbox_memory_override.rs"]
 mod memory_override;
+#[path = "pipeline_sandbox_session_dir.rs"]
+mod session_dir;
+#[path = "pipeline_sandbox_spawn_admission.rs"]
+mod spawn_admission;
 #[path = "pipeline_sandbox_writable.rs"]
 mod writable_sources;
+use session_dir::resolve_session_dir_for_sandbox;
 use writable_sources::add_execution_env_writable_paths;
 
 pub(crate) use memory_balloon::maybe_inflate_balloon;
 #[cfg(test)]
 pub(crate) use memory_balloon::should_skip_balloon_prewarm;
+pub(crate) use spawn_admission::resource_capability_for_spawn_admission;
 
 /// Outcome of sandbox resolution — either enriched options or a fatal error string
 /// (for `Required` mode with no capability).
@@ -61,15 +67,6 @@ pub(crate) struct SandboxResolveInput<'a> {
     pub(crate) extra_writable: &'a [PathBuf],
     pub(crate) extra_readable: &'a [PathBuf],
     pub(crate) execution_env: Option<&'a HashMap<String, String>>,
-}
-
-fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> PathBuf {
-    csa_session::manager::get_session_dir(project_root, session_id).unwrap_or_else(|_| {
-        std::env::temp_dir()
-            .join("cli-sub-agent")
-            .join("sessions")
-            .join(session_id)
-    })
 }
 
 pub(crate) fn validate_run_extra_writable_sources_exist(

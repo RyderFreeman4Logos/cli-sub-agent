@@ -128,3 +128,58 @@ fn writer_default_projection_only_uses_soft_limit_floor_with_cgroup_monitoring()
         "the cgroup memory monitor needs its writer soft-limit floor"
     );
 }
+
+#[test]
+fn final_recheck_uses_setrlimit_after_cgroup_landlock_plan_degradation() {
+    let project_root = tempfile::tempdir().expect("project root");
+    let resource_overrides = RunResourceOverrides::from_cli(None, Some(100));
+    let options = match crate::pipeline_sandbox::resolve_sandbox_options_with_capabilities(
+        crate::pipeline_sandbox::SandboxResolveInput {
+            config: None,
+            tool_name: "codex",
+            session_id: "projection-test",
+            project_root: project_root.path(),
+            stream_mode: csa_process::StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: None,
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[],
+            execution_env: None,
+        },
+        resource_overrides,
+        ResourceCapability::CgroupV2,
+        csa_resource::FilesystemCapability::Landlock,
+    ) {
+        crate::pipeline_sandbox::SandboxResolution::Ok(options) => options,
+        crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(message) => {
+            panic!("default Codex plan should resolve: {message}")
+        }
+    };
+
+    assert_eq!(
+        options
+            .sandbox
+            .as_ref()
+            .expect("sandbox plan")
+            .isolation_plan
+            .resource,
+        ResourceCapability::Setrlimit,
+        "Landlock degrades the detected cgroup plan to setrlimit"
+    );
+    assert_eq!(
+        spawn_memory_projection_mb_for_physical_available(
+            Some("run"),
+            None,
+            "codex",
+            resource_overrides,
+            crate::pipeline_sandbox::resource_capability_for_spawn_admission(&options),
+            8_377,
+        ),
+        8_277,
+        "the final recheck must not apply a cgroup-only writer floor to Setrlimit"
+    );
+}
