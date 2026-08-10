@@ -3,6 +3,10 @@ include!("run_cmd_attempt_prelude.rs");
 #[path = "run_cmd_attempt_admission.rs"]
 mod admission;
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_test_events.rs"]
+mod test_events;
+
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
     let mut g = capture_cg(request.project_root, request.skill)?;
     let o = ri(request, &mut g).await;
