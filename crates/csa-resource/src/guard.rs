@@ -24,7 +24,7 @@ impl Default for ResourceLimits {
 }
 
 /// Host-memory projection for a session spawn admission decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnMemoryAdmission {
     /// Memory the new session is expected to be allowed to consume.
     pub projected_spawn_mb: u64,
@@ -36,6 +36,8 @@ pub struct SpawnMemoryAdmission {
     pub active_session_count: u64,
     /// Number of active sessions whose process tree RSS was sampled successfully.
     pub sampled_session_count: u64,
+    /// Counted session IDs and project paths for operator diagnostics.
+    pub active_session_holders: String,
 }
 
 /// Upper-bound inputs for a retry after host-memory admission denial.
@@ -301,7 +303,7 @@ fn evaluate_memory_availability(
     reserve_mb: u64,
     admission: Option<SpawnMemoryAdmission>,
 ) -> Result<()> {
-    let admission_retry = admission.map(|admission| {
+    let admission_retry = admission.as_ref().map(|admission| {
         let retry_bounds = retry_bounds_for(available_phys_mb, total_ram_mb, reserve_mb, admission);
         (
             admission,
@@ -315,12 +317,21 @@ fn evaluate_memory_availability(
         available_combined_mb,
         total_ram_mb,
         reserve_mb,
-        projected_spawn_mb: admission.map(|admission| admission.projected_spawn_mb),
-        active_session_rss_mb: admission.map(|admission| admission.active_session_rss_mb),
+        projected_spawn_mb: admission
+            .as_ref()
+            .map(|admission| admission.projected_spawn_mb),
+        active_session_rss_mb: admission
+            .as_ref()
+            .map(|admission| admission.active_session_rss_mb),
         active_session_projected_mb: admission
+            .as_ref()
             .map(|admission| admission.active_session_projected_mb),
-        active_session_count: admission.map(|admission| admission.active_session_count),
-        sampled_session_count: admission.map(|admission| admission.sampled_session_count),
+        active_session_count: admission
+            .as_ref()
+            .map(|admission| admission.active_session_count),
+        sampled_session_count: admission
+            .as_ref()
+            .map(|admission| admission.sampled_session_count),
         retry_bounds: admission_retry
             .as_ref()
             .map(|(_, retry_bounds, _)| *retry_bounds),
@@ -382,7 +393,8 @@ fn evaluate_memory_availability(
                  required={required_available_mb}MB (reserve={reserve_mb}MB + \
                  projected_spawn={projected_spawn_mb}MB). active_sessions={active_sessions} \
                  sampled_sessions={sampled_sessions} active_session_rss_mb={active_rss} \
-                 active_session_projected_mb={active_projected} swap_available_mb={available_swap_mb} \
+                 active_session_projected_mb={active_projected} \
+                 active_session_holders=[{active_session_holders}] swap_available_mb={available_swap_mb} \
                  combined_available_mb={available_combined_mb}. Pre-exec memory admission is \
                  infrastructure/session-unavailable before provider launch, not a \
                  product/test/review failure. {retry_note}",
@@ -391,6 +403,7 @@ fn evaluate_memory_availability(
                 sampled_sessions = admission.sampled_session_count,
                 active_rss = admission.active_session_rss_mb,
                 active_projected = admission.active_session_projected_mb,
+                active_session_holders = admission.active_session_holders,
             );
             eprintln!("{message}");
             let error = MemoryAdmissionError::new(
@@ -432,15 +445,17 @@ fn evaluate_memory_availability(
                  > host_safe_limit={host_safe_limit_mb}MB ({safe_num}/{safe_den} of total_ram={total_ram_mb}MB). \
                  active_sessions={active_sessions} sampled_sessions={sampled_sessions} \
                  active_session_rss_mb={active_rss} active_session_projected_mb={active_projected} \
-                 projected_spawn_mb={projected_spawn_mb} available_mb={available_phys_mb}. \
-                 Pre-exec memory admission is infrastructure/session-unavailable before provider \
-                 launch, not a product/test/review failure. {retry_note}",
+                 active_session_holders=[{active_session_holders}] projected_spawn_mb={projected_spawn_mb} \
+                 available_mb={available_phys_mb}. Pre-exec memory admission is \
+                 infrastructure/session-unavailable before provider launch, not a \
+                 product/test/review failure. {retry_note}",
                 safe_num = ACTIVE_SESSION_SAFE_FRACTION_NUM,
                 safe_den = ACTIVE_SESSION_SAFE_FRACTION_DEN,
                 active_sessions = admission.active_session_count,
                 sampled_sessions = admission.sampled_session_count,
                 active_rss = admission.active_session_rss_mb,
                 active_projected = admission.active_session_projected_mb,
+                active_session_holders = admission.active_session_holders,
                 projected_spawn_mb = admission.projected_spawn_mb,
             );
             eprintln!("{message}");
@@ -495,7 +510,7 @@ fn retry_bounds_for(
     available_phys_mb: u64,
     total_ram_mb: u64,
     reserve_mb: u64,
-    admission: SpawnMemoryAdmission,
+    admission: &SpawnMemoryAdmission,
 ) -> MemoryAdmissionRetryBounds {
     let physical_upper_mb = available_phys_mb.saturating_sub(reserve_mb);
     let active_session_upper_mb = active_session_retry_upper_mb(total_ram_mb, admission);
@@ -512,7 +527,7 @@ fn retry_bounds_for(
 
 fn active_session_retry_upper_mb(
     total_ram_mb: u64,
-    admission: SpawnMemoryAdmission,
+    admission: &SpawnMemoryAdmission,
 ) -> Option<u64> {
     let host_safe_limit_mb = total_ram_mb.saturating_mul(ACTIVE_SESSION_SAFE_FRACTION_NUM)
         / ACTIVE_SESSION_SAFE_FRACTION_DEN;

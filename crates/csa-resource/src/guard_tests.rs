@@ -175,6 +175,7 @@ fn test_evaluate_blocks_when_spawn_projection_exceeds_available_headroom() {
         active_session_projected_mb: 4096,
         active_session_count: 1,
         sampled_session_count: 1,
+        active_session_holders: String::new(),
     };
 
     let result =
@@ -201,13 +202,15 @@ fn test_evaluate_blocks_when_spawn_projection_exceeds_available_headroom() {
 }
 
 #[test]
-fn test_evaluate_blocks_when_active_projection_exceeds_host_safe_limit() {
+fn test_active_projection_denial_lists_counted_session_holders() {
     let admission = SpawnMemoryAdmission {
         projected_spawn_mb: 8192,
         active_session_rss_mb: 16_000,
         active_session_projected_mb: 20_000,
         active_session_count: 3,
         sampled_session_count: 2,
+        active_session_holders: r#"session_id="01HOLDER" project_path="/repo/codeseek""#
+            .to_string(),
     };
 
     let result =
@@ -224,6 +227,9 @@ fn test_evaluate_blocks_when_active_projection_exceeds_host_safe_limit() {
     let msg = err.to_string();
     assert!(msg.contains("active-session memory admission denied"));
     assert!(msg.contains("projected_active=28192MB"));
+    assert!(msg.contains(
+        r#"active_session_holders=[session_id="01HOLDER" project_path="/repo/codeseek"]"#
+    ));
     assert!(msg.contains("Retry upper bound: memory_max_mb <= 4000MB"));
     assert!(msg.contains("--memory-max-mb <MB>"));
     assert!(msg.contains("resources.memory_max_mb"));
@@ -237,6 +243,7 @@ fn test_evaluate_allows_safe_spawn_projection() {
         active_session_projected_mb: 4096,
         active_session_count: 1,
         sampled_session_count: 1,
+        active_session_holders: String::new(),
     };
 
     let result = evaluate_memory_availability(

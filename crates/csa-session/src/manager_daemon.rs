@@ -9,7 +9,8 @@ pub(crate) enum SessionIdStrategy {
     Fresh,
 }
 
-pub(crate) fn preassigned_daemon_session_id_from_env(project_path: &Path) -> Option<String> {
+/// Return the daemon-owned session ID when its environment contract matches this project.
+pub fn preassigned_daemon_session_id_from_env(project_path: &Path) -> Option<String> {
     let session_id = std::env::var(super::DAEMON_SESSION_ID_ENV)
         .ok()
         .filter(|value| !value.is_empty())?;

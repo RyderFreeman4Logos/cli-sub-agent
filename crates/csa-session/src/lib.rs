@@ -203,9 +203,9 @@ pub use manager::{
     list_sessions_from_root_readonly, list_sessions_readonly, load_metadata, load_result,
     load_result_view, load_session, load_session_global_exact,
     next_turn_contract_result_artifact_path, next_turn_contract_result_path,
-    observed_session_artifact, redact_result_sidecar_value, render_redacted_result_sidecar,
-    resolve_fork_source, resolve_resume_session, save_result, save_result_with_options,
-    save_result_with_signal_metadata, save_session, save_session_in,
+    observed_session_artifact, preassigned_daemon_session_id_from_env, redact_result_sidecar_value,
+    render_redacted_result_sidecar, resolve_fork_source, resolve_resume_session, save_result,
+    save_result_with_options, save_result_with_signal_metadata, save_session, save_session_in,
     turn_contract_result_artifact_path, turn_contract_result_path, update_last_accessed,
     validate_tool_access, write_audit_warning_artifact,
 };

@@ -23,12 +23,13 @@ const RECENT_ACTIVE_FALLBACK_WINDOW_SECS: i64 = 15 * 60;
 const PRE_SPAWN_ADMISSION_MODE: &str = "admission";
 const PRE_SPAWN_MEMORY_ADMITTED_FILE: &str = ".pre-spawn-memory-admitted.toml";
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ActiveSessionMemory {
     active_count: u64,
     sampled_count: u64,
     sampled_rss_mb: u64,
     projected_mb: u64,
+    holders: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,8 +208,16 @@ pub(crate) fn build_spawn_memory_admission(
             project_root.display()
         )
     })?;
-    let active =
-        aggregate_active_session_memory(&sessions, current, Utc::now(), sample_session_memory);
+    let daemon_current = current
+        .is_none()
+        .then(|| csa_session::preassigned_daemon_session_id_from_env(project_root))
+        .flatten();
+    let active = aggregate_active_session_memory(
+        &sessions,
+        current.or(daemon_current.as_deref()),
+        Utc::now(),
+        sample_session_memory,
+    );
 
     Ok(SpawnMemoryAdmission {
         projected_spawn_mb,
@@ -216,6 +225,7 @@ pub(crate) fn build_spawn_memory_admission(
         active_session_projected_mb: active.projected_mb,
         active_session_count: active.active_count,
         sampled_session_count: active.sampled_count,
+        active_session_holders: active.holders.join(", "),
     })
 }
 
@@ -240,6 +250,10 @@ fn aggregate_active_session_memory(
         };
 
         memory.active_count = memory.active_count.saturating_add(1);
+        memory.holders.push(format!(
+            "session_id={:?} project_path={:?}",
+            session.meta_session_id, session.project_path
+        ));
 
         if let Some(rss_mb) = observation.sampled_rss_mb {
             memory.sampled_count = memory.sampled_count.saturating_add(1);
@@ -507,13 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn active_memory_counts_old_session_with_live_sample() {
+    fn active_memory_identifies_stale_live_holder() {
         let now = Utc::now();
-        let sessions = vec![active_session(
-            "live",
-            now - TimeDelta::hours(2),
-            Some(12_288),
-        )];
+        let mut live = active_session("live", now - TimeDelta::hours(2), Some(12_288));
+        live.project_path = "/repo/live".to_string();
+        let sessions = vec![live];
 
         let memory = aggregate_active_session_memory(&sessions, Some("current"), now, |_| {
             SessionMemorySample::RssMb(1024)
@@ -523,6 +535,10 @@ mod tests {
         assert_eq!(memory.sampled_count, 1);
         assert_eq!(memory.sampled_rss_mb, 1024);
         assert_eq!(memory.projected_mb, 12_288);
+        assert_eq!(
+            memory.holders,
+            vec![r#"session_id="live" project_path="/repo/live""#.to_string()]
+        );
     }
 
     #[test]

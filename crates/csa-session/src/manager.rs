@@ -34,8 +34,10 @@ pub(crate) use manager_access::load_metadata_in;
 pub(crate) use manager_access::validate_tool_access_in;
 pub use manager_access::{load_metadata, resolve_fork_source, validate_tool_access};
 pub use manager_audit::{RepoWriteAudit, compute_repo_write_audit, write_audit_warning_artifact};
-pub use manager_daemon::{ResumeSessionResolution, create_session_with_daemon_env};
-use manager_daemon::{SessionIdStrategy, preassigned_daemon_session_id_from_env};
+use manager_daemon::SessionIdStrategy;
+pub use manager_daemon::{
+    ResumeSessionResolution, create_session_with_daemon_env, preassigned_daemon_session_id_from_env,
+};
 pub use manager_inventory::list_all_sessions_all_projects_strict;
 pub use manager_legacy::decode_session_created_at;
 #[cfg(test)]
