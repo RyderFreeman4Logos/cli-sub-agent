@@ -1,4 +1,6 @@
 use super::*;
+use crate::test_env_lock::ScopedEnvVarRestore;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_resource::ResourceCapability;
 
 #[test]
@@ -182,4 +184,31 @@ fn final_recheck_uses_setrlimit_after_cgroup_landlock_plan_degradation() {
         8_277,
         "the final recheck must not apply a cgroup-only writer floor to Setrlimit"
     );
+}
+
+#[test]
+fn pre_session_admission_excludes_preassigned_daemon_session() {
+    let project = tempfile::tempdir().expect("project");
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project);
+    let mut session =
+        csa_session::create_session(project.path(), Some("current"), None, Some("codex"))
+            .expect("create current session");
+    persist_spawn_memory_projection(
+        &mut session,
+        12_000,
+        RunResourceOverrides::absent().resolution_info(None, "codex"),
+    )
+    .expect("persist current projection");
+    let session_dir = csa_session::get_session_dir(project.path(), &session.meta_session_id)
+        .expect("current session dir");
+    let _daemon_id = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_ID", &session.meta_session_id);
+    let _daemon_dir = ScopedEnvVarRestore::set("CSA_DAEMON_SESSION_DIR", &session_dir);
+    let _daemon_project = ScopedEnvVarRestore::set("CSA_DAEMON_PROJECT_ROOT", project.path());
+
+    let admission = build_spawn_memory_admission(project.path(), None, 12_000)
+        .expect("build pre-session admission");
+
+    assert_eq!(admission.active_session_count, 0);
+    assert_eq!(admission.active_session_projected_mb, 0);
+    assert!(admission.active_session_holders.is_empty());
 }
