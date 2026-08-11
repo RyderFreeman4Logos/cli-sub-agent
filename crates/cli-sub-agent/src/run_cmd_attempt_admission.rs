@@ -46,7 +46,9 @@ impl<'a> RunMemoryAdmission<'a> {
         &self,
         tool_name: &str,
         initial_response_timeout_seconds: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<csa_resource::ResourceCapability> {
+        #[cfg(test)]
+        super::test_events::record(super::test_events::AttemptEvent::StaticSoftLimit);
         crate::run_cmd_preflight::validate_run_memory_soft_limit_before_session(
             crate::run_cmd_preflight::RunMemorySoftLimitPreflight {
                 project_root: self.project_root,
@@ -63,6 +65,22 @@ impl<'a> RunMemoryAdmission<'a> {
                 extra_writable: &self.extra_writable,
                 extra_readable: &self.extra_readable,
             },
+        )
+    }
+
+    pub(super) fn validate_host_memory_after_slot_acquisition(
+        &self,
+        tool_name: &str,
+        resource_capability: csa_resource::ResourceCapability,
+    ) -> Result<()> {
+        #[cfg(test)]
+        super::test_events::record(super::test_events::AttemptEvent::HostMemoryAfterSlot);
+        crate::run_cmd_preflight::validate_run_host_memory_after_slot_acquisition(
+            self.project_root,
+            self.project_config,
+            tool_name,
+            self.resource_overrides,
+            resource_capability,
         )
     }
 }

@@ -3,6 +3,10 @@ include!("run_cmd_attempt_prelude.rs");
 #[path = "run_cmd_attempt_admission.rs"]
 mod admission;
 
+#[cfg(test)]
+#[path = "run_cmd_attempt_test_events.rs"]
+mod test_events;
+
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
     let mut g = capture_cg(request.project_root, request.skill)?;
     let o = ri(request, &mut g).await;
@@ -84,12 +88,12 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
             request.run_timeout_seconds,
             tool_name_str,
         );
-        if (effective_session_arg.is_none() || is_fork)
+        let needs_admission = (effective_session_arg.is_none() || is_fork)
             && executed_session_id.is_none()
-            && pre_created_fork_session_id.is_none()
-        {
-            memory_admission.validate(tool_name_str, initial_response_timeout_seconds)?;
-        }
+            && pre_created_fork_session_id.is_none();
+        let resource_capability = needs_admission
+            .then(|| memory_admission.validate(tool_name_str, initial_response_timeout_seconds))
+            .transpose()?;
         let max_concurrent = request.global_config.max_concurrent(tool_name_str);
         let mut _slot_guard = match acquire_attempt_slot(
             AttemptSlotRequest {
@@ -158,6 +162,11 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                     return Ok(Exit(1));
                 }
             }
+        }
+
+        if let Some(resource_capability) = resource_capability {
+            memory_admission
+                .validate_host_memory_after_slot_acquisition(tool_name_str, resource_capability)?;
         }
 
         if is_fork && fork_resolution.is_none() {
@@ -265,8 +274,6 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                 request.skill,
                 timeout_resume_session.as_deref(),
             )?;
-            // Break with synthetic timeout result instead of Exit, so the
-            // completion path (restore_cg + Completed) runs consistently.
             let timeout_result = csa_process::ExecutionResult {
                 output: String::new(),
                 stderr_output: String::new(),
@@ -444,12 +451,7 @@ async fn ri(request: RunLoopRequest<'_>, g: &mut Cg) -> Result<RunLoopCompletion
                     request.skill,
                     timeout_resume_session.as_deref(),
                 )?;
-                // Construct a synthetic timeout result and break to flow
-                // through restore_cg + Completed (instead of Exit), so that
-                // complete_session_execution runs (session state update,
-                // require-commit suppression for timeouts per #2611, commit-
-                // skill workspace guard restoration, and uncommitted tracking).
-                // Previously this path short-circuited completion (#2615).
+                // Complete synthetic timeouts so state, guards, and timeout policy run (#2611, #2615).
                 let timeout_result = csa_process::ExecutionResult {
                     output: String::new(),
                     stderr_output: String::new(),

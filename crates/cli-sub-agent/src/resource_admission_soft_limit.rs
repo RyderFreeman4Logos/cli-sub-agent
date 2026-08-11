@@ -93,19 +93,10 @@ impl SoftLimitAdmissionDenial {
 
     fn message(self, tool_name: &str) -> String {
         let required_memory_max_mb = self.required_memory_max_mb;
-        let recommendation = match self.session_kind {
-            CodexSoftLimitAdmissionKind::Reviewer => format!(
-                "Raise --memory-max-mb, resources.memory_max_mb, or \
-                 tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB, remove a lower \
-                 memory override so Codex can use its 16384MB default, or raise \
-                 resources.soft_limit_percent only when host RAM makes that safe."
-            ),
-            CodexSoftLimitAdmissionKind::Writer => format!(
-                "Raise --memory-max-mb, resources.memory_max_mb, or \
-                 tools.{tool_name}.memory_max_mb to at least {required_memory_max_mb}MB, or raise \
-                 resources.soft_limit_percent only when host RAM makes that safe."
-            ),
-        };
+        let recommendation = format!(
+            "A floor-compliant envelope needs memory_max_mb at least {required_memory_max_mb}MB; \
+             retry guidance will confirm whether the current host can admit that envelope."
+        );
         format!(
             "CSA: {reason} denied -- {tool_name} {session_kind} soft memory threshold is \
              {threshold}MB, below required={required}MB \
@@ -279,12 +270,16 @@ mod tests {
             MemorySoftLimitAdmissionError::TERMINATION_REASON,
             MEMORY_SOFT_LIMIT_ADMISSION_REASON
         );
-        assert!(err.to_string().contains("--memory-max-mb"));
-        assert!(err.to_string().contains("tools.codex.memory_max_mb"));
+        let guidance = err.guidance();
+        assert!(guidance.iter().any(|line| line.contains("--memory-max-mb")));
         assert!(
-            err.to_string()
-                .contains("remove a lower memory override so Codex can use its 16384MB default")
+            guidance
+                .iter()
+                .any(|line| line.contains("tools.codex.memory_max_mb"))
         );
+        assert!(guidance.iter().any(|line| {
+            line.contains("Remove a lower memory override so Codex can use its 16384MB default")
+        }));
     }
 
     #[test]
@@ -362,8 +357,8 @@ mod tests {
         assert_eq!(denial.required_threshold_mb, CODEX_REVIEW_MIN_SOFT_LIMIT_MB);
         assert_eq!(denial.required_memory_max_mb, 9103);
         assert!(
-            err.to_string().contains("to at least 9103MB"),
-            "error must point to the exact cap floor at soft90: {err}"
+            err.to_string()
+                .contains("floor-compliant envelope needs memory_max_mb at least 9103MB")
         );
         assert!(
             err.guidance()
@@ -390,7 +385,11 @@ mod tests {
             .expect_err("writer admission should fail");
         assert!(err.to_string().contains("writer soft memory threshold"));
         assert!(err.to_string().contains("after editing the worktree"));
-        assert!(err.to_string().contains("tools.codex.memory_max_mb"));
+        assert!(
+            err.guidance()
+                .iter()
+                .any(|line| line.contains("tools.codex.memory_max_mb"))
+        );
     }
 
     #[test]

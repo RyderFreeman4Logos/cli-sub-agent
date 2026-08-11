@@ -240,6 +240,12 @@ fn validate_review_candidate_resources_before_session(
                 anyhow::bail!(message)
             }
         };
+    let resource_capability = execute_options
+        .sandbox
+        .as_ref()
+        .map_or(csa_resource::ResourceCapability::None, |sandbox| {
+            sandbox.isolation_plan.resource
+        });
     crate::resource_admission_soft_limit::ensure_memory_soft_limit_admission(
         Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         tool.as_str(),
@@ -269,8 +275,14 @@ fn validate_review_candidate_resources_before_session(
             err
         }
     })?;
-    validate_host_memory_before_session(project_root, project_config, tool, resource_overrides)
-        .with_context(|| format!("review preflight for tool '{tool}'"))
+    validate_host_memory_before_session(
+        project_root,
+        project_config,
+        tool,
+        resource_overrides,
+        resource_capability,
+    )
+    .with_context(|| format!("review preflight for tool '{tool}'"))
 }
 
 fn validate_host_memory_before_session(
@@ -278,14 +290,17 @@ fn validate_host_memory_before_session(
     project_config: Option<&ProjectConfig>,
     tool: ToolName,
     resource_overrides: RunResourceOverrides,
+    resource_capability: csa_resource::ResourceCapability,
 ) -> Result<()> {
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(project_config),
     });
     let projected_spawn_mb = crate::resource_admission::spawn_memory_projection_mb_with_overrides(
+        Some(REVIEWER_SUB_SESSION_TASK_TYPE),
         project_config,
         tool.as_str(),
         resource_overrides,
+        resource_capability,
     );
     let admission = crate::resource_admission::build_spawn_memory_admission(
         project_root,

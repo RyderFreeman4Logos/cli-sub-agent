@@ -54,8 +54,8 @@ mod session_exec_write_lock;
 #[path = "pipeline_session_exec_state_preflight.rs"]
 mod state_preflight;
 use self::session_exec_pre_exec::{
-    PipelinePreExecFailureDetails, check_resources_before_spawn, persist_pipeline_pre_exec_failure,
-    write_fatal_error_marker_sidecar,
+    PipelinePreExecFailureDetails, SpawnResourceCheckInput, check_resources_before_spawn,
+    persist_pipeline_pre_exec_failure, write_fatal_error_marker_sidecar,
 };
 use clean_room::execute_clean_room_session_core;
 #[cfg(test)]
@@ -232,14 +232,56 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source<
         executor.tool_name(),
         &mut cleanup_guard,
     )?;
+    let resource_capability =
+        match crate::pipeline_sandbox::resolve_pre_session_sandbox_options_with_overrides(
+            crate::pipeline_sandbox::SandboxResolveInput {
+                config,
+                tool_name: executor.tool_name(),
+                session_id: &session.meta_session_id,
+                project_root,
+                stream_mode,
+                idle_timeout_seconds,
+                liveness_dead_seconds: crate::pipeline::resolve_liveness_dead_seconds(config),
+                initial_response_timeout_seconds,
+                no_fs_sandbox,
+                allow_user_daemon_ipc,
+                readonly_project_root,
+                extra_writable,
+                extra_readable,
+                execution_env: None,
+            },
+            resource_overrides,
+        ) {
+            crate::pipeline_sandbox::SandboxResolution::Ok(options) => {
+                crate::pipeline_sandbox::resource_capability_for_spawn_admission(&options)
+            }
+            crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(message) => {
+                return Err(persist_pipeline_pre_exec_failure(
+                    project_root,
+                    &mut session,
+                    executor.tool_name(),
+                    anyhow::anyhow!(message).context("resolve final pre-spawn sandbox plan"),
+                    &mut cleanup_guard,
+                    None,
+                    PipelinePreExecFailureDetails {
+                        config,
+                        task_type,
+                        resource_overrides,
+                    },
+                ));
+            }
+        };
     check_resources_before_spawn(
-        config,
+        SpawnResourceCheckInput {
+            config,
+            resource_overrides,
+            task_type,
+            resource_capability,
+        },
         executor,
         project_root,
         &mut session,
         &mut cleanup_guard,
-        resource_overrides,
-        task_type,
     )?;
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {

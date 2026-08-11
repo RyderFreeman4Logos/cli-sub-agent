@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use csa_config::ProjectConfig;
-use csa_resource::{ResourceGuard, ResourceLimits, SpawnMemoryAdmission};
+use csa_resource::{
+    ResourceCapability, ResourceGuard, ResourceLimits, SpawnMemoryAdmission, memory_policy,
+};
 use csa_session::{MetaSessionState, SandboxInfo, SessionPhase};
 
 use crate::run_resource_overrides::RunResourceOverrides;
@@ -36,9 +38,11 @@ struct ActiveSessionObservation {
 }
 
 fn spawn_memory_projection_mb_for_physical_available(
+    task_type: Option<&str>,
     config: Option<&ProjectConfig>,
     tool_name: &str,
     resource_overrides: RunResourceOverrides,
+    resource_capability: ResourceCapability,
     physical_available_mb: u64,
 ) -> u64 {
     let configured_projection_mb = resource_overrides
@@ -52,17 +56,26 @@ fn spawn_memory_projection_mb_for_physical_available(
         return configured_projection_mb;
     }
 
-    bound_default_spawn_projection_mb(
+    let bounded_projection_mb = bound_default_spawn_projection_mb(
         configured_projection_mb,
         physical_available_mb,
         resource_overrides.resolve_min_free_memory_mb(config),
-    )
+    );
+    if resource_capability != ResourceCapability::CgroupV2 {
+        return bounded_projection_mb;
+    }
+    required_default_memory_max_mb(task_type, config, tool_name)
+        .map_or(bounded_projection_mb, |required| {
+            bounded_projection_mb.max(required)
+        })
 }
 
 pub(crate) fn spawn_memory_projection_mb_with_overrides(
+    task_type: Option<&str>,
     config: Option<&ProjectConfig>,
     tool_name: &str,
     resource_overrides: RunResourceOverrides,
+    resource_capability: ResourceCapability,
 ) -> u64 {
     if resource_overrides.has_memory_max_override()
         || config_has_explicit_memory_max_mb(config, tool_name)
@@ -74,9 +87,11 @@ pub(crate) fn spawn_memory_projection_mb_with_overrides(
 
     let mut resource_guard = ResourceGuard::new(ResourceLimits::default());
     spawn_memory_projection_mb_for_physical_available(
+        task_type,
         config,
         tool_name,
         resource_overrides,
+        resource_capability,
         resource_guard.available_physical_memory_mb(),
     )
 }
@@ -89,6 +104,21 @@ fn config_has_explicit_memory_max_mb(config: Option<&ProjectConfig>, tool_name: 
             .is_some()
             || cfg.resources.memory_max_mb.is_some()
     })
+}
+
+fn required_default_memory_max_mb(
+    task_type: Option<&str>,
+    config: Option<&ProjectConfig>,
+    tool_name: &str,
+) -> Option<u64> {
+    let required_floor_mb =
+        crate::resource_admission_soft_limit::codex_soft_limit_required_floor_mb(
+            task_type, tool_name,
+        )?;
+    let soft_limit_percent = config
+        .and_then(|cfg| cfg.resources.soft_limit_percent)
+        .unwrap_or(memory_policy::DEFAULT_SOFT_LIMIT_PERCENT);
+    memory_policy::required_memory_max_for_soft_limit_mb(required_floor_mb, soft_limit_percent)
 }
 
 fn bound_default_spawn_projection_mb(
@@ -322,6 +352,10 @@ mod terminal_session_tests;
 mod state_root_tests;
 
 #[cfg(test)]
+#[path = "resource_admission_projection_tests.rs"]
+mod projection_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -372,86 +406,6 @@ mod tests {
             }),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn spawn_projection_uses_configured_tool_limit() {
-        let cfg: ProjectConfig =
-            toml::from_str("[resources]\nmemory_max_mb = 8192\n").expect("config should parse");
-
-        assert_eq!(
-            spawn_memory_projection_mb_for_physical_available(
-                Some(&cfg),
-                "codex",
-                RunResourceOverrides::absent(),
-                1,
-            ),
-            8192
-        );
-    }
-
-    #[test]
-    fn spawn_projection_uses_run_override_before_tool_config() {
-        let cfg: ProjectConfig = toml::from_str(
-            r#"
-[tools.codex]
-memory_max_mb = 16384
-"#,
-        )
-        .expect("config should parse");
-        let overrides = RunResourceOverrides::from_cli(Some(6144), None);
-
-        assert_eq!(
-            spawn_memory_projection_mb_with_overrides(Some(&cfg), "codex", overrides),
-            6144
-        );
-    }
-
-    #[test]
-    fn spawn_projection_uses_inherited_memory_override_before_tool_config() {
-        let cfg: ProjectConfig = toml::from_str(
-            r#"
-[tools.codex]
-memory_max_mb = 16384
-"#,
-        )
-        .expect("config should parse");
-        let inherited = RunResourceOverrides::from_cli(Some(6144), None).for_child();
-
-        assert_eq!(
-            spawn_memory_projection_mb_with_overrides(Some(&cfg), "codex", inherited),
-            6144
-        );
-    }
-
-    #[test]
-    fn default_projection_is_bounded_by_physical_memory_after_reserve() {
-        assert_eq!(
-            bound_default_spawn_projection_mb(14_000, 12_000, 1024),
-            10_976
-        );
-        assert_eq!(
-            bound_default_spawn_projection_mb(14_000, 32_000, 1024),
-            14_000
-        );
-    }
-
-    #[test]
-    fn default_projection_uses_a_minimum_when_host_headroom_is_exhausted() {
-        assert_eq!(bound_default_spawn_projection_mb(14_000, 1024, 2048), 256);
-    }
-
-    #[test]
-    fn spawn_projection_uses_tool_default_without_config() {
-        assert_eq!(
-            spawn_memory_projection_mb_for_physical_available(
-                None,
-                "codex",
-                RunResourceOverrides::absent(),
-                12_000,
-            ),
-            7904
-        );
     }
 
     #[test]

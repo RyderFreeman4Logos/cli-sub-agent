@@ -8,5 +8,8 @@ mod git_push_tests;
 #[path = "run_cmd_attempt_http_failover_tests.rs"]
 mod http_failover_tests;
 #[cfg(test)]
+#[path = "run_cmd_attempt_admission_ordering_tests.rs"]
+mod admission_ordering_tests;
+#[cfg(test)]
 #[path = "run_cmd_attempt_tests.rs"]
 mod tests;

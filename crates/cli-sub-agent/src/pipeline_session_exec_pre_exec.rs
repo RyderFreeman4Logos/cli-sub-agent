@@ -2,7 +2,7 @@ use std::path::Path;
 
 use csa_config::ProjectConfig;
 use csa_executor::Executor;
-use csa_resource::{ResourceGuard, ResourceLimits};
+use csa_resource::{ResourceCapability, ResourceGuard, ResourceLimits};
 use csa_session::{MetaSessionState, save_session};
 use tracing::warn;
 
@@ -49,20 +49,38 @@ impl PipelinePreExecFailureDetails<'_> {
     }
 }
 
+/// Resource-policy inputs for the final pre-spawn host-memory check.
+#[derive(Clone, Copy)]
+pub(super) struct SpawnResourceCheckInput<'a> {
+    pub(super) config: Option<&'a ProjectConfig>,
+    pub(super) resource_overrides: RunResourceOverrides,
+    pub(super) task_type: Option<&'a str>,
+    pub(super) resource_capability: ResourceCapability,
+}
+
 pub(super) fn check_resources_before_spawn(
-    config: Option<&ProjectConfig>,
+    input: SpawnResourceCheckInput<'_>,
     executor: &Executor,
     project_root: &Path,
     session: &mut MetaSessionState,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
-    resource_overrides: RunResourceOverrides,
-    task_type: Option<&str>,
 ) -> anyhow::Result<()> {
+    let SpawnResourceCheckInput {
+        config,
+        resource_overrides,
+        task_type,
+        resource_capability,
+    } = input;
     let mut resource_guard = ResourceGuard::new(ResourceLimits {
         min_free_memory_mb: resource_overrides.resolve_min_free_memory_mb(config),
     });
-    let projected_spawn_mb =
-        spawn_memory_projection_mb_with_overrides(config, executor.tool_name(), resource_overrides);
+    let projected_spawn_mb = spawn_memory_projection_mb_with_overrides(
+        task_type,
+        config,
+        executor.tool_name(),
+        resource_overrides,
+        resource_capability,
+    );
     if let Err(err) = crate::resource_admission::persist_spawn_memory_projection(
         session,
         projected_spawn_mb,

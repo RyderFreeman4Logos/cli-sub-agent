@@ -58,6 +58,8 @@ pub(super) fn acquire_attempt_slot(
                 max = request.max_concurrent,
                 "Acquired global slot"
             );
+            #[cfg(test)]
+            super::test_events::record(super::test_events::AttemptEvent::SlotAcquired);
             Ok(AttemptSlotOutcome::Acquired(slot))
         }
         SlotAcquireResult::Exhausted(status) => {

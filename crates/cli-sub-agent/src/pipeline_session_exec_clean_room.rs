@@ -16,7 +16,7 @@ use super::clean_room_completion::{
 };
 use super::session_exec_api::{CleanRoomExecutionLimits, SessionExecutionPolicy};
 use super::session_exec_bootstrap::bootstrap_clean_room_session;
-use super::session_exec_pre_exec::check_resources_before_spawn;
+use super::session_exec_pre_exec::{SpawnResourceCheckInput, check_resources_before_spawn};
 use crate::pipeline::admitted_executor::DispatchExecutor;
 use crate::pipeline::{AdmittedExecutor, SessionExecutionResult};
 use crate::run_resource_overrides::RunResourceOverrides;
@@ -339,14 +339,42 @@ pub(super) async fn execute_clean_room_session_core(
             &mut cleanup_guard,
         );
     }
+    let resource_capability = match resolve_clean_room_sandbox_options(
+        CleanRoomSandboxInput {
+            config,
+            tool_name: executor.tool_name(),
+            session_id: &session.meta_session_id,
+            project_root: &project_root,
+            evidence_bundle: &evidence_bundle,
+            session_dir: &session_dir,
+            idle_timeout_seconds: limits.idle_timeout_seconds(),
+            initial_response_timeout_seconds: limits.initial_response_timeout_seconds(),
+        },
+        limits.resource_overrides(),
+    ) {
+        Ok(options) => crate::pipeline_sandbox::resource_capability_for_spawn_admission(&options),
+        Err(error) => {
+            return fail_clean_room_pre_transport(
+                &project_root,
+                &mut session,
+                executor.tool_name(),
+                execution_start_time,
+                error.context("resolve final clean-room pre-spawn sandbox plan"),
+                &mut cleanup_guard,
+            );
+        }
+    };
     check_resources_before_spawn(
-        config,
+        SpawnResourceCheckInput {
+            config,
+            resource_overrides: limits.resource_overrides(),
+            task_type: None,
+            resource_capability,
+        },
         executor,
         &project_root,
         &mut session,
         &mut cleanup_guard,
-        limits.resource_overrides(),
-        None,
     )?;
     let default_global;
     let global = match global_config {
