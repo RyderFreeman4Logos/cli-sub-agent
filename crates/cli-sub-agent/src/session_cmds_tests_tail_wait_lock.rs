@@ -2,7 +2,7 @@ use super::*;
 use crate::session_cmds_daemon::{
     WaitBehavior, WaitCallerIdentity, WaitLoopTiming, WaitReconciliationOutcome,
     handle_session_wait_with_hooks, handle_session_wait_with_hooks_at,
-    handle_session_wait_with_identity_for_test, try_acquire_session_wait_lock,
+    handle_session_wait_with_identity_for_test, parent_pid, try_acquire_session_wait_lock,
     try_acquire_session_wait_lock_with_caller,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
@@ -73,12 +73,14 @@ fn session_wait_lock_creates_dot_wait_lock_file_and_rejects_duplicates() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn session_wait_lock_persists_caller_output_identity() {
+fn session_wait_lock_persists_caller_identity_for_timeout_reclaim() {
     let td = tempdir().expect("tempdir");
     let (_caller_read_end, _wait_output_end, caller_identity) = caller_output_pipe();
     let (output_device, output_inode) = caller_identity
         .diagnostic_parts_for_test()
         .expect("pipe output should have a stable descriptor identity");
+    let expected_parent_pid = parent_pid(std::process::id())
+        .expect("Linux test process should expose its startup parent");
 
     let _lock = try_acquire_session_wait_lock_with_caller(td.path(), caller_identity)
         .expect("wait lock acquisition")
@@ -95,6 +97,11 @@ fn session_wait_lock_persists_caller_output_identity() {
     assert_eq!(
         diagnostic["caller_output_inode"].as_u64(),
         Some(output_inode)
+    );
+    assert_eq!(
+        diagnostic["parent_pid"].as_u64(),
+        Some(u64::from(expected_parent_pid)),
+        "the startup caller must remain identifiable after a tool timeout"
     );
 }
 

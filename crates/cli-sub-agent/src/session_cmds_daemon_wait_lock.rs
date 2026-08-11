@@ -15,13 +15,14 @@ use serde::{Deserialize, Serialize};
 /// The output descriptor is inherited from the launcher before this process
 /// can run, so it remains authoritative even if the waiter has already been
 /// reparented. A closed pipe/socket reports HUP or ERR through `poll(2)`;
-/// regular files and terminals remain valid result sinks without relying on a
-/// sampled parent PID.
+/// the startup parent is retained as a fallback for regular files, terminals,
+/// and supervisor-held channels that cannot report caller closure.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct WaitCallerIdentity {
     output_fd: Option<RawFd>,
     output_device: Option<u64>,
     output_inode: Option<u64>,
+    startup_parent_pid: Option<u32>,
 }
 
 impl WaitCallerIdentity {
@@ -46,13 +47,18 @@ impl WaitCallerIdentity {
     }
 
     fn from_output_fd(output_fd: RawFd) -> Self {
+        let startup_parent_pid = parent_pid(std::process::id());
         let Some((output_device, output_inode)) = descriptor_identity(output_fd) else {
-            return Self::default();
+            return Self {
+                startup_parent_pid,
+                ..Self::default()
+            };
         };
         Self {
             output_fd: Some(output_fd),
             output_device: Some(output_device),
             output_inode: Some(output_inode),
+            startup_parent_pid,
         }
     }
 
@@ -137,8 +143,8 @@ struct SessionWaitLockDiagnostic {
     caller_output_device: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     caller_output_inode: Option<u64>,
-    /// Legacy compatibility for diagnostics written before the caller-owned
-    /// output lifecycle contract.
+    /// Startup parent fallback for result channels whose closure is not
+    /// observable after the launcher exits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_pid: Option<u32>,
 }
@@ -193,8 +199,8 @@ pub(crate) fn try_acquire_session_wait_lock_with_caller(
         )?));
     }
 
-    // Older diagnostics used a sampled PPID. Preserve their verified reclaim
-    // path while current waiters release on caller-output closure themselves.
+    // Caller-output closure is primary; the captured startup PPID covers result
+    // channels that stay open after their launcher exits.
     if let Some(validated) = is_wait_lock_diagnostic_caller_gone(&lock_path)
         && descriptor_identity(fd)
             .is_some_and(|identity| kill_wait_lock_holder(&lock_path, identity, validated))
@@ -291,7 +297,7 @@ fn write_session_wait_lock_diagnostic(
         pid_start_time_ticks: process_start_time_ticks(pid),
         caller_output_device: caller_parts.map(|(_, device, _)| device),
         caller_output_inode: caller_parts.map(|(_, _, inode)| inode),
-        parent_pid: None,
+        parent_pid: caller_identity.startup_parent_pid,
     };
     let json = serde_json::to_string(&diagnostic)?;
 
@@ -319,11 +325,10 @@ fn is_wait_lock_diagnostic_pid_dead(lock_path: &Path) -> bool {
     true
 }
 
-/// Return a verified live legacy holder whose recorded parent changed.
+/// Return a verified live holder whose recorded parent changed.
 ///
-/// Current waiters observe their caller-owned output channel directly and
-/// release the flock themselves. This PPID comparison is retained only so a
-/// new binary can safely reclaim locks written by older versions.
+/// Caller-output closure remains the primary lifecycle signal. This PPID
+/// comparison is the fallback when the launcher's result channel stays open.
 fn is_wait_lock_diagnostic_caller_gone(lock_path: &Path) -> Option<SessionWaitLockDiagnostic> {
     let diagnostic = read_wait_lock_diagnostic(lock_path)?;
     let pid_start_time_ticks = diagnostic.pid_start_time_ticks.filter(|ticks| *ticks != 0);
@@ -356,7 +361,7 @@ fn is_wait_lock_diagnostic_caller_gone(lock_path: &Path) -> Option<SessionWaitLo
         holder_pid = diagnostic.pid,
         recorded_ppid,
         current_ppid,
-        "retrying legacy session wait lock flock after detecting reparented holder PID"
+        "retrying session wait lock flock after detecting reparented holder PID"
     );
     Some(diagnostic)
 }
