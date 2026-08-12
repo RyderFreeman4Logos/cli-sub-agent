@@ -2,8 +2,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+#[path = "../src/test_bounded_command.rs"]
+mod test_bounded_command;
+
 const SKILL_RUN_TIMEOUT: Duration = Duration::from_secs(30);
 const SKILL_RUN_TERMINATION_GRACE: Duration = Duration::from_secs(1);
+const GIT_FIXTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn csa_cmd(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
@@ -85,6 +89,112 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
+fn run_fixture_git(project: &Path, args: &[&str]) {
+    let mut command = Command::new("/usr/bin/git");
+    command
+        .env_clear()
+        .args([
+            "-c",
+            "commit.gpgSign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "init.templateDir=",
+        ])
+        .args(args)
+        .current_dir(project)
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("XDG_CONFIG_HOME", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@test.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@test.com");
+    let output = test_bounded_command::output_with_timeout(command, GIT_FIXTURE_TIMEOUT);
+    assert!(
+        output.status.success(),
+        "fixture git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_resource_git_fixture_ignores_hostile_ambient_config() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ambient = tempfile::tempdir().expect("temporary hostile Git environment");
+    let hooks = ambient.path().join("hooks");
+    std::fs::create_dir(&hooks).expect("create hostile hooks directory");
+    let marker = ambient.path().join("ambient-git-ran");
+    let hostile_program = hooks.join("pre-commit");
+    std::fs::write(
+        &hostile_program,
+        "#!/bin/sh\nprintf reached > \"$HOSTILE_GIT_MARKER\"\nexit 91\n",
+    )
+    .expect("write hostile Git hook and signer");
+    std::fs::set_permissions(&hostile_program, std::fs::Permissions::from_mode(0o755))
+        .expect("make hostile Git hook and signer executable");
+    let config = ambient.path().join("hostile.gitconfig");
+    let config_contents = format!(
+        "[core]\n\thooksPath = {}\n[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = {}\n[init]\n\ttemplateDir = {}\n",
+        hooks.display(),
+        hostile_program.display(),
+        ambient.path().display()
+    );
+    std::fs::write(&config, &config_contents).expect("write hostile Git config");
+    std::fs::create_dir(ambient.path().join("git")).expect("create hostile XDG Git directory");
+    std::fs::write(ambient.path().join("git/config"), config_contents)
+        .expect("write hostile XDG Git config");
+
+    let status = test_bounded_command::status_with_timeout(
+        {
+            let mut command = Command::new(std::env::current_exe().expect("current test binary"));
+            command
+                .args([
+                    "--exact",
+                    "skill_run_preserves_plan_parent_resource_snapshot_for_nested_child",
+                    "--nocapture",
+                ])
+                .env("HOME", ambient.path())
+                .env("XDG_CONFIG_HOME", ambient.path())
+                .env("GIT_CONFIG", &config)
+                .env("GIT_CONFIG_SYSTEM", &config)
+                .env("GIT_CONFIG_GLOBAL", &config)
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+                .env("GIT_CONFIG_VALUE_0", &hooks)
+                .env("GIT_TEMPLATE_DIR", ambient.path())
+                .env("HOSTILE_GIT_MARKER", &marker);
+            command
+        },
+        Duration::from_secs(45),
+    );
+
+    assert!(
+        status.success(),
+        "fixture failed under hostile ambient Git state with {status}"
+    );
+    let source = include_str!("skill_resource_inheritance.rs");
+    let unbounded_status = [".sta", "tus()"].concat();
+    assert!(
+        !source.contains(&unbounded_status),
+        "fixture Git setup must not use unbounded Command::status"
+    );
+    let bounded_call = [
+        "test_bounded_command::output_with_timeout",
+        "(command, GIT_FIXTURE_TIMEOUT)",
+    ]
+    .concat();
+    assert!(
+        source.contains(&bounded_call),
+        "fixture Git setup must use the existing bounded subprocess helper"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn skill_run_preserves_plan_parent_resource_snapshot_for_nested_child() {
@@ -137,28 +247,24 @@ enabled = false
         "resource inheritance fixture must disable unrelated filesystem enforcement"
     );
 
-    assert!(
-        Command::new("git")
-            .args(["-c", "init.defaultBranch=feat/resource-probe", "init", "-q"])
-            .current_dir(&project)
-            .status()
-            .expect("initialize fixture git repository")
-            .success(),
-        "fixture git repository initialization must succeed"
+    run_fixture_git(
+        &project,
+        &["-c", "init.defaultBranch=feat/resource-probe", "init", "-q"],
     );
-    assert!(
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-qm", "init"])
-            .current_dir(&project)
-            .env("GIT_AUTHOR_NAME", "test")
-            .env("GIT_AUTHOR_EMAIL", "test@test.com")
-            .env("GIT_COMMITTER_NAME", "test")
-            .env("GIT_COMMITTER_EMAIL", "test@test.com")
-            .status()
-            .expect("commit fixture git repository")
-            .success(),
-        "fixture git repository commit must succeed"
-    );
+    let hostile_marker = std::env::var_os("HOSTILE_GIT_MARKER");
+    if hostile_marker.is_some() {
+        assert!(
+            !project.join(".git/hooks/pre-commit").exists(),
+            "ambient Git template altered fixture initialization"
+        );
+    }
+    run_fixture_git(&project, &["commit", "--allow-empty", "-qm", "init"]);
+    if let Some(marker) = hostile_marker {
+        assert!(
+            !Path::new(&marker).exists(),
+            "ambient Git hook or signer altered fixture setup"
+        );
+    }
 
     let fake_bin = install_fake_codex(&project);
     let mut command = csa_cmd(home.path());

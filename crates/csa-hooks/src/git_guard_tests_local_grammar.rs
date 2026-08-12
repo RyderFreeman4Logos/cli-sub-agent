@@ -7,7 +7,10 @@ fn wrapper_allows_exact_git_version_grammar() {
     write_executable(&wrapper, git_wrapper_script());
 
     let fake_git = temp.path().join("real-git");
-    write_executable(&fake_git, "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\"\n");
+    write_executable(
+        &fake_git,
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --exec-path ]; then exec /usr/bin/git --exec-path; fi\nprintf '%s\\n' \"$*\"\n",
+    );
 
     for args in [&["version"][..], &["--version"][..]] {
         let output = std::process::Command::new(&wrapper)
@@ -38,7 +41,10 @@ fn wrapper_allows_exact_git_init_grammar() {
     write_executable(&wrapper, git_wrapper_script());
 
     let fake_git = temp.path().join("real-git");
-    write_executable(&fake_git, "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\"\n");
+    write_executable(
+        &fake_git,
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --exec-path ]; then exec /usr/bin/git --exec-path; fi\nprintf '%s\\n' \"$*\"\n",
+    );
 
     for args in [&["init"][..], &["init", "-q"][..], &["init", "--quiet"][..]] {
         let output = std::process::Command::new(&wrapper)
@@ -58,6 +64,72 @@ fn wrapper_allows_exact_git_init_grammar() {
             args.join(" ")
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_isolates_exact_git_init_from_hostile_environment() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let launcher = temp.path().join("launch-git-guard");
+    write_executable(
+        &launcher,
+        r#"#!/bin/sh
+set -eu
+case "${HOSTILE_GIT_FAMILY}" in
+  repository-path) export GIT_DIR="${HOSTILE_GIT_VALUE}" ;;
+  template) export GIT_TEMPLATE_DIR="${HOSTILE_GIT_VALUE}" ;;
+  config)
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0=init.templateDir
+    export GIT_CONFIG_VALUE_0="${HOSTILE_GIT_VALUE}"
+    ;;
+esac
+exec "${GIT_GUARD_UNDER_TEST}" "$@"
+"#,
+    );
+
+    let mut altered = Vec::new();
+    for family in ["repository-path", "template", "config"] {
+        let repo = temp.path().join(format!("repo-{family}"));
+        std::fs::create_dir(&repo).unwrap();
+        let hostile = temp.path().join(format!("hostile-{family}"));
+        if family != "repository-path" {
+            std::fs::create_dir(&hostile).unwrap();
+            std::fs::write(hostile.join("ambient-template-marker"), "hostile\n").unwrap();
+        }
+
+        let output = std::process::Command::new(&launcher)
+            .arg("init")
+            .current_dir(&repo)
+            .env("CSA_REAL_GIT", "/usr/bin/git")
+            .env("GIT_GUARD_UNDER_TEST", &wrapper)
+            .env("HOSTILE_GIT_FAMILY", family)
+            .env("HOSTILE_GIT_VALUE", &hostile)
+            .output_with_timeout()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{family}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let initialized_here = repo.join(".git").is_dir();
+        let escaped = family == "repository-path" && hostile.exists();
+        let template_applied = repo.join(".git/ambient-template-marker").exists();
+        if !initialized_here || escaped || template_applied {
+            altered.push(family);
+        }
+    }
+
+    assert!(
+        altered.is_empty(),
+        "hostile Git environment altered exact local init: {}",
+        altered.join(", ")
+    );
 }
 
 #[cfg(unix)]

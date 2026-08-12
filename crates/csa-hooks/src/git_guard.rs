@@ -214,10 +214,10 @@ descriptor_path_for() {
 }
 
 reset_hermetic_git_environment() {
-  # The projected local transport must not inherit caller-selected repository,
-  # config, protocol, or helper-routing inputs. The final push runs from an
-  # empty temporary Git directory, so repository-local remotes and URL
-  # rewrites never enter the transport decision.
+  # Hermetic Git operations must not inherit caller-selected repository,
+  # template, config, protocol, or helper-routing inputs. Projected pushes also
+  # run from an empty temporary Git directory, excluding local remotes and URL
+  # rewrites from transport decisions.
   unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
   unset GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_TEMPLATE_DIR || true
   unset GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES || true
@@ -457,6 +457,12 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     && ! is_safe_local_command "${COMMAND}"; then
     block_untrusted_git_command "$@"
   fi
+fi
+
+# Every closed-grammar route that forwards caller argv uses the same hermetic
+# environment; the local-push route applies it inside its projection validator.
+if is_exact_git_version_grammar "$@" || is_exact_git_init_grammar "$@"; then
+  reset_hermetic_git_environment || block_untrusted_git_command "$@"
 fi
 
 if [ "${COMMAND}" != "commit" ]; then
