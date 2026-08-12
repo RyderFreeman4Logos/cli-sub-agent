@@ -215,15 +215,20 @@ descriptor_path_for() {
 
 reset_hermetic_git_environment() {
   # Hermetic Git operations must not inherit caller-selected repository,
-  # template, config, protocol, or helper-routing inputs. Projected pushes also
-  # run from an empty temporary Git directory, excluding local remotes and URL
-  # rewrites from transport decisions.
+  # template, config, initialization defaults, trace output, protocol, or
+  # helper-routing inputs. Projected pushes also run from an empty temporary
+  # Git directory, excluding local remotes and URL rewrites from transport
+  # decisions.
   unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
   unset GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_TEMPLATE_DIR || true
   unset GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES || true
   unset GIT_EXEC_PATH GIT_SSH GIT_SSH_COMMAND GIT_SSH_VARIANT GIT_PROXY_COMMAND || true
   unset GIT_ASKPASS SSH_ASKPASS GIT_TRANSPORT_HELPER_DIR GIT_REMOTE_HELPER_DIR || true
-  for env_name in $(env | sed -n -e 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  for env_name in $(env | sed -n \
+    -e 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_DEFAULT_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_TEST_DEFAULT_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
     unset "${env_name}" || true
   done
 

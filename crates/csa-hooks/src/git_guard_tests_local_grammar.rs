@@ -134,6 +134,72 @@ exec "${GIT_GUARD_UNDER_TEST}" "$@"
 
 #[cfg(unix)]
 #[test]
+fn wrapper_scrubs_init_defaults_and_trace_environment() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let control_repo = temp.path().join("control");
+    let hostile_repo = temp.path().join("hostile");
+    std::fs::create_dir(&control_repo).unwrap();
+    std::fs::create_dir(&hostile_repo).unwrap();
+
+    let control = std::process::Command::new(&wrapper)
+        .arg("init")
+        .current_dir(&control_repo)
+        .env("CSA_REAL_GIT", "/usr/bin/git")
+        .output_with_timeout()
+        .unwrap();
+    assert!(
+        control.status.success(),
+        "control: {}",
+        String::from_utf8_lossy(&control.stderr)
+    );
+
+    let trace = temp.path().join("external-git-trace");
+    let launcher = temp.path().join("launch-hostile-git-guard");
+    write_executable(
+        &launcher,
+        r#"#!/bin/sh
+set -eu
+export GIT_DEFAULT_HASH=sha256
+export GIT_DEFAULT_REF_FORMAT=reftable
+export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=hostile-branch
+export GIT_TRACE="${HOSTILE_GIT_TRACE}"
+export GIT_TRACE2_EVENT="${HOSTILE_GIT_TRACE}"
+exec "${GIT_GUARD_UNDER_TEST}" "$@"
+"#,
+    );
+    let hostile = std::process::Command::new(&launcher)
+        .arg("init")
+        .current_dir(&hostile_repo)
+        .env("CSA_REAL_GIT", "/usr/bin/git")
+        .env("GIT_GUARD_UNDER_TEST", &wrapper)
+        .env("HOSTILE_GIT_TRACE", &trace)
+        .output_with_timeout()
+        .unwrap();
+    assert!(
+        hostile.status.success(),
+        "hostile: {}",
+        String::from_utf8_lossy(&hostile.stderr)
+    );
+
+    let format_changed = std::fs::read(control_repo.join(".git/config")).unwrap()
+        != std::fs::read(hostile_repo.join(".git/config")).unwrap();
+    let branch_changed = std::fs::read(control_repo.join(".git/HEAD")).unwrap()
+        != std::fs::read(hostile_repo.join(".git/HEAD")).unwrap();
+    let trace_written = trace.exists();
+    assert!(
+        !format_changed && !branch_changed && !trace_written,
+        "hostile Git environment altered exact local init: \
+         format_changed={format_changed}, branch_changed={branch_changed}, \
+         trace_written={trace_written}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn wrapper_rejects_git_init_option_smuggling() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();
