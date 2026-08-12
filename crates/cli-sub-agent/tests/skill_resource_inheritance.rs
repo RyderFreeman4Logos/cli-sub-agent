@@ -137,6 +137,29 @@ enabled = false
         "resource inheritance fixture must disable unrelated filesystem enforcement"
     );
 
+    assert!(
+        Command::new("git")
+            .args(["-c", "init.defaultBranch=feat/resource-probe", "init", "-q"])
+            .current_dir(&project)
+            .status()
+            .expect("initialize fixture git repository")
+            .success(),
+        "fixture git repository initialization must succeed"
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-qm", "init"])
+            .current_dir(&project)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .status()
+            .expect("commit fixture git repository")
+            .success(),
+        "fixture git repository commit must succeed"
+    );
+
     let fake_bin = install_fake_codex(&project);
     let mut command = csa_cmd(home.path());
     command
