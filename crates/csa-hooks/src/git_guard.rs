@@ -136,6 +136,10 @@ for arg do
     --help|-h)
       continue
       ;;
+    --version*)
+      COMMAND="${arg}"
+      break
+      ;;
     -c|--config)
       EXPECT_VALUE="config"
       continue
@@ -382,6 +386,27 @@ format_git_command() {
   done
 }
 
+is_exact_git_version_grammar() {
+  [ "$#" -eq 1 ] || return 1
+  case "${1}" in
+    version|--version) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_exact_git_init_grammar() {
+  [ "${1:-}" = "init" ] || return 1
+  case "$#" in
+    1) return 0 ;;
+    2)
+      case "${2}" in
+        -q|--quiet) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
 is_safe_local_command() {
   case "${1}" in
     ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
@@ -425,10 +450,11 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     exit "${push_status}"
   fi
 
-  # A publication-capable plumbing command or unknown external subcommand can
-  # bypass literal `push` interception. Permit only common local-only Git
-  # commands; all other command surfaces are denied while leaf pushes are off.
-  if ! is_safe_local_command "${COMMAND}"; then
+  # Closed probes and local fixture bootstrap forms are admitted only with their
+  # exact argv; path/config steering and extra operands still fail closed.
+  if ! is_exact_git_version_grammar "$@" \
+    && ! is_exact_git_init_grammar "$@" \
+    && ! is_safe_local_command "${COMMAND}"; then
     block_untrusted_git_command "$@"
   fi
 fi

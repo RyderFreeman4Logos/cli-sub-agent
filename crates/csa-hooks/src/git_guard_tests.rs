@@ -623,6 +623,8 @@ fn wrapper_allows_leading_dash_after_file_option() {
     );
 }
 
+include!("git_guard_tests_local_grammar.rs");
+
 #[cfg(unix)]
 #[test]
 fn wrapper_forwards_non_commit_commands() {
