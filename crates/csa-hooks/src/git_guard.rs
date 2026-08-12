@@ -232,6 +232,11 @@ reset_hermetic_git_environment() {
     unset "${env_name}" || true
   done
 
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_SYSTEM=/dev/null
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export XDG_CONFIG_HOME=/dev/null
+
   trusted_exec_path="$("${REAL_GIT}" --exec-path 2>/dev/null)" || return 1
   case "${trusted_exec_path}" in
     /*) ;;
@@ -239,10 +244,6 @@ reset_hermetic_git_environment() {
   esac
   trusted_exec_path="$(canonical_directory "${trusted_exec_path}")" || return 1
 
-  export GIT_CONFIG_NOSYSTEM=1
-  export GIT_CONFIG_SYSTEM=/dev/null
-  export GIT_CONFIG_GLOBAL=/dev/null
-  export XDG_CONFIG_HOME=/dev/null
   export GIT_ALLOW_PROTOCOL=file
   export GIT_PROTOCOL_FROM_USER=0
   export GIT_EXEC_PATH="${trusted_exec_path}"

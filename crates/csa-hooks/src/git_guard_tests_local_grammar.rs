@@ -200,6 +200,46 @@ exec "${GIT_GUARD_UNDER_TEST}" "$@"
 
 #[cfg(unix)]
 #[test]
+fn wrapper_isolates_exec_path_probe_from_global_trace2_config() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&repo).unwrap();
+    let trace = temp.path().join("external-trace2-event");
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!("[trace2]\n\teventTarget = {}\n", trace.display()),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(&wrapper)
+        .arg("init")
+        .current_dir(&repo)
+        .env("CSA_REAL_GIT", "/usr/bin/git")
+        .env("HOME", &home)
+        .output_with_timeout()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(repo.join(".git").is_dir(), "exact local init did not run");
+    assert!(
+        !trace.exists(),
+        "exec-path probe wrote hostile global Trace2 target: {}",
+        trace.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn wrapper_rejects_git_init_option_smuggling() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();
