@@ -1,10 +1,4 @@
-//! Git guard: deterministic gate preventing hook bypass on `git commit`.
-//!
-//! CSA tool subprocesses share the caller's `.git` directory, so Git hooks are
-//! the last deterministic local gate before an agent-created commit lands in
-//! the repository.  This module injects a `git` wrapper ahead of the real Git
-//! binary in `PATH`, strips hook-bypass inputs from commits, and blocks leaf
-//! worker pushes.
+//! Git wrapper that preserves commit hooks and blocks leaf-worker publication.
 
 use std::collections::HashMap;
 use std::fs;
@@ -214,11 +208,7 @@ descriptor_path_for() {
 }
 
 reset_hermetic_git_environment() {
-  # Hermetic Git operations must not inherit caller-selected repository,
-  # template, config, initialization defaults, trace output, protocol, or
-  # helper-routing inputs. Projected pushes also run from an empty temporary
-  # Git directory, excluding local remotes and URL rewrites from transport
-  # decisions.
+  # Remove caller-selected repository, config, and transport routing.
   unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
   unset GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_TEMPLATE_DIR || true
   unset GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES || true
@@ -250,10 +240,7 @@ reset_hermetic_git_environment() {
 }
 
 create_hermetic_push_projection() {
-  # Git has no switch to ignore only the source repository's config. Build a
-  # minimal, configless source snapshot instead: object alternates plus copied
-  # refs give real pack negotiation without allowing local remote/pushurl or
-  # URL-rewrite settings into the final invocation.
+  # Push from a configless ref snapshot backed by source object alternates.
   source_common_dir="$("${REAL_GIT}" rev-parse --git-common-dir 2>/dev/null)" || return 1
   source_common_dir="$(canonical_directory "${source_common_dir}")" || return 1
   source_objects="${source_common_dir}/objects"
@@ -286,9 +273,7 @@ cleanup_hermetic_push_projection() {
 }
 
 is_hermetic_local_bare_push() {
-  # Closed grammar for the one fixture exception: no global options, exactly
-  # `push <absolute-path|file:///local> <non-force-refspec...>`. Requiring a
-  # refspec also prevents repository push defaults from becoming policy input.
+  # Exact fixture grammar: push <absolute|file URL> <non-force-refspec...>.
   [ "${1:-}" = "push" ] || return 1
   [ "$#" -ge 3 ] || return 1
   destination="${2}"
@@ -330,9 +315,7 @@ is_hermetic_local_bare_push() {
     is_descendant_of "${destination_path}" "${project_root}" && return 1
   fi
 
-  # Keep both the fixture root and bare destination open. Re-canonicalizing
-  # their descriptor paths after open makes a concurrent symlink/rename swap
-  # fail closed; the transfer receives the pinned destination descriptor.
+  # Pin opened fixture paths against concurrent rename or symlink swaps.
   exec 8<"${fixture_root}" || return 1
   exec 9<"${destination_path}" || return 1
   fixture_root_descriptor="$(descriptor_path_for 8)" || return 1
@@ -413,6 +396,13 @@ is_exact_git_init_grammar() {
   return 1
 }
 
+is_head_ref() {
+  case "${1}" in
+    refs/heads/?*) "${REAL_GIT}" check-ref-format "${1}" >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_safe_local_command() {
   case "${1}" in
     ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
@@ -454,6 +444,30 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     fi
     cleanup_hermetic_push_projection
     exit "${push_status}"
+  fi
+
+  if [ "$#" -eq 4 ] \
+    && [ "${1}" = "show-ref" ] \
+    && [ "${2}" = "--verify" ] \
+    && [ "${3}" = "--hash" ]; then
+    reset_hermetic_git_environment || block_untrusted_git_command "$@"
+    is_head_ref "${4}" || block_untrusted_git_command "$@"
+    exec "${REAL_GIT}" "$@"
+  fi
+
+  if [ "$#" -ge 4 ] && [ "${1}" = "ls-remote" ] && [ "${2}" = "--heads" ]; then
+    remote="${3}"
+    has_control_bytes "${remote}" && block_untrusted_git_command "$@"
+    case "${remote}" in
+      ""|-*) block_untrusted_git_command "$@" ;;
+    esac
+    shift 3
+    reset_hermetic_git_environment || block_untrusted_git_command "$@"
+    for reference do
+      is_head_ref "${reference}" || block_untrusted_git_command "$@"
+    done
+    export GIT_ALLOW_PROTOCOL=file:https
+    exec "${REAL_GIT}" ls-remote --upload-pack=git-upload-pack --heads "${remote}" "$@"
   fi
 
   # Closed probes and local fixture bootstrap forms are admitted only with their
