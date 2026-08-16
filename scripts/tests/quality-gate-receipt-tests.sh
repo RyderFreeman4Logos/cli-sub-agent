@@ -54,7 +54,6 @@ new_fixture() {
   git -C "$fixture" init -q
   git -C "$fixture" config user.name "Quality Gate Tests"
   git -C "$fixture" config user.email "quality-gate-tests@example.invalid"
-  git -C "$fixture" remote add origin "https://example.invalid/quality-gate.git"
   if [ "${CSA_QUALITY_GATE_TEST_SETUP_FAILURE:-}" = after-init ]; then
     return 73
   fi
