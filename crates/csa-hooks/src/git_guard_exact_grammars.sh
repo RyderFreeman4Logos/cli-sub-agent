@@ -41,8 +41,15 @@ is_exact_git_c_local_grammar() {
   done
   case "${git_c_command}" in
     init)
-      case "$#:${1:-}:${2:-}" in 0::|1:-q:|1:--quiet:|2:-q:?*|2:--quiet:?*) ;; *) return 1 ;; esac
-      [ "$#" -lt 2 ] || case "${2}" in .|..|-*|*/*|*:*) return 1 ;; esac
+      case "$#" in
+        0) ;;
+        1) case "${1}" in -q|--quiet) ;; *) return 1 ;; esac ;;
+        2)
+          case "${1}" in -q|--quiet) ;; *) return 1 ;; esac
+          case "${2}" in ""|.|..|-*|*/*|*:*) return 1 ;; esac
+          ;;
+        *) return 1 ;;
+      esac
       ;;
     config)
       [ "$#" -eq 2 ] || return 1
@@ -52,17 +59,44 @@ is_exact_git_c_local_grammar() {
       [ "$#" -ge 1 ] || return 1
       for fixture_arg do case "${fixture_arg}" in -*) return 1 ;; esac; done
       ;;
-    commit) case "$#:${1:-}:${2:-}" in 2:-m:*|2:--message:*|2:-qm:*|3:-q:-m|3:-q:--message) ;; *) return 1 ;; esac ;;
-    status) case "$#:${1:-}" in 0:|1:--short|1:--porcelain|1:--porcelain=v1) ;; *) return 1 ;; esac ;;
-    diff) case "$#:${1:-}" in 0:|1:--quiet) ;; *) return 1 ;; esac ;;
-    rev-parse)
-      case "$#:${1:-}" in
-        1:HEAD|1:--show-toplevel) ;;
-        2:--verify|2:--short) case "${2}" in ""|-*) return 1 ;; esac ;;
+    commit)
+      case "$#" in
+        2) case "${1}" in -m|--message|-qm) ;; *) return 1 ;; esac ;;
+        3)
+          [ "${1}" = "-q" ] || return 1
+          case "${2}" in -m|--message) ;; *) return 1 ;; esac
+          ;;
         *) return 1 ;;
       esac
       ;;
-    log) case "$#:${1:-}:${2:-}" in 2:-1:--format=?*) ;; *) return 1 ;; esac ;;
+    status)
+      case "$#" in
+        0) ;;
+        1) case "${1}" in --short|--porcelain|--porcelain=v1) ;; *) return 1 ;; esac ;;
+        *) return 1 ;;
+      esac
+      ;;
+    diff)
+      case "$#" in
+        0) ;;
+        1) [ "${1}" = "--quiet" ] || return 1 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    rev-parse)
+      case "$#" in
+        1) case "${1}" in HEAD|--show-toplevel) ;; *) return 1 ;; esac ;;
+        2)
+          case "${1}" in --verify|--short) ;; *) return 1 ;; esac
+          case "${2}" in ""|-*) return 1 ;; esac
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+    log)
+      [ "$#" -eq 2 ] && [ "${1}" = "-1" ] || return 1
+      case "${2}" in --format=?*) ;; *) return 1 ;; esac
+      ;;
     show) [ "$#" -eq 1 ] && case "${1}" in ""|-*) return 1 ;; esac || return 1 ;;
     checkout)
       [ "$#" -eq 2 ] && [ "${1}" = "-b" ] || return 1
