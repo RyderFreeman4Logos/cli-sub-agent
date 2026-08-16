@@ -281,7 +281,8 @@ fn resolve_sandbox_options_with_capability_source(
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
-            .with_readonly_project_root(readonly_project_root);
+            .with_readonly_project_root(readonly_project_root)
+            .with_project_root(project_root);
         if let Some(session_dir) = runtime_session_dir.as_deref() {
             builder = builder.with_tool_defaults_and_state_dirs(
                 tool_name,
@@ -337,9 +338,10 @@ fn resolve_sandbox_options_with_capability_source(
             }
         }
 
-        let plan = builder
-            .build()
-            .expect("BestEffort IsolationPlan should never fail");
+        let plan = match spawn_admission::build_isolation_plan(builder, tool_name) {
+            Ok(plan) => plan,
+            Err(message) => return SandboxResolution::RequiredButUnavailable(message),
+        };
         if let Some(message) =
             memory_override::plan_error_if_unenforced(tool_name, has_explicit_cli_memory_max, &plan)
         {
@@ -483,6 +485,7 @@ fn resolve_sandbox_options_with_capability_source(
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
         .with_readonly_project_root(effective_readonly)
+        .with_project_root(project_root)
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
     if let Some(session_dir) = runtime_session_dir.as_deref() {
@@ -580,15 +583,9 @@ fn resolve_sandbox_options_with_capability_source(
         }
     }
 
-    let plan = builder.build();
-
-    let plan = match plan {
-        Ok(p) => p,
-        Err(e) => {
-            return SandboxResolution::RequiredButUnavailable(format!(
-                "Failed to build isolation plan for tool '{tool_name}': {e}"
-            ));
-        }
+    let plan = match spawn_admission::build_isolation_plan(builder, tool_name) {
+        Ok(plan) => plan,
+        Err(message) => return SandboxResolution::RequiredButUnavailable(message),
     };
     if let Some(message) =
         memory_override::plan_error_if_unenforced(tool_name, has_explicit_cli_memory_max, &plan)

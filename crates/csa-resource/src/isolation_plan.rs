@@ -211,6 +211,12 @@ impl IsolationPlanBuilder {
         self
     }
 
+    /// Record the project root without applying session-owned runtime defaults.
+    pub fn with_project_root(mut self, project_root: &Path) -> Self {
+        self.project_root = Some(project_root.to_path_buf());
+        self
+    }
+
     /// Set the soft memory limit percentage for the memory monitor.
     pub fn with_soft_limit_percent(mut self, percent: Option<u8>) -> Self {
         self.soft_limit_percent = percent;
