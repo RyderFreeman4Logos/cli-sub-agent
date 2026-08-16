@@ -85,6 +85,79 @@ pub(super) fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
     None
 }
 
+pub(super) fn linked_worktree_git_admin_dirs(
+    project_root: &Path,
+) -> anyhow::Result<Option<[PathBuf; 2]>> {
+    let dot_git = project_root.join(".git");
+    if !dot_git.is_file() {
+        return Ok(None);
+    }
+
+    let marker = std::fs::read_to_string(&dot_git)?;
+    let mut marker_lines = marker.lines();
+    let (Some(marker), None) = (marker_lines.next(), marker_lines.next()) else {
+        anyhow::bail!("invalid Git directory marker '{}'", dot_git.display());
+    };
+    let Some(git_dir) = marker
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        anyhow::bail!("invalid Git directory marker '{}'", dot_git.display());
+    };
+    // Submodules also use .git files; linked-worktree gitdirs end in worktrees/<id>.
+    if Path::new(git_dir).parent().and_then(Path::file_name)
+        != Some(std::ffi::OsStr::new("worktrees"))
+    {
+        return Ok(None);
+    }
+
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args([
+            "rev-parse",
+            "--absolute-git-dir",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to resolve Git admin paths for linked worktree '{}': {}",
+            project_root.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let paths = String::from_utf8_lossy(&output.stdout);
+    let mut paths = paths.lines().map(PathBuf::from);
+    let (Some(git_dir), Some(common_dir), None) = (paths.next(), paths.next(), paths.next()) else {
+        anyhow::bail!(
+            "git rev-parse returned invalid admin paths for linked worktree '{}'",
+            project_root.display()
+        );
+    };
+    let git_dir = git_dir.canonicalize()?;
+    let common_dir = common_dir.canonicalize()?;
+    if git_dir == common_dir {
+        return Ok(None);
+    }
+    if is_sensitive_system_path(&common_dir) || !git_dir.starts_with(common_dir.join("worktrees")) {
+        anyhow::bail!(
+            "refusing unsafe linked-worktree Git admin paths '{}' and '{}'",
+            git_dir.display(),
+            common_dir.display()
+        );
+    }
+
+    Ok(Some([git_dir, common_dir]))
+}
+
 /// Reject paths under sensitive system directories that should never be
 /// writable inside a sandbox.  Allows legitimate paths like home dirs,
 /// `/tmp`, `/usr/local/share/mise`, etc.

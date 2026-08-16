@@ -211,6 +211,12 @@ impl IsolationPlanBuilder {
         self
     }
 
+    /// Record the project root without applying session-owned runtime defaults.
+    pub fn with_project_root(mut self, project_root: &Path) -> Self {
+        self.project_root = Some(project_root.to_path_buf());
+        self
+    }
+
     /// Set the soft memory limit percentage for the memory monitor.
     pub fn with_soft_limit_percent(mut self, percent: Option<u8>) -> Self {
         self.soft_limit_percent = percent;
@@ -488,6 +494,15 @@ impl IsolationPlanBuilder {
             self.degraded_reasons.push(
                 "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
             );
+        }
+
+        if self.filesystem != FilesystemCapability::None
+            && !self.readonly_project_root
+            && let Some(project_root) = self.project_root.as_deref()
+            && let Some([git_dir, common_dir]) =
+                runtime_path::linked_worktree_git_admin_dirs(project_root)?
+        {
+            self.writable_paths.extend([common_dir, git_dir]);
         }
 
         self.add_runtime_daemon_socket_readable_paths();
