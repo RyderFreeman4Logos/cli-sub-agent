@@ -136,6 +136,10 @@ for arg do
     --help|-h)
       continue
       ;;
+    --version*)
+      COMMAND="${arg}"
+      break
+      ;;
     -c|--config)
       EXPECT_VALUE="config"
       continue
@@ -210,18 +214,28 @@ descriptor_path_for() {
 }
 
 reset_hermetic_git_environment() {
-  # The projected local transport must not inherit caller-selected repository,
-  # config, protocol, or helper-routing inputs. The final push runs from an
-  # empty temporary Git directory, so repository-local remotes and URL
-  # rewrites never enter the transport decision.
+  # Hermetic Git operations must not inherit caller-selected repository,
+  # template, config, initialization defaults, trace output, protocol, or
+  # helper-routing inputs. Projected pushes also run from an empty temporary
+  # Git directory, excluding local remotes and URL rewrites from transport
+  # decisions.
   unset GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_NAMESPACE || true
   unset GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_TEMPLATE_DIR || true
   unset GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES || true
   unset GIT_EXEC_PATH GIT_SSH GIT_SSH_COMMAND GIT_SSH_VARIANT GIT_PROXY_COMMAND || true
   unset GIT_ASKPASS SSH_ASKPASS GIT_TRANSPORT_HELPER_DIR GIT_REMOTE_HELPER_DIR || true
-  for env_name in $(env | sed -n -e 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  for env_name in $(env | sed -n \
+    -e 's/^\(GIT_CONFIG_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_DEFAULT_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_TEST_DEFAULT_[A-Za-z0-9_]*\)=.*/\1/p' \
+    -e 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
     unset "${env_name}" || true
   done
+
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_SYSTEM=/dev/null
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export XDG_CONFIG_HOME=/dev/null
 
   trusted_exec_path="$("${REAL_GIT}" --exec-path 2>/dev/null)" || return 1
   case "${trusted_exec_path}" in
@@ -230,10 +244,6 @@ reset_hermetic_git_environment() {
   esac
   trusted_exec_path="$(canonical_directory "${trusted_exec_path}")" || return 1
 
-  export GIT_CONFIG_NOSYSTEM=1
-  export GIT_CONFIG_SYSTEM=/dev/null
-  export GIT_CONFIG_GLOBAL=/dev/null
-  export XDG_CONFIG_HOME=/dev/null
   export GIT_ALLOW_PROTOCOL=file
   export GIT_PROTOCOL_FROM_USER=0
   export GIT_EXEC_PATH="${trusted_exec_path}"
@@ -382,6 +392,27 @@ format_git_command() {
   done
 }
 
+is_exact_git_version_grammar() {
+  [ "$#" -eq 1 ] || return 1
+  case "${1}" in
+    version|--version) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_exact_git_init_grammar() {
+  [ "${1:-}" = "init" ] || return 1
+  case "$#" in
+    1) return 0 ;;
+    2)
+      case "${2}" in
+        -q|--quiet) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
 is_safe_local_command() {
   case "${1}" in
     ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
@@ -425,12 +456,19 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     exit "${push_status}"
   fi
 
-  # A publication-capable plumbing command or unknown external subcommand can
-  # bypass literal `push` interception. Permit only common local-only Git
-  # commands; all other command surfaces are denied while leaf pushes are off.
-  if ! is_safe_local_command "${COMMAND}"; then
+  # Closed probes and local fixture bootstrap forms are admitted only with their
+  # exact argv; path/config steering and extra operands still fail closed.
+  if ! is_exact_git_version_grammar "$@" \
+    && ! is_exact_git_init_grammar "$@" \
+    && ! is_safe_local_command "${COMMAND}"; then
     block_untrusted_git_command "$@"
   fi
+fi
+
+# Every closed-grammar route that forwards caller argv uses the same hermetic
+# environment; the local-push route applies it inside its projection validator.
+if is_exact_git_version_grammar "$@" || is_exact_git_init_grammar "$@"; then
+  reset_hermetic_git_environment || block_untrusted_git_command "$@"
 fi
 
 if [ "${COMMAND}" != "commit" ]; then
