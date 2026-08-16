@@ -490,6 +490,15 @@ impl IsolationPlanBuilder {
             );
         }
 
+        if self.filesystem != FilesystemCapability::None
+            && !self.readonly_project_root
+            && let Some(project_root) = self.project_root.as_deref()
+            && let Some([git_dir, common_dir]) =
+                runtime_path::linked_worktree_git_admin_dirs(project_root)?
+        {
+            self.writable_paths.extend([common_dir, git_dir]);
+        }
+
         self.add_runtime_daemon_socket_readable_paths();
 
         codex_paths::validate_required_writable_dirs(
