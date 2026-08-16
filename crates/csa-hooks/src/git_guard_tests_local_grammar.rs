@@ -68,6 +68,158 @@ fn wrapper_allows_exact_git_init_grammar() {
 
 #[cfg(unix)]
 #[test]
+fn wrapper_allows_git_c_existing_local_fixture_commands() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let fixture = temp.path().join("fixture");
+    std::fs::create_dir(&fixture).unwrap();
+    let fixture = fixture.to_str().expect("UTF-8 fixture path");
+    let fake_git = temp.path().join("real-git");
+    write_executable(
+        &fake_git,
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --exec-path ]; then exec /usr/bin/git --exec-path; fi\nif [ \"$PWD\" != \"$EXPECTED_GIT_C_CALLER_CWD\" ]; then exit 97; fi\nprintf '%s\\n' \"$*\"\n",
+    );
+
+    let cases: &[&[&str]] = &[
+        &["init", "-q"],
+        &["init", "-q", "child"],
+        &["config", "user.name", "Fixture"],
+        &["add", "fixture.txt"],
+        &["commit", "-qm", "fixture"],
+        &["status", "--short"],
+        &["diff", "--quiet"],
+        &["rev-parse", "HEAD"],
+        &["log", "-1", "--format=%H"],
+        &["show", "HEAD:fixture.txt"],
+        &["checkout", "-b", "fixture-branch"],
+    ];
+
+    for tail in cases {
+        let args = ["-C", fixture]
+            .into_iter()
+            .chain(tail.iter().copied())
+            .collect::<Vec<_>>();
+        let output = std::process::Command::new(&wrapper)
+            .args(&args)
+            .current_dir(temp.path())
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("EXPECTED_GIT_C_CALLER_CWD", temp.path())
+            .output_with_timeout()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            args.join(" ")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_rejects_git_c_local_fixture_smuggling() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let fixture = temp.path().join("fixture");
+    std::fs::create_dir(&fixture).unwrap();
+    let fixture = fixture.to_str().expect("UTF-8 fixture path");
+    let missing = temp.path().join("secret-missing");
+    let missing = missing.to_str().expect("UTF-8 missing path");
+    let remote = format!("file://{fixture}");
+    let joined_chdir = format!("-C{fixture}");
+    let marker = temp.path().join("fake-git-reached");
+    let fake_git = temp.path().join("real-git");
+    write_executable(
+        &fake_git,
+        r#"#!/usr/bin/env bash
+if [ "${1:-}" = --exec-path ]; then exec /usr/bin/git --exec-path; fi
+printf reached > "$FAKE_GIT_MARKER"
+printf '%s\n' "$*"
+"#,
+    );
+
+    let cases = vec![
+        vec!["-C", fixture, "push", "origin", "HEAD:refs/heads/secret"],
+        vec!["-C", fixture, "remote", "add", "origin", "https://secret.invalid/repo"],
+        vec!["-C", fixture, "diff", "--upload-pack=/tmp/secret-upload-pack"],
+        vec!["-C", fixture, "config", "alias.secret-publish", "!git push"],
+        vec!["-C", fixture, "status", "--"],
+        vec!["-C", fixture, "add", "HEAD:refs/heads/secret-destination"],
+        vec!["-C", fixture, "status", "--work-tree=/tmp/secret-worktree"],
+        vec!["-C", fixture, "status", "-m", "secret-cross-option"],
+        vec!["-C", fixture, "add", "--quiet", "fixture.txt"],
+        vec!["-C", fixture, "diff", "--format=%H"],
+        vec!["-C", fixture, "rev-parse", "-b", "HEAD"],
+        vec!["-C", fixture, "log", "--short"],
+        vec!["-C", fixture, "show", "--verify", "HEAD"],
+        vec!["-C", fixture, "checkout", "--short", "fixture-branch"],
+        vec!["-C", fixture, "reset", "--hard"],
+        vec!["-C", missing, "init", "-q"],
+        vec!["-C", remote.as_str(), "init", "-q"],
+        vec![joined_chdir.as_str(), "status"],
+        vec!["-c", "alias.secret=status", "-C", fixture, "status"],
+    ];
+
+    for args in cases {
+        let _ = std::fs::remove_file(&marker);
+        let output = std::process::Command::new(&wrapper)
+            .args(&args)
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("FAKE_GIT_MARKER", &marker)
+            .output_with_timeout()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(128), "{}", args.join(" "));
+        assert!(!marker.exists(), "fake Git reached for {}", args.join(" "));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("CSA git-guard: blocked command: git"),
+            "{}: {stderr}",
+            args.join(" ")
+        );
+        for secret in [
+            fixture,
+            missing,
+            "secret-upload-pack",
+            "secret-publish",
+            "secret-destination",
+            "secret-worktree",
+            "secret-cross-option",
+            "secret.invalid",
+        ] {
+            assert!(!stderr.contains(secret), "{secret} leaked in {stderr}");
+        }
+    }
+
+    let output = std::process::Command::new(&wrapper)
+        .args(["init", "-C", fixture])
+        .env("CSA_REAL_GIT", &fake_git)
+        .env("FAKE_GIT_MARKER", &marker)
+        .output_with_timeout()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(128));
+    assert!(!marker.exists(), "fake Git reached for -C after command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("blocked command: git <command> -C <value>"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(fixture), "fixture path leaked in {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn wrapper_allows_exact_show_ref_attestation() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();

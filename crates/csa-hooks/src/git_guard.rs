@@ -13,7 +13,7 @@ const FALLBACK_GUARD_DIR_NAME: &str = "guards";
 const SESSION_GUARD_DIR_NAME: &str = "bin";
 const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
 static GUARD_SETUP_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-const GIT_WRAPPER: &str = r#"#!/bin/sh
+const GIT_WRAPPER_TEMPLATE: &str = r#"#!/bin/sh
 # CSA git guard: strips git commit hook bypass and blocks leaf-worker pushes.
 # Injected by CSA via PATH.
 set -eu
@@ -111,6 +111,7 @@ strip_commit_short_arg() {
 COMMAND=""
 BLOCK_HOOKS_PATH_OVERRIDE=false
 ALIAS_CONFIG_OVERRIDE=false
+CHDIR_OPTION_SEEN=false
 EXPECT_VALUE=""
 for arg do
   if [ -n "${EXPECT_VALUE}" ]; then
@@ -156,10 +157,10 @@ for arg do
       ALIAS_CONFIG_OVERRIDE=true
       continue
       ;;
-    -C|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
-      EXPECT_VALUE="other"
-      continue
-      ;;
+    -C) CHDIR_OPTION_SEEN=true; EXPECT_VALUE="other"; continue ;;
+    -C?*) CHDIR_OPTION_SEEN=true; continue ;;
+    --git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env)
+      EXPECT_VALUE="other"; continue ;;
     --git-dir=*|--work-tree=*|--namespace=*|--exec-path=*|--super-prefix=*|--config-env=*)
       continue
       ;;
@@ -375,27 +376,7 @@ format_git_command() {
   done
 }
 
-is_exact_git_version_grammar() {
-  [ "$#" -eq 1 ] || return 1
-  case "${1}" in
-    version|--version) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-is_exact_git_init_grammar() {
-  [ "${1:-}" = "init" ] || return 1
-  case "$#" in
-    1) return 0 ;;
-    2)
-      case "${2}" in
-        -q|--quiet) return 0 ;;
-      esac
-      ;;
-  esac
-  return 1
-}
-
+__CSA_GIT_EXACT_GRAMMARS__
 is_head_ref() {
   case "${1}" in
     refs/heads/?*) "${REAL_GIT}" check-ref-format "${1}" >/dev/null 2>&1 ;;
@@ -470,9 +451,11 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     exec "${REAL_GIT}" ls-remote --upload-pack=git-upload-pack --heads "${remote}" "$@"
   fi
 
-  # Closed probes and local fixture bootstrap forms are admitted only with their
-  # exact argv; path/config steering and extra operands still fail closed.
-  if ! is_exact_git_version_grammar "$@" \
+  # Closed probes and local fixture forms reject steering, remotes, and unlisted argv.
+  if [ "${CHDIR_OPTION_SEEN}" = "true" ]; then
+    is_exact_git_c_local_grammar "$@" || block_untrusted_git_command "$@"
+    reset_hermetic_git_environment || block_untrusted_git_command "$@"
+  elif ! is_exact_git_version_grammar "$@" \
     && ! is_exact_git_init_grammar "$@" \
     && ! is_safe_local_command "${COMMAND}"; then
     block_untrusted_git_command "$@"
@@ -634,6 +617,13 @@ eval "set -- ${SANITIZED_ARGS}"
 exec "${REAL_GIT}" "$@"
 "#;
 
+static GIT_WRAPPER: LazyLock<String> = LazyLock::new(|| {
+    GIT_WRAPPER_TEMPLATE.replace(
+        "__CSA_GIT_EXACT_GRAMMARS__",
+        include_str!("git_guard_exact_grammars.sh"),
+    )
+});
+
 pub fn ensure_git_guard_dir() -> Result<PathBuf> {
     let data_dir = csa_config::paths::state_dir()
         .context("cannot determine CSA state directory")?
@@ -657,7 +647,7 @@ fn ensure_git_guard_dir_at(data_dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(data_dir)
         .with_context(|| format!("failed to create guard dir: {}", data_dir.display()))?;
     let wrapper_path = data_dir.join("git");
-    fs::write(&wrapper_path, GIT_WRAPPER)
+    fs::write(&wrapper_path, GIT_WRAPPER.as_bytes())
         .with_context(|| format!("failed to write git wrapper: {}", wrapper_path.display()))?;
     #[cfg(unix)]
     fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
@@ -729,5 +719,5 @@ fn prepend_guard_dir(env: &mut HashMap<String, String>, guard_dir: &Path) {
 
 #[must_use]
 pub fn git_wrapper_script() -> &'static str {
-    GIT_WRAPPER
+    GIT_WRAPPER.as_str()
 }
