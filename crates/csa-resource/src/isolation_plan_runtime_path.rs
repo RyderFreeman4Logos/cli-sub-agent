@@ -88,7 +88,28 @@ pub(super) fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
 pub(super) fn linked_worktree_git_admin_dirs(
     project_root: &Path,
 ) -> anyhow::Result<Option<[PathBuf; 2]>> {
-    if !project_root.join(".git").is_file() {
+    let dot_git = project_root.join(".git");
+    if !dot_git.is_file() {
+        return Ok(None);
+    }
+
+    let marker = std::fs::read_to_string(&dot_git)?;
+    let mut marker_lines = marker.lines();
+    let (Some(marker), None) = (marker_lines.next(), marker_lines.next()) else {
+        anyhow::bail!("invalid Git directory marker '{}'", dot_git.display());
+    };
+    let Some(git_dir) = marker
+        .trim()
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        anyhow::bail!("invalid Git directory marker '{}'", dot_git.display());
+    };
+    // Submodules also use .git files; linked-worktree gitdirs end in worktrees/<id>.
+    if Path::new(git_dir).parent().and_then(Path::file_name)
+        != Some(std::ffi::OsStr::new("worktrees"))
+    {
         return Ok(None);
     }
 
