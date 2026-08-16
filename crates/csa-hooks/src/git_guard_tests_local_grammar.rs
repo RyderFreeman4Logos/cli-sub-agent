@@ -68,6 +68,246 @@ fn wrapper_allows_exact_git_init_grammar() {
 
 #[cfg(unix)]
 #[test]
+fn wrapper_allows_exact_show_ref_attestation() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let fake_git = temp.path().join("real-git");
+    write_executable(
+        &fake_git,
+        "#!/usr/bin/env bash\nif [ \"${1:-}\" = --exec-path ]; then exec /usr/bin/git --exec-path; fi\nprintf '%s\\n' \"$*\"\n",
+    );
+    let args = [
+        "show-ref",
+        "--verify",
+        "--hash",
+        "refs/heads/feat/comp-003-closed-operators",
+    ];
+
+    let output = std::process::Command::new(&wrapper)
+        .args(args)
+        .env("CSA_REAL_GIT", &fake_git)
+        .output_with_timeout()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        args.join(" ")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_allows_exact_ls_remote_attestation_with_pinned_upload_pack() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let repo = temp.path().join("repo");
+    init_worktree_repo(&repo);
+    let remote = temp.path().join("remote.git");
+    init_bare_repo(temp.path(), &remote);
+    run_git(
+        &repo,
+        &[
+            "push",
+            remote.to_str().expect("UTF-8 remote path"),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    run_git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("UTF-8 remote path"),
+        ],
+    );
+
+    let hostile_upload_pack = temp.path().join("hostile-upload-pack");
+    let hostile_marker = temp.path().join("hostile-upload-pack-ran");
+    write_executable(
+        &hostile_upload_pack,
+        "#!/usr/bin/env bash\nprintf reached > \"$HOSTILE_UPLOAD_PACK_MARKER\"\nexit 99\n",
+    );
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.origin.uploadpack",
+            hostile_upload_pack
+                .to_str()
+                .expect("UTF-8 hostile upload-pack path"),
+        ],
+    );
+
+    let output = std::process::Command::new(&wrapper)
+        .args([
+            "ls-remote",
+            "--heads",
+            "origin",
+            "refs/heads/main",
+            "refs/heads/feat/comp-003-closed-operators",
+        ])
+        .current_dir(&repo)
+        .env("CSA_REAL_GIT", "/usr/bin/git")
+        .env("HOSTILE_UPLOAD_PACK_MARKER", &hostile_marker)
+        .output_with_timeout()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("refs/heads/main"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !hostile_marker.exists(),
+        "named remote upload-pack override escaped the guard"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_rejects_read_only_attestation_smuggling() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("git");
+    write_executable(&wrapper, git_wrapper_script());
+
+    let marker = temp.path().join("fake-git-reached");
+    let fake_git = temp.path().join("real-git");
+    write_executable(
+        &fake_git,
+        r#"#!/usr/bin/env bash
+case "${1:-}" in
+  --exec-path) exec /usr/bin/git --exec-path ;;
+  check-ref-format) exec /usr/bin/git "$@" ;;
+esac
+printf reached > "$FAKE_GIT_MARKER"
+printf '%s\n' "$*"
+"#,
+    );
+
+    let cases: &[&[&str]] = &[
+        &[
+            "show-ref",
+            "--verify",
+            "--hash",
+            "refs/heads/main",
+            "refs/heads/extra",
+        ],
+        &["show-ref", "--verify", "-s", "refs/heads/main"],
+        &["show-ref", "--verify", "--hash", "--"],
+        &[
+            "show-ref",
+            "--verify",
+            "--hash",
+            "refs/heads/main:refs/heads/dest",
+        ],
+        &["show-ref", "--verify", "--hash", "refs/tags/main"],
+        &["show-ref", "--verify", "--hash", "refs/heads/bad..name"],
+        &[
+            "show-ref",
+            "--verify",
+            "--hash",
+            "refs/heads/main",
+            "--exclude-existing",
+        ],
+        &["show-ref", "--unknown", "--hash", "refs/heads/main"],
+        &[
+            "-c",
+            "alias.attest=show-ref",
+            "attest",
+            "--verify",
+            "--hash",
+            "refs/heads/main",
+        ],
+        &["ls-remote", "--heads", "origin"],
+        &["ls-remote", "--heads", "origin", "refs/heads/main", "extra"],
+        &[
+            "ls-remote",
+            "--upload-pack=/tmp/evil",
+            "--heads",
+            "origin",
+            "refs/heads/main",
+        ],
+        &[
+            "ls-remote",
+            "--upload-pack",
+            "/tmp/evil",
+            "--heads",
+            "origin",
+            "refs/heads/main",
+        ],
+        &[
+            "ls-remote",
+            "--heads",
+            "origin",
+            "refs/heads/main:refs/heads/dest",
+        ],
+        &["ls-remote", "--heads", "origin", "HEAD:refs/heads/dest"],
+        &["ls-remote", "--heads", "origin", "refs/heads/*"],
+        &["ls-remote", "--heads", "origin", "--"],
+        &[
+            "-c",
+            "remote.origin.uploadpack=/tmp/evil",
+            "ls-remote",
+            "--heads",
+            "origin",
+            "refs/heads/main",
+        ],
+        &[
+            "-c",
+            "alias.attest=ls-remote",
+            "attest",
+            "--heads",
+            "origin",
+            "refs/heads/main",
+        ],
+        &["ls-remote", "--unknown", "origin", "refs/heads/main"],
+    ];
+
+    for args in cases {
+        let _ = std::fs::remove_file(&marker);
+        let output = std::process::Command::new(&wrapper)
+            .args(*args)
+            .env("CSA_REAL_GIT", &fake_git)
+            .env("FAKE_GIT_MARKER", &marker)
+            .output_with_timeout()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(128), "{}", args.join(" "));
+        assert!(
+            String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+            "fake Git stdout for {}",
+            args.join(" ")
+        );
+        assert!(!marker.exists(), "fake Git reached for {}", args.join(" "));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("CSA git-guard: blocked command: git"),
+            "{}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn wrapper_isolates_exact_git_init_from_hostile_environment() {
     let _lock = ENV_LOCK.lock().expect("env lock poisoned");
     let temp = tempfile::tempdir().unwrap();
