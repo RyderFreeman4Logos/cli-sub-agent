@@ -40,7 +40,8 @@ pub(crate) use policy::{
 pub(crate) use shell::{detect_git_commit_commands, detect_no_verify_commit_commands};
 pub(crate) use uncommitted::{
     collect_uncommitted_changes_for_changed_paths, format_large_diff_warning_block,
-    format_uncommitted_warning, is_writer_session, working_tree_changed_lines,
+    format_uncommitted_warning, is_writer_session, sandbox_commit_failure_matches,
+    working_tree_changed_lines,
 };
 
 #[cfg(test)]

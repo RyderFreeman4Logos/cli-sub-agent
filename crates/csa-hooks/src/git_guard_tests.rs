@@ -118,12 +118,17 @@ printf '%s\n' "$*"
 }
 
 #[cfg(unix)]
-fn run_git(current_dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+fn git_output(current_dir: &Path, args: &[&str]) -> Output {
+    Command::new("git")
         .args(args)
         .current_dir(current_dir)
         .output_with_timeout()
-        .expect("run git fixture command");
+        .expect("run git fixture command")
+}
+
+#[cfg(unix)]
+fn run_git(current_dir: &Path, args: &[&str]) {
+    let output = git_output(current_dir, args);
     assert!(
         output.status.success(),
         "git {} failed:\nstdout:\n{}\nstderr:\n{}",
@@ -509,6 +514,88 @@ fn wrapper_requires_pre_commit_when_lefthook_config_defines_it() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(stderr.contains("pre-commit"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn wrapper_blocks_repeated_sandbox_commit_for_unchanged_staged_tree() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let temp = tempfile::tempdir().unwrap();
+    let session_dir = temp.path().join("session");
+    let wrapper = session_dir.join("bin/git");
+    std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+    write_executable(&wrapper, git_wrapper_script());
+
+    let repo = temp.path().join("repo");
+    init_worktree_repo(&repo);
+    std::fs::write(repo.join("fixture.txt"), "staged change\n").unwrap();
+    run_git(&repo, &["add", "fixture.txt"]);
+
+    let hook_count = temp.path().join("hook-count");
+    write_executable(
+        repo.join(".git/hooks/pre-commit").as_path(),
+        r#"#!/bin/sh
+count=0
+[ ! -f "${HOOK_COUNT}" ] || count="$(cat "${HOOK_COUNT}")"
+count=$((count + 1))
+printf '%s\n' "${count}" > "${HOOK_COUNT}"
+echo "hook cannot write /var/tmp: Read-only file system" >&2
+exit 1
+"#,
+    );
+
+    let run_commit = || {
+        Command::new(&wrapper)
+            .args(["commit", "-m", "sandbox commit"])
+            .current_dir(&repo)
+            .env("CSA_REAL_GIT", "/usr/bin/git")
+            .env("CSA_FS_SANDBOXED", "1")
+            .env("CSA_SESSION_DIR", &session_dir)
+            .env("HOOK_COUNT", &hook_count)
+            .output_with_timeout()
+            .expect("run guarded commit")
+    };
+    let head_before = git_output(&repo, &["rev-parse", "HEAD"]).stdout;
+    let staged_tree_before = git_output(&repo, &["write-tree"]).stdout;
+
+    let first = run_commit();
+    assert!(!first.status.success());
+    assert_eq!(std::fs::read_to_string(&hook_count).unwrap().trim(), "1");
+    assert!(
+        session_dir.join(".git-guard-commit-failure").is_file(),
+        "the first unchanged-tree hook failure must leave a fail-closed marker"
+    );
+    assert_eq!(
+        git_output(&repo, &["rev-parse", "HEAD"]).stdout,
+        head_before
+    );
+    assert_eq!(
+        git_output(&repo, &["write-tree"]).stdout,
+        staged_tree_before,
+        "failed hook must preserve the staged tree"
+    );
+
+    let second = run_commit();
+    assert!(!second.status.success());
+    assert_eq!(
+        std::fs::read_to_string(&hook_count).unwrap().trim(),
+        "1",
+        "unchanged staged tree must not rerun the known-failing hook"
+    );
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(stderr.contains("filesystem sandbox"), "{stderr}");
+    assert!(stderr.contains("staged tree is preserved"), "{stderr}");
+    assert!(stderr.contains("outside the sandbox"), "{stderr}");
+
+    std::fs::write(repo.join("fixture.txt"), "repaired staged change\n").unwrap();
+    run_git(&repo, &["add", "fixture.txt"]);
+    let third = run_commit();
+    assert!(!third.status.success());
+    assert_eq!(
+        std::fs::read_to_string(&hook_count).unwrap().trim(),
+        "2",
+        "a changed staged tree must get one fresh hook attempt"
+    );
 }
 
 #[cfg(unix)]

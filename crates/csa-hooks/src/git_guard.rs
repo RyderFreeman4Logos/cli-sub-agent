@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 const FALLBACK_GUARD_DIR_NAME: &str = "guards";
 const SESSION_GUARD_DIR_NAME: &str = "bin";
 const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
+pub const SANDBOX_COMMIT_FAILURE_MARKER_FILE: &str = ".git-guard-commit-failure";
 static GUARD_SETUP_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 const GIT_WRAPPER_TEMPLATE: &str = r#"#!/bin/sh
 # CSA git guard: strips git commit hook bypass and blocks leaf-worker pushes.
@@ -566,8 +567,23 @@ if [ "${STRIPPED_NO_VERIFY}" = "true" ]; then
   echo "CSA git-guard: stripped --no-verify from git commit (hook bypass forbidden)" >&2
 fi
 
+top=""
+hooks_path=""
 if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   top="$("${REAL_GIT}" rev-parse --show-toplevel 2>/dev/null || pwd)"
+  hooks_path="$("${REAL_GIT}" config --path --get core.hooksPath 2>/dev/null || true)"
+  hook_path_for() {
+    hook_name="$1"
+    if [ -n "${hooks_path}" ]; then
+      case "${hooks_path}" in
+        /*) printf '%s\n' "${hooks_path}/${hook_name}" ;;
+        *) printf '%s\n' "${top}/${hooks_path}/${hook_name}" ;;
+      esac
+    else
+      "${REAL_GIT}" rev-parse --git-path "hooks/${hook_name}" 2>/dev/null || true
+    fi
+  }
+
   lefthook_config=""
   for cfg in lefthook.yml lefthook.yaml .lefthook.yml .lefthook.yaml; do
     if [ -f "${top}/${cfg}" ]; then
@@ -577,19 +593,6 @@ if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   done
 
   if [ -n "${lefthook_config}" ]; then
-    hooks_path="$("${REAL_GIT}" config --path --get core.hooksPath 2>/dev/null || true)"
-    hook_path_for() {
-      hook_name="$1"
-      if [ -n "${hooks_path}" ]; then
-        case "${hooks_path}" in
-          /*) printf '%s\n' "${hooks_path}/${hook_name}" ;;
-          *) printf '%s\n' "${top}/${hooks_path}/${hook_name}" ;;
-        esac
-      else
-        "${REAL_GIT}" rev-parse --git-path "hooks/${hook_name}" 2>/dev/null || true
-      fi
-    }
-
     while IFS= read -r line || [ -n "${line}" ]; do
       case "${line}" in
         ""|\#*|" "*) continue ;;
@@ -614,14 +617,23 @@ if "${REAL_GIT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 eval "set -- ${SANITIZED_ARGS}"
-exec "${REAL_GIT}" "$@"
+__CSA_GIT_SANDBOX_COMMIT_FAIL_CLOSED__
 "#;
 
 static GIT_WRAPPER: LazyLock<String> = LazyLock::new(|| {
-    GIT_WRAPPER_TEMPLATE.replace(
-        "__CSA_GIT_EXACT_GRAMMARS__",
-        include_str!("git_guard_exact_grammars.sh"),
-    )
+    GIT_WRAPPER_TEMPLATE
+        .replace(
+            "__CSA_GIT_EXACT_GRAMMARS__",
+            include_str!("git_guard_exact_grammars.sh"),
+        )
+        .replace(
+            "__CSA_GIT_SANDBOX_COMMIT_FAIL_CLOSED__",
+            include_str!("git_guard_sandbox_commit_fail_closed.sh"),
+        )
+        .replace(
+            "__CSA_GIT_COMMIT_FAILURE_MARKER__",
+            SANDBOX_COMMIT_FAILURE_MARKER_FILE,
+        )
 });
 
 pub fn ensure_git_guard_dir() -> Result<PathBuf> {

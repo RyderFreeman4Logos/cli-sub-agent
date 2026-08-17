@@ -293,7 +293,7 @@ async fn signal_killed_require_commit_run_rescues_dirty_workspace() {
 
 #[cfg(not(target_os = "macos"))]
 #[tokio::test]
-async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes() {
+async fn completion_does_not_rescue_after_sandbox_hook_failure_marker() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
@@ -304,15 +304,21 @@ async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes(
 
     std::fs::write(project_root.join("tracked.txt"), "changed\n").expect("write change");
     run_git(project_root, &["add", "tracked.txt"]);
+    let staged_tree = git_capture(project_root, &["write-tree"]);
 
     let mut session = create_session(
         project_root,
-        Some("require commit rescue"),
+        Some("sandbox hook blocked require commit"),
         None,
         Some("codex"),
     )
     .expect("create session");
     let session_dir = get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+        format!("{initial_head} {staged_tree} args env config hooks\n"),
+    )
+    .expect("write sandbox hook marker");
     let executor = Executor::Codex {
         model_override: None,
         thinking_budget: None,
@@ -382,52 +388,17 @@ async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes(
     .await
     .expect("complete session");
 
+    assert_eq!(completed.commit_created, Some(false));
+    assert_ne!(completed.execution.exit_code, 0);
     assert_eq!(
-        completed.execution.exit_code,
-        0,
-        "summary={}\ngate={:?}\nstderr={}",
-        completed.execution.summary,
-        completed.execution.csa_gate_failure,
-        completed.execution.stderr_output
-    );
-    assert!(completed.execution.csa_gate_failure.is_none());
-    assert_eq!(completed.commit_created, Some(true));
-    assert!(
-        completed
-            .changed_paths
-            .as_ref()
-            .is_some_and(|paths| paths.len() == 1 && paths[0] == "tracked.txt")
-    );
-    assert!(
-        completed
-            .execution
-            .stderr_output
-            .contains("CSA require-commit rescue: created commit"),
-        "{}",
-        completed.execution.stderr_output
-    );
-    assert!(
-        !completed
-            .execution
-            .stderr_output
-            .contains("post-run policy blocked"),
-        "{}",
-        completed.execution.stderr_output
-    );
-    assert_ne!(
         git_capture(project_root, &["rev-parse", "HEAD"]),
         initial_head
     );
-    assert_eq!(git_capture(project_root, &["status", "--porcelain=v1"]), "");
     assert_eq!(
-        git_capture(project_root, &["log", "-1", "--format=%s"]),
-        "feat: auto-rescue commit from CSA codex writer session"
+        git_capture(project_root, &["write-tree"]),
+        staged_tree,
+        "control-plane rescue must preserve the sandbox-blocked staged tree"
     );
-    let persisted = load_result(project_root, &session.meta_session_id)
-        .expect("load result")
-        .expect("result should be saved");
-    assert_eq!(persisted.status, "success");
-    assert_eq!(persisted.exit_code, 0);
 }
 
 #[test]

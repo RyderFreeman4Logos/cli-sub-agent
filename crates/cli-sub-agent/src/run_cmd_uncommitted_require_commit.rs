@@ -32,8 +32,15 @@ pub(super) fn build_blocker_summary(
     result: &csa_session::SessionResult,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
+    sandbox_hook_blocked: bool,
 ) -> Option<String> {
     let mut parts = Vec::new();
+    if sandbox_hook_blocked {
+        parts.push(
+            "sandbox_hook=mandatory hook-enabled commit failed for unchanged staged tree"
+                .to_string(),
+        );
+    }
     if let Some(gate_failure) = gate_failure
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -76,6 +83,80 @@ fn bound_redacted_one_line(value: &str, max_chars: usize) -> String {
     truncated = truncated.trim_end().to_string();
     truncated.push_str("...");
     truncated
+}
+
+pub(super) fn build_recovery_diagnostic_for_state(
+    result: &csa_session::SessionResult,
+    changes: Option<&csa_session::UncommittedChanges>,
+    commit_created: bool,
+    gate_failure: Option<&str>,
+    clean_tree_verification_failure: Option<&str>,
+    sa_mode: Option<bool>,
+    sandbox_hook_blocked: bool,
+) -> csa_session::RequireCommitRecoveryDiagnostic {
+    let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
+    let termination_status = result
+        .raw_process_exit_code
+        .map(super::raw_termination_status_from_exit_code)
+        .unwrap_or_else(|| result.status.clone());
+    csa_session::RequireCommitRecoveryDiagnostic {
+        require_commit: true,
+        sa_mode,
+        commit_created,
+        dirty_worktree: changes.is_some(),
+        changed_paths: changes
+            .map(|changes| {
+                changes
+                    .files
+                    .iter()
+                    .map(|path| super::sanitize_diagnostic_path(path))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        changed_paths_truncated: changes.map(|changes| changes.truncated).unwrap_or_default(),
+        termination_status,
+        exit_code: termination_exit_code,
+        termination_signal: result
+            .kill_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.signal)
+            .or_else(|| super::infer_signal_from_exit_code(termination_exit_code)),
+        kill_hint: result.kill_hint.clone(),
+        blocker_summary: build_blocker_summary(
+            result,
+            gate_failure,
+            clean_tree_verification_failure,
+            sandbox_hook_blocked,
+        ),
+        suggested_recovery_action: if sandbox_hook_blocked {
+            super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+        } else {
+            super::REQUIRE_COMMIT_RECOVERY_ACTION
+        }
+        .to_string(),
+    }
+}
+
+pub(super) fn sandbox_commit_failure_matches(project_root: &Path, session_id: &str) -> bool {
+    let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
+        return false;
+    };
+    let Ok(marker) = std::fs::read_to_string(
+        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+    ) else {
+        return false;
+    };
+    let fields = marker.split_whitespace().collect::<Vec<_>>();
+    if fields.len() != 6 {
+        return false;
+    }
+    let current_head = run_git_status_porcelain(project_root, &["rev-parse", "--verify", "HEAD"])
+        .map(|head| head.trim().to_string())
+        .unwrap_or_else(|_| "unborn".to_string());
+    let Ok(current_index_tree) = run_git_status_porcelain(project_root, &["write-tree"]) else {
+        return false;
+    };
+    fields[0] == current_head && fields[1] == current_index_tree.trim()
 }
 
 pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTrackedWorktree {

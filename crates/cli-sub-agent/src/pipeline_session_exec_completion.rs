@@ -139,11 +139,20 @@ pub(super) async fn complete_session_execution(
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
-        if require_commit::should_attempt_require_commit_rescue(
-            effective_require_commit_on_mutation,
-            commit_guard.as_ref(),
-        ) && let Some(new_head) =
-            crate::run_cmd::attempt_rescue_commit(input.project_root, input.executor.tool_name())
+        let sandbox_hook_blocked = effective_require_commit_on_mutation
+            && crate::run_cmd::sandbox_commit_failure_matches(
+                input.project_root,
+                &session.meta_session_id,
+            );
+        if !sandbox_hook_blocked
+            && require_commit::should_attempt_require_commit_rescue(
+                effective_require_commit_on_mutation,
+                commit_guard.as_ref(),
+            )
+            && let Some(new_head) = crate::run_cmd::attempt_rescue_commit(
+                input.project_root,
+                input.executor.tool_name(),
+            )
         {
             commit_created = Some(true);
             rescued_changed_paths = Some(require_commit::compute_changed_paths_from_snapshots(
