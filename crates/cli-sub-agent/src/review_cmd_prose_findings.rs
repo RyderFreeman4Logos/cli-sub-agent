@@ -27,7 +27,9 @@ pub(in crate::review_cmd) fn findings_file_from_explicit_findings_sections(
             {
                 continue;
             }
-            finding.id = format!("prose-{:03}", findings.len() + 1);
+            if finding.id.starts_with("prose-") {
+                finding.id = format!("prose-{:03}", findings.len() + 1);
+            }
             findings.push(finding);
         }
     }
@@ -207,13 +209,18 @@ pub(in crate::review_cmd) fn zero_severity_counts() -> BTreeMap<Severity, u32> {
 
 pub(in crate::review_cmd) fn severity_from_label(level: &str) -> Option<Severity> {
     let normalized = level.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    let parse = |label: &str| match label {
         "critical" => Some(Severity::Critical),
         "high" => Some(Severity::High),
-        "medium" => Some(Severity::Medium),
+        "medium" | "moderate" => Some(Severity::Medium),
         "low" | "info" => Some(Severity::Low),
-        _ => priority_severity_from_label(&normalized),
-    }
+        _ => priority_severity_from_label(label),
+    };
+    let mut labels = normalized.split('/');
+    let severity = parse(labels.next()?)?;
+    labels
+        .all(|label| parse(label).as_ref() == Some(&severity))
+        .then_some(severity)
 }
 
 pub(in crate::review_cmd) fn contains_blocking_review_signal(text: &str) -> bool {
@@ -221,6 +228,7 @@ pub(in crate::review_cmd) fn contains_blocking_review_signal(text: &str) -> bool
 }
 
 struct ParsedProseFinding {
+    id: Option<String>,
     severity: Severity,
     file_range: Option<ReviewFindingFileRange>,
     description: String,
@@ -229,7 +237,7 @@ struct ParsedProseFinding {
 impl ParsedProseFinding {
     fn into_review_finding(self, id: String) -> ReviewFinding {
         ReviewFinding {
-            id,
+            id: self.id.unwrap_or(id),
             severity: self.severity,
             file_ranges: self.file_range.into_iter().collect(),
             is_regression_of_commit: None,
@@ -251,6 +259,10 @@ fn parse_finding_line(
         return Some(parsed);
     }
 
+    if let Some(parsed) = parse_identified_finding(body) {
+        return Some(parsed);
+    }
+
     if let Some(parsed) =
         parse_severity_prefixed_finding(body, structured_entry || in_findings_section)
     {
@@ -269,7 +281,7 @@ pub(in crate::review_cmd) fn structured_bracketed_finding_severity(line: &str) -
 }
 
 fn bracketed_finding_severity(body: &str) -> Option<Severity> {
-    let (label, _) = parse_bracketed_prefix(body.trim_start())?;
+    let (label, _) = parse_bracketed_prefix(trim_inline_markdown(body))?;
     severity_from_label(label)
 }
 
@@ -278,7 +290,9 @@ fn structured_finding_body(line: &str) -> Option<&str> {
     let line = line
         .strip_prefix('#')
         .map_or(line, |line| line.trim_start_matches('#').trim_start());
-    strip_numbered_prefix(line).or_else(|| strip_unordered_finding_prefix(line))
+    strip_numbered_prefix(line)
+        .or_else(|| strip_unordered_finding_prefix(line))
+        .or_else(|| parse_identified_finding(line).is_some().then_some(line))
 }
 
 fn is_markdown_finding_heading(line: &str) -> bool {
@@ -309,7 +323,8 @@ fn strip_unordered_finding_prefix(line: &str) -> Option<&str> {
 }
 
 fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
-    let (label, mut rest) = parse_bracketed_prefix(body.trim_start())?;
+    let body = trim_inline_markdown(body);
+    let (label, mut rest) = parse_bracketed_prefix(body)?;
     let severity = severity_from_label(label)?;
     rest = rest.trim_start();
 
@@ -327,10 +342,47 @@ fn parse_bracketed_finding(body: &str) -> Option<ParsedProseFinding> {
         return None;
     }
     Some(ParsedProseFinding {
+        id: None,
         severity,
         file_range: parse_embedded_file_range(rest),
         description: non_empty_or_fallback(rest, body),
     })
+}
+
+fn parse_identified_finding(body: &str) -> Option<ParsedProseFinding> {
+    let body = trim_inline_markdown(body);
+    let (id, rest) = body.split_once('—')?;
+    let (level, description) = rest.split_once('—')?;
+    let id = id.trim();
+    if !looks_like_finding_id(id) {
+        return None;
+    }
+    let severity = severity_from_label(level)?;
+    let description = trim_inline_markdown(description);
+    if finding_text_describes_resolved_issue(description) {
+        return None;
+    }
+    Some(ParsedProseFinding {
+        id: Some(id.to_string()),
+        severity,
+        file_range: parse_embedded_file_range(description),
+        description: non_empty_or_fallback(description, body),
+    })
+}
+
+fn looks_like_finding_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().any(|ch| ch.is_ascii_digit())
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+}
+
+fn trim_inline_markdown(value: &str) -> &str {
+    value
+        .trim()
+        .trim_matches(|ch| matches!(ch, '*' | '_' | '`'))
+        .trim()
 }
 
 fn parse_bracketed_prefix(text: &str) -> Option<(&str, &str)> {
@@ -354,12 +406,14 @@ fn parse_severity_prefixed_finding(
     }
     if let Some((file_range, description)) = parse_leading_file_range(rest) {
         return Some(ParsedProseFinding {
+            id: None,
             severity,
             file_range: Some(file_range),
             description: non_empty_or_fallback(&description, body),
         });
     }
     allow_description_only.then(|| ParsedProseFinding {
+        id: None,
         severity,
         file_range: None,
         description: severity_prefixed_description(label, rest),
@@ -374,30 +428,14 @@ fn severity_prefixed_rest_is_zero_count(rest: &str) -> bool {
 fn parse_path_prefixed_finding(body: &str, severity: Severity) -> Option<ParsedProseFinding> {
     let (file_range, description) = parse_leading_file_range(body)?;
     Some(ParsedProseFinding {
+        id: None,
         severity,
         file_range: Some(file_range),
         description: non_empty_or_fallback(&description, body),
     })
 }
 
-fn parse_file_reference_line(line: &str) -> Option<ReviewFindingFileRange> {
-    let line = strip_unordered_list_prefix(line);
-    let (label, rest) = line.split_once(':')?;
-    if !(label.trim().eq_ignore_ascii_case("file") || label.trim().eq_ignore_ascii_case("location"))
-    {
-        return None;
-    }
-    parse_leading_file_range(rest.trim()).map(|(range, _)| range)
-}
-
-fn strip_unordered_list_prefix(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    if matches!(trimmed.as_bytes().first(), Some(b'-' | b'*')) {
-        trimmed[1..].trim_start()
-    } else {
-        trimmed
-    }
-}
+include!("review_cmd_prose_findings_file_ranges.rs");
 
 fn leading_severity_from_title(title: &str) -> Option<Severity> {
     let mut segments = title.split('/');
@@ -428,59 +466,6 @@ fn severity_prefixed_description(label: &str, rest: &str) -> String {
     }
 }
 
-fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
-    let trimmed = body.trim_start_matches(['`', '(', '[']).trim_start();
-    let mut parts = trimmed.splitn(2, char::is_whitespace);
-    let token = parts.next()?.trim_matches(['`', ',', '.', ')', ']']);
-    let description = parts
-        .next()
-        .unwrap_or_default()
-        .trim_start_matches(['-', ':'])
-        .trim()
-        .to_string();
-    let (path, line) = parse_file_line_token(token)?;
-    Some((
-        ReviewFindingFileRange {
-            path,
-            start: line,
-            end: None,
-        },
-        description,
-    ))
-}
-
-fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
-    body.split(char::is_whitespace)
-        .map(|token| token.trim_matches(['`', '(', ')', '[', ']', ',', '.', ';']))
-        .find_map(|token| {
-            parse_file_line_token(token).map(|(path, start)| ReviewFindingFileRange {
-                path,
-                start,
-                end: None,
-            })
-        })
-}
-
-fn parse_file_line_token(token: &str) -> Option<(String, u32)> {
-    let (path, line) = token.rsplit_once(':')?;
-    if path.is_empty() || !looks_like_file_path(path) {
-        return None;
-    }
-    let line = line.parse::<u32>().ok()?;
-    Some((path.to_string(), line))
-}
-
-fn looks_like_file_path(path: &str) -> bool {
-    if path.chars().any(char::is_whitespace) {
-        return false;
-    }
-    path.contains('/')
-        || path.contains('.')
-        || path.eq_ignore_ascii_case("justfile")
-        || path == "Makefile"
-        || path == "Dockerfile"
-}
-
 fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
     if value.trim().is_empty() {
         fallback.trim().to_string()
@@ -502,8 +487,15 @@ pub(in crate::review_cmd) fn is_findings_header(line: &str) -> bool {
     let normalized = normalized
         .split_once('(')
         .map_or(normalized, |(heading, _)| heading.trim_end());
-    normalized.eq_ignore_ascii_case("findings")
-        || normalized.eq_ignore_ascii_case("review findings")
+    matches!(
+        normalized.to_ascii_lowercase().as_str(),
+        "finding"
+            | "findings"
+            | "blocking finding"
+            | "blocking findings"
+            | "review finding"
+            | "review findings"
+    )
 }
 
 const REVIEW_ISSUE_NOUNS: &[&str] = &[
@@ -522,7 +514,8 @@ const REVIEW_ISSUE_NOUNS: &[&str] = &[
     "violation",
     "violations",
 ];
-const BLOCKING_REVIEW_SEVERITIES: &[&str] = &["critical", "high", "medium", "p0", "p1", "p2"];
+const BLOCKING_REVIEW_SEVERITIES: &[&str] =
+    &["critical", "high", "medium", "moderate", "p0", "p1", "p2"];
 const ZERO_COUNT_WORDS: &[&str] = &["0", "zero", "none", "no"];
 const MAX_TOKENS_AFTER_REVIEW_SIGNAL: usize = 8;
 

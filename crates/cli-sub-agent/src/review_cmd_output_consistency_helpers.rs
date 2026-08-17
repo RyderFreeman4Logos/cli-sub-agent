@@ -1,6 +1,15 @@
-fn remove_clean_pass_failure_keys(existing: &mut serde_json::Map<String, serde_json::Value>) {
-    for key in ["status_reason", "primary_failure", "failure_reason"] {
-        existing.remove(key);
+fn remove_absent_review_meta_failure_keys(
+    existing: &mut serde_json::Map<String, serde_json::Value>,
+    meta: &csa_session::ReviewSessionMeta,
+) {
+    for (key, absent) in [
+        ("status_reason", meta.status_reason.is_none()),
+        ("primary_failure", meta.primary_failure.is_none()),
+        ("failure_reason", meta.failure_reason.is_none()),
+    ] {
+        if absent {
+            existing.remove(key);
+        }
     }
 }
 
@@ -73,7 +82,8 @@ fn review_meta_has_hard_failure_evidence(meta: &csa_session::ReviewSessionMeta) 
     ) {
         return true;
     }
-    if non_empty(meta.status_reason.as_deref()).is_some()
+    if non_empty(meta.status_reason.as_deref())
+        .is_some_and(|reason| !artifact_failure_reason_is_placeholder(Some(reason)))
         || non_empty(meta.primary_failure.as_deref()).is_some()
         || meta
             .failure_reason
@@ -86,8 +96,15 @@ fn review_meta_has_hard_failure_evidence(meta: &csa_session::ReviewSessionMeta) 
     meta.fix_attempted && !meta.fix_clean_converged()
 }
 
-fn artifact_failure_reason_is_placeholder(reason: Option<&str>) -> bool {
-    reason.is_some_and(|reason| reason.trim() == EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+pub(super) fn artifact_failure_reason_is_placeholder(reason: Option<&str>) -> bool {
+    reason.is_some_and(|reason| {
+        matches!(
+            reason.trim(),
+            EMPTY_FAIL_FINDINGS_ARTIFACT_REASON
+                | PROSE_FINDINGS_UNPARSED_REASON
+                | SEVERITY_FINDINGS_MISMATCH_REASON
+        )
+    })
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -99,7 +116,9 @@ fn non_empty_str(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
-fn findings_file_contains_only_empty_fail_placeholder(findings_file: &FindingsFile) -> bool {
+fn findings_file_contains_only_artifact_generation_placeholder(
+    findings_file: &FindingsFile,
+) -> bool {
     let [finding] = findings_file.findings.as_slice() else {
         return false;
     };
@@ -107,7 +126,7 @@ fn findings_file_contains_only_empty_fail_placeholder(findings_file: &FindingsFi
         && finding.file_ranges.is_empty()
         && finding
             .description
-            .contains(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+            .starts_with("Artifact generation failed:")
 }
 
 fn ensure_failed_verdict_findings_artifact(

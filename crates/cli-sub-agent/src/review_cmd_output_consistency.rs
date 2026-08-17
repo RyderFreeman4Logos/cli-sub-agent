@@ -65,10 +65,12 @@ pub(super) fn enforce_final_verdict_consistency(
         || repair_prose_signals.checklist_violation_findings;
     let skip_prose_override =
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
-    let findings_file = if findings_file.findings.is_empty()
+    let placeholder_findings_only =
+        findings_file_contains_only_artifact_generation_placeholder(&findings_file);
+    let prose_findings_recovered = (findings_file.findings.is_empty() || placeholder_findings_only)
         && !prose_signals.findings.is_empty()
-        && !skip_prose_override
-    {
+        && !skip_prose_override;
+    let findings_file = if prose_findings_recovered {
         let findings_file = FindingsFile {
             findings: prose_signals.findings.clone(),
         };
@@ -84,7 +86,7 @@ pub(super) fn enforce_final_verdict_consistency(
     };
 
     let placeholder_findings_only =
-        findings_file_contains_only_empty_fail_placeholder(&findings_file);
+        findings_file_contains_only_artifact_generation_placeholder(&findings_file);
     let effective_findings_empty = findings_file.findings.is_empty() || placeholder_findings_only;
     let findings_counts = if placeholder_findings_only {
         zero_severity_counts()
@@ -92,8 +94,11 @@ pub(super) fn enforce_final_verdict_consistency(
         severity_counts_from_review_findings(&findings_file.findings)
     };
     if !skip_prose_override {
-        artifact.severity_counts =
-            reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
+        artifact.severity_counts = if prose_findings_recovered {
+            findings_counts.clone()
+        } else {
+            reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts)
+        };
         artifact.severity_counts = reconcile_counts_with_prose(
             artifact.severity_counts.clone(),
             &prose_signals.severity_counts,
@@ -139,6 +144,16 @@ pub(super) fn enforce_final_verdict_consistency(
     let cross_dimension_blocker_mismatch = cross_dimension_blocker
         && !has_structured_findings
         && severity_counts_are_zero(&artifact.severity_counts);
+    let consistency_failure_persists = unparsed_findings_prose
+        || checklist_violation_mismatch
+        || cross_dimension_blocker_mismatch
+        || structured_mismatch;
+    if has_structured_findings
+        && !consistency_failure_persists
+        && artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
+    {
+        artifact.failure_reason = None;
+    }
     let resume_to_fix_blocks_clean_recovery = resume_to_fix
         && !artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
         && !placeholder_findings_only;
@@ -281,9 +296,7 @@ fn write_review_meta_preserving_extra(
         for (key, new_value) in updated {
             existing.insert(key.clone(), new_value.clone());
         }
-        if meta.decision == csa_core::types::ReviewDecision::Pass.as_str() {
-            remove_clean_pass_failure_keys(existing);
-        }
+        remove_absent_review_meta_failure_keys(existing, meta);
     } else {
         value = meta_value;
     }
