@@ -116,17 +116,21 @@ fn non_empty_str(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+fn finding_is_artifact_generation_placeholder(finding: &ReviewFinding) -> bool {
+    finding.id == ARTIFACT_GENERATION_FINDING_ID
+        && finding.file_ranges.is_empty()
+        && finding
+            .description
+            .starts_with("Artifact generation failed:")
+}
+
 fn findings_file_contains_only_artifact_generation_placeholder(
     findings_file: &FindingsFile,
 ) -> bool {
     let [finding] = findings_file.findings.as_slice() else {
         return false;
     };
-    finding.id == ARTIFACT_GENERATION_FINDING_ID
-        && finding.file_ranges.is_empty()
-        && finding
-            .description
-            .starts_with("Artifact generation failed:")
+    finding_is_artifact_generation_placeholder(finding)
 }
 
 fn ensure_failed_verdict_findings_artifact(

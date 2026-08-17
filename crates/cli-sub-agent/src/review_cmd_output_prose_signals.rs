@@ -13,7 +13,7 @@ use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
     FindingsSectionParse, classify_findings_section_body,
     extract_review_findings_from_prose_with_default, findings_section_bodies,
-    severity_counts_from_review_findings,
+    review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
 #[derive(Debug, Clone)]
@@ -75,6 +75,7 @@ fn review_prose_signals_from_contents(
             default_unlabeled_severity.clone(),
         );
     }
+    signals.severity_counts = severity_counts_from_review_findings(&signals.findings);
 
     Ok(signals)
 }
@@ -200,9 +201,25 @@ fn record_review_prose_signal(
     signals.uncertain_conclusion |= detect_prose_uncertain_conclusion(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
-    let counts = severity_counts_from_review_findings(&findings);
-    merge_severity_counts_add(&mut signals.severity_counts, &counts);
-    signals.findings.extend(findings);
+    for mut finding in findings {
+        if signals
+            .findings
+            .iter()
+            .any(|existing| review_finding_payload_eq(existing, &finding))
+        {
+            continue;
+        }
+        if finding.id.starts_with("prose-") {
+            let index = signals
+                .findings
+                .iter()
+                .filter(|existing| existing.id.starts_with("prose-"))
+                .count()
+                + 1;
+            finding.id = format!("prose-{index:03}");
+        }
+        signals.findings.push(finding);
+    }
 }
 
 fn classify_findings_sections(
@@ -362,15 +379,6 @@ fn token_looks_like_finding_id(token: &str) -> bool {
             || token.contains('_'))
 }
 
-fn merge_severity_counts_add(
-    target: &mut BTreeMap<Severity, u32>,
-    source: &BTreeMap<Severity, u32>,
-) {
-    for (severity, count) in source {
-        *target.entry(severity.clone()).or_insert(0) += *count;
-    }
-}
-
 pub(super) fn reconcile_counts_with_prose(
     mut structured_counts: BTreeMap<Severity, u32>,
     prose_counts: &BTreeMap<Severity, u32>,
@@ -419,5 +427,90 @@ mod tests {
             &review_contents(),
             candidate
         ));
+    }
+
+    #[test]
+    fn issue_2815_authoritative_findings_shrink_stale_verdict_counts() {
+        use csa_core::types::ReviewDecision;
+        use csa_session::{
+            FindingsFile, ReviewFinding, ReviewFindingFileRange, ReviewVerdictArtifact, Severity,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let session_dir = temp.path();
+        std::fs::create_dir(session_dir.join("output")).expect("create output dir");
+        csa_session::persist_structured_output(
+            session_dir,
+            r#"<!-- CSA:SECTION:summary -->
+Review result: FAIL. One high and one medium finding remain.
+<!-- CSA:SECTION:summary:END -->
+<!-- CSA:SECTION:details -->
+## Findings
+1. [HIGH] High finding remains (`src/high.rs:10`).
+2. [MEDIUM] Medium finding remains (`src/medium.rs:20`).
+<!-- CSA:SECTION:details:END -->
+"#,
+        )
+        .expect("persist review prose");
+        let finding = |id: &str, severity, path: &str, start, description: &str| ReviewFinding {
+            id: id.to_string(),
+            severity,
+            file_ranges: vec![ReviewFindingFileRange {
+                path: path.to_string(),
+                start,
+                end: None,
+            }],
+            is_regression_of_commit: None,
+            suggested_test_scenario: None,
+            description: description.to_string(),
+        };
+        let expected = FindingsFile {
+            findings: vec![
+                finding(
+                    "structured-high",
+                    Severity::High,
+                    "src/high.rs",
+                    10,
+                    "High finding remains (`src/high.rs:10`).",
+                ),
+                finding(
+                    "structured-medium",
+                    Severity::Medium,
+                    "src/medium.rs",
+                    20,
+                    "Medium finding remains (`src/medium.rs:20`).",
+                ),
+            ],
+        };
+        csa_session::write_findings_toml(session_dir, &expected).expect("write findings");
+        let mut verdict = ReviewVerdictArtifact::from_parts(
+            "01TEST2815EXACTCOUNTS00".to_string(),
+            ReviewDecision::Fail,
+            "HAS_ISSUES",
+            &[],
+            Vec::new(),
+        );
+        verdict.severity_counts.insert(Severity::High, 7);
+        verdict.severity_counts.insert(Severity::Medium, 9);
+        csa_session::write_review_verdict(session_dir, &verdict).expect("write verdict");
+
+        assert!(
+            super::super::consistency::repair_clean_empty_fail_review_verdict(session_dir)
+                .expect("repair verdict")
+        );
+
+        let persisted: FindingsFile = toml::from_str(
+            &std::fs::read_to_string(session_dir.join("output/findings.toml"))
+                .expect("read findings"),
+        )
+        .expect("parse findings");
+        assert_eq!(persisted.findings, expected.findings);
+        let verdict: ReviewVerdictArtifact = serde_json::from_str(
+            &std::fs::read_to_string(session_dir.join("output/review-verdict.json"))
+                .expect("read verdict"),
+        )
+        .expect("parse verdict");
+        assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+        assert_eq!(verdict.severity_counts.get(&Severity::Medium), Some(&1));
     }
 }

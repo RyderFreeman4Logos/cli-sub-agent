@@ -372,3 +372,27 @@ fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
         }
     }
 }
+
+#[test]
+fn issue_2975_wrapped_finding_keeps_continuation_and_source() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Blocking finding\n",
+        "1. [MODERATE][correctness/ordering] Latched limits can still be\n",
+        "   reclassified as cancellation (lifecycle.rs:741, confidence 0.98; ",
+        "class sweep: 1 site).\n",
+        "\n## Recommended Actions\n",
+        "Location: `wrong.rs:1`\n",
+    ));
+
+    let [finding] = findings.as_slice() else {
+        panic!("expected one wrapped finding, got {findings:#?}");
+    };
+    assert_eq!(finding.severity, Severity::Medium);
+    assert_eq!(
+        finding.description,
+        "Latched limits can still be reclassified as cancellation (lifecycle.rs:741, confidence 0.98; class sweep: 1 site)."
+    );
+    assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+    assert_eq!(finding.file_ranges[0].path, "lifecycle.rs");
+    assert_eq!(finding.file_ranges[0].start, 741);
+}

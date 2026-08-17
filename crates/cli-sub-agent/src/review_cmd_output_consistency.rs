@@ -18,7 +18,9 @@ use super::prose_signals::{
 };
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
-use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
+use crate::review_cmd::prose_findings::{
+    review_finding_payload_eq, severity_counts_from_review_findings,
+};
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
 const SEVERITY_FINDINGS_MISMATCH_REASON: &str = "severity_counts_findings_mismatch";
@@ -65,17 +67,39 @@ pub(super) fn enforce_final_verdict_consistency(
         || repair_prose_signals.checklist_violation_findings;
     let skip_prose_override =
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
-    let placeholder_findings_only =
-        findings_file_contains_only_artifact_generation_placeholder(&findings_file);
-    let prose_findings_recovered = (findings_file.findings.is_empty() || placeholder_findings_only)
-        && !prose_signals.findings.is_empty()
-        && !skip_prose_override;
-    let findings_file = if prose_findings_recovered {
+    let mut canonical_findings = Vec::new();
+    for finding in &findings_file.findings {
+        if canonical_findings
+            .iter()
+            .any(|existing| review_finding_payload_eq(existing, finding))
+        {
+            continue;
+        }
+        canonical_findings.push(finding.clone());
+    }
+    if !skip_prose_override {
+        for finding in &prose_signals.findings {
+            if canonical_findings
+                .iter()
+                .any(|existing| review_finding_payload_eq(existing, finding))
+            {
+                continue;
+            }
+            canonical_findings.push(finding.clone());
+        }
+    }
+    if canonical_findings
+        .iter()
+        .any(|finding| !finding_is_artifact_generation_placeholder(finding))
+    {
+        canonical_findings.retain(|finding| !finding_is_artifact_generation_placeholder(finding));
+    }
+    let findings_file = if canonical_findings != findings_file.findings {
         let findings_file = FindingsFile {
-            findings: prose_signals.findings.clone(),
+            findings: canonical_findings,
         };
         write_findings_toml(session_dir, &findings_file)
-            .map_err(|error| anyhow::anyhow!("write prose-derived findings.toml: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("write reconciled findings.toml: {error}"))?;
         let marker_path = session_dir
             .join("output")
             .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
@@ -94,15 +118,13 @@ pub(super) fn enforce_final_verdict_consistency(
         severity_counts_from_review_findings(&findings_file.findings)
     };
     if !skip_prose_override {
-        artifact.severity_counts = if prose_findings_recovered {
-            findings_counts.clone()
+        artifact.severity_counts = if effective_findings_empty {
+            let fallback_counts =
+                reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
+            reconcile_counts_with_prose(fallback_counts, &prose_signals.severity_counts)
         } else {
-            reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts)
+            findings_counts.clone()
         };
-        artifact.severity_counts = reconcile_counts_with_prose(
-            artifact.severity_counts.clone(),
-            &prose_signals.severity_counts,
-        );
     }
 
     let prose_grade = highest_prose_severity_grade(session_dir);

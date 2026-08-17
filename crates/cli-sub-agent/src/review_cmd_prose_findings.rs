@@ -49,6 +49,7 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
     let mut findings: Vec<ReviewFinding> = Vec::new();
     let mut in_findings_section = false;
     let mut in_code_fence = false;
+    let mut active_finding: Option<usize> = None;
 
     for line in text.lines() {
         let trimmed = line.trim();
@@ -61,31 +62,46 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
         }
         if is_findings_header(trimmed) {
             in_findings_section = true;
+            active_finding = None;
             continue;
         }
-        if in_findings_section && trimmed.starts_with('#') && !is_markdown_finding_heading(trimmed)
-        {
+        if trimmed.starts_with('#') && !is_markdown_finding_heading(trimmed) {
             in_findings_section = false;
+            active_finding = None;
             continue;
         }
 
         if let Some(range) = parse_file_reference_line(trimmed) {
-            if let Some(last) = findings.last_mut()
-                && last.file_ranges.is_empty()
+            if let Some(index) = active_finding
+                && findings[index].file_ranges.is_empty()
             {
-                last.file_ranges.push(range);
+                findings[index].file_ranges.push(range);
             }
             continue;
         }
 
-        let Some(parsed) = parse_finding_line(
+        if let Some(parsed) = parse_finding_line(
             trimmed,
             in_findings_section,
             default_unlabeled_severity.clone(),
-        ) else {
+        ) {
+            findings.push(parsed.into_review_finding(format!("prose-{:03}", findings.len() + 1)));
+            active_finding = Some(findings.len() - 1);
             continue;
-        };
-        findings.push(parsed.into_review_finding(format!("prose-{:03}", findings.len() + 1)));
+        }
+
+        if line.chars().next().is_some_and(char::is_whitespace)
+            && let Some(index) = active_finding
+        {
+            let finding = &mut findings[index];
+            if finding.file_ranges.is_empty()
+                && let Some(range) = parse_embedded_file_range(trimmed)
+            {
+                finding.file_ranges.push(range);
+            }
+            finding.description.push(' ');
+            finding.description.push_str(trimmed);
+        }
     }
 
     findings
@@ -474,7 +490,10 @@ fn non_empty_or_fallback(value: &str, fallback: &str) -> String {
     }
 }
 
-fn review_finding_payload_eq(left: &ReviewFinding, right: &ReviewFinding) -> bool {
+pub(in crate::review_cmd) fn review_finding_payload_eq(
+    left: &ReviewFinding,
+    right: &ReviewFinding,
+) -> bool {
     left.severity == right.severity
         && left.file_ranges == right.file_ranges
         && left.is_regression_of_commit == right.is_regression_of_commit
