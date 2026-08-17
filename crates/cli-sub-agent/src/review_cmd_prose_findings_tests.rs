@@ -313,3 +313,86 @@ fn issue_2652_compound_severity_prefix_stays_rejected() {
         );
     }
 }
+
+#[test]
+fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
+    let cases = [
+        (
+            "## Findings\n### CSA-R1 — High — Cancellation can turn a wall timeout into an unbounded wait\n",
+            "CSA-R1",
+            Severity::High,
+            None,
+        ),
+        (
+            concat!(
+                "## Finding\n",
+                "### F001 — High — Strict classifier accepts an impossible receipt\n",
+                "\u{4f4d}\u{7f6e}\u{ff1a}`skills/smoke-test/scripts/smoke_receipts.py:128-139,165-177`\n",
+            ),
+            "F001",
+            Severity::High,
+            Some(("skills/smoke-test/scripts/smoke_receipts.py", 128)),
+        ),
+        (
+            concat!(
+                "## Blocking finding\n",
+                "1. [MODERATE][correctness/ordering] Latched limits can still be reclassified ",
+                "as cancellation ([lifecycle.rs](/project/rust-core/src/workflow_adk/lifecycle.rs:741), confidence 0.98).\n",
+            ),
+            "prose-001",
+            Severity::Medium,
+            Some(("lifecycle.rs", 741)),
+        ),
+        (
+            concat!(
+                "## Finding\n",
+                "1. [P1][security] Deleted-file ownership tokens have an inode-reuse ABA window\n",
+                "`llm/coding/scripts/test-fix-target.sh:104`, confidence 0.96\n",
+            ),
+            "prose-001",
+            Severity::High,
+            Some(("llm/coding/scripts/test-fix-target.sh", 104)),
+        ),
+    ];
+
+    for (text, id, severity, location) in cases {
+        let findings = extract_review_findings_from_prose(text);
+        let [finding] = findings.as_slice() else {
+            panic!("expected one finding for {id}, got {findings:#?}");
+        };
+        assert_eq!(finding.id, id);
+        assert_eq!(finding.severity, severity);
+        match location {
+            Some((path, line)) => {
+                assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+                assert_eq!(finding.file_ranges[0].path, path);
+                assert_eq!(finding.file_ranges[0].start, line);
+            }
+            None => assert!(finding.file_ranges.is_empty(), "{finding:#?}"),
+        }
+    }
+}
+
+#[test]
+fn issue_2975_wrapped_finding_keeps_continuation_and_source() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Blocking finding\n",
+        "1. [MODERATE][correctness/ordering] Latched limits can still be\n",
+        "   reclassified as cancellation (lifecycle.rs:741, confidence 0.98; ",
+        "class sweep: 1 site).\n",
+        "\n## Recommended Actions\n",
+        "Location: `wrong.rs:1`\n",
+    ));
+
+    let [finding] = findings.as_slice() else {
+        panic!("expected one wrapped finding, got {findings:#?}");
+    };
+    assert_eq!(finding.severity, Severity::Medium);
+    assert_eq!(
+        finding.description,
+        "Latched limits can still be reclassified as cancellation (lifecycle.rs:741, confidence 0.98; class sweep: 1 site)."
+    );
+    assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+    assert_eq!(finding.file_ranges[0].path, "lifecycle.rs");
+    assert_eq!(finding.file_ranges[0].start, 741);
+}

@@ -18,7 +18,9 @@ use super::prose_signals::{
 };
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
-use crate::review_cmd::prose_findings::severity_counts_from_review_findings;
+use crate::review_cmd::prose_findings::{
+    review_finding_payload_eq, severity_counts_from_review_findings,
+};
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
 const SEVERITY_FINDINGS_MISMATCH_REASON: &str = "severity_counts_findings_mismatch";
@@ -65,15 +67,39 @@ pub(super) fn enforce_final_verdict_consistency(
         || repair_prose_signals.checklist_violation_findings;
     let skip_prose_override =
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
-    let findings_file = if findings_file.findings.is_empty()
-        && !prose_signals.findings.is_empty()
-        && !skip_prose_override
+    let mut canonical_findings = Vec::new();
+    for finding in &findings_file.findings {
+        if canonical_findings
+            .iter()
+            .any(|existing| review_finding_payload_eq(existing, finding))
+        {
+            continue;
+        }
+        canonical_findings.push(finding.clone());
+    }
+    if !skip_prose_override {
+        for finding in &prose_signals.findings {
+            if canonical_findings
+                .iter()
+                .any(|existing| review_finding_payload_eq(existing, finding))
+            {
+                continue;
+            }
+            canonical_findings.push(finding.clone());
+        }
+    }
+    if canonical_findings
+        .iter()
+        .any(|finding| !finding_is_artifact_generation_placeholder(finding))
     {
+        canonical_findings.retain(|finding| !finding_is_artifact_generation_placeholder(finding));
+    }
+    let findings_file = if canonical_findings != findings_file.findings {
         let findings_file = FindingsFile {
-            findings: prose_signals.findings.clone(),
+            findings: canonical_findings,
         };
         write_findings_toml(session_dir, &findings_file)
-            .map_err(|error| anyhow::anyhow!("write prose-derived findings.toml: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("write reconciled findings.toml: {error}"))?;
         let marker_path = session_dir
             .join("output")
             .join(super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
@@ -84,7 +110,7 @@ pub(super) fn enforce_final_verdict_consistency(
     };
 
     let placeholder_findings_only =
-        findings_file_contains_only_empty_fail_placeholder(&findings_file);
+        findings_file_contains_only_artifact_generation_placeholder(&findings_file);
     let effective_findings_empty = findings_file.findings.is_empty() || placeholder_findings_only;
     let findings_counts = if placeholder_findings_only {
         zero_severity_counts()
@@ -92,12 +118,13 @@ pub(super) fn enforce_final_verdict_consistency(
         severity_counts_from_review_findings(&findings_file.findings)
     };
     if !skip_prose_override {
-        artifact.severity_counts =
-            reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
-        artifact.severity_counts = reconcile_counts_with_prose(
-            artifact.severity_counts.clone(),
-            &prose_signals.severity_counts,
-        );
+        artifact.severity_counts = if effective_findings_empty {
+            let fallback_counts =
+                reconcile_counts_with_prose(artifact.severity_counts.clone(), &findings_counts);
+            reconcile_counts_with_prose(fallback_counts, &prose_signals.severity_counts)
+        } else {
+            findings_counts.clone()
+        };
     }
 
     let prose_grade = highest_prose_severity_grade(session_dir);
@@ -139,16 +166,35 @@ pub(super) fn enforce_final_verdict_consistency(
     let cross_dimension_blocker_mismatch = cross_dimension_blocker
         && !has_structured_findings
         && severity_counts_are_zero(&artifact.severity_counts);
+    let consistency_failure_persists = unparsed_findings_prose
+        || checklist_violation_mismatch
+        || cross_dimension_blocker_mismatch
+        || structured_mismatch;
+    if has_structured_findings
+        && !consistency_failure_persists
+        && artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
+    {
+        artifact.failure_reason = None;
+    }
     let resume_to_fix_blocks_clean_recovery = resume_to_fix
         && !artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
         && !placeholder_findings_only;
+    let empty_fail_placeholder_allows_clean_recovery = artifact
+        .failure_reason
+        .as_deref()
+        .is_some_and(|reason| reason.trim() == EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+        || (placeholder_findings_only
+            && findings_file.findings.first().is_some_and(|finding| {
+                finding
+                    .description
+                    .contains(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+            }));
 
     if clean_review_can_recover_to_pass(
         artifact,
         CleanReviewRecoverySignals {
             artifact_counts_clean: severity_counts_are_zero(&artifact.severity_counts)
-                || artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
-                || placeholder_findings_only,
+                || empty_fail_placeholder_allows_clean_recovery,
             has_structured_findings,
             has_prose_failure_evidence: has_hard_prose_failure_evidence,
             resume_to_fix: resume_to_fix_blocks_clean_recovery,
@@ -281,9 +327,7 @@ fn write_review_meta_preserving_extra(
         for (key, new_value) in updated {
             existing.insert(key.clone(), new_value.clone());
         }
-        if meta.decision == csa_core::types::ReviewDecision::Pass.as_str() {
-            remove_clean_pass_failure_keys(existing);
-        }
+        remove_absent_review_meta_failure_keys(existing, meta);
     } else {
         value = meta_value;
     }

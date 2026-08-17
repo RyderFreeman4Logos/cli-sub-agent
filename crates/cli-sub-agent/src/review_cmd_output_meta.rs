@@ -27,6 +27,16 @@ pub(in crate::review_cmd) fn review_meta_for_verdict_artifact(
     final_meta.verdict = artifact.verdict_legacy.clone();
     final_meta.exit_code =
         crate::verdict_exit_code::exit_code_from_review_decision(artifact.decision);
+    if meta.failure_reason.is_some()
+        || artifact.failure_reason.as_deref() != meta.status_reason.as_deref()
+    {
+        final_meta.failure_reason = artifact.failure_reason.clone();
+    }
+    if super::consistency::artifact_failure_reason_is_placeholder(meta.status_reason.as_deref())
+        && artifact.failure_reason.as_deref() != meta.status_reason.as_deref()
+    {
+        final_meta.status_reason = None;
+    }
     if artifact.decision == ReviewDecision::Pass {
         final_meta.status_reason = None;
         final_meta.primary_failure = None;
