@@ -77,24 +77,8 @@ pub(super) fn enforce_final_verdict_consistency(
         }
         canonical_findings.push(finding.clone());
     }
-    let mut unmatched_unlocated_structured_counts = zero_severity_counts();
-    for finding in &canonical_findings {
-        if finding.file_ranges.is_empty() && !finding_is_artifact_generation_placeholder(finding) {
-            *unmatched_unlocated_structured_counts
-                .entry(finding.severity.clone())
-                .or_insert(0) += 1;
-        }
-    }
     if !skip_prose_override {
         for finding in &prose_signals.findings {
-            if finding.file_ranges.is_empty()
-                && let Some(count) =
-                    unmatched_unlocated_structured_counts.get_mut(&finding.severity)
-                && *count > 0
-            {
-                *count -= 1;
-                continue;
-            }
             if canonical_findings
                 .iter()
                 .any(|existing| review_finding_payload_eq(existing, finding))
