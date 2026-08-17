@@ -31,6 +31,72 @@ fn with_valid_sandbox_failure_marker(
 }
 
 #[test]
+fn sandbox_commit_failure_marker_valid_nonmatch_is_clear() {
+    with_valid_sandbox_failure_marker(|root, session_id, marker, _sandbox| {
+        let valid_record = std::fs::read_to_string(marker).expect("read valid marker");
+        let (_, rest) = valid_record.split_once(' ').expect("valid marker fields");
+        std::fs::write(marker, format!("{} {rest}", "0".repeat(40)))
+            .expect("write nonmatching marker");
+
+        assert!(matches!(
+            require_commit::sandbox_commit_failure_matches(root, session_id),
+            Ok(false)
+        ));
+    });
+}
+
+#[test]
+fn require_commit_recovery_rejects_multi_record_marker_as_probe_uncertainty() {
+    with_valid_sandbox_failure_marker(|root, session_id, marker, _sandbox| {
+        let valid_record = std::fs::read_to_string(marker).expect("read valid marker");
+        std::fs::write(marker, format!("{valid_record}trailing record\n"))
+            .expect("write multi-record marker");
+        csa_session::save_result(root, session_id, &session_result("success", 0))
+            .expect("save session result");
+        let mut execution = csa_process::ExecutionResult {
+            exit_code: 0,
+            summary: "writer claimed success".to_string(),
+            ..Default::default()
+        };
+
+        record_writer_uncommitted_changes_with_config(
+            root,
+            Some(session_id),
+            &mut execution,
+            WriterUncommittedRecord {
+                sa_mode: false,
+                require_commit: true,
+                changed_paths: Some(&["tracked.txt".to_string()]),
+                commit_created: Some(false),
+                large_diff_config: &RunLargeDiffWarningConfig::default(),
+            },
+        );
+
+        let loaded = csa_session::load_result(root, session_id)
+            .expect("load result")
+            .expect("persisted result");
+        let recovery = loaded
+            .require_commit_recovery
+            .expect("probe uncertainty recovery");
+        let expected_reason = require_commit::contract_failure_reason(
+            require_commit::SandboxHookProbeState::Uncertain("probe-failed"),
+        );
+        assert_eq!(execution.summary, expected_reason);
+        assert_eq!(loaded.summary, expected_reason);
+        assert_eq!(
+            recovery.suggested_recovery_action,
+            REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+        );
+        assert!(
+            recovery
+                .blocker_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("sandbox_hook_probe="))
+        );
+    });
+}
+
+#[test]
 fn sandbox_commit_failure_marker_rejects_fifo_in_bounded_time() {
     use std::os::unix::ffi::OsStrExt;
     use std::time::Duration;
@@ -53,7 +119,7 @@ fn sandbox_commit_failure_marker_rejects_fifo_in_bounded_time() {
         let matched = rx
             .recv_timeout(Duration::from_millis(500))
             .expect("FIFO marker inspection must return within 500ms");
-        assert!(!matched, "FIFO marker must fail closed");
+        assert!(matched.is_err(), "FIFO marker must be uncertain");
     });
 }
 
@@ -67,8 +133,8 @@ fn sandbox_commit_failure_marker_rejects_symlink() {
         symlink(&target, marker).expect("create marker symlink");
 
         assert!(
-            !require_commit::sandbox_commit_failure_matches(root, session_id),
-            "sandbox marker symlinks must fail closed"
+            require_commit::sandbox_commit_failure_matches(root, session_id).is_err(),
+            "sandbox marker symlinks must be uncertain"
         );
     });
 }
@@ -87,8 +153,8 @@ fn sandbox_commit_failure_marker_rejects_oversized_sparse_file_in_bounded_time()
         let started = Instant::now();
 
         assert!(
-            !require_commit::sandbox_commit_failure_matches(root, session_id),
-            "oversized sparse marker must fail closed"
+            require_commit::sandbox_commit_failure_matches(root, session_id).is_err(),
+            "oversized sparse marker must be uncertain"
         );
         assert!(
             started.elapsed() < Duration::from_millis(500),
@@ -128,8 +194,8 @@ fn sandbox_commit_failure_git_probe_times_out_reaps_and_preserves_index() {
         let started = Instant::now();
 
         assert!(
-            !require_commit::sandbox_commit_failure_matches(root, session_id),
-            "timed-out Git marker probe must fail closed"
+            require_commit::sandbox_commit_failure_matches(root, session_id).is_err(),
+            "timed-out Git marker probe must be uncertain"
         );
         assert!(
             started.elapsed() < Duration::from_secs(2),

@@ -42,7 +42,10 @@ pub(crate) fn effective_writer_must_commit(
     cli_require_commit || config.is_some_and(|cfg| cfg.run.writer_must_commit)
 }
 
-pub(crate) fn sandbox_commit_failure_matches(project_root: &Path, session_id: &str) -> bool {
+pub(crate) fn sandbox_commit_failure_matches(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
     require_commit::sandbox_commit_failure_matches(project_root, session_id)
 }
 
@@ -207,10 +210,15 @@ fn record_writer_uncommitted_changes_with_config(
             || dirty_tracked_probe
                 .as_ref()
                 .is_some_and(|probe| !probe.is_clean()));
-    let sandbox_hook_blocked = require_commit_contract_failure
-        && session_id.is_some_and(|session_id| {
+    let sandbox_hook_probe = if require_commit_contract_failure {
+        session_id.map(|session_id| {
             require_commit::sandbox_commit_failure_matches(project_root, session_id)
-        });
+        })
+    } else {
+        None
+    };
+    let sandbox_hook_state =
+        require_commit::SandboxHookProbeState::from_result(sandbox_hook_probe.as_ref());
     let contract_changes = dirty_tracked_changes;
 
     let maybe_signal_exit = matches!(result.exit_code, 124 | 130 | 137 | 143);
@@ -220,7 +228,7 @@ fn record_writer_uncommitted_changes_with_config(
 
     let Some(session_id) = session_id else {
         if require_commit_contract_failure {
-            mark_require_commit_contract_failure(result, sandbox_hook_blocked);
+            mark_require_commit_contract_failure(result, sandbox_hook_state);
         }
         return warning;
     };
@@ -243,7 +251,7 @@ fn record_writer_uncommitted_changes_with_config(
                     result.csa_gate_failure.as_deref(),
                     clean_tree_verification_failure,
                     Some(record.sa_mode),
-                    sandbox_hook_blocked,
+                    sandbox_hook_state,
                 )
             });
             let mut should_save = false;
@@ -296,7 +304,7 @@ fn record_writer_uncommitted_changes_with_config(
     }
 
     if require_commit_contract_failure {
-        mark_require_commit_contract_failure(result, sandbox_hook_blocked);
+        mark_require_commit_contract_failure(result, sandbox_hook_state);
     }
     warning
 }
@@ -320,7 +328,7 @@ pub(crate) fn apply_uncommitted_changes_to_result(
                 None,
                 None,
                 None,
-                false,
+                require_commit::SandboxHookProbeState::Clear,
             )
         });
         apply_require_commit_contract_failure_to_result(result, recovery);
@@ -334,13 +342,7 @@ fn apply_require_commit_contract_failure_to_result(
     remove_incidental_downgrade_warnings(&mut result.warnings);
     result.exit_code = 1;
     result.status = csa_session::SessionResult::status_from_exit_code(1);
-    result.summary =
-        if recovery.suggested_recovery_action == REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION {
-            REQUIRE_COMMIT_SANDBOX_HOOK_REASON
-        } else {
-            REQUIRE_COMMIT_REASON
-        }
-        .to_string();
+    result.summary = require_commit::persisted_contract_failure_reason(&recovery).to_string();
     result.require_commit_recovery = Some(recovery);
 }
 
@@ -356,20 +358,16 @@ fn build_require_commit_recovery_diagnostic(
         None,
         None,
         Some(false),
-        false,
+        require_commit::SandboxHookProbeState::Clear,
     )
 }
 
 fn mark_require_commit_contract_failure(
     result: &mut csa_process::ExecutionResult,
-    sandbox_hook_blocked: bool,
+    sandbox_hook_state: require_commit::SandboxHookProbeState<'_>,
 ) {
     result.mark_gate_failure("writer-uncommitted");
-    let reason = if sandbox_hook_blocked {
-        REQUIRE_COMMIT_SANDBOX_HOOK_REASON
-    } else {
-        REQUIRE_COMMIT_REASON
-    };
+    let reason = require_commit::contract_failure_reason(sandbox_hook_state);
     result.summary = reason.to_string();
     if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
         result.stderr_output.push('\n');

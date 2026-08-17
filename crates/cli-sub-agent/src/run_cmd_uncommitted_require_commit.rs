@@ -1,4 +1,4 @@
-use std::io::{BufRead, Read};
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -7,6 +7,54 @@ use std::time::Duration;
 
 const SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES: usize = 1024;
 const REQUIRE_COMMIT_GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const SANDBOX_HOOK_PROBE_REASON: &str = "require-commit blocked: sandbox hook failure state could not be verified; staged tree preserved for host recovery";
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SandboxHookProbeState<'a> {
+    Clear,
+    Blocked,
+    Uncertain(&'a str),
+}
+
+impl<'a> SandboxHookProbeState<'a> {
+    pub(super) fn from_result(probe: Option<&'a Result<bool, String>>) -> Self {
+        match probe {
+            Some(Ok(true)) => Self::Blocked,
+            Some(Err(error)) => Self::Uncertain(error),
+            Some(Ok(false)) | None => Self::Clear,
+        }
+    }
+
+    fn requires_host_recovery(self) -> bool {
+        !matches!(self, Self::Clear)
+    }
+}
+
+pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'static str {
+    match state {
+        SandboxHookProbeState::Blocked => super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON,
+        SandboxHookProbeState::Uncertain(_) => SANDBOX_HOOK_PROBE_REASON,
+        SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_REASON,
+    }
+}
+
+pub(super) fn persisted_contract_failure_reason(
+    recovery: &csa_session::RequireCommitRecoveryDiagnostic,
+) -> &'static str {
+    if recovery
+        .blocker_summary
+        .as_deref()
+        .is_some_and(|summary| summary.contains("sandbox_hook_probe="))
+    {
+        SANDBOX_HOOK_PROBE_REASON
+    } else if recovery.suggested_recovery_action
+        == super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+    {
+        super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+    } else {
+        super::REQUIRE_COMMIT_REASON
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) enum DirtyTrackedWorktree {
@@ -39,14 +87,18 @@ pub(super) fn build_blocker_summary(
     result: &csa_session::SessionResult,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
-    sandbox_hook_blocked: bool,
+    sandbox_hook_state: SandboxHookProbeState<'_>,
 ) -> Option<String> {
     let mut parts = Vec::new();
-    if sandbox_hook_blocked {
-        parts.push(
+    match sandbox_hook_state {
+        SandboxHookProbeState::Blocked => parts.push(
             "sandbox_hook=mandatory hook-enabled commit failed for unchanged staged tree"
                 .to_string(),
-        );
+        ),
+        SandboxHookProbeState::Uncertain(error) => {
+            parts.push(format!("sandbox_hook_probe={error}"));
+        }
+        SandboxHookProbeState::Clear => {}
     }
     if let Some(gate_failure) = gate_failure
         .map(str::trim)
@@ -99,7 +151,7 @@ pub(super) fn build_recovery_diagnostic_for_state(
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
     sa_mode: Option<bool>,
-    sandbox_hook_blocked: bool,
+    sandbox_hook_state: SandboxHookProbeState<'_>,
 ) -> csa_session::RequireCommitRecoveryDiagnostic {
     let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
     let termination_status = result
@@ -133,9 +185,9 @@ pub(super) fn build_recovery_diagnostic_for_state(
             result,
             gate_failure,
             clean_tree_verification_failure,
-            sandbox_hook_blocked,
+            sandbox_hook_state,
         ),
-        suggested_recovery_action: if sandbox_hook_blocked {
+        suggested_recovery_action: if sandbox_hook_state.requires_host_recovery() {
             super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
         } else {
             super::REQUIRE_COMMIT_RECOVERY_ACTION
@@ -144,65 +196,91 @@ pub(super) fn build_recovery_diagnostic_for_state(
     }
 }
 
-pub(super) fn sandbox_commit_failure_matches(project_root: &Path, session_id: &str) -> bool {
-    let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
-        return false;
-    };
+pub(super) fn sandbox_commit_failure_matches(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)
+        .map_err(|_| "sandbox-hook-marker-session-dir-unavailable".to_string())?;
     let Some(marker) = read_sandbox_commit_failure_marker(
         &session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
-    ) else {
-        return false;
+    )?
+    else {
+        return Ok(false);
     };
     let fields = marker.split_whitespace().collect::<Vec<_>>();
     if fields.len() != 6 {
-        return false;
+        return Err("sandbox-hook-marker-invalid-record".to_string());
     }
-    let Some(head_output) = run_git_output(project_root, &["rev-parse", "--verify", "HEAD"]) else {
-        return false;
-    };
+    let head_output = run_git_output(project_root, &["rev-parse", "--verify", "HEAD"])
+        .ok_or_else(|| "sandbox-hook-marker-head-probe-spawn-or-timeout".to_string())?;
     let current_head = if head_output.status.success() {
         String::from_utf8_lossy(&head_output.stdout)
             .trim()
             .to_string()
-    } else {
+    } else if head_output.status.code() == Some(128) {
         "unborn".to_string()
+    } else {
+        return Err(format!(
+            "sandbox-hook-marker-head-probe-failed exit_code={}",
+            head_output
+                .status
+                .code()
+                .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+        ));
     };
     if fields[0] != current_head {
-        return false;
+        return Ok(false);
     }
-    let Ok(current_index_tree) = run_git_status_porcelain(project_root, &["write-tree"]) else {
-        return false;
-    };
-    fields[1] == current_index_tree.trim()
+    let current_index_tree = run_git_status_porcelain(project_root, &["write-tree"])
+        .map_err(|error| format!("sandbox-hook-marker-index-probe={error}"))?;
+    Ok(fields[1] == current_index_tree.trim())
 }
 
 #[cfg(unix)]
-fn read_sandbox_commit_failure_marker(path: &Path) -> Option<String> {
-    let file = std::fs::OpenOptions::new()
+fn read_sandbox_commit_failure_marker(path: &Path) -> Result<Option<String>, String> {
+    let file = match std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file()
-        || metadata.len() > u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES).ok()?
     {
-        return None;
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("sandbox-hook-marker-open-failed".to_string()),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| "sandbox-hook-marker-metadata-failed".to_string())?;
+    if !metadata.is_file()
+        || metadata.len()
+            > u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES)
+                .map_err(|_| "sandbox-hook-marker-size-limit-invalid".to_string())?
+    {
+        return Err("sandbox-hook-marker-not-bounded-regular-file".to_string());
     }
 
     let mut record = Vec::new();
-    let mut reader = std::io::BufReader::new(file)
-        .take(u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES + 1).ok()?);
-    reader.read_until(b'\n', &mut record).ok()?;
+    let mut reader = file.take(
+        u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES + 1)
+            .map_err(|_| "sandbox-hook-marker-size-limit-invalid".to_string())?,
+    );
+    reader
+        .read_to_end(&mut record)
+        .map_err(|_| "sandbox-hook-marker-read-failed".to_string())?;
     if record.len() > SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES {
-        return None;
+        return Err("sandbox-hook-marker-too-large".to_string());
     }
-    String::from_utf8(record).ok()
+    if record.last() != Some(&b'\n') || record[..record.len() - 1].contains(&b'\n') {
+        return Err("sandbox-hook-marker-not-single-record".to_string());
+    }
+    String::from_utf8(record)
+        .map(Some)
+        .map_err(|_| "sandbox-hook-marker-not-utf8".to_string())
 }
 
 #[cfg(not(unix))]
-fn read_sandbox_commit_failure_marker(_path: &Path) -> Option<String> {
-    None
+fn read_sandbox_commit_failure_marker(_path: &Path) -> Result<Option<String>, String> {
+    Err("sandbox-hook-marker-reader-unavailable".to_string())
 }
 
 pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTrackedWorktree {

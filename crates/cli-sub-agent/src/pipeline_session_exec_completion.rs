@@ -139,12 +139,17 @@ pub(super) async fn complete_session_execution(
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
-        let sandbox_hook_blocked = effective_require_commit_on_mutation
-            && crate::run_cmd::sandbox_commit_failure_matches(
+        let sandbox_hook_probe = effective_require_commit_on_mutation.then(|| {
+            crate::run_cmd::sandbox_commit_failure_matches(
                 input.project_root,
                 &session.meta_session_id,
-            );
+            )
+        });
+        let sandbox_hook_blocked = matches!(sandbox_hook_probe, Some(Ok(true)));
+        let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)));
+        policy_evaluation_failed |= sandbox_hook_probe_uncertain;
         if !sandbox_hook_blocked
+            && !sandbox_hook_probe_uncertain
             && require_commit::should_attempt_require_commit_rescue(
                 effective_require_commit_on_mutation,
                 commit_guard.as_ref(),
