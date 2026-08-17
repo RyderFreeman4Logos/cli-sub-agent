@@ -4,17 +4,33 @@ commit_attempt_fingerprint() {
   args_hash="$(for arg do printf '%s:%s\n' "${#arg}" "${arg}"; done | "${REAL_GIT}" hash-object --stdin)" || return 1
   env_hash="$(env | LC_ALL=C sort | "${REAL_GIT}" hash-object --stdin)" || return 1
   config_hash="$("${REAL_GIT}" config --null --list --show-origin 2>/dev/null | "${REAL_GIT}" hash-object --stdin)" || return 1
+  if [ -n "${top}" ]; then
+    worktree_hash="$("${REAL_GIT}" -C "${top}" diff --no-ext-diff --no-textconv --binary -- | "${REAL_GIT}" hash-object --stdin)" || return 1
+  else
+    worktree_hash=absent
+  fi
   hooks_hash="$(
     {
+      printf 'worktree:%s\n' "${worktree_hash}"
+      if [ -n "${lefthook_config:-}" ] && [ -f "${lefthook_config}" ]; then
+        config_name="${lefthook_config##*/}"
+        printf 'lefthook:%s:%s\n' "${#config_name}" "${config_name}"
+        "${REAL_GIT}" hash-object "${lefthook_config}" 2>/dev/null || printf '%s\n' unreadable
+      else
+        printf '%s\n' lefthook:absent
+      fi
       if [ -n "${top}" ]; then
-        for hook_name in pre-commit prepare-commit-msg commit-msg; do
-          hook_path="$(hook_path_for "${hook_name}")"
-          if [ -f "${hook_path}" ]; then
-            "${REAL_GIT}" hash-object "${hook_path}" 2>/dev/null || printf '%s\n' unreadable
-          else
-            printf '%s\n' absent
-          fi
+        hooks_dir="$(dirname "$(hook_path_for pre-commit)")"
+        found_hook=false
+        for hook_path in "${hooks_dir}"/*; do
+          [ -f "${hook_path}" ] || continue
+          found_hook=true
+          hook_name="${hook_path##*/}"
+          if [ -x "${hook_path}" ]; then hook_mode=x; else hook_mode=-; fi
+          printf 'hook:%s:%s:%s\n' "${#hook_name}" "${hook_name}" "${hook_mode}"
+          "${REAL_GIT}" hash-object "${hook_path}" 2>/dev/null || printf '%s\n' unreadable
         done
+        [ "${found_hook}" = true ] || printf '%s\n' hooks:absent
       fi
     } | "${REAL_GIT}" hash-object --stdin
   )" || return 1

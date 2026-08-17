@@ -114,6 +114,7 @@ use prior_rounds::load_prior_rounds_section_or_persist_error;
 use resolve::build_review_instruction;
 #[cfg(test)]
 pub(crate) use resolve::resolve_review_tool;
+pub(crate) use resolve::run_command_with_timeout;
 use resolve::{
     ReviewProjectPromptOptions, build_review_instruction_for_project, derive_scope_for_project,
     resolve_review_effective_tier, resolve_review_model, resolve_review_readonly_configured,

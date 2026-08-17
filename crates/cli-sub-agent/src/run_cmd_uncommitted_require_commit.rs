@@ -1,5 +1,12 @@
+use std::io::{BufRead, Read};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::time::Duration;
+
+const SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES: usize = 1024;
+const REQUIRE_COMMIT_GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub(super) enum DirtyTrackedWorktree {
@@ -141,8 +148,8 @@ pub(super) fn sandbox_commit_failure_matches(project_root: &Path, session_id: &s
     let Ok(session_dir) = csa_session::get_session_dir(project_root, session_id) else {
         return false;
     };
-    let Ok(marker) = std::fs::read_to_string(
-        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+    let Some(marker) = read_sandbox_commit_failure_marker(
+        &session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
     ) else {
         return false;
     };
@@ -150,13 +157,52 @@ pub(super) fn sandbox_commit_failure_matches(project_root: &Path, session_id: &s
     if fields.len() != 6 {
         return false;
     }
-    let current_head = run_git_status_porcelain(project_root, &["rev-parse", "--verify", "HEAD"])
-        .map(|head| head.trim().to_string())
-        .unwrap_or_else(|_| "unborn".to_string());
+    let Some(head_output) = run_git_output(project_root, &["rev-parse", "--verify", "HEAD"]) else {
+        return false;
+    };
+    let current_head = if head_output.status.success() {
+        String::from_utf8_lossy(&head_output.stdout)
+            .trim()
+            .to_string()
+    } else {
+        "unborn".to_string()
+    };
+    if fields[0] != current_head {
+        return false;
+    }
     let Ok(current_index_tree) = run_git_status_porcelain(project_root, &["write-tree"]) else {
         return false;
     };
-    fields[0] == current_head && fields[1] == current_index_tree.trim()
+    fields[1] == current_index_tree.trim()
+}
+
+#[cfg(unix)]
+fn read_sandbox_commit_failure_marker(path: &Path) -> Option<String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file()
+        || metadata.len() > u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES).ok()?
+    {
+        return None;
+    }
+
+    let mut record = Vec::new();
+    let mut reader = std::io::BufReader::new(file)
+        .take(u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES + 1).ok()?);
+    reader.read_until(b'\n', &mut record).ok()?;
+    if record.len() > SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES {
+        return None;
+    }
+    String::from_utf8(record).ok()
+}
+
+#[cfg(not(unix))]
+fn read_sandbox_commit_failure_marker(_path: &Path) -> Option<String> {
+    None
 }
 
 pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTrackedWorktree {
@@ -189,12 +235,8 @@ pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTracked
 }
 
 fn run_git_status_porcelain(project_root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(args)
-        .output()
-        .map_err(|_| "git-status-probe-spawn-failed".to_string())?;
+    let output = run_git_output(project_root, args)
+        .ok_or_else(|| "git-status-probe-spawn-or-timeout".to_string())?;
     if !output.status.success() {
         let exit_code = output
             .status
@@ -204,4 +246,10 @@ fn run_git_status_porcelain(project_root: &Path, args: &[&str]) -> Result<String
         return Err(format!("git-status-probe-failed exit_code={exit_code}"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_git_output(project_root: &Path, args: &[&str]) -> Option<Output> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(project_root).args(args);
+    crate::review_cmd::run_command_with_timeout(&mut command, REQUIRE_COMMIT_GIT_PROBE_TIMEOUT)
 }

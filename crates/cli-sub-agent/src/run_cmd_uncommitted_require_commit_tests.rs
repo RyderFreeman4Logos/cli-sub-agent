@@ -318,6 +318,10 @@ fn require_commit_fails_closed_after_sandbox_hook_preserving_staged_tree() {
     );
 }
 
+#[cfg(unix)]
+#[path = "run_cmd_uncommitted_require_commit_marker_tests.rs"]
+mod sandbox_commit_failure_tests;
+
 #[test]
 fn require_commit_recovery_records_bounded_redacted_blocker_summary() {
     let (temp, _sandbox) = init_repo_with_initial_commit();
