@@ -139,6 +139,8 @@ pub(super) async fn complete_session_execution(
             && (!inside_git_worktree
                 || pre_run_workspace.is_none()
                 || post_run_workspace.is_none());
+        let git_commit_attempted =
+            !crate::run_cmd::detect_git_commit_commands(&executed_shell_commands).is_empty();
         let sandbox_hook_probe = effective_require_commit_on_mutation.then(|| {
             crate::run_cmd::sandbox_commit_failure_matches(
                 input.project_root,
@@ -146,7 +148,8 @@ pub(super) async fn complete_session_execution(
             )
         });
         let sandbox_hook_blocked = matches!(sandbox_hook_probe, Some(Ok(true)));
-        let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)));
+        let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)))
+            || (git_commit_attempted && matches!(sandbox_hook_probe, Some(Ok(false))));
         policy_evaluation_failed |= sandbox_hook_probe_uncertain;
         if !sandbox_hook_blocked
             && !sandbox_hook_probe_uncertain
@@ -184,8 +187,6 @@ pub(super) async fn complete_session_execution(
                     || pre_run_workspace.is_none()
                     || post_run_workspace.is_none());
         }
-        let git_commit_attempted =
-            !crate::run_cmd::detect_git_commit_commands(&executed_shell_commands).is_empty();
         let commit_reflog_race = if git_commit_attempted && commit_created == Some(true) {
             let current_head = post_run_workspace
                 .as_ref()
@@ -366,6 +367,10 @@ mod fix_finding_tests;
 #[cfg(test)]
 #[path = "pipeline_session_exec_completion_require_commit_tests.rs"]
 mod require_commit_tests;
+
+#[cfg(test)]
+#[path = "pipeline_session_exec_completion_autofix_hook_tests.rs"]
+mod autofix_hook_tests;
 
 #[cfg(test)]
 #[path = "pipeline_session_exec_completion_tests.rs"]

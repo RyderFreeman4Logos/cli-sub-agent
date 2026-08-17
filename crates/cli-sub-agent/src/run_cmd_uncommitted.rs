@@ -13,6 +13,8 @@ const REQUIRE_COMMIT_REASON: &str =
 const REQUIRE_COMMIT_SANDBOX_HOOK_REASON: &str = "require-commit blocked: mandatory hook-enabled commit failed in the filesystem sandbox; staged tree preserved for host recovery";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
 const REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION: &str = "run_hook_enabled_commit_outside_sandbox";
+const REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION: &str =
+    "run_hook_enabled_commit_outside_sandbox_probe_uncertain";
 const REQUIRE_COMMIT_BLOCKER_SUMMARY_MAX_CHARS: usize = 240;
 const REDACTED_PATH: &str = "[redacted-path]";
 const LARGE_DIFF_WARNING_TEXT: &str = "This CSA session left a large changed surface. Do not proceed directly to a single commit/PR unless this was explicitly intended. First inspect the file list, split into atomic logical units if possible, and run review per unit. If intentionally large, record that rationale in the commit/PR.";
@@ -212,7 +214,7 @@ fn record_writer_uncommitted_changes_with_config(
                 .is_some_and(|probe| !probe.is_clean()));
     let sandbox_hook_probe = if require_commit_contract_failure {
         session_id.map(|session_id| {
-            require_commit::sandbox_commit_failure_matches(project_root, session_id)
+            require_commit::sandbox_commit_failure_state(project_root, session_id)
         })
     } else {
         None

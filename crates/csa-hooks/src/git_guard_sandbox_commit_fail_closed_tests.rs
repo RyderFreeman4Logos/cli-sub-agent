@@ -322,6 +322,82 @@ fn wrapper_fingerprints_supported_hook_helpers() {
 }
 
 #[test]
+fn wrapper_fingerprints_active_symlink_hooks() {
+    use std::os::unix::fs::symlink;
+
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    for symlink_kind in ["hook", "hooks-dir"] {
+        let fixture = SandboxCommitFixture::new();
+        let hooks_dir = fixture.repo.join(".git/hooks");
+        let target = match symlink_kind {
+            "hook" => {
+                let target = hooks_dir.join("pre-commit.target");
+                std::fs::remove_file(hooks_dir.join("pre-commit")).expect("remove hook");
+                write_executable(&target, rejecting_helper_body("first symlink rejection"));
+                symlink(&target, hooks_dir.join("pre-commit")).expect("symlink hook");
+                target
+            }
+            "hooks-dir" => {
+                let target_dir = fixture.repo.join(".git/hooks.target");
+                std::fs::rename(&hooks_dir, &target_dir).expect("move hooks dir");
+                symlink(&target_dir, &hooks_dir).expect("symlink hooks dir");
+                target_dir.join("pre-commit")
+            }
+            _ => unreachable!(),
+        };
+        if symlink_kind == "hooks-dir" {
+            write_executable(&target, rejecting_helper_body("first symlink rejection"));
+        }
+
+        assert!(!fixture.run().status.success(), "{symlink_kind}");
+        assert_eq!(fixture.hook_count(), 1, "{symlink_kind}");
+        write_executable(&target, rejecting_helper_body("repaired symlink rejection"));
+        assert!(!fixture.run().status.success(), "{symlink_kind}");
+        assert_eq!(
+            fixture.hook_count(),
+            2,
+            "changing {symlink_kind} target must allow one fresh hook attempt"
+        );
+    }
+}
+
+#[test]
+fn wrapper_keeps_a_durable_marker_when_an_autofix_hook_changes_the_index() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let fixture = SandboxCommitFixture::new();
+    write_executable(
+        &fixture.repo.join(".git/hooks/pre-commit"),
+        r#"#!/bin/sh
+printf 'autofixed\n' > hook-generated.txt
+/usr/bin/git add hook-generated.txt
+exit 1
+"#,
+    );
+    let head_before = git_output(&fixture.repo, &["rev-parse", "HEAD"]).stdout;
+
+    assert!(!fixture.run().status.success());
+    let staged_tree_after_hook = git_output(&fixture.repo, &["write-tree"]).stdout;
+    assert!(
+        fixture.marker().is_file(),
+        "a changed hook failure must remain distinguishable from no failure"
+    );
+    assert!(
+        std::fs::read_to_string(fixture.marker())
+            .expect("read marker")
+            .starts_with("retryable "),
+        "the changed failure marker may permit a hook-enabled retry but not rescue"
+    );
+    assert_eq!(
+        git_output(&fixture.repo, &["rev-parse", "HEAD"]).stdout,
+        head_before
+    );
+    assert_eq!(
+        git_output(&fixture.repo, &["write-tree"]).stdout,
+        staged_tree_after_hook
+    );
+}
+
+#[test]
 fn wrapper_fails_closed_when_fingerprint_producers_fail() {
     use std::os::unix::fs::PermissionsExt;
 

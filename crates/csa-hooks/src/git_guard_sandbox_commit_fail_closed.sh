@@ -113,6 +113,33 @@ append_hashed_file() {
     "${hashed_value}" >> "${hashed_manifest}" || return 1
 }
 
+append_hashed_symlink_identity() {
+  symlink_label="$1"
+  symlink_path="$2"
+  symlink_manifest="$3"
+  [ -L "${symlink_path}" ] || return 1
+  fingerprint_file_count=$((fingerprint_file_count + 1))
+  [ "${fingerprint_file_count}" -le "${FINGERPRINT_MAX_FILES}" ] || return 1
+  symlink_capture="symlink.${fingerprint_file_count}"
+  bounded_capture "${symlink_capture}.identity" /usr/bin/stat -c '%d:%i:%f:%y:%z' -- "${symlink_path}" || return 1
+  symlink_identity_hash="$(hash_input_file "${fingerprint_tmp_dir}/${symlink_capture}.identity")" || return 1
+  bounded_capture "${symlink_capture}.target" readlink -- "${symlink_path}" || return 1
+  symlink_target_hash="$(hash_input_file "${fingerprint_tmp_dir}/${symlink_capture}.target")" || return 1
+  printf '%s:%s:%s:%s:%s\n' "${symlink_label}" "${#symlink_path}" "${symlink_path}" \
+    "${symlink_identity_hash}" "${symlink_target_hash}" >> "${symlink_manifest}" || return 1
+}
+
+append_hashed_symlink_hook() {
+  symlink_label="$1"
+  symlink_path="$2"
+  symlink_manifest="$3"
+  append_hashed_symlink_identity "${symlink_label}" "${symlink_path}" "${symlink_manifest}" || return 1
+  symlink_capture="symlink.${fingerprint_file_count}"
+  bounded_capture "${symlink_capture}.resolved" readlink -f -- "${symlink_path}" || return 1
+  symlink_target="$(read_bounded_single_record "${fingerprint_tmp_dir}/${symlink_capture}.resolved" "${FINGERPRINT_FILE_MAX_BYTES}")" || return 1
+  append_hashed_file "${symlink_label}-target" "${symlink_target}" "${symlink_manifest}"
+}
+
 commit_attempt_fingerprint_inner() {
   LC_ALL=C
   export LC_ALL
@@ -168,13 +195,21 @@ commit_attempt_fingerprint_inner() {
     pre_commit_path="$(hook_path_for pre-commit)" || return 1
     [ -n "${pre_commit_path}" ] || return 1
     hooks_dir="$(dirname "${pre_commit_path}")" || return 1
-    bounded_capture hooks.raw find -P "${hooks_dir}" -type f -print || return 1
+    if [ -L "${hooks_dir}" ]; then
+      append_hashed_symlink_identity hooks-dir "${hooks_dir}" "${hooks_manifest}" || return 1
+    fi
+    bounded_capture hooks.raw find -H "${hooks_dir}" \( -type f -o -type l \) -print || return 1
     bounded_capture hooks.sorted sort "${fingerprint_tmp_dir}/hooks.raw" || return 1
     while IFS= read -r hook_path || [ -n "${hook_path}" ]; do
       [ -n "${hook_path}" ] || continue
       found_hook=true
       if [ -x "${hook_path}" ]; then hook_mode=x; else hook_mode=-; fi
-      append_hashed_file "hook:${hook_mode}" "${hook_path}" "${hooks_manifest}" || return 1
+      if [ -L "${hook_path}" ]; then
+        [ "${hook_mode}" = x ] || continue
+        append_hashed_symlink_hook "hook:${hook_mode}" "${hook_path}" "${hooks_manifest}" || return 1
+      else
+        append_hashed_file "hook:${hook_mode}" "${hook_path}" "${hooks_manifest}" || return 1
+      fi
     done < "${fingerprint_tmp_dir}/hooks.sorted"
   fi
 
@@ -234,18 +269,28 @@ if [ "${CSA_FS_SANDBOXED:-}" = "1" ] && [ -n "${CSA_SESSION_DIR:-}" ]; then
   if [ -n "${session_dir}" ] && [ "${guard_dir}" = "${expected_guard_dir}" ]; then
     commit_failure_marker="${session_dir}/__CSA_GIT_COMMIT_FAILURE_MARKER__"
     if ! commit_fingerprint="$(commit_attempt_fingerprint "$@")"; then
-      write_commit_failure_marker "uncertain fingerprint producer failure" || true
+      write_commit_failure_marker "uncertain fingerprint producer failure" || block_unavailable_fingerprint
       block_unavailable_fingerprint
     fi
     if [ -e "${commit_failure_marker}" ] || [ -L "${commit_failure_marker}" ]; then
       if blocked_fingerprint="$(read_bounded_single_record "${commit_failure_marker}" "${MARKER_MAX_BYTES}")"; then
-        if [ "${blocked_fingerprint}" = "${commit_fingerprint}" ]; then
-          echo "BLOCKED: hook-enabled commit already failed for this unchanged staged tree in the filesystem sandbox; mandatory hooks will not be rerun." >&2
-          echo "The staged tree is preserved. Inspect the first hook failure, then run the same hook-enabled commit outside the sandbox if it needs host resources." >&2
-          exit 1
-        fi
+        case "${blocked_fingerprint}" in
+          "retryable "*)
+            retryable_fingerprint="${blocked_fingerprint#retryable }"
+            if [ "${retryable_fingerprint}" = "${commit_fingerprint}" ]; then
+              /usr/bin/rm -f -- "${commit_failure_marker}" || block_unavailable_fingerprint
+            fi
+            ;;
+          *)
+            if [ "${blocked_fingerprint}" = "${commit_fingerprint}" ]; then
+              echo "BLOCKED: hook-enabled commit already failed for this unchanged staged tree in the filesystem sandbox; mandatory hooks will not be rerun." >&2
+              echo "The staged tree is preserved. Inspect the first hook failure, then run the same hook-enabled commit outside the sandbox if it needs host resources." >&2
+              exit 1
+            fi
+            ;;
+        esac
       else
-        write_commit_failure_marker "uncertain invalid fingerprint marker" || true
+        write_commit_failure_marker "uncertain invalid fingerprint marker" || block_unavailable_fingerprint
         block_unavailable_fingerprint
       fi
     fi
@@ -267,12 +312,18 @@ if post_fingerprint="$(commit_attempt_fingerprint "$@")"; then
     if write_commit_failure_marker "${commit_fingerprint}"; then
       echo "CSA git-guard: hook-enabled commit failed inside the filesystem sandbox; the staged tree is preserved." >&2
       echo "CSA git-guard: an identical retry is blocked. Inspect the hook failure, then use the same hook-enabled commit outside the sandbox if host resources are required." >&2
+    else
+      echo "CSA git-guard: unable to persist hook-failure state; staged tree is preserved and host recovery is required." >&2
     fi
   else
-    /usr/bin/rm -f -- "${commit_failure_marker}" 2>/dev/null || true
+    if ! write_commit_failure_marker "retryable ${post_fingerprint}"; then
+      echo "CSA git-guard: unable to persist retryable hook-failure state; staged tree is preserved and host recovery is required." >&2
+    fi
   fi
 else
-  write_commit_failure_marker "uncertain fingerprint producer failure" || true
+  if ! write_commit_failure_marker "uncertain fingerprint producer failure"; then
+    echo "CSA git-guard: unable to persist uncertain hook-failure state; staged tree is preserved and host recovery is required." >&2
+  fi
   echo "CSA git-guard: post-hook fingerprint state is unavailable; the staged tree is preserved for host recovery." >&2
 fi
 exit "${commit_status}"

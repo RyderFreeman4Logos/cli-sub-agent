@@ -13,26 +13,27 @@ const SANDBOX_HOOK_PROBE_REASON: &str = "require-commit blocked: sandbox hook fa
 pub(super) enum SandboxHookProbeState<'a> {
     Clear,
     Blocked,
+    Retryable,
     Uncertain(&'a str),
 }
 
 impl<'a> SandboxHookProbeState<'a> {
-    pub(super) fn from_result(probe: Option<&'a Result<bool, String>>) -> Self {
+    pub(super) fn from_result(
+        probe: Option<&'a Result<SandboxHookProbeState<'static>, String>>,
+    ) -> Self {
         match probe {
-            Some(Ok(true)) => Self::Blocked,
+            Some(Ok(state)) => *state,
             Some(Err(error)) => Self::Uncertain(error),
-            Some(Ok(false)) | None => Self::Clear,
+            None => Self::Clear,
         }
-    }
-
-    fn requires_host_recovery(self) -> bool {
-        !matches!(self, Self::Clear)
     }
 }
 
 pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'static str {
     match state {
-        SandboxHookProbeState::Blocked => super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON,
+        SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
+            super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+        }
         SandboxHookProbeState::Uncertain(_) => SANDBOX_HOOK_PROBE_REASON,
         SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_REASON,
     }
@@ -41,10 +42,8 @@ pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'sta
 pub(super) fn persisted_contract_failure_reason(
     recovery: &csa_session::RequireCommitRecoveryDiagnostic,
 ) -> &'static str {
-    if recovery
-        .blocker_summary
-        .as_deref()
-        .is_some_and(|summary| summary.contains("sandbox_hook_probe="))
+    if recovery.suggested_recovery_action
+        == super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
     {
         SANDBOX_HOOK_PROBE_REASON
     } else if recovery.suggested_recovery_action
@@ -93,6 +92,10 @@ pub(super) fn build_blocker_summary(
     match sandbox_hook_state {
         SandboxHookProbeState::Blocked => parts.push(
             "sandbox_hook=mandatory hook-enabled commit failed for unchanged staged tree"
+                .to_string(),
+        ),
+        SandboxHookProbeState::Retryable => parts.push(
+            "sandbox_hook=mandatory hook-enabled commit failed after changing staged state"
                 .to_string(),
         ),
         SandboxHookProbeState::Uncertain(error) => {
@@ -187,10 +190,14 @@ pub(super) fn build_recovery_diagnostic_for_state(
             clean_tree_verification_failure,
             sandbox_hook_state,
         ),
-        suggested_recovery_action: if sandbox_hook_state.requires_host_recovery() {
-            super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
-        } else {
-            super::REQUIRE_COMMIT_RECOVERY_ACTION
+        suggested_recovery_action: match sandbox_hook_state {
+            SandboxHookProbeState::Uncertain(_) => {
+                super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
+            }
+            SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
+                super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+            }
+            SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_RECOVERY_ACTION,
         }
         .to_string(),
     }
@@ -200,14 +207,27 @@ pub(super) fn sandbox_commit_failure_matches(
     project_root: &Path,
     session_id: &str,
 ) -> Result<bool, String> {
+    Ok(!matches!(
+        sandbox_commit_failure_state(project_root, session_id)?,
+        SandboxHookProbeState::Clear
+    ))
+}
+
+pub(super) fn sandbox_commit_failure_state(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<SandboxHookProbeState<'static>, String> {
     let session_dir = csa_session::get_session_dir(project_root, session_id)
         .map_err(|_| "sandbox-hook-marker-session-dir-unavailable".to_string())?;
     let Some(marker) = read_sandbox_commit_failure_marker(
         &session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
     )?
     else {
-        return Ok(false);
+        return Ok(SandboxHookProbeState::Clear);
     };
+    let (retryable, marker) = marker
+        .strip_prefix("retryable ")
+        .map_or((false, marker.as_str()), |marker| (true, marker));
     let fields = marker.split_whitespace().collect::<Vec<_>>();
     if fields.len() != 6 {
         return Err("sandbox-hook-marker-invalid-record".to_string());
@@ -230,11 +250,18 @@ pub(super) fn sandbox_commit_failure_matches(
         ));
     };
     if fields[0] != current_head {
-        return Ok(false);
+        return Ok(SandboxHookProbeState::Clear);
     }
     let current_index_tree = run_git_status_porcelain(project_root, &["write-tree"])
         .map_err(|error| format!("sandbox-hook-marker-index-probe={error}"))?;
-    Ok(fields[1] == current_index_tree.trim())
+    if fields[1] != current_index_tree.trim() {
+        return Ok(SandboxHookProbeState::Clear);
+    }
+    Ok(if retryable {
+        SandboxHookProbeState::Retryable
+    } else {
+        SandboxHookProbeState::Blocked
+    })
 }
 
 #[cfg(unix)]

@@ -85,7 +85,7 @@ fn require_commit_recovery_rejects_multi_record_marker_as_probe_uncertainty() {
         assert_eq!(loaded.summary, expected_reason);
         assert_eq!(
             recovery.suggested_recovery_action,
-            REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+            REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
         );
         assert!(
             recovery
@@ -94,6 +94,49 @@ fn require_commit_recovery_rejects_multi_record_marker_as_probe_uncertainty() {
                 .is_some_and(|summary| summary.contains("sandbox_hook_probe="))
         );
     });
+}
+
+#[test]
+fn require_commit_result_summary_cannot_spoof_probe_uncertainty() {
+    let (temp, _sandbox) = init_repo_with_initial_commit();
+    let root = temp.path();
+    std::fs::write(root.join("tracked.txt"), "dirty\n").expect("write dirty tracked file");
+    let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
+        .expect("session should be created");
+    let mut persisted = session_result("success", 0);
+    persisted.summary = "writer prose: sandbox_hook_probe=spoofed".to_string();
+    csa_session::save_result(root, &session.meta_session_id, &persisted)
+        .expect("save session result");
+    let mut execution = csa_process::ExecutionResult {
+        exit_code: 0,
+        summary: persisted.summary.clone(),
+        ..Default::default()
+    };
+
+    record_writer_uncommitted_changes_with_config(
+        root,
+        Some(&session.meta_session_id),
+        &mut execution,
+        WriterUncommittedRecord {
+            sa_mode: false,
+            require_commit: true,
+            changed_paths: Some(&["tracked.txt".to_string()]),
+            commit_created: Some(false),
+            large_diff_config: &RunLargeDiffWarningConfig::default(),
+        },
+    );
+
+    let loaded = csa_session::load_result(root, &session.meta_session_id)
+        .expect("load result")
+        .expect("persisted result");
+    let recovery = loaded
+        .require_commit_recovery
+        .expect("require-commit recovery");
+    assert_eq!(loaded.summary, REQUIRE_COMMIT_REASON);
+    assert_eq!(
+        recovery.suggested_recovery_action,
+        REQUIRE_COMMIT_RECOVERY_ACTION
+    );
 }
 
 #[test]
