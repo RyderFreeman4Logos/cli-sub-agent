@@ -150,7 +150,6 @@ pub(super) async fn complete_session_execution(
         let sandbox_hook_blocked = matches!(sandbox_hook_probe, Some(Ok(true)));
         let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)))
             || (git_commit_attempted && matches!(sandbox_hook_probe, Some(Ok(false))));
-        policy_evaluation_failed |= sandbox_hook_probe_uncertain;
         if !sandbox_hook_blocked
             && !sandbox_hook_probe_uncertain
             && require_commit::should_attempt_require_commit_rescue(
@@ -199,6 +198,7 @@ pub(super) async fn complete_session_execution(
         } else {
             None
         };
+        policy_evaluation_failed |= sandbox_hook_probe_uncertain && commit_reflog_race.is_none();
         crate::run_cmd::apply_post_session_commit_policies(
             &mut result,
             crate::run_cmd::PostSessionCommitPolicyArgs {

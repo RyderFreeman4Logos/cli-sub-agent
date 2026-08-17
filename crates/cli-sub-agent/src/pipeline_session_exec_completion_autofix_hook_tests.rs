@@ -77,9 +77,14 @@ async fn completion_does_not_rescue_after_autofix_hook_failure() {
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
         .expect("make wrapper executable");
     let hook = project_root.join(".git/hooks/pre-commit");
+    let hook_generated = project_root.join("hook-generated.txt");
     std::fs::write(
         &hook,
-        "#!/bin/sh\nprintf 'autofixed\\n' > hook-generated.txt\n/usr/bin/git add hook-generated.txt\nexit 1\n",
+        format!(
+            "#!/bin/sh\nprintf 'autofixed\\n' > {}\n/usr/bin/git add {}\nexit 1\n",
+            hook_generated.display(),
+            hook_generated.display(),
+        ),
     )
     .expect("write autofix hook");
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
