@@ -27,6 +27,10 @@ ignore = [
     # Transitive from rustls-webpki 0.101.7 (old agent-teams/cc-sdk reqwest 0.11 chain).
     # No non-breaking upgrade path exists on the 0.101 line.
     "RUSTSEC-2026-0104",
+    # Transitive from h2 0.3.27 (old agent-teams/cc-sdk reqwest 0.11 -> hyper 0.14 chain).
+    # Unbounded empty DATA frames DoS (low); patched only on h2 0.4 >=0.4.16, which this
+    # repo already uses. h2 0.3 line is archived with no non-breaking patch. Ignored 2026-08-18.
+    "RUSTSEC-2026-0258",
 ]
 
 [licenses]
