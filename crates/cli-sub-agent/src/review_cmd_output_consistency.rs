@@ -69,6 +69,13 @@ pub(super) fn enforce_final_verdict_consistency(
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let mut canonical_findings = Vec::new();
     for finding in &findings_file.findings {
+        // `prose-*` rows are parser output, not reviewer-authored identities.
+        // Rebuild them from the current canonical prose so stale parser
+        // diagnostics (for example a standalone `confidence=...` row) cannot
+        // survive beside the source-located finding they came from.
+        if !prose_signals.findings.is_empty() && finding.id.starts_with("prose-") {
+            continue;
+        }
         if canonical_findings
             .iter()
             .any(|existing| review_finding_payload_eq(existing, finding))

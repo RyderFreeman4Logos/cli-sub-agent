@@ -26,9 +26,16 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 }
 
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
-    let trimmed = body.trim_start_matches(['`', '(', '[']).trim_start();
+    let trimmed = body
+        .trim_start_matches(|ch: char| {
+            ch.is_ascii_punctuation()
+                || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+        })
+        .trim_start();
     let mut parts = trimmed.splitn(2, char::is_whitespace);
-    let token = parts.next()?.trim_matches(['`', ',', '.', ')', ']']);
+    let token = parts.next()?.trim_matches(|ch: char| {
+        ch.is_ascii_punctuation() || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+    });
     let description = parts
         .next()
         .unwrap_or_default()
@@ -47,8 +54,15 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
 }
 
 fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
-    body.split(char::is_whitespace)
-        .map(|token| token.trim_matches(['`', '(', ')', '[', ']', ',', '.', ';']))
+    body.split(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+    })
+        .map(|token| {
+            token.trim_matches(|ch: char| {
+                ch.is_ascii_punctuation()
+                    || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+            })
+        })
         .find_map(|token| {
             parse_file_reference_token(token).map(|(path, start)| ReviewFindingFileRange {
                 path,
