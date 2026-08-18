@@ -1,5 +1,59 @@
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::time::Duration;
+
+const SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES: usize = 1024;
+const REQUIRE_COMMIT_GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const SANDBOX_HOOK_PROBE_REASON: &str = "require-commit blocked: sandbox hook failure state could not be verified; staged tree preserved for host recovery";
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SandboxHookProbeState<'a> {
+    Clear,
+    Blocked,
+    Retryable,
+    Uncertain(&'a str),
+}
+
+impl<'a> SandboxHookProbeState<'a> {
+    pub(super) fn from_result(
+        probe: Option<&'a Result<SandboxHookProbeState<'static>, String>>,
+    ) -> Self {
+        match probe {
+            Some(Ok(state)) => *state,
+            Some(Err(error)) => Self::Uncertain(error),
+            None => Self::Clear,
+        }
+    }
+}
+
+pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'static str {
+    match state {
+        SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
+            super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+        }
+        SandboxHookProbeState::Uncertain(_) => SANDBOX_HOOK_PROBE_REASON,
+        SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_REASON,
+    }
+}
+
+pub(super) fn persisted_contract_failure_reason(
+    recovery: &csa_session::RequireCommitRecoveryDiagnostic,
+) -> &'static str {
+    if recovery.suggested_recovery_action
+        == super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
+    {
+        SANDBOX_HOOK_PROBE_REASON
+    } else if recovery.suggested_recovery_action
+        == super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+    {
+        super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+    } else {
+        super::REQUIRE_COMMIT_REASON
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) enum DirtyTrackedWorktree {
@@ -32,8 +86,23 @@ pub(super) fn build_blocker_summary(
     result: &csa_session::SessionResult,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
+    sandbox_hook_state: SandboxHookProbeState<'_>,
 ) -> Option<String> {
     let mut parts = Vec::new();
+    match sandbox_hook_state {
+        SandboxHookProbeState::Blocked => parts.push(
+            "sandbox_hook=mandatory hook-enabled commit failed for unchanged staged tree"
+                .to_string(),
+        ),
+        SandboxHookProbeState::Retryable => parts.push(
+            "sandbox_hook=mandatory hook-enabled commit failed after changing staged state"
+                .to_string(),
+        ),
+        SandboxHookProbeState::Uncertain(error) => {
+            parts.push(format!("sandbox_hook_probe={error}"));
+        }
+        SandboxHookProbeState::Clear => {}
+    }
     if let Some(gate_failure) = gate_failure
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -78,6 +147,169 @@ fn bound_redacted_one_line(value: &str, max_chars: usize) -> String {
     truncated
 }
 
+pub(super) fn build_recovery_diagnostic_for_state(
+    result: &csa_session::SessionResult,
+    changes: Option<&csa_session::UncommittedChanges>,
+    commit_created: bool,
+    gate_failure: Option<&str>,
+    clean_tree_verification_failure: Option<&str>,
+    sa_mode: Option<bool>,
+    sandbox_hook_state: SandboxHookProbeState<'_>,
+) -> csa_session::RequireCommitRecoveryDiagnostic {
+    let termination_exit_code = result.raw_process_exit_code.unwrap_or(result.exit_code);
+    let termination_status = result
+        .raw_process_exit_code
+        .map(super::raw_termination_status_from_exit_code)
+        .unwrap_or_else(|| result.status.clone());
+    csa_session::RequireCommitRecoveryDiagnostic {
+        require_commit: true,
+        sa_mode,
+        commit_created,
+        dirty_worktree: changes.is_some(),
+        changed_paths: changes
+            .map(|changes| {
+                changes
+                    .files
+                    .iter()
+                    .map(|path| super::sanitize_diagnostic_path(path))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        changed_paths_truncated: changes.map(|changes| changes.truncated).unwrap_or_default(),
+        termination_status,
+        exit_code: termination_exit_code,
+        termination_signal: result
+            .kill_diagnostics
+            .as_ref()
+            .and_then(|diagnostics| diagnostics.signal)
+            .or_else(|| super::infer_signal_from_exit_code(termination_exit_code)),
+        kill_hint: result.kill_hint.clone(),
+        blocker_summary: build_blocker_summary(
+            result,
+            gate_failure,
+            clean_tree_verification_failure,
+            sandbox_hook_state,
+        ),
+        suggested_recovery_action: match sandbox_hook_state {
+            SandboxHookProbeState::Uncertain(_) => {
+                super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
+            }
+            SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
+                super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+            }
+            SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_RECOVERY_ACTION,
+        }
+        .to_string(),
+    }
+}
+
+pub(super) fn sandbox_commit_failure_matches(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    Ok(!matches!(
+        sandbox_commit_failure_state(project_root, session_id)?,
+        SandboxHookProbeState::Clear
+    ))
+}
+
+pub(super) fn sandbox_commit_failure_state(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<SandboxHookProbeState<'static>, String> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)
+        .map_err(|_| "sandbox-hook-marker-session-dir-unavailable".to_string())?;
+    let Some(marker) = read_sandbox_commit_failure_marker(
+        &session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+    )?
+    else {
+        return Ok(SandboxHookProbeState::Clear);
+    };
+    let (retryable, marker) = marker
+        .strip_prefix("retryable ")
+        .map_or((false, marker.as_str()), |marker| (true, marker));
+    let fields = marker.split_whitespace().collect::<Vec<_>>();
+    if fields.len() != 6 {
+        return Err("sandbox-hook-marker-invalid-record".to_string());
+    }
+    let head_output = run_git_output(project_root, &["rev-parse", "--verify", "HEAD"])
+        .ok_or_else(|| "sandbox-hook-marker-head-probe-spawn-or-timeout".to_string())?;
+    let current_head = if head_output.status.success() {
+        String::from_utf8_lossy(&head_output.stdout)
+            .trim()
+            .to_string()
+    } else if head_output.status.code() == Some(128) {
+        "unborn".to_string()
+    } else {
+        return Err(format!(
+            "sandbox-hook-marker-head-probe-failed exit_code={}",
+            head_output
+                .status
+                .code()
+                .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+        ));
+    };
+    if fields[0] != current_head {
+        return Ok(SandboxHookProbeState::Clear);
+    }
+    let current_index_tree = run_git_status_porcelain(project_root, &["write-tree"])
+        .map_err(|error| format!("sandbox-hook-marker-index-probe={error}"))?;
+    if fields[1] != current_index_tree.trim() {
+        return Ok(SandboxHookProbeState::Clear);
+    }
+    Ok(if retryable {
+        SandboxHookProbeState::Retryable
+    } else {
+        SandboxHookProbeState::Blocked
+    })
+}
+
+#[cfg(unix)]
+fn read_sandbox_commit_failure_marker(path: &Path) -> Result<Option<String>, String> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("sandbox-hook-marker-open-failed".to_string()),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| "sandbox-hook-marker-metadata-failed".to_string())?;
+    if !metadata.is_file()
+        || metadata.len()
+            > u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES)
+                .map_err(|_| "sandbox-hook-marker-size-limit-invalid".to_string())?
+    {
+        return Err("sandbox-hook-marker-not-bounded-regular-file".to_string());
+    }
+
+    let mut record = Vec::new();
+    let mut reader = file.take(
+        u64::try_from(SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES + 1)
+            .map_err(|_| "sandbox-hook-marker-size-limit-invalid".to_string())?,
+    );
+    reader
+        .read_to_end(&mut record)
+        .map_err(|_| "sandbox-hook-marker-read-failed".to_string())?;
+    if record.len() > SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES {
+        return Err("sandbox-hook-marker-too-large".to_string());
+    }
+    if record.last() != Some(&b'\n') || record[..record.len() - 1].contains(&b'\n') {
+        return Err("sandbox-hook-marker-not-single-record".to_string());
+    }
+    String::from_utf8(record)
+        .map(Some)
+        .map_err(|_| "sandbox-hook-marker-not-utf8".to_string())
+}
+
+#[cfg(not(unix))]
+fn read_sandbox_commit_failure_marker(_path: &Path) -> Result<Option<String>, String> {
+    Err("sandbox-hook-marker-reader-unavailable".to_string())
+}
+
 pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTrackedWorktree {
     let porcelain = match run_git_status_porcelain(
         project_root,
@@ -108,12 +340,8 @@ pub(super) fn inspect_dirty_tracked_changes(project_root: &Path) -> DirtyTracked
 }
 
 fn run_git_status_porcelain(project_root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(args)
-        .output()
-        .map_err(|_| "git-status-probe-spawn-failed".to_string())?;
+    let output = run_git_output(project_root, args)
+        .ok_or_else(|| "git-status-probe-spawn-or-timeout".to_string())?;
     if !output.status.success() {
         let exit_code = output
             .status
@@ -123,4 +351,10 @@ fn run_git_status_porcelain(project_root: &Path, args: &[&str]) -> Result<String
         return Err(format!("git-status-probe-failed exit_code={exit_code}"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_git_output(project_root: &Path, args: &[&str]) -> Option<Output> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(project_root).args(args);
+    crate::review_cmd::run_command_with_timeout(&mut command, REQUIRE_COMMIT_GIT_PROBE_TIMEOUT)
 }

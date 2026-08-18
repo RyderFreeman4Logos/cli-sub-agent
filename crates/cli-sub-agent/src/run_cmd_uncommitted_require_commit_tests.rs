@@ -240,14 +240,23 @@ fn require_commit_without_created_commit_fails_successful_self_report() {
 }
 
 #[test]
-fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
+fn require_commit_fails_closed_after_sandbox_hook_preserving_staged_tree() {
     let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
     std::fs::write(root.join("tracked.txt"), "staged but not committed\n")
         .expect("write tracked change");
     run_git(root, &["add", "tracked.txt"]);
+    let head_before = git_capture(root, &["rev-parse", "HEAD"]);
+    let staged_tree_before = git_capture(root, &["write-tree"]);
     let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
         .expect("session should be created");
+    let session_dir = csa_session::get_session_dir(root, &session.meta_session_id)
+        .expect("session dir should resolve");
+    std::fs::write(
+        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+        format!("{head_before} {staged_tree_before} args env config hooks\n"),
+    )
+    .expect("sandbox commit failure marker should be written");
     let session_result = session_result("success", 0);
     csa_session::save_result(root, &session.meta_session_id, &session_result)
         .expect("result should be saved");
@@ -273,14 +282,17 @@ fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
     let loaded = csa_session::load_result(root, &session.meta_session_id)
         .expect("load result")
         .expect("result should exist");
+    let expected_summary = "require-commit blocked: mandatory hook-enabled commit failed in the filesystem sandbox; staged tree preserved for host recovery";
     assert_eq!(execution.exit_code, 1);
     assert_eq!(
         execution.csa_gate_failure.as_deref(),
         Some("writer-uncommitted")
     );
+    assert_eq!(execution.summary, expected_summary);
+    assert!(execution.stderr_output.contains(expected_summary));
     assert_eq!(loaded.status, "failure");
     assert_eq!(loaded.exit_code, 1);
-    assert_eq!(loaded.summary, REQUIRE_COMMIT_REASON);
+    assert_eq!(loaded.summary, expected_summary);
     let recovery = loaded
         .require_commit_recovery
         .expect("explicit require-commit must fail closed in sa-mode");
@@ -288,11 +300,27 @@ fn require_commit_applies_in_sa_mode_when_hook_leaves_staged_work() {
     assert!(!recovery.commit_created);
     assert!(recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
+    assert!(
+        recovery
+            .blocker_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("sandbox_hook=mandatory hook-enabled commit"))
+    );
     assert_eq!(
         recovery.suggested_recovery_action,
-        REQUIRE_COMMIT_RECOVERY_ACTION
+        "run_hook_enabled_commit_outside_sandbox"
+    );
+    assert_eq!(git_capture(root, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_capture(root, &["write-tree"]),
+        staged_tree_before,
+        "persisting the blocker must not alter the staged tree"
     );
 }
+
+#[cfg(unix)]
+#[path = "run_cmd_uncommitted_require_commit_marker_tests.rs"]
+mod sandbox_commit_failure_tests;
 
 #[test]
 fn require_commit_recovery_records_bounded_redacted_blocker_summary() {
@@ -416,7 +444,7 @@ fn session_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
     }
 }
 
-fn run_git(root: &Path, args: &[&str]) {
+fn git_capture(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -429,6 +457,11 @@ fn run_git(root: &Path, args: &[&str]) {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    git_capture(root, args);
 }
 
 /// A throwaway git repo with one commit so `HEAD` exists. Hooks and GPG

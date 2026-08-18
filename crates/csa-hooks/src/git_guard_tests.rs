@@ -118,12 +118,17 @@ printf '%s\n' "$*"
 }
 
 #[cfg(unix)]
-fn run_git(current_dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
+fn git_output(current_dir: &Path, args: &[&str]) -> Output {
+    Command::new("git")
         .args(args)
         .current_dir(current_dir)
         .output_with_timeout()
-        .expect("run git fixture command");
+        .expect("run git fixture command")
+}
+
+#[cfg(unix)]
+fn run_git(current_dir: &Path, args: &[&str]) {
+    let output = git_output(current_dir, args);
     assert!(
         output.status.success(),
         "git {} failed:\nstdout:\n{}\nstderr:\n{}",
@@ -510,6 +515,10 @@ fn wrapper_requires_pre_commit_when_lefthook_config_defines_it() {
     assert!(!output.status.success());
     assert!(stderr.contains("pre-commit"), "{stderr}");
 }
+
+#[cfg(unix)]
+#[path = "git_guard_sandbox_commit_fail_closed_tests.rs"]
+mod sandbox_commit_fail_closed_tests;
 
 #[cfg(unix)]
 #[test]

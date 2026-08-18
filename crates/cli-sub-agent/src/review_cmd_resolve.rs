@@ -329,7 +329,7 @@ mod scope;
 #[cfg(test)]
 pub(crate) use scope::derive_scope;
 pub(crate) use scope::{
-    derive_scope_for_project, review_scope_allows_auto_discovery,
+    derive_scope_for_project, review_scope_allows_auto_discovery, run_command_with_timeout,
     validate_single_parent_commit_scope,
 };
 

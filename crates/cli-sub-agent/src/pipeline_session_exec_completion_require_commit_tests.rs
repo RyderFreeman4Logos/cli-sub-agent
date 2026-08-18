@@ -292,10 +292,11 @@ async fn signal_killed_require_commit_run_rescues_dirty_workspace() {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[tokio::test]
-async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes() {
+async fn assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(hang_git_probe: bool) {
+    use std::os::unix::fs::PermissionsExt;
+
     let tmp = tempfile::tempdir().expect("tempdir");
-    let _sandbox = ScopedSessionSandbox::new(&tmp).await;
+    let mut sandbox = ScopedSessionSandbox::new(&tmp).await;
     let project_root = tmp.path();
     init_git_repo(project_root);
     let initial_head = git_capture(project_root, &["rev-parse", "HEAD"]);
@@ -304,15 +305,55 @@ async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes(
 
     std::fs::write(project_root.join("tracked.txt"), "changed\n").expect("write change");
     run_git(project_root, &["add", "tracked.txt"]);
+    let staged_tree = git_capture(project_root, &["write-tree"]);
 
     let mut session = create_session(
         project_root,
-        Some("require commit rescue"),
+        Some("sandbox hook blocked require commit"),
         None,
         Some("codex"),
     )
     .expect("create session");
     let session_dir = get_session_dir(project_root, &session.meta_session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+        format!("{initial_head} {staged_tree} args env config hooks\n"),
+    )
+    .expect("write sandbox hook marker");
+
+    let original_path = hang_git_probe.then(|| std::env::var_os("PATH").unwrap_or_default());
+    if let Some(original_path) = original_path.as_ref() {
+        let fake_bin = project_root.join("fake-bin");
+        std::fs::create_dir(&fake_bin).expect("create fake bin");
+        let fake_git = fake_bin.join("git");
+        std::fs::write(
+            &fake_git,
+            r#"#!/bin/sh
+if [ "${1:-}" = "-C" ] && [ "${3:-}" = "rev-parse" ] && [ "${4:-}" = "--verify" ] && [ "${5:-}" = "HEAD" ]; then
+  count=0
+  [ ! -f "${GIT_PROBE_COUNT}" ] || count="$(cat "${GIT_PROBE_COUNT}")"
+  count=$((count + 1))
+  printf '%s\n' "${count}" > "${GIT_PROBE_COUNT}"
+  [ "${count}" -ne 2 ] || exec /usr/bin/sleep 2
+fi
+exec /usr/bin/git "$@"
+"#,
+        )
+        .expect("write hanging probe Git");
+        std::fs::set_permissions(&fake_git, std::fs::Permissions::from_mode(0o755))
+            .expect("make fake Git executable");
+        let probe_count = project_root.join("git-probe-count");
+        let mut path = fake_bin.into_os_string();
+        path.push(":");
+        path.push(original_path);
+        sandbox.track_env("PATH");
+        sandbox.track_env("GIT_PROBE_COUNT");
+        // SAFETY: ScopedSessionSandbox owns TEST_ENV_LOCK and restores both variables.
+        unsafe {
+            std::env::set_var("PATH", path);
+            std::env::set_var("GIT_PROBE_COUNT", probe_count);
+        }
+    }
     let executor = Executor::Codex {
         model_override: None,
         thinking_budget: None,
@@ -382,52 +423,37 @@ async fn completion_rescues_require_commit_when_writer_left_uncommitted_changes(
     .await
     .expect("complete session");
 
+    if let Some(original_path) = original_path {
+        // SAFETY: restore PATH before the fixture's final real-Git checks.
+        unsafe {
+            std::env::set_var("PATH", original_path);
+            std::env::remove_var("GIT_PROBE_COUNT");
+        }
+    }
+
+    assert_eq!(completed.commit_created, Some(false));
+    assert_ne!(completed.execution.exit_code, 0);
     assert_eq!(
-        completed.execution.exit_code,
-        0,
-        "summary={}\ngate={:?}\nstderr={}",
-        completed.execution.summary,
-        completed.execution.csa_gate_failure,
-        completed.execution.stderr_output
-    );
-    assert!(completed.execution.csa_gate_failure.is_none());
-    assert_eq!(completed.commit_created, Some(true));
-    assert!(
-        completed
-            .changed_paths
-            .as_ref()
-            .is_some_and(|paths| paths.len() == 1 && paths[0] == "tracked.txt")
-    );
-    assert!(
-        completed
-            .execution
-            .stderr_output
-            .contains("CSA require-commit rescue: created commit"),
-        "{}",
-        completed.execution.stderr_output
-    );
-    assert!(
-        !completed
-            .execution
-            .stderr_output
-            .contains("post-run policy blocked"),
-        "{}",
-        completed.execution.stderr_output
-    );
-    assert_ne!(
         git_capture(project_root, &["rev-parse", "HEAD"]),
         initial_head
     );
-    assert_eq!(git_capture(project_root, &["status", "--porcelain=v1"]), "");
     assert_eq!(
-        git_capture(project_root, &["log", "-1", "--format=%s"]),
-        "feat: auto-rescue commit from CSA codex writer session"
+        git_capture(project_root, &["write-tree"]),
+        staged_tree,
+        "control-plane rescue must preserve the sandbox-blocked staged tree"
     );
-    let persisted = load_result(project_root, &session.meta_session_id)
-        .expect("load result")
-        .expect("result should be saved");
-    assert_eq!(persisted.status, "success");
-    assert_eq!(persisted.exit_code, 0);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn completion_does_not_rescue_after_sandbox_hook_failure_marker() {
+    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(false).await;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn completion_does_not_rescue_when_sandbox_marker_probe_times_out() {
+    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(true).await;
 }
 
 #[test]

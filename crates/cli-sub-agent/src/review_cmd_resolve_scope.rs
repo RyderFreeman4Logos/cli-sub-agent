@@ -147,7 +147,7 @@ fn git_output_with_timeout(project_root: &Path, args: &[&str]) -> Option<Output>
     run_command_with_timeout(&mut command, GIT_SCOPE_PROBE_TIMEOUT)
 }
 
-fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
+pub(crate) fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
     let mut stdout = tempfile::tempfile().ok()?;
     let mut stderr = tempfile::tempfile().ok()?;
     command
