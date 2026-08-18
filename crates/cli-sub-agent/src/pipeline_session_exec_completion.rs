@@ -149,7 +149,14 @@ pub(super) async fn complete_session_execution(
         });
         let sandbox_hook_blocked = matches!(sandbox_hook_probe, Some(Ok(true)));
         let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)))
-            || (git_commit_attempted && matches!(sandbox_hook_probe, Some(Ok(false))));
+            // Probe `Ok(false)` (no failure marker) is only ambiguous when the
+            // writer's commit did NOT advance HEAD. A successful commit removes
+            // the marker (and non-sandboxed runs never write one), so head
+            // advance plus a clean probe is verifiable: do not gate-fail it as
+            // commit-policy-unverifiable (F1/45240b4f).
+            || (git_commit_attempted
+                && commit_created != Some(true)
+                && matches!(sandbox_hook_probe, Some(Ok(false))));
         if !sandbox_hook_blocked
             && !sandbox_hook_probe_uncertain
             && require_commit::should_attempt_require_commit_rescue(
