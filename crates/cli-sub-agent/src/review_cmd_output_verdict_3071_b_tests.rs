@@ -307,3 +307,46 @@ fn issue_3071_single_review_preserves_post_prose_audit_finding() {
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[test]
+fn issue_3071_single_review_reconciles_split_section_prose_with_post_prose_audit() {
+    let session_id = "01M06C1K96HC53JD4149Z6TNGC";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-3071-single-split-section-audit", session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview result: FAIL. One canonical prose finding remains.\n## Findings\n1. [LOW][style] Canonical prose-only finding remains.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nHIGH: Cross-section prose row must not be extracted.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist split-section prose review");
+    save_result_with_repo_write_audit(&project_root, session_id);
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    let exit_code = crate::review_cmd::flow::persist_review_sidecars_if_session_exists(
+        &project_root,
+        &meta,
+        Some(session_id),
+    )
+    .expect("persist single-review sidecars");
+    assert_eq!(exit_code, 1);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    assert!(findings.findings.iter().any(|finding| {
+        finding.description == "Canonical prose-only finding remains."
+    }));
+    assert!(!findings
+        .findings
+        .iter()
+        .any(|finding| finding.description.contains("Cross-section prose row")));
+    assert!(findings
+        .findings
+        .iter()
+        .any(|finding| finding.id == "CSA-REVIEW-WORKTREE-MUTATION"));
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(verdict.severity_counts.get(&Severity::Low), Some(&1));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}

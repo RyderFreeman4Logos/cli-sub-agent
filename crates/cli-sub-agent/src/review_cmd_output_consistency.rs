@@ -76,8 +76,12 @@ pub(super) fn enforce_final_verdict_consistency(
     let mut canonical_findings = Vec::new();
     for finding in &findings_file.findings {
         // Parser-derived rows are rebuilt from current prose only when the
-        // extractor explicitly marked the artifact as prose-derived.
-        if prose_derived_findings && !prose_signals.findings.is_empty() {
+        // extractor explicitly marked the artifact as prose-derived. Keep
+        // the independent repo-write audit row added after extraction.
+        if prose_derived_findings
+            && !prose_signals.findings.is_empty()
+            && finding.id != super::super::dirty_tree::REVIEW_WORKTREE_MUTATION_FINDING_ID
+        {
             continue;
         }
         if canonical_findings
