@@ -478,6 +478,32 @@ fn issue_3071_fullwidth_path_punctuation_survives_leading_and_embedded_parsing()
 }
 
 #[test]
+fn issue_3071_double_backtick_leading_location_preserves_file_range() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading double-backtick path\n",
+        "   Location: ``src/lib.rs:42``\n",
+    ));
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_double_backtick_embedded_location_preserves_file_range() {
+    let findings = extract_review_findings_from_prose(
+        "## Findings\n1. [HIGH] embedded double-backtick path ``src/lib.rs:42`` for context\n",
+    );
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
 fn issue_3071_adjacent_backtick_spans_with_fullwidth_punctuation_preserve_later_path() {
     let findings = extract_review_findings_from_prose(concat!(
         "## Findings\n",

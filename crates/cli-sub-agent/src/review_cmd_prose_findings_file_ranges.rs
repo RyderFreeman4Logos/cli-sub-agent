@@ -36,9 +36,15 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
             })
             .trim_start()
     };
-    let (token, description, quoted) = if let Some(quoted_body) = trimmed.strip_prefix('`') {
-        let end = quoted_body.find('`')?;
-        (&quoted_body[..end], &quoted_body[end + 1..], true)
+    let (token, description, quoted) = if trimmed.starts_with('`') {
+        let delimiter_len = backtick_run_length(trimmed, 0);
+        let content_start = delimiter_len;
+        let end = find_closing_backtick(trimmed, content_start, delimiter_len)?;
+        (
+            &trimmed[content_start..end],
+            &trimmed[end + delimiter_len..],
+            true,
+        )
     } else {
         let mut parts = trimmed.splitn(2, char::is_whitespace);
         (parts.next()?, parts.next().unwrap_or_default(), false)
@@ -70,20 +76,22 @@ fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
         let mut search_start = 0;
         let mut found_span = false;
         while let Some(relative_start) = token[search_start..].find('`') {
-            let start = search_start + relative_start + 1;
-            let Some(relative_end) = token[start..].find('`') else {
-                break;
+            let opening_start = search_start + relative_start;
+            let delimiter_len = backtick_run_length(token, opening_start);
+            let content_start = opening_start + delimiter_len;
+            let Some(end) = find_closing_backtick(token, content_start, delimiter_len) else {
+                search_start = content_start;
+                continue;
             };
             found_span = true;
-            let end = start + relative_end;
-            if let Some((path, start)) = parse_file_reference_token(&token[start..end]) {
+            if let Some((path, start)) = parse_file_reference_token(&token[content_start..end]) {
                 return Some(ReviewFindingFileRange {
                     path,
                     start,
                     end: None,
                 });
             }
-            search_start = end + 1;
+            search_start = end + delimiter_len;
         }
         if !found_span {
             let token = token.trim_matches(|ch: char| {
@@ -100,6 +108,29 @@ fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
                 });
             }
         }
+    }
+    None
+}
+
+fn backtick_run_length(text: &str, start: usize) -> usize {
+    text.as_bytes()[start..]
+        .iter()
+        .take_while(|&&byte| byte == b'`')
+        .count()
+}
+
+fn find_closing_backtick(
+    text: &str,
+    mut search_start: usize,
+    delimiter_len: usize,
+) -> Option<usize> {
+    while let Some(relative_end) = text[search_start..].find('`') {
+        let end = search_start + relative_end;
+        let closing_len = backtick_run_length(text, end);
+        if closing_len == delimiter_len {
+            return Some(end);
+        }
+        search_start = end + closing_len;
     }
     None
 }
