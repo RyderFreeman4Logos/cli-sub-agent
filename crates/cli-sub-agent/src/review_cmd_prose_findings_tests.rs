@@ -476,3 +476,35 @@ fn issue_3071_fullwidth_path_punctuation_survives_leading_and_embedded_parsing()
     );
     assert_eq!(embedded[0].file_ranges[0].start, 42);
 }
+
+#[test]
+fn issue_3071_adjacent_backtick_spans_with_fullwidth_punctuation_preserve_later_path() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] adjacent spans `--json`\u{ff0c}`src/lib.rs:42`\u{ff0e}\n",
+    ));
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_backtick_quoted_leading_fullwidth_parenthesis_preserves_path() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading quoted path\n",
+        "   Location: `\u{ff08}src/lib.rs:42`\n",
+        "2. [HIGH] second leading quoted path\n",
+        "   Location: `\u{ff09}src/lib.rs:43`\n",
+    ));
+
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "\u{ff08}src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+    assert_eq!(findings[1].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[1].file_ranges[0].path, "\u{ff09}src/lib.rs");
+    assert_eq!(findings[1].file_ranges[0].start, 43);
+}

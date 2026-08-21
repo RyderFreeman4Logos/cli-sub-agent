@@ -26,18 +26,31 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 }
 
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
-    let trimmed = body
-        .trim_start_matches(|ch: char| {
-            matches!(ch, '`' | '(' | '[' | '（' | '）')
+    let trimmed = body.trim_start();
+    let trimmed = if trimmed.starts_with('`') {
+        trimmed
+    } else {
+        trimmed
+            .trim_start_matches(|ch: char| {
+                matches!(ch, '`' | '(' | '[' | '（' | '）')
+            })
+            .trim_start()
+    };
+    let (token, description, quoted) = if let Some(quoted_body) = trimmed.strip_prefix('`') {
+        let end = quoted_body.find('`')?;
+        (&quoted_body[..end], &quoted_body[end + 1..], true)
+    } else {
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        (parts.next()?, parts.next().unwrap_or_default(), false)
+    };
+    let token = if quoted {
+        token
+    } else {
+        token.trim_matches(|ch: char| {
+            matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）')
         })
-        .trim_start();
-    let mut parts = trimmed.splitn(2, char::is_whitespace);
-    let token = parts.next()?.trim_matches(|ch: char| {
-        matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）')
-    });
-    let description = parts
-        .next()
-        .unwrap_or_default()
+    };
+    let description = description
         .trim_start_matches(['-', ':'])
         .trim()
         .to_string();
@@ -53,28 +66,42 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
 }
 
 fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
-    body.split(char::is_whitespace)
-        .map(|token| {
-            if let Some(start) = token.find('`')
-                && let Some(relative_end) = token[start + 1..].find('`')
-            {
-                let end = start + 1 + relative_end;
-                return &token[start + 1..end];
+    for token in body.split(char::is_whitespace) {
+        let mut search_start = 0;
+        let mut found_span = false;
+        while let Some(relative_start) = token[search_start..].find('`') {
+            let start = search_start + relative_start + 1;
+            let Some(relative_end) = token[start..].find('`') else {
+                break;
+            };
+            found_span = true;
+            let end = start + relative_end;
+            if let Some((path, start)) = parse_file_reference_token(&token[start..end]) {
+                return Some(ReviewFindingFileRange {
+                    path,
+                    start,
+                    end: None,
+                });
             }
-            token.trim_matches(|ch: char| {
+            search_start = end + 1;
+        }
+        if !found_span {
+            let token = token.trim_matches(|ch: char| {
                 matches!(
                     ch,
                     '`' | '(' | ')' | '[' | ']' | ',' | '.' | ';' | '（' | '）'
                 )
-            })
-        })
-        .find_map(|token| {
-            parse_file_reference_token(token).map(|(path, start)| ReviewFindingFileRange {
-                path,
-                start,
-                end: None,
-            })
-        })
+            });
+            if let Some((path, start)) = parse_file_reference_token(token) {
+                return Some(ReviewFindingFileRange {
+                    path,
+                    start,
+                    end: None,
+                });
+            }
+        }
+    }
+    None
 }
 
 fn parse_file_reference_token(token: &str) -> Option<(String, u32)> {
