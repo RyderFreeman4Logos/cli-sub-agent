@@ -28,12 +28,12 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
     let trimmed = body
         .trim_start_matches(|ch: char| {
-            matches!(ch, '`' | '(' | '[' | '（' | '）' | '，' | '。' | '；' | '：' | '、')
+            matches!(ch, '`' | '(' | '[' | '（' | '）')
         })
         .trim_start();
     let mut parts = trimmed.splitn(2, char::is_whitespace);
     let token = parts.next()?.trim_matches(|ch: char| {
-        matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）' | '，' | '。' | '；' | '：' | '、')
+        matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）')
     });
     let description = parts
         .next()
@@ -53,15 +53,18 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
 }
 
 fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
-    body.split(|ch: char| {
-        ch.is_whitespace() || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
-    })
+    body.split(char::is_whitespace)
         .map(|token| {
+            if let Some(start) = token.find('`')
+                && let Some(relative_end) = token[start + 1..].find('`')
+            {
+                let end = start + 1 + relative_end;
+                return &token[start + 1..end];
+            }
             token.trim_matches(|ch: char| {
                 matches!(
                     ch,
-                    '`' | '(' | ')' | '[' | ']' | ',' | '.' | ';'
-                        | '（' | '）' | '，' | '。' | '；' | '：' | '、'
+                    '`' | '(' | ')' | '[' | ']' | ',' | '.' | ';' | '（' | '）'
                 )
             })
         })

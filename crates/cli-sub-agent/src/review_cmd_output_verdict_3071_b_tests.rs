@@ -50,67 +50,67 @@ fn issue_3071_class_b_counts_three_frozen_findings_once() {
         "\\u{5ba1}\\u{67e5}\\u{53d1}\\u{73b0} 3 \\u{4e2a}\\u{7f3a}\\u{9677}：1 \\u{4e2a} HIGH \\u{8d44}\\u{6e90}\\u{8017}\\u{5c3d}\\u{5b89}\\u{5168}\\u{95ee}\\u{9898}、2 \\u{4e2a} MEDIUM CLI \\u{5408}\\u{540c}\\u{95ee}\\u{9898}。",
         CLASS_B_DETAILS,
         r#"[[findings]]
-id = "prose-001"
+id = "prose-generated-001"
 severity = "high"
 description = "\\u{6587}\\u{4ef6}\\u{7f16}\\u{8bd1}\\u{5165}\\u{53e3}\\u{53ef}\\u{65e0}\\u{9650}\\u{8bfb}\\u{53d6}\\u{6216}\\u{6c38}\\u{4e45}\\u{963b}\\u{585e}"
 
 [[findings]]
-id = "prose-002"
+id = "prose-generated-002"
 severity = "medium"
 description = "confidence=0.99"
 file_ranges = [{ path = "crates/workflow-compiler/src/lib.rs", start = 98 }]
 
 [[findings]]
-id = "prose-003"
+id = "prose-generated-003"
 severity = "medium"
 description = "`--` \\u{540e}\\u{7684}\\u{8def}\\u{5f84} `--json` \\u{88ab}\\u{9519}\\u{8bef}\\u{8bc6}\\u{522b}\\u{4e3a}\\u{683c}\\u{5f0f}\\u{9009}\\u{9879}"
 
 [[findings]]
-id = "prose-004"
+id = "prose-generated-004"
 severity = "medium"
 description = "confidence=0.98"
 file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 81 }]
 
 [[findings]]
-id = "prose-005"
+id = "prose-generated-005"
 severity = "medium"
 description = "\\u{6210}\\u{529f}\\u{8f93}\\u{51fa}\\u{5199}\\u{5165}\\u{5931}\\u{8d25}\\u{4f1a} panic，\\u{800c}\\u{4e0d}\\u{662f}\\u{9075}\\u{5b88}\\u{9000}\\u{51fa}\\u{5408}\\u{540c}"
 
 [[findings]]
-id = "prose-006"
+id = "prose-generated-006"
 severity = "medium"
 description = "confidence=0.97"
 file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 122 }]
 
 [[findings]]
-id = "prose-007"
+id = "prose-generated-007"
 severity = "high"
 description = "\\u{6587}\\u{4ef6}\\u{7f16}\\u{8bd1}\\u{5165}\\u{53e3}\\u{53ef}\\u{65e0}\\u{9650}\\u{8bfb}\\u{53d6}\\u{6216}\\u{6c38}\\u{4e45}\\u{963b}\\u{585e}"
 
 [[findings]]
-id = "prose-008"
+id = "prose-generated-008"
 severity = "medium"
 description = "confidence=0.99"
 file_ranges = [{ path = "crates/workflow-compiler/src/lib.rs", start = 98 }]
 
 [[findings]]
-id = "prose-009"
+id = "prose-generated-009"
 severity = "medium"
 description = "`--` \\u{540e}\\u{7684}\\u{8def}\\u{5f84} `--json` \\u{88ab}\\u{9519}\\u{8bef}\\u{8bc6}\\u{522b}\\u{4e3a}\\u{683c}\\u{5f0f}\\u{9009}\\u{9879}"
 
 [[findings]]
-id = "prose-010"
+id = "prose-generated-010"
 severity = "medium"
 description = "confidence=0.98"
 file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 81 }]
 
 [[findings]]
-id = "prose-011"
+id = "prose-generated-011"
 severity = "medium"
 description = "\\u{6210}\\u{529f}\\u{8f93}\\u{51fa}\\u{5199}\\u{5165}\\u{5931}\\u{8d25}\\u{4f1a} panic，\\u{800c}\\u{4e0d}\\u{662f}\\u{9075}\\u{5b88}\\u{9000}\\u{51fa}\\u{5408}\\u{540c}"
 
 [[findings]]
-id = "prose-012"
+id = "prose-generated-012"
 severity = "medium"
 description = "confidence=0.97"
 file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 122 }]
@@ -163,6 +163,44 @@ description = "Structured security finding"
             .findings
             .iter()
             .any(|finding| finding.description == "Active security regression remains."),
+        "parsed prose finding was removed: {findings:#?}"
+    );
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&2));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_3071_structured_numeric_prose_id_survives_reconciliation() {
+    let (_env_lock, project_root, session_dir) = persist_fixture_review(
+        "issue-3071-structured-numeric-prose-id",
+        "01TEST3071NUMERICID0000",
+        "Review found one high-severity security finding.",
+        "## Findings\n1. [HIGH][security] Parsed security regression remains.\n",
+        r#"[[findings]]
+id = "prose-123"
+severity = "high"
+description = "Structured numeric prose ID"
+"#,
+        true,
+    );
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.id == "prose-123"),
+        "structured numeric prose finding was removed: {findings:#?}"
+    );
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.description == "Parsed security regression remains."),
         "parsed prose finding was removed: {findings:#?}"
     );
 

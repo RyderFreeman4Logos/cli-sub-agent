@@ -339,7 +339,7 @@ fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
                 "1. [MODERATE][correctness/ordering] Latched limits can still be reclassified ",
                 "as cancellation ([lifecycle.rs](/project/rust-core/src/workflow_adk/lifecycle.rs:741), confidence 0.98).\n",
             ),
-            "prose-001",
+            "prose-generated-001",
             Severity::Medium,
             Some(("lifecycle.rs", 741)),
         ),
@@ -349,7 +349,7 @@ fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
                 "1. [P1][security] Deleted-file ownership tokens have an inode-reuse ABA window\n",
                 "`llm/coding/scripts/test-fix-target.sh:104`, confidence 0.96\n",
             ),
-            "prose-001",
+            "prose-generated-001",
             Severity::High,
             Some(("llm/coding/scripts/test-fix-target.sh", 104)),
         ),
@@ -436,4 +436,43 @@ fn issue_3071_linux_path_prefixes_survive_leading_and_embedded_parsing() {
         assert_eq!(finding.file_ranges[0].path, path);
         assert_eq!(finding.file_ranges[0].start, line);
     }
+}
+
+#[test]
+fn parser_generated_prose_ids_support_indices_above_999() {
+    let text = (1..=1000)
+        .map(|index| format!("{index}. [LOW] generated finding {index}\n"))
+        .collect::<String>();
+    let findings = extract_review_findings_from_prose(&format!("## Findings\n{text}"));
+
+    assert_eq!(findings.len(), 1000);
+    assert_eq!(findings[999].id, "prose-generated-1000");
+}
+
+#[test]
+fn issue_3071_fullwidth_path_punctuation_survives_leading_and_embedded_parsing() {
+    let leading = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading fullwidth path\n",
+        "   Location: ",
+        "\u{ff0c}report.rs:7\n",
+    ));
+    assert_eq!(leading.len(), 1, "{leading:#?}");
+    assert_eq!(leading[0].file_ranges.len(), 1, "{leading:#?}");
+    assert_eq!(leading[0].file_ranges[0].path, "\u{ff0c}report.rs");
+    assert_eq!(leading[0].file_ranges[0].start, 7);
+
+    let embedded = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] embedded fullwidth path (",
+        "`src/\u{62a5}\u{544a}\u{ff0c}\u{6700}\u{7ec8}.rs:42`)",
+        "\n",
+    ));
+    assert_eq!(embedded.len(), 1, "{embedded:#?}");
+    assert_eq!(embedded[0].file_ranges.len(), 1, "{embedded:#?}");
+    assert_eq!(
+        embedded[0].file_ranges[0].path,
+        "src/\u{62a5}\u{544a}\u{ff0c}\u{6700}\u{7ec8}.rs"
+    );
+    assert_eq!(embedded[0].file_ranges[0].start, 42);
 }

@@ -17,12 +17,12 @@ fn issue_3071_class_c_counts_one_frozen_finding_once() {
    - Test gap: \\u{5f53}\\u{524d} `/dev/null` \\u{6d4b}\\u{8bd5}\\u{53ea}\\u{8986}\\u{76d6}\\u{7a33}\\u{5b9a}\\u{7684}\\u{975e}\\u{666e}\\u{901a}\\u{6587}\\u{4ef6}，\\u{6ca1}\\u{6709}\\u{8986}\\u{76d6}\\u{68c0}\\u{67e5}\\u{4e0e}\\u{6253}\\u{5f00}\\u{4e4b}\\u{95f4}\\u{7684}\\u{8def}\\u{5f84}\\u{66ff}\\u{6362}。
 "#,
         r#"[[findings]]
-id = "prose-001"
+id = "prose-generated-001"
 severity = "high"
 description = "\\u{6587}\\u{4ef6}\\u{7c7b}\\u{578b}\\u{68c0}\\u{67e5}\\u{4e0e}\\u{6253}\\u{5f00}\\u{4e0d}\\u{662f}\\u{540c}\\u{4e00}\\u{6587}\\u{4ef6}\\u{5bf9}\\u{8c61}（`crates/workflow-spec/src/lib.rs:423`，confidence=0.99）"
 
 [[findings]]
-id = "prose-002"
+id = "prose-generated-002"
 severity = "high"
 description = "\\u{6587}\\u{4ef6}\\u{7c7b}\\u{578b}\\u{68c0}\\u{67e5}\\u{4e0e}\\u{6253}\\u{5f00}\\u{4e0d}\\u{662f}\\u{540c}\\u{4e00}\\u{6587}\\u{4ef6}\\u{5bf9}\\u{8c61}（`crates/workflow-spec/src/lib.rs:423`，confidence=0.99）"
 "#,

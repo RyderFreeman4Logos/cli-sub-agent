@@ -13,7 +13,8 @@ use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
     FindingsSectionParse, classify_findings_section_body,
     extract_review_findings_from_prose_with_default, findings_section_bodies,
-    is_generated_prose_finding_id, review_finding_payload_eq, severity_counts_from_review_findings,
+    generated_prose_finding_id, is_generated_prose_finding_id, review_finding_payload_eq,
+    severity_counts_from_review_findings,
 };
 
 #[derive(Debug, Clone)]
@@ -216,7 +217,7 @@ fn record_review_prose_signal(
                 .filter(|existing| is_generated_prose_finding_id(&existing.id))
                 .count()
                 + 1;
-            finding.id = format!("prose-{index:03}");
+            finding.id = generated_prose_finding_id(index);
         }
         signals.findings.push(finding);
     }

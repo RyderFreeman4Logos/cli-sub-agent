@@ -5,6 +5,13 @@ use super::prose_resolution::{
 };
 use csa_session::{FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity};
 
+#[path = "review_cmd_prose_findings_generated.rs"]
+mod generated_prose_findings;
+pub(in crate::review_cmd) use generated_prose_findings::{
+    findings_file_from_explicit_findings_sections, generated_prose_finding_id,
+    is_generated_prose_finding_id,
+};
+
 pub(in crate::review_cmd) fn findings_file_from_prose(text: &str) -> Option<FindingsFile> {
     let findings = extract_review_findings_from_prose(text);
     if findings.is_empty() {
@@ -12,35 +19,6 @@ pub(in crate::review_cmd) fn findings_file_from_prose(text: &str) -> Option<Find
     } else {
         Some(FindingsFile { findings })
     }
-}
-
-pub(in crate::review_cmd) fn is_generated_prose_finding_id(id: &str) -> bool {
-    let Some(index) = id.strip_prefix("prose-") else {
-        return false;
-    };
-    index.len() == 3 && index.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-pub(in crate::review_cmd) fn findings_file_from_explicit_findings_sections(
-    text: &str,
-) -> Option<FindingsFile> {
-    let mut findings = Vec::new();
-    for body in findings_section_bodies(text) {
-        let parser_input = format!("Findings\n{}", body.as_str());
-        for mut finding in extract_review_findings_from_prose_with_default(&parser_input, None) {
-            if findings
-                .iter()
-                .any(|existing| review_finding_payload_eq(existing, &finding))
-            {
-                continue;
-            }
-            if is_generated_prose_finding_id(&finding.id) {
-                finding.id = format!("prose-{:03}", findings.len() + 1);
-            }
-            findings.push(finding);
-        }
-    }
-    (!findings.is_empty()).then_some(FindingsFile { findings })
 }
 
 pub(in crate::review_cmd) fn extract_review_findings_from_prose(text: &str) -> Vec<ReviewFinding> {
@@ -92,7 +70,8 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
             in_findings_section,
             default_unlabeled_severity.clone(),
         ) {
-            findings.push(parsed.into_review_finding(format!("prose-{:03}", findings.len() + 1)));
+            findings
+                .push(parsed.into_review_finding(generated_prose_finding_id(findings.len() + 1)));
             active_finding = Some(findings.len() - 1);
             continue;
         }
