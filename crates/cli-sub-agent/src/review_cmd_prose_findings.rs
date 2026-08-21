@@ -14,6 +14,13 @@ pub(in crate::review_cmd) fn findings_file_from_prose(text: &str) -> Option<Find
     }
 }
 
+pub(in crate::review_cmd) fn is_generated_prose_finding_id(id: &str) -> bool {
+    let Some(index) = id.strip_prefix("prose-") else {
+        return false;
+    };
+    index.len() == 3 && index.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 pub(in crate::review_cmd) fn findings_file_from_explicit_findings_sections(
     text: &str,
 ) -> Option<FindingsFile> {
@@ -27,7 +34,7 @@ pub(in crate::review_cmd) fn findings_file_from_explicit_findings_sections(
             {
                 continue;
             }
-            if finding.id.starts_with("prose-") {
+            if is_generated_prose_finding_id(&finding.id) {
                 finding.id = format!("prose-{:03}", findings.len() + 1);
             }
             findings.push(finding);

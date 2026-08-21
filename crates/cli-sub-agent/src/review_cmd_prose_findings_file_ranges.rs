@@ -28,13 +28,12 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
     let trimmed = body
         .trim_start_matches(|ch: char| {
-            ch.is_ascii_punctuation()
-                || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+            matches!(ch, '`' | '(' | '[' | '（' | '）' | '，' | '。' | '；' | '：' | '、')
         })
         .trim_start();
     let mut parts = trimmed.splitn(2, char::is_whitespace);
     let token = parts.next()?.trim_matches(|ch: char| {
-        ch.is_ascii_punctuation() || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+        matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）' | '，' | '。' | '；' | '：' | '、')
     });
     let description = parts
         .next()
@@ -59,8 +58,11 @@ fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
     })
         .map(|token| {
             token.trim_matches(|ch: char| {
-                ch.is_ascii_punctuation()
-                    || matches!(ch, '（' | '）' | '，' | '。' | '；' | '：' | '、')
+                matches!(
+                    ch,
+                    '`' | '(' | ')' | '[' | ']' | ',' | '.' | ';'
+                        | '（' | '）' | '，' | '。' | '；' | '：' | '、'
+                )
             })
         })
         .find_map(|token| {

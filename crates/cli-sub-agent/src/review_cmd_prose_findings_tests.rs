@@ -396,3 +396,44 @@ fn issue_2975_wrapped_finding_keeps_continuation_and_source() {
     assert_eq!(finding.file_ranges[0].path, "lifecycle.rs");
     assert_eq!(finding.file_ranges[0].start, 741);
 }
+
+#[test]
+fn issue_3071_linux_path_prefixes_survive_leading_and_embedded_parsing() {
+    let leading = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] absolute path regression\n",
+        "   Location: /workspace/src/lib.rs:42\n",
+        "2. [HIGH] generated path regression\n",
+        "   Location: _generated.rs:7\n",
+        "3. [HIGH] dashed path regression\n",
+        "   Location: -generated.rs:8\n",
+        "4. [HIGH] plus path regression\n",
+        "   Location: +generated.rs:9\n",
+    ));
+    let expected = [
+        ("/workspace/src/lib.rs", 42),
+        ("_generated.rs", 7),
+        ("-generated.rs", 8),
+        ("+generated.rs", 9),
+    ];
+    assert_eq!(leading.len(), expected.len(), "{leading:#?}");
+    for (finding, (path, line)) in leading.iter().zip(expected) {
+        assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+        assert_eq!(finding.file_ranges[0].path, path);
+        assert_eq!(finding.file_ranges[0].start, line);
+    }
+
+    let embedded = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] absolute path regression (/workspace/src/lib.rs:42)\n",
+        "2. [HIGH] generated path regression (_generated.rs:7)\n",
+        "3. [HIGH] dashed path regression (-generated.rs:8)\n",
+        "4. [HIGH] plus path regression (+generated.rs:9)\n",
+    ));
+    assert_eq!(embedded.len(), expected.len(), "{embedded:#?}");
+    for (finding, (path, line)) in embedded.iter().zip(expected) {
+        assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+        assert_eq!(finding.file_ranges[0].path, path);
+        assert_eq!(finding.file_ranges[0].start, line);
+    }
+}

@@ -133,3 +133,41 @@ file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 122 }]
     assert_eq!(verdict.severity_counts.values().sum::<u32>(), 3);
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+#[test]
+fn issue_3071_structured_prose_prefixed_id_survives_reconciliation() {
+    let (_env_lock, project_root, session_dir) = persist_fixture_review(
+        "issue-3071-structured-prose-id",
+        "01TEST3071PROSEID00000",
+        "Review found one high-severity security finding.",
+        "## Findings\n1. [HIGH][security] Active security regression remains.\n",
+        r#"[[findings]]
+id = "prose-security-1"
+severity = "high"
+description = "Structured security finding"
+"#,
+        true,
+    );
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.id == "prose-security-1"),
+        "structured prose-prefixed finding was removed: {findings:#?}"
+    );
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.description == "Active security regression remains."),
+        "parsed prose finding was removed: {findings:#?}"
+    );
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&2));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}

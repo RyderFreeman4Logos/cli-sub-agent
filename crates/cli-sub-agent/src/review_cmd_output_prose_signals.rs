@@ -13,7 +13,7 @@ use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
     FindingsSectionParse, classify_findings_section_body,
     extract_review_findings_from_prose_with_default, findings_section_bodies,
-    review_finding_payload_eq, severity_counts_from_review_findings,
+    is_generated_prose_finding_id, review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
 #[derive(Debug, Clone)]
@@ -209,11 +209,11 @@ fn record_review_prose_signal(
         {
             continue;
         }
-        if finding.id.starts_with("prose-") {
+        if is_generated_prose_finding_id(&finding.id) {
             let index = signals
                 .findings
                 .iter()
-                .filter(|existing| existing.id.starts_with("prose-"))
+                .filter(|existing| is_generated_prose_finding_id(&existing.id))
                 .count()
                 + 1;
             finding.id = format!("prose-{index:03}");

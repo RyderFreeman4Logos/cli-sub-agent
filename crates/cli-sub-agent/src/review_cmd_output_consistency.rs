@@ -19,7 +19,7 @@ use super::prose_signals::{
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
 use crate::review_cmd::prose_findings::{
-    review_finding_payload_eq, severity_counts_from_review_findings,
+    is_generated_prose_finding_id, review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
@@ -69,11 +69,11 @@ pub(super) fn enforce_final_verdict_consistency(
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let mut canonical_findings = Vec::new();
     for finding in &findings_file.findings {
-        // `prose-*` rows are parser output, not reviewer-authored identities.
+        // `prose-###` rows are parser output, not reviewer-authored identities.
         // Rebuild them from the current canonical prose so stale parser
         // diagnostics (for example a standalone `confidence=...` row) cannot
         // survive beside the source-located finding they came from.
-        if !prose_signals.findings.is_empty() && finding.id.starts_with("prose-") {
+        if !prose_signals.findings.is_empty() && is_generated_prose_finding_id(&finding.id) {
             continue;
         }
         if canonical_findings
