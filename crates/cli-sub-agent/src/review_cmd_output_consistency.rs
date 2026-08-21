@@ -19,7 +19,7 @@ use super::prose_signals::{
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
 use crate::review_cmd::prose_findings::{
-    is_generated_prose_finding_id, review_finding_payload_eq, severity_counts_from_review_findings,
+    review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
 const PROSE_FINDINGS_UNPARSED_REASON: &str = "prose_findings_present_but_unparsed";
@@ -34,6 +34,10 @@ pub(super) fn enforce_final_verdict_consistency(
 ) -> Result<(), anyhow::Error> {
     let prose_signals = review_prose_signals(session_dir)?;
     let findings_file = load_findings_toml_from_output(session_dir)?.unwrap_or_default();
+    let prose_derived_findings = session_dir
+        .join("output")
+        .join(super::super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER)
+        .exists();
     let extraction_confirmed_empty = findings_file.findings.is_empty()
         && session_dir
             .join("output")
@@ -69,11 +73,9 @@ pub(super) fn enforce_final_verdict_consistency(
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let mut canonical_findings = Vec::new();
     for finding in &findings_file.findings {
-        // `prose-generated-###` rows are parser output, not reviewer-authored identities.
-        // Rebuild them from the current canonical prose so stale parser
-        // diagnostics (for example a standalone `confidence=...` row) cannot
-        // survive beside the source-located finding they came from.
-        if !prose_signals.findings.is_empty() && is_generated_prose_finding_id(&finding.id) {
+        // Parser-derived rows are rebuilt from current prose only when the
+        // extractor explicitly marked the artifact as prose-derived.
+        if prose_derived_findings && !prose_signals.findings.is_empty() {
             continue;
         }
         if canonical_findings
@@ -115,6 +117,12 @@ pub(super) fn enforce_final_verdict_consistency(
     } else {
         findings_file
     };
+    if prose_derived_findings && !prose_signals.findings.is_empty() {
+        let marker_path = session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER);
+        let _ = fs::remove_file(marker_path);
+    }
 
     let placeholder_findings_only =
         findings_file_contains_only_artifact_generation_placeholder(&findings_file);

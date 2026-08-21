@@ -27,6 +27,7 @@ severity = "high"
 description = "\\u{6587}\\u{4ef6}\\u{7c7b}\\u{578b}\\u{68c0}\\u{67e5}\\u{4e0e}\\u{6253}\\u{5f00}\\u{4e0d}\\u{662f}\\u{540c}\\u{4e00}\\u{6587}\\u{4ef6}\\u{5bf9}\\u{8c61}（`crates/workflow-spec/src/lib.rs:423`，confidence=0.99）"
 "#,
         true,
+        true,
     );
     let findings = read_findings_toml(&session_dir);
     assert_eq!(findings.findings.len(), 1, "{findings:#?}");

@@ -24,6 +24,10 @@ pub(super) const FINDINGS_TOML_SYNTHETIC_MARKER: &str = ".findings.toml.syntheti
 /// is suppressed only when this marker is present (#2002).
 pub(super) const FINDINGS_TOML_EXTRACTED_MARKER: &str = ".findings.toml.extracted";
 
+/// Sidecar marker written when findings were synthesized from prose rather than
+/// loaded from reviewer-authored structured TOML.
+pub(super) const FINDINGS_TOML_PROSE_DERIVED_MARKER: &str = ".findings.toml.prose-derived";
+
 /// Persist `output/findings.toml` extracted from the reviewer message.
 ///
 /// Best-effort: missing/invalid fenced TOML produces a synthetic empty file and
@@ -41,6 +45,10 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                     .join("output")
                     .join(FINDINGS_TOML_SYNTHETIC_MARKER);
                 let _ = fs::remove_file(&marker_path);
+                let prose_marker_path = session_dir
+                    .join("output")
+                    .join(FINDINGS_TOML_PROSE_DERIVED_MARKER);
+                let _ = fs::remove_file(prose_marker_path);
                 debug!(
                     session_id = %meta.session_id,
                     "Skipped synthetic findings.toml for failed review execution"
@@ -48,7 +56,9 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                 return;
             }
 
-            let (artifact, warning_reason) = match derive_findings_toml_artifact(&session_dir) {
+            let (artifact, warning_reason, prose_derived) = match derive_findings_toml_artifact(
+                &session_dir,
+            ) {
                 Ok(artifact) => artifact,
                 Err(error) => {
                     warn!(
@@ -56,7 +66,7 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                         error = %error,
                         "Failed to derive review findings.toml; writing synthetic empty artifact"
                     );
-                    (FindingsFile::default(), Some("derivation failure"))
+                    (FindingsFile::default(), Some("derivation failure"), false)
                 }
             };
 
@@ -100,6 +110,14 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
                     .join(FINDINGS_TOML_EXTRACTED_MARKER);
                 let _ = fs::write(&extracted_marker, b"");
             }
+            let prose_marker_path = session_dir
+                .join("output")
+                .join(FINDINGS_TOML_PROSE_DERIVED_MARKER);
+            if prose_derived {
+                let _ = fs::write(prose_marker_path, b"");
+            } else {
+                let _ = fs::remove_file(prose_marker_path);
+            }
         }
         Err(error) => {
             warn!(
@@ -113,9 +131,13 @@ pub(super) fn persist_review_findings_toml(project_root: &Path, meta: &ReviewSes
 
 fn derive_findings_toml_artifact(
     session_dir: &Path,
-) -> Result<(FindingsFile, Option<&'static str>), anyhow::Error> {
+) -> Result<(FindingsFile, Option<&'static str>, bool), anyhow::Error> {
     let Some(review_text) = load_canonical_review_text(session_dir)? else {
-        return Ok((FindingsFile::default(), Some("review text unavailable")));
+        return Ok((
+            FindingsFile::default(),
+            Some("review text unavailable"),
+            false,
+        ));
     };
 
     let prose_artifact = findings_file_from_prose(&review_text);
@@ -127,23 +149,24 @@ fn derive_findings_toml_artifact(
             // support/evidence prose (e.g. "P1 supported by ...") from being
             // misclassified as blocking findings (#2536).
             if review_explicitly_states_no_findings(&review_text) {
-                Ok((artifact, None))
+                Ok((artifact, None, false))
             } else if let Some(prose_artifact) =
                 findings_file_from_explicit_findings_sections(&review_text)
             {
-                Ok((prose_artifact, None))
+                Ok((prose_artifact, None, true))
             } else {
-                Ok((artifact, None))
+                Ok((artifact, None, false))
             }
         }
-        Some(artifact) => Ok((artifact, None)),
+        Some(artifact) => Ok((artifact, None, false)),
         None => {
             if let Some(artifact) = prose_artifact {
-                Ok((artifact, None))
+                Ok((artifact, None, true))
             } else {
                 Ok((
                     FindingsFile::default(),
                     Some("findings.toml block missing or invalid"),
+                    false,
                 ))
             }
         }

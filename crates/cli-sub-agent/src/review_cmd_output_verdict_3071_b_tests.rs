@@ -116,6 +116,7 @@ description = "confidence=0.97"
 file_ranges = [{ path = "crates/workflowctl/src/main.rs", start = 122 }]
 "#,
         true,
+        true,
     );
     let findings = read_findings_toml(&session_dir);
     assert_eq!(findings.findings.len(), 3, "{findings:#?}");
@@ -147,6 +148,7 @@ severity = "high"
 description = "Structured security finding"
 "#,
         true,
+        false,
     );
 
     let findings = read_findings_toml(&session_dir);
@@ -173,6 +175,46 @@ description = "Structured security finding"
 }
 
 #[test]
+fn issue_3071_authored_generated_prose_id_survives_reconciliation() {
+    let (_env_lock, project_root, session_dir) = persist_fixture_review(
+        "issue-3071-authored-generated-prose-id",
+        "01TEST3071AUTHOREDGEN000",
+        "Review found one high-severity structured finding and one low-severity prose finding.",
+        "## Findings\n1. [LOW][style] Independent prose-only finding remains.\n",
+        r#"[[findings]]
+id = "prose-generated-001"
+severity = "high"
+description = "Reviewer-authored generated namespace ID"
+"#,
+        true,
+        false,
+    );
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.id == "prose-generated-001"),
+        "reviewer-authored generated namespace ID was removed: {findings:#?}"
+    );
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.description == "Independent prose-only finding remains."),
+        "prose finding was removed: {findings:#?}"
+    );
+
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(verdict.severity_counts.get(&Severity::Low), Some(&1));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn issue_3071_structured_numeric_prose_id_survives_reconciliation() {
     let (_env_lock, project_root, session_dir) = persist_fixture_review(
         "issue-3071-structured-numeric-prose-id",
@@ -185,6 +227,7 @@ severity = "high"
 description = "Structured numeric prose ID"
 "#,
         true,
+        false,
     );
 
     let findings = read_findings_toml(&session_dir);

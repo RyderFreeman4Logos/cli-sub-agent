@@ -233,6 +233,7 @@ fn clear_empty_findings_markers(session_dir: &Path) {
     for marker in [
         super::super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER,
         super::super::findings_toml::FINDINGS_TOML_EXTRACTED_MARKER,
+        super::super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER,
     ] {
         let _ = fs::remove_file(session_dir.join("output").join(marker));
     }

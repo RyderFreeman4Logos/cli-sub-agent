@@ -40,6 +40,7 @@ fn persist_fixture_review(
     details: &str,
     findings_toml: &str,
     extracted_marker: bool,
+    prose_derived: bool,
 ) -> (OwnedMutexGuard<()>, PathBuf, PathBuf) {
     let summary = expand_unicode_escapes(summary);
     let details = expand_unicode_escapes(details);
@@ -65,6 +66,15 @@ fn persist_fixture_review(
             b"",
         )
         .expect("write extracted marker");
+    }
+    if prose_derived {
+        fs::write(
+            session_dir
+                .join("output")
+                .join(crate::review_cmd::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER),
+            b"",
+        )
+        .expect("write prose-derived marker");
     }
     let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
     persist_review_verdict(&project_root, &meta, &[], Vec::new());

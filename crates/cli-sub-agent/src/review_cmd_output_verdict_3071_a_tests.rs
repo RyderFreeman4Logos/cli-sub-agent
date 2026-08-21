@@ -24,6 +24,7 @@ fn issue_3071_class_a_replaces_artifact_placeholder_with_source_located_finding(
  description = "Artifact generation failed: review verdict is FAIL but CSA could not extract a structured finding. Reason: fail_verdict_empty_findings_artifact. Inspect output/details.md and output/review-verdict.json."
 "#,
         false,
+        false,
     );
     let findings = read_findings_toml(&session_dir);
     assert_eq!(findings.findings.len(), 1, "{findings:#?}");
