@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use super::prose_resolution::{
     finding_text_describes_resolved_issue, review_signal_describes_resolved_issue,
@@ -8,7 +8,7 @@ use csa_session::{FindingsFile, ReviewFinding, ReviewFindingFileRange, Severity}
 #[path = "review_cmd_prose_findings_generated.rs"]
 mod generated_prose_findings;
 pub(in crate::review_cmd) use generated_prose_findings::{
-    findings_file_from_explicit_findings_sections, generated_prose_finding_id,
+    allocate_unique_generated_prose_finding_id, findings_file_from_explicit_findings_sections,
     is_generated_prose_finding_id,
 };
 
@@ -32,6 +32,8 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
     default_unlabeled_severity: Option<Severity>,
 ) -> Vec<ReviewFinding> {
     let mut findings: Vec<ReviewFinding> = Vec::new();
+    let mut used_ids = HashSet::new();
+    let mut next_generated_index = 1;
     let mut in_findings_section = false;
     let mut in_code_fence = false;
     let mut active_finding: Option<usize> = None;
@@ -70,8 +72,11 @@ pub(in crate::review_cmd) fn extract_review_findings_from_prose_with_default(
             in_findings_section,
             default_unlabeled_severity.clone(),
         ) {
-            findings
-                .push(parsed.into_review_finding(generated_prose_finding_id(findings.len() + 1)));
+            let id = allocate_unique_generated_prose_finding_id(
+                &mut used_ids,
+                &mut next_generated_index,
+            );
+            findings.push(parsed.into_review_finding(id));
             active_finding = Some(findings.len() - 1);
             continue;
         }

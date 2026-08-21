@@ -125,6 +125,11 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
 
     let (dirty_session_id, dirty_session_dir) =
         create_review_session(project.path(), "dirty reviewer");
+    csa_session::persist_structured_output(
+        &dirty_session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview result: FAIL. One low severity prose finding remains.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\n## Findings\n1. [LOW][style] Independent prose-only finding remains.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist prose review");
     save_result_with_repo_write_audit(project.path(), &dirty_session_id);
     let (clean_session_id_1, _) = create_review_session(project.path(), "clean reviewer 1");
     let (clean_session_id_2, _) = create_review_session(project.path(), "clean reviewer 2");
@@ -195,6 +200,7 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
             .expect("child findings.toml should exist"),
     )
     .expect("child findings.toml should parse");
+    assert_eq!(child_findings.findings.len(), 2, "{child_findings:#?}");
     let child_finding = child_findings
         .findings
         .iter()

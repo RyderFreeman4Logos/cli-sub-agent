@@ -80,3 +80,31 @@ fn persist_fixture_review(
     persist_review_verdict(&project_root, &meta, &[], Vec::new());
     (env_lock, project_root, session_dir)
 }
+
+fn save_result_with_repo_write_audit(project_root: &Path, session_id: &str) {
+    let mut repo_write_audit = toml::map::Map::new();
+    repo_write_audit.insert(
+        "modified".to_string(),
+        toml::Value::Array(vec![toml::Value::String("weave.lock".to_string())]),
+    );
+    let mut artifacts = toml::map::Map::new();
+    artifacts.insert(
+        "repo_write_audit".to_string(),
+        toml::Value::Table(repo_write_audit),
+    );
+    let now = chrono::Utc::now();
+    let result = csa_session::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "Clean textual verdict".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now + chrono::TimeDelta::seconds(1),
+        manager_fields: csa_session::SessionManagerFields {
+            artifacts: Some(toml::Value::Table(artifacts)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    csa_session::save_result(project_root, session_id, &result).expect("save review result");
+}

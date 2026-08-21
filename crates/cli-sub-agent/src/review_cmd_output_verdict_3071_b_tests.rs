@@ -192,6 +192,12 @@ description = "Reviewer-authored generated namespace ID"
 
     let findings = read_findings_toml(&session_dir);
     assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    let finding_ids = findings
+        .findings
+        .iter()
+        .map(|finding| finding.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(finding_ids.len(), 2, "distinct findings reused one ID: {findings:#?}");
     assert!(
         findings
             .findings
@@ -205,6 +211,18 @@ description = "Reviewer-authored generated namespace ID"
             .iter()
             .any(|finding| finding.description == "Independent prose-only finding remains."),
         "prose finding was removed: {findings:#?}"
+    );
+
+    let session_findings = crate::review_session_findings::read_session_findings_or_fall_back(
+        &session_dir,
+    )
+    .expect("read session findings")
+    .expect("findings.toml should be authoritative");
+    let consolidated = crate::review_consensus::consolidate_findings(session_findings);
+    assert_eq!(
+        consolidated.len(),
+        2,
+        "consensus dropped a distinct finding: {consolidated:#?}"
     );
 
     let verdict = read_verdict(&session_dir);
@@ -250,5 +268,42 @@ description = "Structured numeric prose ID"
     let verdict = read_verdict(&session_dir);
     assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&2));
     assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
+fn issue_3071_single_review_preserves_post_prose_audit_finding() {
+    let session_id = "01M06C1K96HC53JD4149Z6TNGC";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-3071-single-post-prose-audit", session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview result: FAIL. One low severity prose finding remains.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\n## Findings\n1. [LOW][style] Independent prose-only finding remains.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist prose review");
+    save_result_with_repo_write_audit(&project_root, session_id);
+
+    let meta = make_review_meta_with_decision(session_id, ReviewDecision::Fail, "HAS_ISSUES");
+    let exit_code = crate::review_cmd::flow::persist_review_sidecars_if_session_exists(
+        &project_root,
+        &meta,
+        Some(session_id),
+    )
+    .expect("persist single-review sidecars");
+    assert_eq!(exit_code, 1);
+
+    let findings = read_findings_toml(&session_dir);
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    let audit = findings
+        .findings
+        .iter()
+        .find(|finding| finding.id == "CSA-REVIEW-WORKTREE-MUTATION")
+        .expect("post-prose audit finding should survive");
+    assert_eq!(audit.severity, Severity::High);
+    let verdict = read_verdict(&session_dir);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(verdict.severity_counts.get(&Severity::Low), Some(&1));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
+
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }

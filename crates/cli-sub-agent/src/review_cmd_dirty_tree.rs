@@ -155,6 +155,10 @@ pub(super) fn append_repo_write_audit_finding(
                 .join("output")
                 .join(super::findings_toml::FINDINGS_TOML_SYNTHETIC_MARKER);
             let _ = std::fs::remove_file(synthetic_marker);
+            let prose_derived_marker = session_dir
+                .join("output")
+                .join(super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER);
+            let _ = std::fs::remove_file(prose_derived_marker);
         }
     }
 

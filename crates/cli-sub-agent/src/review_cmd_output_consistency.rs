@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -19,6 +20,7 @@ use super::prose_signals::{
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
 use crate::review_cmd::prose_findings::{
+    allocate_unique_generated_prose_finding_id, is_generated_prose_finding_id,
     review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
@@ -86,6 +88,11 @@ pub(super) fn enforce_final_verdict_consistency(
         }
         canonical_findings.push(finding.clone());
     }
+    let mut used_finding_ids = canonical_findings
+        .iter()
+        .map(|finding| finding.id.clone())
+        .collect::<HashSet<_>>();
+    let mut next_generated_index = 1;
     if !skip_prose_override {
         for finding in &prose_signals.findings {
             if canonical_findings
@@ -94,7 +101,16 @@ pub(super) fn enforce_final_verdict_consistency(
             {
                 continue;
             }
-            canonical_findings.push(finding.clone());
+            let mut finding = finding.clone();
+            if is_generated_prose_finding_id(&finding.id) {
+                finding.id = allocate_unique_generated_prose_finding_id(
+                    &mut used_finding_ids,
+                    &mut next_generated_index,
+                );
+            } else {
+                used_finding_ids.insert(finding.id.clone());
+            }
+            canonical_findings.push(finding);
         }
     }
     if canonical_findings
