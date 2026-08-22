@@ -280,6 +280,8 @@ async fn idle_timeout_after_both_pipes_close_terminates_term_resistant_descendan
     let child = spawn_tool_with_options(command.into(), None, SpawnOptions::default())
         .await
         .expect("spawn fixture");
+    let process_group = i32::try_from(child.id().expect("fixture process group identity"))
+        .expect("fixture PID fits process-group ID");
     let pid = wait_for_fixture_pid(&pid_file).await;
     let result = tokio::time::timeout(
         Duration::from_secs(2),
@@ -299,4 +301,9 @@ async fn idle_timeout_after_both_pipes_close_terminates_term_resistant_descendan
     .expect("wait result");
     assert_eq!(result.exit_code, 137);
     assert_dead_or_zombie(pid).await;
+    assert!(
+        !crate::process_activity::process_group_has_live_members(process_group)
+            .expect("inspect cleaned process group"),
+        "timed-out cleanup must leave no live process-group members"
+    );
 }

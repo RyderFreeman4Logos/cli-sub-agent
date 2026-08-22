@@ -215,6 +215,18 @@ fn output_with_deadline(
     description: &str,
     command_timeout: Duration,
 ) -> Output {
+    output_with_deadline_observing(command, description, command_timeout, || String::new())
+}
+
+fn output_with_deadline_observing<F>(
+    command: &mut Command,
+    description: &str,
+    command_timeout: Duration,
+    mut observe_before_cleanup: F,
+) -> Output
+where
+    F: FnMut() -> String,
+{
     command.process_group(0);
     let mut child = command
         .stdin(Stdio::null())
@@ -227,6 +239,7 @@ fn output_with_deadline(
     let mut child = ChildProcessGroupGuard::new(child);
     let deadline = Instant::now() + command_timeout;
     let status = loop {
+        let observation = observe_before_cleanup();
         match child.exited_without_reaping() {
             Ok(true) => {
                 let _ = child.fence_group_if_owned();
@@ -238,8 +251,8 @@ fn output_with_deadline(
             Ok(false) => {
                 child.cleanup();
                 panic!(
-                    "{description} did not finish within {} seconds",
-                    command_timeout.as_secs()
+                    "{description} did not finish within {} seconds; {observation}",
+                    command_timeout.as_secs(),
                 );
             }
             Err(error) => {
@@ -271,38 +284,60 @@ fn output_with_deadline(
 
 #[test]
 fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
+    let identity_dir = tempfile::tempdir().expect("create descendant identity directory");
+    let identity_path = identity_dir.path().join("descendant.identity");
+    let release_path = identity_dir.path().join("release");
     let mut command = Command::new("sh");
-    command.args([
-        "-c",
-        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; start_time=$(awk '{print $22}' \"/proc/$descendant/stat\"); printf '%s %s\\n' \"$descendant\" \"$start_time\"; exit 0",
-    ]);
+    let script = format!(
+        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; start_time=$(awk '{{print $22}}' \"/proc/$descendant/stat\"); printf '%s %s\\n' \"$descendant\" \"$start_time\" > \"{}\"; printf '%s %s\\n' \"$descendant\" \"$start_time\"; while [ ! -e \"{}\" ]; do sleep 0.01; done; exit 0",
+        identity_path.display(),
+        release_path.display(),
+    );
+    command.args(["-c", &script]);
     let started = Instant::now();
-    let output = output_with_deadline(
+    let mut descendant = None;
+    let output = output_with_deadline_observing(
         &mut command,
         "direct child exited but descendant survived with closed pipes",
         Duration::from_secs(5),
+        || {
+            if descendant.is_some() {
+                return String::from("captured descendant identity");
+            }
+            let Ok(identity_output) = std::fs::read_to_string(&identity_path) else {
+                return String::from("descendant identity has not been published");
+            };
+            let identity = identity_output.split_whitespace().collect::<Vec<_>>();
+            if identity.len() != 2 {
+                return format!("invalid descendant identity contents: {identity_output:?}");
+            }
+            let Ok(pid) = identity[0].parse::<u32>() else {
+                return format!("invalid descendant PID: {:?}", identity[0]);
+            };
+            let Ok(start_time) = identity[1].parse::<u64>() else {
+                return format!("invalid descendant start time: {:?}", identity[1]);
+            };
+            if let Some(captured) = ProcessIdentity::capture_with_start_time(pid, start_time) {
+                descendant = Some(captured);
+                std::fs::write(&release_path, "released").expect("release direct child");
+                return format!("captured descendant identity pid={pid} start_time={start_time}");
+            }
+            format!(
+                "published descendant identity pid={pid} start_time={start_time} no longer matches"
+            )
+        },
     );
-    let descendant_output = String::from_utf8(output.stdout).expect("descendant pid is utf-8");
-    let descendant_identity = descendant_output.split_whitespace().collect::<Vec<_>>();
-    assert_eq!(descendant_identity.len(), 2, "descendant identity fields");
-    let descendant_pid = descendant_identity[0]
-        .parse::<u32>()
-        .expect("parse descendant pid");
-    let descendant_start_time = descendant_identity[1]
-        .parse::<u64>()
-        .expect("parse descendant start time");
     let descendant =
-        ProcessIdentity::capture_with_start_time(descendant_pid, descendant_start_time)
-            .expect("capture the spawned descendant identity before checking cleanup");
-    let exited = wait_for_process_exit(descendant_pid);
+        descendant.expect("capture the spawned descendant identity before checking cleanup");
+    let exited = wait_for_process_exit(descendant.pid);
     if !exited {
-        // Keep the RED test hygienic: the unfixed helper intentionally leaks
-        // this descendant, so clean it up before asserting the failure.
+        // Keep the regression hygienic if cleanup regresses: signal only the
+        // descendant identity captured before the helper checked process exit.
         assert!(
             descendant.signal_direct_if_current(libc::SIGKILL),
             "cleanup must signal only the captured descendant identity"
         );
-        let _ = wait_for_process_exit(descendant_pid);
+        let _ = wait_for_process_exit(descendant.pid);
     }
 
     assert!(

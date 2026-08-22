@@ -118,12 +118,21 @@ async fn wait_for_process_group_termination(process_group: i32) -> Result<()> {
     loop {
         match crate::process_activity::process_group_has_live_members(process_group) {
             Ok(false) => return Ok(()),
-            Ok(true) => {}
+            Ok(true) => {
+                // A descendant can fork between the initial group kill and
+                // this observation. Keep the kill fenced to the owned PGID
+                // until the scanner observes no live members.
+                signal_process_group(process_group, libc::SIGKILL)?;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error).context("failed to inspect child process group"),
+            Err(error) => {
+                return Err(error).context(format!(
+                    "failed to inspect child process group {process_group}"
+                ));
+            }
         }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for child process group to terminate");
+            anyhow::bail!("timed out waiting for child process group {process_group} to terminate");
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -145,7 +154,16 @@ pub async fn terminate_child_process_group(
             // PID anchors the PGID even when it exited on SIGTERM.
             signal_process_group(process_group, libc::SIGKILL)?;
             #[cfg(target_os = "linux")]
-            wait_for_process_group_termination(process_group).await?;
+            if let Err(group_error) = wait_for_process_group_termination(process_group).await {
+                return match wait_for_child_exit(child).await {
+                    Ok(_) => Err(group_error.context(format!(
+                        "child process was reaped but process group {process_group} cleanup failed"
+                    ))),
+                    Err(child_error) => Err(group_error.context(format!(
+                        "process group {process_group} cleanup failed and direct child reap also failed: {child_error:#}"
+                    ))),
+                };
+            }
             return wait_for_child_exit(child).await;
         }
     }
