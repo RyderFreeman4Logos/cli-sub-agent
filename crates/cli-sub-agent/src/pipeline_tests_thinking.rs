@@ -115,6 +115,75 @@ async fn build_and_validate_executor_accepts_global_openai_compat_env() {
 }
 
 #[tokio::test]
+async fn openai_compat_default_model_is_admitted_for_review_without_model_env() {
+    let _lock = crate::test_env_lock::TEST_ENV_LOCK
+        .clone()
+        .lock_owned()
+        .await;
+    let _base = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_BASE_URL");
+    let _key = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_API_KEY");
+    let _model = crate::test_env_lock::ScopedEnvVarRestore::unset("OPENAI_COMPAT_MODEL");
+    let mut cfg = config_with_single_tier_model(
+        "tier-3-complex",
+        "openai-compat",
+        "openai-compat/openai/gpt-5/high",
+    );
+    let tool = cfg
+        .tools
+        .get_mut("openai-compat")
+        .expect("openai-compat test tool config exists");
+    tool.base_url = Some("http://localhost:8317".to_string());
+    tool.api_key = Some("test-key".to_string());
+    tool.default_model = Some("configured-default".to_string());
+
+    let default_executor = build_and_validate_executor(
+        &ToolName::OpenaiCompat,
+        None,
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+            model_catalog: None,
+        },
+        false,
+        false,
+        false,
+    )
+    .await
+    .expect("review admission should use the configured default model");
+    match &*default_executor {
+        csa_executor::Executor::OpenaiCompat { model_override, .. } => {
+            assert_eq!(model_override.as_deref(), Some("configured-default"));
+        }
+        other => panic!("expected openai-compat executor, got {other:?}"),
+    }
+
+    let cli_executor = build_and_validate_executor(
+        &ToolName::OpenaiCompat,
+        None,
+        Some("cli-model"),
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+            model_catalog: None,
+        },
+        false,
+        false,
+        false,
+    )
+    .await
+    .expect("explicit model should be admitted");
+    match &*cli_executor {
+        csa_executor::Executor::OpenaiCompat { model_override, .. } => {
+            assert_eq!(model_override.as_deref(), Some("cli-model"));
+        }
+        other => panic!("expected openai-compat executor, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn openai_compat_model_spec_overrides_project_default_model() {
     let _lock = crate::test_env_lock::TEST_ENV_LOCK
         .clone()
