@@ -1,5 +1,7 @@
 use super::*;
+use crate::ToolLiveness;
 use std::io::Read;
+use std::time::{Duration, Instant};
 
 fn write_executable_script(path: &Path, contents: &str) {
     let mut file = std::fs::OpenOptions::new()
@@ -57,6 +59,41 @@ fn test_spawn_config(session_id: &str, csa_binary: PathBuf) -> DaemonSpawnConfig
         subcommand: "plan run".to_string(),
         args: vec!["--flag".to_string(), "value".to_string()],
         env: HashMap::from([("CSA_TEST_ENV".to_string(), "1".to_string())]),
+    }
+}
+
+struct ReleaseMarker(PathBuf);
+
+impl Drop for ReleaseMarker {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.0, b"release\n");
+    }
+}
+
+fn wait_for_spool_content(path: &Path, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if std::fs::read_to_string(path).is_ok_and(|contents| contents.contains(expected)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "spool did not contain {expected:?} before readiness deadline: {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_daemon_exit(session_dir: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while ToolLiveness::daemon_pid_is_alive(session_dir) {
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not exit after readiness release: {}",
+            session_dir.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -129,34 +166,41 @@ fn test_daemon_spawn_creates_spool_files() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let session_dir = tmp.path().join("session-test");
     let wrapper = write_wrapper_script(tmp.path(), "wrapper1.sh");
+    let release_marker = tmp.path().join("daemon-release");
+    let _release_guard = ReleaseMarker(release_marker.clone());
 
     let config = DaemonSpawnConfig {
-        session_id: "TEST001".to_string(),
+        session_id: "01M0KCV46DMV3TMJ0CAPA4FXZT".to_string(),
         session_dir: session_dir.clone(),
         csa_binary: wrapper,
         subcommand: "run".to_string(),
-        // After the injected flags, pass '--' then the real command.
-        args: vec!["--".to_string(), "echo hello".to_string()],
-        env: HashMap::new(),
+        // Keep the child alive until the parent observes durable spool output.
+        args: vec![
+            "--".to_string(),
+            "echo hello; while [ ! -e \"$CSA_TEST_RELEASE_MARKER\" ]; do sleep 0.01; done"
+                .to_string(),
+        ],
+        env: HashMap::from([(
+            "CSA_TEST_RELEASE_MARKER".to_string(),
+            release_marker.to_string_lossy().into_owned(),
+        )]),
     };
 
     let result = spawn_daemon(config).expect("spawn_daemon");
-    assert_eq!(result.session_id, "TEST001");
+    assert_eq!(result.session_id, "01M0KCV46DMV3TMJ0CAPA4FXZT");
     assert!(result.pid > 0);
-
-    // Give the child time to write and exit.
-    std::thread::sleep(std::time::Duration::from_millis(500));
 
     let stdout_path = session_dir.join("stdout.log");
     let stderr_path = session_dir.join("stderr.log");
     assert!(stdout_path.exists(), "stdout.log must exist");
     assert!(stderr_path.exists(), "stderr.log must exist");
+    wait_for_spool_content(&stdout_path, "hello");
 
-    let mut contents = String::new();
-    File::open(&stdout_path)
-        .expect("open stdout.log")
-        .read_to_string(&mut contents)
-        .expect("read stdout.log");
+    // Release the child only after the parent has observed the durable spool.
+    std::fs::write(&release_marker, b"release\n").expect("release daemon readiness barrier");
+    wait_for_daemon_exit(&session_dir);
+
+    let contents = std::fs::read_to_string(&stdout_path).expect("read stdout.log");
     assert!(
         contents.contains("hello"),
         "stdout.log should contain 'hello', got: {contents:?}"

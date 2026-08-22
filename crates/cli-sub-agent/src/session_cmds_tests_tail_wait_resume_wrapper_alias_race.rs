@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+
+#[cfg(target_os = "linux")]
 fn read_process_start_time_ticks(pid: u32) -> u64 {
     let stat_path = format!("/proc/{pid}/stat");
     let content = std::fs::read_to_string(stat_path).expect("read process stat");
@@ -28,18 +31,55 @@ fn daemon_pid_record(pid: u32) -> String {
 fn wait_until_wait_lock_is_held(session_dir: &std::path::Path) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
-        match try_acquire_session_wait_lock(session_dir).expect("probe wait lock") {
-            Some(lock) => {
-                drop(lock);
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "session wait did not rebind to target wait lock at {}",
-                    session_dir.display()
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            None => return,
+        if wait_lock_is_held(session_dir) {
+            return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session wait did not rebind to target wait lock at {}",
+            session_dir.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_lock_is_held(session_dir: &std::path::Path) -> bool {
+    let Ok(inode) =
+        std::fs::metadata(session_dir.join(".wait.lock")).map(|metadata| metadata.ino())
+    else {
+        return false;
+    };
+    let expected_inode = inode.to_string();
+    std::fs::read_to_string("/proc/locks")
+        .ok()
+        .is_some_and(|locks| {
+            locks.lines().any(|line| {
+                let mut fields = line.split_whitespace();
+                let _record = fields.next();
+                let lock_type = fields.next();
+                let advisory = fields.next();
+                let access = fields.next();
+                let _pid = fields.next();
+                let device_inode = fields.next();
+                matches!(
+                    (lock_type, advisory, access),
+                    (Some("FLOCK"), Some("ADVISORY"), Some("WRITE"))
+                ) && device_inode
+                    .and_then(|value| value.rsplit_once(':'))
+                    .is_some_and(|(_, locked_inode)| locked_inode == expected_inode)
+            })
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wait_lock_is_held(session_dir: &std::path::Path) -> bool {
+    match try_acquire_session_wait_lock(session_dir).expect("probe wait lock") {
+        Some(lock) => {
+            drop(lock);
+            false
+        }
+        None => true,
     }
 }
 
