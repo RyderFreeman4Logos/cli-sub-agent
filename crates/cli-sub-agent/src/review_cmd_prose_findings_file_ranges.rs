@@ -26,12 +26,37 @@ fn strip_unordered_list_prefix(line: &str) -> &str {
 }
 
 fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, String)> {
-    let trimmed = body.trim_start_matches(['`', '(', '[']).trim_start();
-    let mut parts = trimmed.splitn(2, char::is_whitespace);
-    let token = parts.next()?.trim_matches(['`', ',', '.', ')', ']']);
-    let description = parts
-        .next()
-        .unwrap_or_default()
+    let trimmed = body.trim_start();
+    let trimmed = if trimmed.starts_with('`') {
+        trimmed
+    } else {
+        trimmed
+            .trim_start_matches(|ch: char| {
+                matches!(ch, '`' | '(' | '[' | '（' | '）')
+            })
+            .trim_start()
+    };
+    let (token, description, quoted) = if trimmed.starts_with('`') {
+        let delimiter_len = backtick_run_length(trimmed, 0);
+        let content_start = delimiter_len;
+        let end = find_closing_backtick(trimmed, content_start, delimiter_len)?;
+        (
+            &trimmed[content_start..end],
+            &trimmed[end + delimiter_len..],
+            true,
+        )
+    } else {
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        (parts.next()?, parts.next().unwrap_or_default(), false)
+    };
+    let token = if quoted {
+        token
+    } else {
+        token.trim_matches(|ch: char| {
+            matches!(ch, '`' | ',' | '.' | ')' | ']' | '（' | '）')
+        })
+    };
+    let description = description
         .trim_start_matches(['-', ':'])
         .trim()
         .to_string();
@@ -47,15 +72,67 @@ fn parse_leading_file_range(body: &str) -> Option<(ReviewFindingFileRange, Strin
 }
 
 fn parse_embedded_file_range(body: &str) -> Option<ReviewFindingFileRange> {
-    body.split(char::is_whitespace)
-        .map(|token| token.trim_matches(['`', '(', ')', '[', ']', ',', '.', ';']))
-        .find_map(|token| {
-            parse_file_reference_token(token).map(|(path, start)| ReviewFindingFileRange {
-                path,
-                start,
-                end: None,
-            })
-        })
+    for token in body.split(char::is_whitespace) {
+        let mut search_start = 0;
+        let mut found_span = false;
+        while let Some(relative_start) = token[search_start..].find('`') {
+            let opening_start = search_start + relative_start;
+            let delimiter_len = backtick_run_length(token, opening_start);
+            let content_start = opening_start + delimiter_len;
+            let Some(end) = find_closing_backtick(token, content_start, delimiter_len) else {
+                search_start = content_start;
+                continue;
+            };
+            found_span = true;
+            if let Some((path, start)) = parse_file_reference_token(&token[content_start..end]) {
+                return Some(ReviewFindingFileRange {
+                    path,
+                    start,
+                    end: None,
+                });
+            }
+            search_start = end + delimiter_len;
+        }
+        if !found_span {
+            let token = token.trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '`' | '(' | ')' | '[' | ']' | ',' | '.' | ';' | '（' | '）'
+                )
+            });
+            if let Some((path, start)) = parse_file_reference_token(token) {
+                return Some(ReviewFindingFileRange {
+                    path,
+                    start,
+                    end: None,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn backtick_run_length(text: &str, start: usize) -> usize {
+    text.as_bytes()[start..]
+        .iter()
+        .take_while(|&&byte| byte == b'`')
+        .count()
+}
+
+fn find_closing_backtick(
+    text: &str,
+    mut search_start: usize,
+    delimiter_len: usize,
+) -> Option<usize> {
+    while let Some(relative_end) = text[search_start..].find('`') {
+        let end = search_start + relative_end;
+        let closing_len = backtick_run_length(text, end);
+        if closing_len == delimiter_len {
+            return Some(end);
+        }
+        search_start = end + closing_len;
+    }
+    None
 }
 
 fn parse_file_reference_token(token: &str) -> Option<(String, u32)> {

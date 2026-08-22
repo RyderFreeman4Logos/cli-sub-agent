@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -11,9 +11,10 @@ use super::clean_detection::{
 };
 use super::text::{contains_blocking_issue_signal, zero_severity_counts};
 use crate::review_cmd::prose_findings::{
-    FindingsSectionParse, classify_findings_section_body,
-    extract_review_findings_from_prose_with_default, findings_section_bodies,
-    review_finding_payload_eq, severity_counts_from_review_findings,
+    FindingsSectionParse, allocate_unique_generated_prose_finding_id,
+    classify_findings_section_body, extract_review_findings_from_prose_with_default,
+    findings_section_bodies, is_generated_prose_finding_id, review_finding_payload_eq,
+    severity_counts_from_review_findings,
 };
 
 #[derive(Debug, Clone)]
@@ -201,6 +202,12 @@ fn record_review_prose_signal(
     signals.uncertain_conclusion |= detect_prose_uncertain_conclusion(content);
     let findings =
         extract_review_findings_from_prose_with_default(content, default_unlabeled_severity);
+    let mut used_ids = signals
+        .findings
+        .iter()
+        .map(|finding| finding.id.clone())
+        .collect::<HashSet<_>>();
+    let mut next_generated_index = 1;
     for mut finding in findings {
         if signals
             .findings
@@ -209,14 +216,13 @@ fn record_review_prose_signal(
         {
             continue;
         }
-        if finding.id.starts_with("prose-") {
-            let index = signals
-                .findings
-                .iter()
-                .filter(|existing| existing.id.starts_with("prose-"))
-                .count()
-                + 1;
-            finding.id = format!("prose-{index:03}");
+        if is_generated_prose_finding_id(&finding.id) {
+            finding.id = allocate_unique_generated_prose_finding_id(
+                &mut used_ids,
+                &mut next_generated_index,
+            );
+        } else {
+            used_ids.insert(finding.id.clone());
         }
         signals.findings.push(finding);
     }

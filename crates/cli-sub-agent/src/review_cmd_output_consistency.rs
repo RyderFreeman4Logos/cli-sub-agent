@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -19,6 +20,7 @@ use super::prose_signals::{
 use super::review_meta_for_verdict_artifact;
 use super::text::zero_severity_counts;
 use crate::review_cmd::prose_findings::{
+    allocate_unique_generated_prose_finding_id, is_generated_prose_finding_id,
     review_finding_payload_eq, severity_counts_from_review_findings,
 };
 
@@ -34,6 +36,10 @@ pub(super) fn enforce_final_verdict_consistency(
 ) -> Result<(), anyhow::Error> {
     let prose_signals = review_prose_signals(session_dir)?;
     let findings_file = load_findings_toml_from_output(session_dir)?.unwrap_or_default();
+    let prose_derived_findings = session_dir
+        .join("output")
+        .join(super::super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER)
+        .exists();
     let extraction_confirmed_empty = findings_file.findings.is_empty()
         && session_dir
             .join("output")
@@ -69,6 +75,15 @@ pub(super) fn enforce_final_verdict_consistency(
         (extraction_confirmed_empty || synthetic_empty) && !has_prose_failure_evidence;
     let mut canonical_findings = Vec::new();
     for finding in &findings_file.findings {
+        // Parser-derived rows are rebuilt from current prose only when the
+        // extractor explicitly marked the artifact as prose-derived. Keep
+        // the independent repo-write audit row added after extraction.
+        if prose_derived_findings
+            && !prose_signals.findings.is_empty()
+            && finding.id != super::super::dirty_tree::REVIEW_WORKTREE_MUTATION_FINDING_ID
+        {
+            continue;
+        }
         if canonical_findings
             .iter()
             .any(|existing| review_finding_payload_eq(existing, finding))
@@ -77,6 +92,11 @@ pub(super) fn enforce_final_verdict_consistency(
         }
         canonical_findings.push(finding.clone());
     }
+    let mut used_finding_ids = canonical_findings
+        .iter()
+        .map(|finding| finding.id.clone())
+        .collect::<HashSet<_>>();
+    let mut next_generated_index = 1;
     if !skip_prose_override {
         for finding in &prose_signals.findings {
             if canonical_findings
@@ -85,7 +105,16 @@ pub(super) fn enforce_final_verdict_consistency(
             {
                 continue;
             }
-            canonical_findings.push(finding.clone());
+            let mut finding = finding.clone();
+            if is_generated_prose_finding_id(&finding.id) {
+                finding.id = allocate_unique_generated_prose_finding_id(
+                    &mut used_finding_ids,
+                    &mut next_generated_index,
+                );
+            } else {
+                used_finding_ids.insert(finding.id.clone());
+            }
+            canonical_findings.push(finding);
         }
     }
     if canonical_findings
@@ -108,6 +137,12 @@ pub(super) fn enforce_final_verdict_consistency(
     } else {
         findings_file
     };
+    if prose_derived_findings && !prose_signals.findings.is_empty() {
+        let marker_path = session_dir
+            .join("output")
+            .join(super::super::findings_toml::FINDINGS_TOML_PROSE_DERIVED_MARKER);
+        let _ = fs::remove_file(marker_path);
+    }
 
     let placeholder_findings_only =
         findings_file_contains_only_artifact_generation_placeholder(&findings_file);

@@ -217,6 +217,11 @@ deny:
         exit "$status"; \
     fi
 
+# Update one lockfile package to a precise version (just-wrapped cargo).
+# Usage: just cargo-update-precise h2@0.4.14 0.4.16
+cargo-update-precise pkg precise:
+    {{_io_prefix}} {{_cargo}} update -p {{pkg}} --precise {{precise}}
+
 # ==============================================================================
 # 🧪 Testing
 # ==============================================================================

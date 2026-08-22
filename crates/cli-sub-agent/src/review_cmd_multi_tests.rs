@@ -125,6 +125,11 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
 
     let (dirty_session_id, dirty_session_dir) =
         create_review_session(project.path(), "dirty reviewer");
+    csa_session::persist_structured_output(
+        &dirty_session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview result: FAIL. One low severity prose finding remains.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\n## Findings\n1. [LOW][style] Independent prose-only finding remains.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist prose review");
     save_result_with_repo_write_audit(project.path(), &dirty_session_id);
     let (clean_session_id_1, _) = create_review_session(project.path(), "clean reviewer 1");
     let (clean_session_id_2, _) = create_review_session(project.path(), "clean reviewer 2");
@@ -195,6 +200,7 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
             .expect("child findings.toml should exist"),
     )
     .expect("child findings.toml should parse");
+    assert_eq!(child_findings.findings.len(), 2, "{child_findings:#?}");
     let child_finding = child_findings
         .findings
         .iter()
@@ -291,6 +297,81 @@ fn repo_write_audit_blocks_clean_multi_reviewer_majority_and_parent_verdict() {
         parent_verdict.severity_counts.get(&Severity::High),
         Some(&1)
     );
+}
+
+#[test]
+fn repo_write_audit_reconciles_split_section_prose_in_multi_reviewer_sidecars() {
+    let _guard = TEST_ENV_LOCK.clone().blocking_lock_owned();
+    let project = tempfile::tempdir().expect("tempdir should be created");
+    let _state_home = ScopedEnvVarRestore::set("XDG_STATE_HOME", project.path().join("state"));
+
+    let (dirty_session_id, dirty_session_dir) =
+        create_review_session(project.path(), "split-section dirty reviewer");
+    csa_session::persist_structured_output(
+        &dirty_session_dir,
+        "<!-- CSA:SECTION:summary -->\nReview result: FAIL. One canonical prose finding remains.\n## Findings\n1. [LOW][style] Canonical prose-only finding remains.\n<!-- CSA:SECTION:summary:END -->\n\n<!-- CSA:SECTION:details -->\nHIGH: Cross-section prose row must not be extracted.\n<!-- CSA:SECTION:details:END -->\n",
+    )
+    .expect("persist split-section prose review");
+    save_result_with_repo_write_audit(project.path(), &dirty_session_id);
+
+    let outcomes = vec![outcome_with_session_id(
+        0,
+        ToolName::Codex,
+        dirty_session_id,
+        CLEAN,
+        None,
+    )];
+    persist_multi_review_sidecars(
+        project.path(),
+        None,
+        "range:main...HEAD",
+        &outcomes,
+        "HEADSHA",
+        ReviewRunMeta {
+            review_iterations: 1,
+            diff_fingerprint: None,
+            review_mode: Some("standard"),
+        },
+        super::super::diff_size::ReviewDiffReport {
+            diff_size: None,
+            large_diff_warning: None,
+        },
+    );
+
+    let findings: FindingsFile = toml::from_str(
+        &std::fs::read_to_string(dirty_session_dir.join("output").join("findings.toml"))
+            .expect("child findings.toml should exist"),
+    )
+    .expect("child findings.toml should parse");
+    assert_eq!(findings.findings.len(), 2, "{findings:#?}");
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.description == "Canonical prose-only finding remains.")
+    );
+    assert!(
+        !findings
+            .findings
+            .iter()
+            .any(|finding| finding.description.contains("Cross-section prose row"))
+    );
+    assert!(
+        findings
+            .findings
+            .iter()
+            .any(|finding| finding.id == "CSA-REVIEW-WORKTREE-MUTATION")
+    );
+
+    let verdict: ReviewVerdictArtifact = serde_json::from_str(
+        &std::fs::read_to_string(dirty_session_dir.join("output").join("review-verdict.json"))
+            .expect("child review-verdict.json should exist"),
+    )
+    .expect("child verdict should parse");
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(verdict.severity_counts.get(&Severity::High), Some(&1));
+    assert_eq!(verdict.severity_counts.get(&Severity::Low), Some(&1));
+    assert_eq!(verdict.severity_counts.values().sum::<u32>(), 2);
 }
 
 #[test]

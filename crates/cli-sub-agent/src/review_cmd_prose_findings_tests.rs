@@ -339,7 +339,7 @@ fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
                 "1. [MODERATE][correctness/ordering] Latched limits can still be reclassified ",
                 "as cancellation ([lifecycle.rs](/project/rust-core/src/workflow_adk/lifecycle.rs:741), confidence 0.98).\n",
             ),
-            "prose-001",
+            "prose-generated-001",
             Severity::Medium,
             Some(("lifecycle.rs", 741)),
         ),
@@ -349,7 +349,7 @@ fn issue_2664_cluster_parses_substantive_heading_and_location_variants() {
                 "1. [P1][security] Deleted-file ownership tokens have an inode-reuse ABA window\n",
                 "`llm/coding/scripts/test-fix-target.sh:104`, confidence 0.96\n",
             ),
-            "prose-001",
+            "prose-generated-001",
             Severity::High,
             Some(("llm/coding/scripts/test-fix-target.sh", 104)),
         ),
@@ -395,4 +395,142 @@ fn issue_2975_wrapped_finding_keeps_continuation_and_source() {
     assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
     assert_eq!(finding.file_ranges[0].path, "lifecycle.rs");
     assert_eq!(finding.file_ranges[0].start, 741);
+}
+
+#[test]
+fn issue_3071_linux_path_prefixes_survive_leading_and_embedded_parsing() {
+    let leading = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] absolute path regression\n",
+        "   Location: /workspace/src/lib.rs:42\n",
+        "2. [HIGH] generated path regression\n",
+        "   Location: _generated.rs:7\n",
+        "3. [HIGH] dashed path regression\n",
+        "   Location: -generated.rs:8\n",
+        "4. [HIGH] plus path regression\n",
+        "   Location: +generated.rs:9\n",
+    ));
+    let expected = [
+        ("/workspace/src/lib.rs", 42),
+        ("_generated.rs", 7),
+        ("-generated.rs", 8),
+        ("+generated.rs", 9),
+    ];
+    assert_eq!(leading.len(), expected.len(), "{leading:#?}");
+    for (finding, (path, line)) in leading.iter().zip(expected) {
+        assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+        assert_eq!(finding.file_ranges[0].path, path);
+        assert_eq!(finding.file_ranges[0].start, line);
+    }
+
+    let embedded = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] absolute path regression (/workspace/src/lib.rs:42)\n",
+        "2. [HIGH] generated path regression (_generated.rs:7)\n",
+        "3. [HIGH] dashed path regression (-generated.rs:8)\n",
+        "4. [HIGH] plus path regression (+generated.rs:9)\n",
+    ));
+    assert_eq!(embedded.len(), expected.len(), "{embedded:#?}");
+    for (finding, (path, line)) in embedded.iter().zip(expected) {
+        assert_eq!(finding.file_ranges.len(), 1, "{finding:#?}");
+        assert_eq!(finding.file_ranges[0].path, path);
+        assert_eq!(finding.file_ranges[0].start, line);
+    }
+}
+
+#[test]
+fn parser_generated_prose_ids_support_indices_above_999() {
+    let text = (1..=1000)
+        .map(|index| format!("{index}. [LOW] generated finding {index}\n"))
+        .collect::<String>();
+    let findings = extract_review_findings_from_prose(&format!("## Findings\n{text}"));
+
+    assert_eq!(findings.len(), 1000);
+    assert_eq!(findings[999].id, "prose-generated-1000");
+}
+
+#[test]
+fn issue_3071_fullwidth_path_punctuation_survives_leading_and_embedded_parsing() {
+    let leading = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading fullwidth path\n",
+        "   Location: ",
+        "\u{ff0c}report.rs:7\n",
+    ));
+    assert_eq!(leading.len(), 1, "{leading:#?}");
+    assert_eq!(leading[0].file_ranges.len(), 1, "{leading:#?}");
+    assert_eq!(leading[0].file_ranges[0].path, "\u{ff0c}report.rs");
+    assert_eq!(leading[0].file_ranges[0].start, 7);
+
+    let embedded = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] embedded fullwidth path (",
+        "`src/\u{62a5}\u{544a}\u{ff0c}\u{6700}\u{7ec8}.rs:42`)",
+        "\n",
+    ));
+    assert_eq!(embedded.len(), 1, "{embedded:#?}");
+    assert_eq!(embedded[0].file_ranges.len(), 1, "{embedded:#?}");
+    assert_eq!(
+        embedded[0].file_ranges[0].path,
+        "src/\u{62a5}\u{544a}\u{ff0c}\u{6700}\u{7ec8}.rs"
+    );
+    assert_eq!(embedded[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_double_backtick_leading_location_preserves_file_range() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading double-backtick path\n",
+        "   Location: ``src/lib.rs:42``\n",
+    ));
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_double_backtick_embedded_location_preserves_file_range() {
+    let findings = extract_review_findings_from_prose(
+        "## Findings\n1. [HIGH] embedded double-backtick path ``src/lib.rs:42`` for context\n",
+    );
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_adjacent_backtick_spans_with_fullwidth_punctuation_preserve_later_path() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] adjacent spans `--json`\u{ff0c}`src/lib.rs:42`\u{ff0e}\n",
+    ));
+
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+}
+
+#[test]
+fn issue_3071_backtick_quoted_leading_fullwidth_parenthesis_preserves_path() {
+    let findings = extract_review_findings_from_prose(concat!(
+        "## Findings\n",
+        "1. [HIGH] leading quoted path\n",
+        "   Location: `\u{ff08}src/lib.rs:42`\n",
+        "2. [HIGH] second leading quoted path\n",
+        "   Location: `\u{ff09}src/lib.rs:43`\n",
+    ));
+
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[0].file_ranges[0].path, "\u{ff08}src/lib.rs");
+    assert_eq!(findings[0].file_ranges[0].start, 42);
+    assert_eq!(findings[1].file_ranges.len(), 1, "{findings:#?}");
+    assert_eq!(findings[1].file_ranges[0].path, "\u{ff09}src/lib.rs");
+    assert_eq!(findings[1].file_ranges[0].start, 43);
 }

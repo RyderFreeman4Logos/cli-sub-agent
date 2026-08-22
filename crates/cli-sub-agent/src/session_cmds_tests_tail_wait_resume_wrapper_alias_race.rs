@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
+
+#[cfg(target_os = "linux")]
 fn read_process_start_time_ticks(pid: u32) -> u64 {
     let stat_path = format!("/proc/{pid}/stat");
     let content = std::fs::read_to_string(stat_path).expect("read process stat");
@@ -28,18 +31,115 @@ fn daemon_pid_record(pid: u32) -> String {
 fn wait_until_wait_lock_is_held(session_dir: &std::path::Path) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
-        match try_acquire_session_wait_lock(session_dir).expect("probe wait lock") {
-            Some(lock) => {
-                drop(lock);
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "session wait did not rebind to target wait lock at {}",
-                    session_dir.display()
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            None => return,
+        if wait_lock_is_held(session_dir) {
+            return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "session wait did not rebind to target wait lock at {}",
+            session_dir.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_lock_is_held(session_dir: &std::path::Path) -> bool {
+    let lock_path = session_dir.join(".wait.lock");
+    let Ok(metadata) = std::fs::metadata(&lock_path) else {
+        return false;
+    };
+    let Some(expected_device) = proc_locks_device_for_path(&lock_path) else {
+        return false;
+    };
+    std::fs::read_to_string("/proc/locks")
+        .ok()
+        .is_some_and(|locks| {
+            locks.lines().any(|line| {
+                wait_lock_line_matches_target(line, expected_device, metadata.ino())
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn wait_lock_line_matches_target(
+    line: &str,
+    expected_device: (u64, u64),
+    expected_inode: u64,
+) -> bool {
+    let mut fields = line.split_whitespace();
+    let _record = fields.next();
+    let lock_type = fields.next();
+    let advisory = fields.next();
+    let access = fields.next();
+    let _pid = fields.next();
+    let device_inode = fields.next();
+    matches!(
+        (lock_type, advisory, access),
+        (Some("FLOCK"), Some("ADVISORY"), Some("WRITE"))
+    ) && device_inode
+        .and_then(parse_proc_lock_device_inode)
+        .is_some_and(|(major, minor, locked_inode)| {
+            (major, minor) == expected_device && locked_inode == expected_inode
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn parse_proc_lock_device_inode(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value.split(':');
+    let major = u64::from_str_radix(parts.next()?, 16).ok()?;
+    let minor = u64::from_str_radix(parts.next()?, 16).ok()?;
+    let inode = parts.next()?.parse().ok()?;
+    parts.next().is_none().then_some((major, minor, inode))
+}
+
+#[cfg(target_os = "linux")]
+fn proc_locks_device_for_path(path: &std::path::Path) -> Option<(u64, u64)> {
+    let canonical_path = std::fs::canonicalize(path).ok()?;
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .ok()?
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let (major, minor) = fields.get(2)?.split_once(':')?;
+            let major = major.parse().ok()?;
+            let minor = minor.parse().ok()?;
+            let mount_point = std::path::PathBuf::from(decode_mountinfo_path(fields.get(4)?));
+            canonical_path
+                .starts_with(&mount_point)
+                .then_some((mount_point.components().count(), (major, minor)))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, device)| device)
+}
+
+#[cfg(target_os = "linux")]
+fn decode_mountinfo_path(value: &str) -> String {
+    value
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\134", "\\")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wait_lock_identity_rejects_same_inode_on_different_device() {
+    let same_inode = 4242;
+    assert!(!wait_lock_line_matches_target(
+        "1: FLOCK ADVISORY WRITE 1234 00:2b:4242 0 EOF",
+        (0, 0x2a),
+        same_inode,
+    ));
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wait_lock_is_held(session_dir: &std::path::Path) -> bool {
+    match try_acquire_session_wait_lock(session_dir).expect("probe wait lock") {
+        Some(lock) => {
+            drop(lock);
+            false
+        }
+        None => true,
     }
 }
 

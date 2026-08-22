@@ -7,7 +7,7 @@ use csa_session::{
 };
 use tracing::{debug, warn};
 
-const REVIEW_WORKTREE_MUTATION_FINDING_ID: &str = "CSA-REVIEW-WORKTREE-MUTATION";
+pub(super) const REVIEW_WORKTREE_MUTATION_FINDING_ID: &str = "CSA-REVIEW-WORKTREE-MUTATION";
 const REVIEW_WORKTREE_MUTATION_RULE_ID: &str = "csa.review.readonly-worktree-mutation";
 
 /// Returns the set of file paths (relative to project root) that have uncommitted

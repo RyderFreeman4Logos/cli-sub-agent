@@ -588,3 +588,8 @@ fn issue_2601_pass_summary_chinese_positive_evidence_keeps_review_verdict_pass()
 
     fs::remove_dir_all(project_root).expect("remove temp project root");
 }
+
+include!("review_cmd_output_verdict_3071_support.rs");
+include!("review_cmd_output_verdict_3071_a_tests.rs");
+include!("review_cmd_output_verdict_3071_b_tests.rs");
+include!("review_cmd_output_verdict_3071_c_tests.rs");
