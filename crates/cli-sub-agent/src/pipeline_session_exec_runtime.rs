@@ -62,6 +62,7 @@ async fn prepare_session_runtime_inner(
     input: SessionRuntimeInput<'_>,
     session: &mut MetaSessionState,
 ) -> Result<SessionRuntimePlan> {
+    crate::openai_compat_review_tools::ensure_review_tool_surface(input.tool, input.task_type)?;
     let can_edit = input
         .config
         .is_none_or(|cfg| cfg.can_tool_edit_existing(input.executor.tool_name()));

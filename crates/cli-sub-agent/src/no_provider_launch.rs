@@ -28,6 +28,18 @@ pub(crate) fn diagnostic_from_error(
     ctx: NoProviderLaunchContext<'_>,
     error: &Error,
 ) -> Option<NoProviderLaunchDiagnostic> {
+    if error
+        .downcast_ref::<crate::openai_compat_review_tools::ReadonlyRepoToolsUnavailable>()
+        .is_some()
+    {
+        return Some(base_diagnostic(
+            &ctx,
+            role_from_task_type(ctx.task_type),
+            crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON,
+            NoProviderLaunchMemoryDiagnostic::default(),
+            vec!["Configure a reviewer with read-only repository tool support.".to_string()],
+        ));
+    }
     if let Some(soft_limit) = error.downcast_ref::<MemorySoftLimitAdmissionError>() {
         return Some(from_soft_limit_admission(ctx, soft_limit));
     }

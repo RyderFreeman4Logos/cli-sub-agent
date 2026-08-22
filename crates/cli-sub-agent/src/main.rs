@@ -48,6 +48,7 @@ mod memory_soft_limit_recovery_display;
 mod merge_cmd;
 mod mktsk_cmd;
 mod no_provider_launch;
+mod openai_compat_review_tools;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_cargo_target;

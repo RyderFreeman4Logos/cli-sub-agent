@@ -106,6 +106,11 @@ fn classify_memory_admission_error_text(error_text: &str) -> Option<&'static str
 }
 
 pub(super) fn classify_no_provider_launch_error_text(error_text: &str) -> Option<&'static str> {
+    if error_text
+        .contains(crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON)
+    {
+        return Some(crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON);
+    }
     if crate::pipeline::is_slot_unavailable_error_text(error_text) {
         return Some(crate::pipeline::SLOT_UNAVAILABLE_REASON);
     }
