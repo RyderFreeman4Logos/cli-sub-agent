@@ -362,6 +362,7 @@ pub(crate) async fn build_and_validate_executor(
     force_override_user_config: bool,
     apply_tool_defaults: bool,
 ) -> Result<AdmittedExecutor> {
+    let apply_tool_defaults = apply_tool_defaults || *tool == ToolName::OpenaiCompat;
     let shipped_catalog;
     let model_catalog = if let Some(catalog) = configs.model_catalog {
         catalog

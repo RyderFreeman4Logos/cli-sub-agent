@@ -325,6 +325,23 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_config_model_env_overrides_default() {
+        let transport = OpenaiCompatTransport::new(Some("configured-default".to_string()));
+        let mut env = HashMap::new();
+        env.insert(
+            ENV_BASE_URL.to_string(),
+            "http://localhost:8317".to_string(),
+        );
+        env.insert(ENV_API_KEY.to_string(), "test-key".to_string());
+        env.insert(ENV_MODEL.to_string(), "env-model".to_string());
+
+        let config = transport
+            .resolve_config(Some(&env))
+            .expect("environment model should resolve");
+        assert_eq!(config.model, "env-model");
+    }
+
+    #[test]
     fn test_resolve_config_missing_base_url_errors() {
         let transport = OpenaiCompatTransport::new(Some("gemini-flash".to_string()));
         let env = HashMap::new();
