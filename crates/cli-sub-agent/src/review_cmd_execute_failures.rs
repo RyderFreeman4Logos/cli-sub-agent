@@ -91,6 +91,27 @@ pub(super) fn classify_review_failover_error(
     .or_else(|| classify_gemini_cli_runtime_error_text(tool, error_text))
 }
 
+pub(super) fn classify_review_failover_error_from_anyhow(
+    tool: ToolName,
+    model_spec: Option<&str>,
+    error: &anyhow::Error,
+    attempt_elapsed: Option<std::time::Duration>,
+) -> Option<ReviewFailoverFailure> {
+    if error
+        .downcast_ref::<crate::openai_compat_review_tools::ReadonlyRepoToolsUnavailable>()
+        .is_some()
+    {
+        return Some(ReviewFailoverFailure {
+            reason: crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON
+                .to_string(),
+            quota_exhausted: Some(false),
+        });
+    }
+
+    let error_text = format!("{error:#}");
+    classify_review_failover_error(tool, model_spec, &error_text, attempt_elapsed)
+}
+
 fn classify_memory_admission_error_text(error_text: &str) -> Option<&'static str> {
     let lower = error_text.to_ascii_lowercase();
     if lower.contains(crate::resource_admission_soft_limit::MEMORY_SOFT_LIMIT_ADMISSION_REASON) {
@@ -106,6 +127,11 @@ fn classify_memory_admission_error_text(error_text: &str) -> Option<&'static str
 }
 
 pub(super) fn classify_no_provider_launch_error_text(error_text: &str) -> Option<&'static str> {
+    if error_text
+        .contains(crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON)
+    {
+        return Some(crate::openai_compat_review_tools::READONLY_REPO_TOOLS_UNAVAILABLE_REASON);
+    }
     if crate::pipeline::is_slot_unavailable_error_text(error_text) {
         return Some(crate::pipeline::SLOT_UNAVAILABLE_REASON);
     }

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use csa_config::ProjectConfig;
 use csa_executor::Executor;
@@ -46,6 +46,17 @@ impl PipelinePreExecFailureDetails<'_> {
             task_type: None,
             resource_overrides: RunResourceOverrides::absent(),
         }
+    }
+}
+
+#[derive(Debug)]
+struct DisplayPreservingPreExecContext {
+    display: String,
+}
+
+impl fmt::Display for DisplayPreservingPreExecContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.display)
     }
 }
 
@@ -283,7 +294,9 @@ pub(super) fn persist_pipeline_pre_exec_failure(
     if let Some(cg) = cleanup_guard {
         cg.defuse();
     }
-    err
+    let display = err.to_string();
+    let source = err.context(format!("meta_session_id={}", session.meta_session_id));
+    source.context(DisplayPreservingPreExecContext { display })
 }
 
 #[cfg(test)]

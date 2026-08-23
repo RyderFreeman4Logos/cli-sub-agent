@@ -51,7 +51,7 @@ use execute_once::execute_review_once_with_artifact_guard;
 use failures::read_review_failure_excerpt;
 use failures::{
     build_gemini_api_key_retry_env, classify_no_provider_launch_error_text,
-    classify_review_failover_error, classify_review_failover_reason,
+    classify_review_failover_error_from_anyhow, classify_review_failover_reason,
     classify_review_failure_result, extract_meta_session_id_from_error,
     maybe_synthesize_missing_review_result, repair_completed_review_restriction_result,
     retire_tier_failover_session,
@@ -373,10 +373,10 @@ pub(crate) async fn execute_review_with_tier_filter(
                 let error_text = format!("{err:#}");
                 if tier_fallback_enabled
                     && candidates.len() > 1
-                    && let Some(detected) = classify_review_failover_error(
+                    && let Some(detected) = classify_review_failover_error_from_anyhow(
                         *attempt_tool,
                         attempt_model_spec.as_deref(),
-                        &error_text,
+                        &err,
                         Some(attempt_started_at.elapsed()),
                     )
                 {
