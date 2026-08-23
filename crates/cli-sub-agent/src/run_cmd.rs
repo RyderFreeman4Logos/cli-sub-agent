@@ -41,7 +41,7 @@ pub(crate) use shell::{detect_git_commit_commands, detect_no_verify_commit_comma
 pub(crate) use uncommitted::{
     collect_uncommitted_changes_for_changed_paths, format_large_diff_warning_block,
     format_uncommitted_warning, is_writer_session, sandbox_commit_failure_matches,
-    working_tree_changed_lines,
+    sandbox_hook_contract_failure_reason, working_tree_changed_lines,
 };
 
 #[cfg(test)]

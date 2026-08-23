@@ -51,6 +51,10 @@ pub(crate) fn sandbox_commit_failure_matches(
     require_commit::sandbox_commit_failure_matches(project_root, session_id)
 }
 
+pub(crate) fn sandbox_hook_contract_failure_reason() -> &'static str {
+    require_commit::contract_failure_reason(require_commit::SandboxHookProbeState::Blocked)
+}
+
 #[cfg(test)]
 pub(crate) fn summarize_uncommitted_changes(
     porcelain: &str,
