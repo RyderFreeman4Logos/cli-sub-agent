@@ -283,7 +283,7 @@ pub(super) fn persist_pipeline_pre_exec_failure(
     if let Some(cg) = cleanup_guard {
         cg.defuse();
     }
-    err
+    err.context(format!("meta_session_id={}", session.meta_session_id))
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::review_cmd::execute::failures::classify_review_failover_error;
 
 fn execution_with(
     output: &str,
