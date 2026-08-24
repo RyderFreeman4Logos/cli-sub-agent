@@ -148,9 +148,6 @@ pub(super) async fn complete_session_execution(
             )
         });
         let sandbox_hook_blocked = matches!(sandbox_hook_probe, Some(Ok(true)));
-        if sandbox_hook_blocked {
-            result.summary = crate::run_cmd::sandbox_hook_contract_failure_reason().to_string();
-        }
         let sandbox_hook_probe_uncertain = matches!(sandbox_hook_probe, Some(Err(_)))
             // Probe `Ok(false)` (no failure marker) is only ambiguous when the
             // writer's commit did NOT advance HEAD. A successful commit removes

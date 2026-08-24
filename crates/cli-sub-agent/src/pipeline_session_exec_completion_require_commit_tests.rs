@@ -362,11 +362,12 @@ exec /usr/bin/git "$@"
         thinking_budget: None,
         runtime_metadata: CodexRuntimeMetadata::current(),
     };
+    let typed_hook_diagnostic = "RebuildError: host write leaf park was rolled back";
     let transport_result = TransportResult {
         execution: csa_process::ExecutionResult {
-            output: "writer completed but commit failed".to_string(),
+            output: typed_hook_diagnostic.to_string(),
             stderr_output: String::new(),
-            summary: "writer completed but commit failed".to_string(),
+            summary: typed_hook_diagnostic.to_string(),
             exit_code: 0,
             model_completed: Some(true),
             ..Default::default()
@@ -436,9 +437,7 @@ exec /usr/bin/git "$@"
 
     assert_eq!(completed.commit_created, Some(false));
     if sa_mode {
-        assert!(completed.execution.summary.contains(
-            "require-commit blocked: mandatory hook-enabled commit failed in the filesystem sandbox"
-        ));
+        assert_eq!(completed.execution.summary, typed_hook_diagnostic);
     }
     assert_ne!(completed.execution.exit_code, 0);
     assert_eq!(
