@@ -69,6 +69,8 @@ new_fixture() {
     "$fixture/scripts/quality_gate_provenance.py"
   cp "${repo_root}/scripts/quality_gate_sandbox.py" \
     "$fixture/scripts/quality_gate_sandbox.py"
+  cp "${repo_root}/scripts/quality_gate_tool_selection.py" \
+    "$fixture/scripts/quality_gate_tool_selection.py"
   cp "${repo_root}/scripts/quality_gate_host_attestation.py" \
     "$fixture/scripts/quality_gate_host_attestation.py"
   cp "${repo_root}/scripts/quality_gate_process.py" \

@@ -371,6 +371,7 @@ new_fixture() {
   cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_tool_selection.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_host_attestation.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_process.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_environment.py" "$fixture/scripts/"
