@@ -202,7 +202,7 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
     // paths such as autofs-backed HOME worktrees.
     let base = tempfile::Builder::new()
         .prefix("bwrap-3075-")
-        .tempdir_in(std::env::current_dir().expect("cwd"))
+        .tempdir_in("/var/tmp")
         .expect("tempdir");
     let real_file = base
         .path()
