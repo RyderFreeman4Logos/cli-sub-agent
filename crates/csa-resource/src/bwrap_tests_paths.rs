@@ -237,6 +237,53 @@ fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn from_isolation_plan_does_not_remount_writable_canonical_child_readonly_through_alias() {
+    use std::os::unix::fs::symlink;
+
+    let base = tempfile::Builder::new()
+        .prefix("bwrap-3101-")
+        .tempdir_in("/var/tmp")
+        .expect("tempdir");
+    let writable_tree = base.path().join("project");
+    let canonical_file = writable_tree.join("file");
+    std::fs::create_dir_all(&writable_tree).expect("create writable tree");
+    std::fs::write(&canonical_file, "{}").expect("write canonical file");
+
+    let alias_root = base.path().join("read-alias");
+    symlink(&writable_tree, &alias_root).expect("create readable alias");
+    let readable_alias = alias_root.join("file");
+
+    let plan = IsolationPlan {
+        resource: ResourceCapability::None,
+        filesystem: FilesystemCapability::Bwrap,
+        writable_paths: vec![writable_tree],
+        readable_paths: vec![readable_alias],
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
+    };
+    let args = command_args(
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+    );
+    let canonical = canonical_file.to_string_lossy();
+
+    assert!(
+        !args.windows(3).any(|window| {
+            window[0] == "--ro-bind" && window[1] == canonical && window[2] == canonical
+        }),
+        "writable canonical child must not be remounted read-only through an alias; args: {args:?}"
+    );
+}
+
 #[test]
 fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
     // Repro for #3075: on autofs/logical worktrees the logical path's parent

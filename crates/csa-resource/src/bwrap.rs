@@ -206,9 +206,10 @@ impl BwrapCommandBuilder {
     }
 
     fn is_covered_by_writable_path(&self, readable_path: &Path) -> bool {
+        let readable_dest = effective_mount_destination(readable_path);
         self.writable_paths.iter().any(|writable_path| {
-            let writable_path = writable_path.as_path();
-            readable_path == writable_path || readable_path.starts_with(writable_path)
+            let writable_dest = effective_mount_destination(writable_path);
+            readable_dest == writable_dest || readable_dest.starts_with(writable_dest)
         })
     }
 
@@ -293,6 +294,16 @@ pub fn from_isolation_plan(
     }
 
     Some(builder.build())
+}
+
+/// Resolve the destination used for a bind mount. Fresh virtual filesystems
+/// keep their logical paths because their resolved host paths are hidden.
+fn effective_mount_destination(path: &Path) -> PathBuf {
+    if fresh_writable_mount_root(path).is_some() {
+        path.to_path_buf()
+    } else {
+        resolve_for_bind(path)
+    }
 }
 
 /// Resolve a bind source path by following symlinks. bwrap operates in the
