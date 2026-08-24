@@ -40,6 +40,9 @@ new_isolation_fixture() {
   if [ -f "$repo_root/scripts/quality_gate_sandbox.py" ]; then
     cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
   fi
+  if [ -f "$repo_root/scripts/quality_gate_tool_selection.py" ]; then
+    cp "$repo_root/scripts/quality_gate_tool_selection.py" "$fixture/scripts/"
+  fi
   if [ -f "$repo_root/scripts/quality_gate_host_attestation.py" ]; then
     cp "$repo_root/scripts/quality_gate_host_attestation.py" "$fixture/scripts/"
   fi
