@@ -41,12 +41,13 @@ fn resolve_writable_paths_impl(
             canonicalize_for_allowlist: true,
             allow_requested_path_for_allowlist: true,
             allow_outside_default_roots,
+            preserve_requested_path: false,
         },
         &[],
     )
 }
 
-/// Validate readable paths and return them resolved as absolute paths.
+/// Validate readable paths and return normalized absolute requested paths.
 ///
 /// Read-only binds are stricter than writable paths: every path must exist on
 /// disk, `/tmp` itself is forbidden, and symlinked paths are validated against
@@ -54,8 +55,9 @@ fn resolve_writable_paths_impl(
 /// resolves somewhere outside the allowlist.
 ///
 /// Project-local relative paths are resolved against `project_root` before
-/// validation, so every returned path is absolute and safe to store in an
-/// `IsolationPlan` for Bwrap read-only bind mounts (#3074).
+/// validation, so every returned path is absolute. Symlink targets remain
+/// canonicalized for validation, but the requested path is stored in an
+/// `IsolationPlan` so Bwrap preserves logical `/tmp` destinations (#3074).
 ///
 /// # Errors
 ///
@@ -92,6 +94,7 @@ fn readable_path_validation_options() -> PathValidationOptions<'static> {
         canonicalize_for_allowlist: true,
         allow_requested_path_for_allowlist: false,
         allow_outside_default_roots: false,
+        preserve_requested_path: true,
     }
 }
 
@@ -164,6 +167,7 @@ struct PathValidationOptions<'a> {
     canonicalize_for_allowlist: bool,
     allow_requested_path_for_allowlist: bool,
     allow_outside_default_roots: bool,
+    preserve_requested_path: bool,
 }
 
 fn default_ssd_mirror_roots() -> [PathBuf; 1] {
@@ -246,7 +250,11 @@ fn validate_sandbox_paths(
             ));
             continue;
         }
-        resolved_paths.push(validated.resolved);
+        resolved_paths.push(if options.preserve_requested_path {
+            validated.requested
+        } else {
+            validated.resolved
+        });
     }
 
     if rejected.is_empty() {
