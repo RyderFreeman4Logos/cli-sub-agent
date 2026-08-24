@@ -133,27 +133,36 @@ impl BwrapCommandBuilder {
             }
         }
 
-        // Read-only readable paths. For /tmp files, only create parent dirs.
-        // Writable grants already imply readability; adding an overlapping
-        // read-only bind afterward would downgrade the writable mount.
+        // Read-only readable paths. Writable grants already imply readability;
+        // adding an overlapping read-only bind afterward would downgrade the
+        // writable mount.
         for path in &self.readable_paths {
             if self.is_covered_by_writable_path(path) {
                 continue;
             }
             let resolved = resolve_for_bind(path);
             let s = resolved.to_string_lossy();
-            let dest = path.to_string_lossy();
             assert!(
                 path != tmp_prefix,
                 "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
             );
-            if path.starts_with(tmp_prefix)
-                && let Some(parent) = path.parent()
+            // Under a fresh virtual filesystem (/tmp) the resolved destination
+            // is hidden by the overlay, so keep the logical destination and
+            // create its parents explicitly. Elsewhere bind at the resolved
+            // destination: creating the logical parent can fail when it is a
+            // symlink into an autofs-backed CSA session-state root (#3075).
+            let dest_path = if fresh_writable_mount_root(path).is_some() {
+                path.as_path()
+            } else {
+                resolved.as_path()
+            };
+            if let Some(parent) = dest_path.parent()
                 && parent != tmp_prefix
+                && parent != Path::new("/")
             {
                 cmd.args(["--dir", &parent.to_string_lossy()]);
             }
-            cmd.args(["--ro-bind", &s, &dest]);
+            cmd.args(["--ro-bind", &s, &dest_path.to_string_lossy()]);
         }
 
         // Extra read-only bind mounts.  When the dest path differs from src
