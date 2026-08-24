@@ -9,6 +9,9 @@ use std::sync::{LazyLock, Mutex};
 
 use anyhow::{Context, Result};
 
+#[path = "git_guard_env.rs"]
+mod git_guard_env;
+
 const FALLBACK_GUARD_DIR_NAME: &str = "guards";
 const SESSION_GUARD_DIR_NAME: &str = "bin";
 const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
@@ -458,6 +461,7 @@ if [ "${CSA_GIT_PUSH_ALLOWED:-}" != "true" ]; then
     reset_hermetic_git_environment || block_untrusted_git_command "$@"
   elif ! is_exact_git_version_grammar "$@" \
     && ! is_exact_git_init_grammar "$@" \
+    && ! is_exact_git_var_identity_grammar "$@" \
     && ! is_safe_local_command "${COMMAND}"; then
     block_untrusted_git_command "$@"
   fi
@@ -684,7 +688,7 @@ pub fn inject_git_guard_env(env: &mut HashMap<String, String>) {
         }
     };
 
-    let real_git = real_git_binary(&guard_dir);
+    let real_git = git_guard_env::real_git_binary(&guard_dir);
     if let Some(real_git) = real_git {
         env.insert(
             "CSA_REAL_GIT".to_string(),
@@ -692,41 +696,7 @@ pub fn inject_git_guard_env(env: &mut HashMap<String, String>) {
         );
     }
 
-    prepend_guard_dir(env, &guard_dir);
-}
-
-fn real_git_binary(guard_dir: &Path) -> Option<PathBuf> {
-    // The guard's child environment is attacker-controlled. Resolve a known
-    // host Git rather than inheriting an ambient CSA_REAL_GIT override; this
-    // is the trust anchor used to pin the projected transfer's libexec path.
-    let guard_dir_str = guard_dir.to_string_lossy();
-    let is_not_guard = |path: &Path| !path.to_string_lossy().starts_with(guard_dir_str.as_ref());
-
-    ["/usr/bin/git", "/usr/local/bin/git", "/bin/git"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file() && is_not_guard(path))
-        .or_else(|| which::which("git").ok().filter(|path| is_not_guard(path)))
-}
-
-fn prepend_guard_dir(env: &mut HashMap<String, String>, guard_dir: &Path) {
-    let guard_dir_str = guard_dir.to_string_lossy().into_owned();
-    let current_path = env
-        .get("PATH")
-        .cloned()
-        .or_else(|| std::env::var("PATH").ok())
-        .unwrap_or_default();
-    let filtered = current_path
-        .split(':')
-        .filter(|entry| !entry.is_empty() && *entry != guard_dir_str)
-        .collect::<Vec<_>>()
-        .join(":");
-    let new_path = if filtered.is_empty() {
-        guard_dir_str
-    } else {
-        format!("{guard_dir_str}:{filtered}")
-    };
-    env.insert("PATH".to_string(), new_path);
+    git_guard_env::prepend_guard_dir(env, &guard_dir);
 }
 
 #[must_use]
