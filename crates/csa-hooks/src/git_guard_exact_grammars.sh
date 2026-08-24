@@ -19,6 +19,15 @@ is_exact_git_init_grammar() {
   return 1
 }
 
+is_exact_git_var_identity_grammar() {
+  [ "$#" -eq 2 ] || return 1
+  [ "${1}" = "var" ] || return 1
+  case "${2}" in
+    GIT_AUTHOR_IDENT|GIT_COMMITTER_IDENT) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_exact_git_c_local_grammar() {
   [ "$#" -ge 3 ] || return 1
   [ "${1}" = "-C" ] || return 1
@@ -30,7 +39,7 @@ is_exact_git_c_local_grammar() {
   git_c_command="${3}"
   shift 3
   case "${git_c_command}" in
-    init|config|add|commit|status|diff|rev-parse|log|show|checkout) ;;
+    init|config|add|commit|status|diff|diff-tree|rev-parse|log|show|checkout) ;;
     *) return 1 ;;
   esac
   for fixture_arg do
@@ -82,6 +91,13 @@ is_exact_git_c_local_grammar() {
         1) [ "${1}" = "--quiet" ] || return 1 ;;
         *) return 1 ;;
       esac
+      ;;
+    diff-tree)
+      [ "$#" -eq 4 ] \
+        && [ "${1}" = "--no-commit-id" ] \
+        && [ "${2}" = "--name-only" ] \
+        && [ "${3}" = "-r" ] \
+        && [ "${4}" = "HEAD" ] || return 1
       ;;
     rev-parse)
       case "$#" in
