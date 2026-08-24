@@ -297,14 +297,17 @@ fn validate_single_path(
     if options.reject_tmp_root && path == Path::new("/tmp") {
         anyhow::bail!("/tmp itself is forbidden; expose a specific sub-path instead");
     }
-    if options.require_absolute && !path.is_absolute() {
-        anyhow::bail!("path must be absolute");
-    }
+    // Resolve project-local relative paths against the project root before the
+    // absolute-path validator, so relative `--extra-readable` / `--context`
+    // paths under an allowed root are accepted (#3074).
     let requested = normalize_path_components(if path.is_absolute() {
         path.to_path_buf()
     } else {
         project_root.join(path)
     });
+    if options.require_absolute && !requested.is_absolute() {
+        anyhow::bail!("path must be absolute");
+    }
     if requested == Path::new("/") {
         anyhow::bail!("root path is forbidden");
     }
