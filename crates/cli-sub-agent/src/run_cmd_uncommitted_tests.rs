@@ -68,7 +68,13 @@ fn apply_uncommitted_changes_warn_only_preserves_success() {
         truncated: 0,
     };
 
-    apply_uncommitted_changes_to_result(&mut result, changes, None, false, None);
+    super::result_finalizer::apply_uncommitted_changes_to_result(
+        &mut result,
+        changes,
+        None,
+        false,
+        None,
+    );
 
     assert_eq!(result.status, "success");
     assert_eq!(result.exit_code, 0);
@@ -89,7 +95,13 @@ fn apply_uncommitted_changes_require_commit_flips_to_failure() {
         truncated: 0,
     };
 
-    apply_uncommitted_changes_to_result(&mut result, changes, None, true, None);
+    super::result_finalizer::apply_uncommitted_changes_to_result(
+        &mut result,
+        changes,
+        None,
+        true,
+        None,
+    );
 
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);
@@ -115,7 +127,13 @@ fn require_commit_recovery_diagnostic_preserves_signal_exit_and_sanitized_paths(
     };
     let recovery = build_require_commit_recovery_diagnostic(&result, &changes);
 
-    apply_uncommitted_changes_to_result(&mut result, changes, None, true, Some(recovery.clone()));
+    super::result_finalizer::apply_uncommitted_changes_to_result(
+        &mut result,
+        changes,
+        None,
+        true,
+        Some(recovery.clone()),
+    );
 
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);

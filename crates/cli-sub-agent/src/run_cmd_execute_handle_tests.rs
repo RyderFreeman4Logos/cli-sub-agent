@@ -154,3 +154,98 @@ async fn handle_run_sequencing_runs_failing_gate_after_require_commit_fatal() {
         "gate evidence must retain require-commit recovery"
     );
 }
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn record_run_dirty_then_apply_post_exec_gate_preserves_typed_sandbox_hook_summary() {
+    let project_dir = tempdir().expect("temp project");
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    let session_id = create_session_fresh(
+        project_dir.path(),
+        Some("typed sandbox hook finalizer"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session")
+    .meta_session_id;
+    write_success_result_for(project_dir.path(), &session_id);
+
+    std::fs::write(project_dir.path().join("tracked.txt"), "dirty\n").expect("dirty tracked file");
+    let head = std::process::Command::new("git")
+        .args([
+            "-C",
+            project_dir.path().to_str().expect("project path"),
+            "rev-parse",
+            "HEAD",
+        ])
+        .output()
+        .expect("read HEAD");
+    assert!(head.status.success());
+    let head = String::from_utf8(head.stdout)
+        .expect("HEAD is UTF-8")
+        .trim()
+        .to_string();
+    let staged_tree = std::process::Command::new("git")
+        .args([
+            "-C",
+            project_dir.path().to_str().expect("project path"),
+            "write-tree",
+        ])
+        .output()
+        .expect("read staged tree");
+    assert!(staged_tree.status.success());
+    let staged_tree = String::from_utf8(staged_tree.stdout)
+        .expect("staged tree is UTF-8")
+        .trim()
+        .to_string();
+    let session_dir =
+        csa_session::get_session_dir(project_dir.path(), &session_id).expect("session dir");
+    std::fs::write(
+        session_dir.join(csa_hooks::git_guard::SANDBOX_COMMIT_FAILURE_MARKER_FILE),
+        format!("{head} {staged_tree} args env config hooks\n"),
+    )
+    .expect("write sandbox hook marker");
+
+    // SAFETY: ScopedSessionSandbox owns the process-wide test environment lock.
+    unsafe {
+        std::env::set_var(
+            crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV,
+            "true",
+        );
+    }
+    let typed_hook_diagnostic = "RebuildError: host write leaf park was rolled back";
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let mut execution = csa_process::ExecutionResult {
+        summary: typed_hook_diagnostic.to_string(),
+        exit_code: 0,
+        model_completed: Some(true),
+        terminal_reason: Some("end_turn".to_string()),
+        ..Default::default()
+    };
+
+    record_run_dirty_then_apply_post_exec_gate(
+        project_dir.path(),
+        "modify tracked.txt",
+        Some(&session_id),
+        None,
+        &mut execution,
+        Some(&changed_paths),
+        Some(false),
+        true,
+        PostExecGateApplyOptions {
+            changed_paths: Some(&changed_paths),
+            extra_env: None,
+            no_post_exec_gate: true,
+            planning_only: false,
+        },
+    )
+    .await
+    .expect("post-exec gate finalizer");
+
+    assert_eq!(execution.summary, typed_hook_diagnostic);
+    let persisted = load_result(project_dir.path(), &session_id)
+        .expect("load result")
+        .expect("persisted result");
+    assert_eq!(persisted.summary, typed_hook_diagnostic);
+}
