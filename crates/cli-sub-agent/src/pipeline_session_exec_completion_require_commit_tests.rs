@@ -292,7 +292,10 @@ async fn signal_killed_require_commit_run_rescues_dirty_workspace() {
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(hang_git_probe: bool) {
+async fn assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(
+    hang_git_probe: bool,
+    sa_mode: bool,
+) {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -359,11 +362,12 @@ exec /usr/bin/git "$@"
         thinking_budget: None,
         runtime_metadata: CodexRuntimeMetadata::current(),
     };
+    let typed_hook_diagnostic = "RebuildError: host write leaf park was rolled back";
     let transport_result = TransportResult {
         execution: csa_process::ExecutionResult {
-            output: "writer completed but commit failed".to_string(),
+            output: typed_hook_diagnostic.to_string(),
             stderr_output: String::new(),
-            summary: "writer completed but commit failed".to_string(),
+            summary: typed_hook_diagnostic.to_string(),
             exit_code: 0,
             model_completed: Some(true),
             ..Default::default()
@@ -398,7 +402,7 @@ exec /usr/bin/git "$@"
         pre_run_workspace: Some(before),
         pre_exec_snapshot: None,
         timeout_diagnostics: None,
-        sa_mode: false,
+        sa_mode,
     };
 
     let completed = complete_session_execution(
@@ -432,6 +436,9 @@ exec /usr/bin/git "$@"
     }
 
     assert_eq!(completed.commit_created, Some(false));
+    if sa_mode {
+        assert_eq!(completed.execution.summary, typed_hook_diagnostic);
+    }
     assert_ne!(completed.execution.exit_code, 0);
     assert_eq!(
         git_capture(project_root, &["rev-parse", "HEAD"]),
@@ -447,13 +454,19 @@ exec /usr/bin/git "$@"
 #[cfg(not(target_os = "macos"))]
 #[tokio::test]
 async fn completion_does_not_rescue_after_sandbox_hook_failure_marker() {
-    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(false).await;
+    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(false, false).await;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn dirty_sa_preserves_sandbox_hook_failure_marker() {
+    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(false, true).await;
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tokio::test]
 async fn completion_does_not_rescue_when_sandbox_marker_probe_times_out() {
-    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(true).await;
+    assert_completion_does_not_rescue_after_sandbox_hook_failure_marker(true, false).await;
 }
 
 #[test]

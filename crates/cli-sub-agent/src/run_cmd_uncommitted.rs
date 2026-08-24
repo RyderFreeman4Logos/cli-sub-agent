@@ -25,6 +25,8 @@ mod diff_tokens;
 mod memory_soft_limit_recovery;
 #[path = "run_cmd_uncommitted_require_commit.rs"]
 mod require_commit;
+#[path = "run_cmd_uncommitted_result_finalizer.rs"]
+mod result_finalizer;
 
 #[cfg(test)]
 use diff_tokens::{DIFF_BYTES_PER_TOKEN, estimate_diff_stream_tokens, tracked_diff_byte_limit};
@@ -221,6 +223,11 @@ fn record_writer_uncommitted_changes_with_config(
     };
     let sandbox_hook_state =
         require_commit::SandboxHookProbeState::from_result(sandbox_hook_probe.as_ref());
+    let preserved_summary = result_finalizer::typed_sandbox_hook_summary(
+        &result.summary,
+        record.sa_mode,
+        sandbox_hook_state,
+    );
     let contract_changes = dirty_tracked_changes;
 
     let maybe_signal_exit = matches!(result.exit_code, 124 | 130 | 137 | 143);
@@ -230,7 +237,11 @@ fn record_writer_uncommitted_changes_with_config(
 
     let Some(session_id) = session_id else {
         if require_commit_contract_failure {
-            mark_require_commit_contract_failure(result, sandbox_hook_state);
+            result_finalizer::mark_require_commit_contract_failure(
+                result,
+                sandbox_hook_state,
+                preserved_summary.as_deref(),
+            );
         }
         return warning;
     };
@@ -263,16 +274,31 @@ fn record_writer_uncommitted_changes_with_config(
                 changes.clone()
             };
             if let Some(changes) = result_changes {
-                apply_uncommitted_changes_to_result(
-                    &mut session_result,
-                    changes,
-                    warning.clone(),
-                    require_commit_contract_failure,
-                    recovery,
-                );
+                if let Some(preserved_summary) = preserved_summary.as_deref() {
+                    result_finalizer::apply_uncommitted_changes_to_result_with_preserved_summary(
+                        &mut session_result,
+                        changes,
+                        warning.clone(),
+                        require_commit_contract_failure,
+                        recovery,
+                        Some(preserved_summary),
+                    );
+                } else {
+                    result_finalizer::apply_uncommitted_changes_to_result(
+                        &mut session_result,
+                        changes,
+                        warning.clone(),
+                        require_commit_contract_failure,
+                        recovery,
+                    );
+                }
                 should_save = true;
             } else if let Some(recovery) = recovery {
-                apply_require_commit_contract_failure_to_result(&mut session_result, recovery);
+                result_finalizer::apply_require_commit_contract_failure_to_result(
+                    &mut session_result,
+                    recovery,
+                    preserved_summary.as_deref(),
+                );
                 should_save = true;
             }
             if let Some(recovery) = memory_soft_limit_recovery {
@@ -306,46 +332,13 @@ fn record_writer_uncommitted_changes_with_config(
     }
 
     if require_commit_contract_failure {
-        mark_require_commit_contract_failure(result, sandbox_hook_state);
+        result_finalizer::mark_require_commit_contract_failure(
+            result,
+            sandbox_hook_state,
+            preserved_summary.as_deref(),
+        );
     }
     warning
-}
-
-pub(crate) fn apply_uncommitted_changes_to_result(
-    result: &mut csa_session::SessionResult,
-    changes: csa_session::UncommittedChanges,
-    large_diff_warning: Option<csa_session::LargeDiffWarningReport>,
-    require_commit_contract_failure: bool,
-    recovery: Option<csa_session::RequireCommitRecoveryDiagnostic>,
-) {
-    result.uncommitted_changes = Some(changes);
-    result.large_diff_warning = large_diff_warning;
-    result.require_commit_recovery = recovery;
-    if require_commit_contract_failure {
-        let recovery = result.require_commit_recovery.take().unwrap_or_else(|| {
-            require_commit::build_recovery_diagnostic_for_state(
-                result,
-                result.uncommitted_changes.as_ref(),
-                false,
-                None,
-                None,
-                None,
-                require_commit::SandboxHookProbeState::Clear,
-            )
-        });
-        apply_require_commit_contract_failure_to_result(result, recovery);
-    }
-}
-
-fn apply_require_commit_contract_failure_to_result(
-    result: &mut csa_session::SessionResult,
-    recovery: csa_session::RequireCommitRecoveryDiagnostic,
-) {
-    remove_incidental_downgrade_warnings(&mut result.warnings);
-    result.exit_code = 1;
-    result.status = csa_session::SessionResult::status_from_exit_code(1);
-    result.summary = require_commit::persisted_contract_failure_reason(&recovery).to_string();
-    result.require_commit_recovery = Some(recovery);
 }
 
 #[cfg(test)]
@@ -364,20 +357,6 @@ fn build_require_commit_recovery_diagnostic(
     )
 }
 
-fn mark_require_commit_contract_failure(
-    result: &mut csa_process::ExecutionResult,
-    sandbox_hook_state: require_commit::SandboxHookProbeState<'_>,
-) {
-    result.mark_gate_failure("writer-uncommitted");
-    let reason = require_commit::contract_failure_reason(sandbox_hook_state);
-    result.summary = reason.to_string();
-    if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-        result.stderr_output.push('\n');
-    }
-    result.stderr_output.push_str(reason);
-    result.stderr_output.push('\n');
-}
-
 fn raw_termination_status_from_exit_code(exit_code: i32) -> String {
     match exit_code {
         0 => "success".to_string(),
@@ -385,14 +364,6 @@ fn raw_termination_status_from_exit_code(exit_code: i32) -> String {
         137 | 143 => "signal".to_string(),
         _ => "failure".to_string(),
     }
-}
-
-fn remove_incidental_downgrade_warnings(warnings: &mut Vec<String>) {
-    warnings.retain(|warning| !is_incidental_downgrade_warning(warning));
-}
-
-fn is_incidental_downgrade_warning(warning: &str) -> bool {
-    warning.contains("incidental nonzero exit") && warning.contains("treated as success")
 }
 
 fn infer_signal_from_exit_code(exit_code: i32) -> Option<i32> {
