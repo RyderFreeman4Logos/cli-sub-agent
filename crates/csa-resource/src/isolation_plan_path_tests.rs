@@ -79,6 +79,29 @@ fn test_resolve_writable_allows_nonexistent_path_with_existing_parent() {
 }
 
 #[test]
+fn test_validate_readable_paths_accepts_project_local_relative_path() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let context_file = project.join(".csa").join("review-context.md");
+    std::fs::create_dir_all(context_file.parent().expect("context parent dir"))
+        .expect("create .csa dir");
+    std::fs::write(&context_file, "context").expect("write context file");
+
+    let resolved = validate_readable_paths(&[PathBuf::from(".csa/review-context.md")], &project).expect(
+        "project-local relative readable path should resolve against project root and be accepted",
+    );
+    assert_eq!(
+        resolved,
+        vec![context_file.canonicalize().expect("canonical context file")],
+        "readable paths must be returned resolved to project-root absolute form"
+    );
+    assert!(
+        resolved.iter().all(|path| path.is_absolute()),
+        "every returned readable path must be absolute for bwrap bind mounts"
+    );
+}
+
+#[test]
 fn test_resolve_writable_accepts_config_path_outside_default_roots() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");

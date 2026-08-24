@@ -64,6 +64,67 @@ fn test_filesystem_sandbox_active_helper() {
     assert!(!filesystem_sandbox_active(Some(&inactive)));
 }
 
+/// Regression for #3074: relative `--expose-readable` paths must be resolved
+/// against the project root before storage in the isolation plan, so Bwrap
+/// construction never sees a relative readable path.
+#[test]
+fn extra_readable_relative_paths_resolve_before_bwrap_construction() {
+    let project = tempfile::tempdir().expect("project root tempdir");
+    let context_file = project.path().join(".csa").join("review-context.md");
+    std::fs::create_dir_all(context_file.parent().expect("context parent dir"))
+        .expect("create .csa dir");
+    std::fs::write(&context_file, "context").expect("write context file");
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_sandbox_options_with_capabilities(
+        SandboxResolveInput {
+            config: Some(&cfg),
+            tool_name: "codex",
+            session_id: "test-session",
+            project_root: project.path(),
+            stream_mode: StreamMode::BufferOnly,
+            idle_timeout_seconds: 120,
+            liveness_dead_seconds: 600,
+            initial_response_timeout_seconds: Some(120),
+            no_fs_sandbox: false,
+            allow_user_daemon_ipc: false,
+            readonly_project_root: false,
+            extra_writable: &[],
+            extra_readable: &[PathBuf::from(".csa/review-context.md")],
+            execution_env: None,
+        },
+        RunResourceOverrides::absent(),
+        csa_resource::ResourceCapability::None,
+        csa_resource::FilesystemCapability::Bwrap,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+    let sandbox = opts.sandbox.expect("expected sandbox context");
+    let plan = &sandbox.isolation_plan;
+    assert!(
+        plan.readable_paths.iter().all(|path| path.is_absolute()),
+        "no readable path may remain relative before bwrap construction, got: {:?}",
+        plan.readable_paths
+    );
+    assert!(
+        contains_equivalent_path(&plan.readable_paths, &context_file),
+        "relative --expose-readable path must be stored resolved against the project root, got: {:?}",
+        plan.readable_paths
+    );
+
+    // Bwrap construction must not panic on the resolved paths (#3074).
+    let cmd = csa_resource::from_isolation_plan(plan, "/usr/bin/tool", &[]);
+    assert!(cmd.is_some(), "Bwrap plan should produce a command");
+}
+
 #[test]
 fn user_daemon_ipc_audit_artifact_records_capability() {
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

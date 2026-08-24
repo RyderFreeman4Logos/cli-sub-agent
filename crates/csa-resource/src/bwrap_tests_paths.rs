@@ -189,6 +189,54 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let canonical_source = temp.path().join("canonical-source.json");
+    let logical_destination = temp.path().join("logical-readable.json");
+    std::fs::write(&canonical_source, "{}").expect("write canonical source");
+    symlink(&canonical_source, &logical_destination).expect("create logical symlink");
+
+    let readable_paths = crate::isolation_plan::validate_readable_paths(
+        std::slice::from_ref(&logical_destination),
+        temp.path(),
+    )
+    .expect("/tmp symlink should be accepted after canonical source validation");
+    assert_eq!(readable_paths, vec![logical_destination.clone()]);
+
+    let plan = IsolationPlan {
+        resource: ResourceCapability::None,
+        filesystem: FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        readable_paths,
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
+    };
+    let args = command_args(
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+    );
+
+    assert!(
+        args.windows(3).any(|window| {
+            window[0] == "--ro-bind"
+                && window[1] == canonical_source.to_string_lossy()
+                && window[2] == logical_destination.to_string_lossy()
+        }),
+        "readable bind must use the canonical source at the /tmp logical destination; args: {args:?}"
+    );
+}
+
 #[test]
 fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
     // Repro for #3075: on autofs/logical worktrees the logical path's parent

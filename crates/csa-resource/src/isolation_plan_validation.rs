@@ -41,18 +41,33 @@ fn resolve_writable_paths_impl(
             canonicalize_for_allowlist: true,
             allow_requested_path_for_allowlist: true,
             allow_outside_default_roots,
+            preserve_requested_path: false,
         },
         &[],
     )
 }
 
-/// Validate that readable paths are safe to expose into the sandbox.
+/// Validate readable paths and return normalized absolute requested paths.
 ///
-/// Read-only binds are stricter than writable paths: every path must be
-/// absolute, must exist on disk, `/tmp` itself is forbidden, and symlinked
-/// paths are validated against the canonical target to prevent bind-mounting a
-/// safe-looking path that resolves somewhere outside the allowlist.
-pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+/// Read-only binds are stricter than writable paths: every path must exist on
+/// disk, `/tmp` itself is forbidden, and symlinked paths are validated against
+/// the canonical target to prevent bind-mounting a safe-looking path that
+/// resolves somewhere outside the allowlist.
+///
+/// Project-local relative paths are resolved against `project_root` before
+/// validation, so every returned path is absolute. Symlink targets remain
+/// canonicalized for validation, but the requested path is stored in an
+/// `IsolationPlan` so Bwrap preserves logical `/tmp` destinations (#3074).
+///
+/// # Errors
+///
+/// Returns an error listing every rejected path when any path is outside the
+/// allowed roots (project root, home dir, `/tmp`), fails to resolve, or is
+/// sensitive.
+pub fn validate_readable_paths(
+    paths: &[PathBuf],
+    project_root: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
     let mirror_roots = default_ssd_mirror_roots();
     validate_readable_paths_with_mirror_roots(paths, project_root, &mirror_roots)
 }
@@ -61,14 +76,13 @@ pub(super) fn validate_readable_paths_with_mirror_roots(
     paths: &[PathBuf],
     project_root: &Path,
     mirror_roots: &[PathBuf],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PathBuf>> {
     validate_sandbox_paths(
         paths,
         project_root,
         readable_path_validation_options(),
         mirror_roots,
     )
-    .map(|_| ())
 }
 
 fn readable_path_validation_options() -> PathValidationOptions<'static> {
@@ -80,6 +94,7 @@ fn readable_path_validation_options() -> PathValidationOptions<'static> {
         canonicalize_for_allowlist: true,
         allow_requested_path_for_allowlist: false,
         allow_outside_default_roots: false,
+        preserve_requested_path: true,
     }
 }
 
@@ -152,6 +167,7 @@ struct PathValidationOptions<'a> {
     canonicalize_for_allowlist: bool,
     allow_requested_path_for_allowlist: bool,
     allow_outside_default_roots: bool,
+    preserve_requested_path: bool,
 }
 
 fn default_ssd_mirror_roots() -> [PathBuf; 1] {
@@ -234,7 +250,11 @@ fn validate_sandbox_paths(
             ));
             continue;
         }
-        resolved_paths.push(validated.resolved);
+        resolved_paths.push(if options.preserve_requested_path {
+            validated.requested
+        } else {
+            validated.resolved
+        });
     }
 
     if rejected.is_empty() {
@@ -297,14 +317,17 @@ fn validate_single_path(
     if options.reject_tmp_root && path == Path::new("/tmp") {
         anyhow::bail!("/tmp itself is forbidden; expose a specific sub-path instead");
     }
-    if options.require_absolute && !path.is_absolute() {
-        anyhow::bail!("path must be absolute");
-    }
+    // Resolve project-local relative paths against the project root before the
+    // absolute-path validator, so relative `--extra-readable` / `--context`
+    // paths under an allowed root are accepted (#3074).
     let requested = normalize_path_components(if path.is_absolute() {
         path.to_path_buf()
     } else {
         project_root.join(path)
     });
+    if options.require_absolute && !requested.is_absolute() {
+        anyhow::bail!("path must be absolute");
+    }
     if requested == Path::new("/") {
         anyhow::bail!("root path is forbidden");
     }
