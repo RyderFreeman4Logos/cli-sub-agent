@@ -87,8 +87,17 @@ fn test_validate_readable_paths_accepts_project_local_relative_path() {
         .expect("create .csa dir");
     std::fs::write(&context_file, "context").expect("write context file");
 
-    validate_readable_paths(&[PathBuf::from(".csa/review-context.md")], &project).expect(
+    let resolved = validate_readable_paths(&[PathBuf::from(".csa/review-context.md")], &project).expect(
         "project-local relative readable path should resolve against project root and be accepted",
+    );
+    assert_eq!(
+        resolved,
+        vec![context_file.canonicalize().expect("canonical context file")],
+        "readable paths must be returned resolved to project-root absolute form"
+    );
+    assert!(
+        resolved.iter().all(|path| path.is_absolute()),
+        "every returned readable path must be absolute for bwrap bind mounts"
     );
 }
 

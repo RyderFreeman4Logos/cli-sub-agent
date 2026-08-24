@@ -46,13 +46,26 @@ fn resolve_writable_paths_impl(
     )
 }
 
-/// Validate that readable paths are safe to expose into the sandbox.
+/// Validate readable paths and return them resolved as absolute paths.
 ///
-/// Read-only binds are stricter than writable paths: every path must be
-/// absolute, must exist on disk, `/tmp` itself is forbidden, and symlinked
-/// paths are validated against the canonical target to prevent bind-mounting a
-/// safe-looking path that resolves somewhere outside the allowlist.
-pub fn validate_readable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+/// Read-only binds are stricter than writable paths: every path must exist on
+/// disk, `/tmp` itself is forbidden, and symlinked paths are validated against
+/// the canonical target to prevent bind-mounting a safe-looking path that
+/// resolves somewhere outside the allowlist.
+///
+/// Project-local relative paths are resolved against `project_root` before
+/// validation, so every returned path is absolute and safe to store in an
+/// `IsolationPlan` for Bwrap read-only bind mounts (#3074).
+///
+/// # Errors
+///
+/// Returns an error listing every rejected path when any path is outside the
+/// allowed roots (project root, home dir, `/tmp`), fails to resolve, or is
+/// sensitive.
+pub fn validate_readable_paths(
+    paths: &[PathBuf],
+    project_root: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
     let mirror_roots = default_ssd_mirror_roots();
     validate_readable_paths_with_mirror_roots(paths, project_root, &mirror_roots)
 }
@@ -61,14 +74,13 @@ pub(super) fn validate_readable_paths_with_mirror_roots(
     paths: &[PathBuf],
     project_root: &Path,
     mirror_roots: &[PathBuf],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PathBuf>> {
     validate_sandbox_paths(
         paths,
         project_root,
         readable_path_validation_options(),
         mirror_roots,
     )
-    .map(|_| ())
 }
 
 fn readable_path_validation_options() -> PathValidationOptions<'static> {
