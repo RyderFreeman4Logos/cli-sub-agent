@@ -36,6 +36,7 @@ new_isolation_fixture() {
   cp "$repo_root/scripts/cargo-env-normalize.sh" "$fixture/scripts/"
   cp "$repo_root/scripts/quality-gate-state.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_file_provenance.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
   if [ -f "$repo_root/scripts/quality_gate_sandbox.py" ]; then
     cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"

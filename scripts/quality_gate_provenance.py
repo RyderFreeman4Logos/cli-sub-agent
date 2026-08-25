@@ -16,6 +16,11 @@ from quality_gate_secure_state import (
     SCHEMA_VERSION,
     sha256_bytes,
 )
+from quality_gate_file_provenance import (
+    ProvenanceError,
+    hash_open_file,
+    toolchain_closure_provenance,
+)
 
 __all__ = (
     "MAX_MANIFEST_BYTES",
@@ -26,8 +31,6 @@ __all__ = (
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_REPOSITORY_FILE_BYTES = 32 * 1024 * 1024
 MAX_TOOL_BYTES = 256 * 1024 * 1024
-MAX_TOOLCHAIN_ENTRIES = 4096
-TOOLCHAIN_CONTENT_HASH_LIMIT = 1024 * 1024
 COMMAND_TIMEOUT_SECONDS = 15
 
 ENV_PREFIXES = ("CARGO_", "RUST", "NEXTEST_", "MISE_")
@@ -90,10 +93,6 @@ PROVENANCE_TOOLS = (
     "shellcheck",
     "timeout",
 )
-
-
-class ProvenanceError(RuntimeError):
-    """Acceptance input normalization."""
 
 
 def encode_fields(fields: dict[str, str]) -> bytes:
@@ -159,34 +158,6 @@ def git_diff_is_clean(repo: Path, env: dict[str, str], *arguments: str) -> bool:
     return completed.returncode == 0
 
 
-def hash_open_file(path: Path, maximum: int, *, resolve: bool = False) -> str:
-    """Hash a bounded regular file, no final-component follow."""
-
-    candidate = path.resolve(strict=True) if resolve else path
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    try:
-        descriptor = os.open(candidate, flags)
-    except OSError as error:
-        raise ProvenanceError("required provenance file is unavailable") from error
-    try:
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_size > maximum:
-            raise ProvenanceError("provenance file is not a bounded regular file")
-        digest = hashlib.sha256()
-        remaining = status.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                raise ProvenanceError("provenance file was truncated while reading")
-            digest.update(chunk)
-            remaining -= len(chunk)
-        if os.read(descriptor, 1):
-            raise ProvenanceError("provenance file grew while reading")
-        return digest.hexdigest()
-    finally:
-        os.close(descriptor)
-
-
 def optional_repository_digest(repo: Path, relative: str) -> str:
     path = repo / relative
     try:
@@ -221,54 +192,6 @@ def resolve_executable(value: str, *, require_absolute: bool) -> Path:
     if not stat.S_ISREG(status.st_mode) or not os.access(path, os.X_OK):
         raise ProvenanceError("provenance executable is not an executable regular file")
     return path
-
-
-def toolchain_closure_provenance(sysroot: Path) -> str:
-    """Bind compiler closure: metadata for large libs, content for manifests."""
-
-    digest = hashlib.sha256()
-    digest.update(sha256_bytes(os.fsencode(sysroot)).encode())
-    entries = 0
-    for root_name in ("bin", "lib"):
-        root = sysroot / root_name
-        if not root.is_dir():
-            raise ProvenanceError("Rust sysroot closure is incomplete")
-        for directory, names, files in os.walk(root, followlinks=False):
-            names.sort(key=os.fsencode)
-            files.sort(key=os.fsencode)
-            for name in (*names, *files):
-                path = Path(directory) / name
-                relative = path.relative_to(sysroot)
-                try:
-                    status = path.lstat()
-                except OSError as error:
-                    raise ProvenanceError("Rust sysroot closure changed") from error
-                entries += 1
-                if entries > MAX_TOOLCHAIN_ENTRIES:
-                    raise ProvenanceError("Rust sysroot closure is too large")
-                metadata = (
-                    f"{relative}\0{status.st_mode:o}\0{status.st_uid}\0"
-                    f"{status.st_gid}\0{status.st_dev}\0{status.st_ino}\0"
-                    f"{status.st_size}\0{status.st_mtime_ns}\0{status.st_ctime_ns}\0"
-                ).encode()
-                digest.update(metadata)
-                if stat.S_ISLNK(status.st_mode):
-                    try:
-                        digest.update(os.fsencode(os.readlink(path)))
-                    except OSError as error:
-                        raise ProvenanceError("Rust sysroot link changed") from error
-                elif stat.S_ISREG(status.st_mode) and (
-                    status.st_size <= TOOLCHAIN_CONTENT_HASH_LIMIT
-                ):
-                    digest.update(
-                        hash_open_file(path, TOOLCHAIN_CONTENT_HASH_LIMIT).encode()
-                    )
-                elif not (stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode)):
-                    raise ProvenanceError(
-                        "Rust sysroot closure has unsupported entries"
-                    )
-    digest.update(str(entries).encode())
-    return digest.hexdigest()
 
 
 def compiler_provenance(repo: Path, env: dict[str, str]) -> tuple[str, str]:
@@ -425,7 +348,7 @@ def cargo_config_provenance(repo: Path, env: dict[str, str]) -> str:
 
 
 def tool_provenance(repo: Path, env: dict[str, str]) -> str:
-    """Hash executables, Cargo version, and native tool overrides."""
+    """Hash tool provenance."""
 
     fields: dict[str, str] = {}
     for tool in PROVENANCE_TOOLS:
@@ -510,7 +433,7 @@ def recipe_digest(repo: Path, env: dict[str, str]) -> str:
 
 
 def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) -> bytes:
-    """Collect canonical acceptance manifest in a normalized child."""
+    """Collect normalized manifest."""
 
     if not command:
         raise ProvenanceError("quality-gate command is empty")
@@ -561,6 +484,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "normalizer_sha256": "scripts/cargo-env-normalize.sh",
         "quality_gate_entrypoint_sha256": "scripts/hooks/quality-gates.sh",
         "quality_gate_environment_sha256": "scripts/quality_gate_environment.py",
+        "quality_gate_file_provenance_sha256": "scripts/quality_gate_file_provenance.py",
         "quality_gate_host_attestation_sha256": (
             "scripts/quality_gate_host_attestation.py"
         ),
@@ -570,6 +494,7 @@ def collect_manifest(repo: Path, command: Sequence[str], env: dict[str, str]) ->
         "quality_gate_sandbox_sha256": "scripts/quality_gate_sandbox.py",
         "quality_gate_secure_state_sha256": "scripts/quality_gate_secure_state.py",
         "quality_gate_state_helper_sha256": "scripts/quality-gate-state.py",
+        "quality_gate_tool_selection_sha256": "scripts/quality_gate_tool_selection.py",
         "quality_gate_toolchain_sha256": "scripts/quality_gate_toolchain.py",
         "rust_toolchain_file_sha256": "rust-toolchain.toml",
         "weave_lock_sha256": "weave.lock",

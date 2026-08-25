@@ -16,6 +16,8 @@ from quality_gate_toolchain import (
     resolve_pinned_rust_tools,
 )
 
+__all__ = ("selected_tools",)
+
 _REQUIRED_TOOLS = ("bash", "git", "python3")
 _OPTIONAL_TOOLS = (
     "ar",
@@ -37,17 +39,20 @@ _FIXED_TOOLS = {
     "python3": Path(sys.executable).resolve(),
     "rg": Path("/usr/bin/rg"),
 }
+_MISE = Path("/usr/local/bin/mise")
 
 
 def selected_tools(
     repo: Path, environment: Mapping[str, str]
 ) -> tuple[PinnedRustToolchain, dict[str, Path]]:
+    mise_shims = Path(environment.get("MISE_DATA_DIR", "/usr/local/share/mise")) / "shims"
     tool_environment = dict(environment)
     tool_environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment.get("PATH", os.defpath).split(os.pathsep)
         if not (
-            Path(entry).name == "shims" and Path(entry).parent.name == "mise"
+            Path(entry).resolve(strict=False) == mise_shims.resolve(strict=False)
+            or (Path(entry).name == "shims" and Path(entry).parent.name == "mise")
         )
     )
     rust_toolchain = resolve_pinned_rust_tools(repo, tool_environment)
@@ -69,6 +74,8 @@ def selected_tools(
             status = resolved.stat()
         except OSError as error:
             raise IsolationError("sandbox tool provenance invalid") from error
+        if resolved == _MISE:
+            continue
         if not stat.S_ISREG(status.st_mode) or not os.access(resolved, os.X_OK):
             raise IsolationError("sandbox tool provenance invalid")
         selected[name] = resolved

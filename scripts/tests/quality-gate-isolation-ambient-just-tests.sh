@@ -2,13 +2,16 @@
 # Ambient Just shim isolation contract.
 
 run_nested_just_ambient_input_isolation() {
-  local fixture runner counter just_victim ambient_shims first second
+  local fixture runner counter just_victim mise_data_dir ambient_shims first second
   local first_identity second_identity
   fixture="$(new_isolation_fixture)"
   runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
   counter="$fixture/target/nested-just-counter"
   just_victim="$fixture/target/hostile-just-tempdir"
-  ambient_shims=/usr/local/share/mise/shims
+  mise_data_dir="$fixture/target/mise-data"
+  ambient_shims="$mise_data_dir/shims"
+  mkdir -p "$ambient_shims"
+  ln -s /usr/local/bin/mise "$ambient_shims/just"
   mkdir -p "$just_victim"
   printf 'checkout-sentinel\n' >"$fixture/checkout-sentinel"
   printf 'victim-sentinel\n' >"$just_victim/sentinel"
@@ -38,10 +41,10 @@ JUST
   git -C "$fixture" add justfile checkout-sentinel
   git -C "$fixture" commit -qm "test: add nested Just static gate"
 
-  first="$(cd "$fixture" && JUST_TEMPDIR="$just_victim" \
+  first="$(cd "$fixture" && MISE_DATA_DIR="$mise_data_dir" JUST_TEMPDIR="$just_victim" \
     PATH="$ambient_shims:$PATH" \
     "$runner" -- just outer)"
-  second="$(cd "$fixture" && JUST_TEMPDIR="$fixture/target/second-hostile-just-tempdir" \
+  second="$(cd "$fixture" && MISE_DATA_DIR="$mise_data_dir" JUST_TEMPDIR="$fixture/target/second-hostile-just-tempdir" \
     PATH="$ambient_shims:$PATH" \
     "$runner" -- just outer)"
   first_identity="$(printf '%s' "$first" | json_field receipt_identity)"
