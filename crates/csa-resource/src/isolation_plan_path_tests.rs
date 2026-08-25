@@ -87,11 +87,15 @@ fn test_validate_readable_paths_accepts_project_local_relative_path() {
         .expect("create .csa dir");
     std::fs::write(&context_file, "context").expect("write context file");
 
-    let resolved = validate_readable_paths(&[PathBuf::from(".csa/review-context.md")], &project).expect(
+    let resolved = validate_readable_paths(&[PathBuf::from(".csa/review-context.md")], &project)
+        .expect(
         "project-local relative readable path should resolve against project root and be accepted",
     );
     assert_eq!(
-        resolved,
+        resolved
+            .iter()
+            .map(|path| path.requested().to_path_buf())
+            .collect::<Vec<_>>(),
         vec![context_file.canonicalize().expect("canonical context file")],
         "readable paths must be returned resolved to project-root absolute form"
     );
@@ -284,8 +288,12 @@ fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
         .build()
         .expect("runtime child scope with user_daemon_ipc should build");
 
-    assert!(plan.readable_paths.contains(&bus_socket));
-    assert!(plan.readable_paths.contains(&systemd_socket));
+    assert!(plan.readable_paths.iter().any(|path| path == &bus_socket));
+    assert!(
+        plan.readable_paths
+            .iter()
+            .any(|path| path == &systemd_socket)
+    );
 }
 
 #[test]
@@ -303,7 +311,7 @@ fn test_daemon_sockets_not_exposed_without_user_daemon_ipc() {
         .build()
         .expect("plan should build without runtime scope");
 
-    assert!(!plan.readable_paths.contains(&bus_socket));
+    assert!(!plan.readable_paths.iter().any(|path| path == &bus_socket));
 }
 
 #[cfg(unix)]

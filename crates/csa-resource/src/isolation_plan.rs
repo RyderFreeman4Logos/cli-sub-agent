@@ -12,12 +12,15 @@ pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 mod claude_paths;
 #[path = "isolation_plan_codex.rs"]
 mod codex_paths;
+#[path = "isolation_plan_readable.rs"]
+mod readable;
 #[path = "isolation_plan_runtime_path.rs"]
 mod runtime_path;
 #[path = "isolation_plan_rust_env.rs"]
 mod rust_env;
 #[path = "isolation_plan_validation.rs"]
 mod validation;
+pub use readable::ReadablePath;
 #[cfg(test)]
 use runtime_path::is_xdg_runtime_child_path;
 use runtime_path::{detect_superproject_root, home_dir, is_sensitive_system_path};
@@ -55,7 +58,7 @@ pub struct IsolationPlan {
     /// Paths the sandboxed process is allowed to write to.
     pub writable_paths: Vec<PathBuf>,
     /// Paths the sandboxed process may read via read-only bind mounts.
-    pub readable_paths: Vec<PathBuf>,
+    pub readable_paths: Vec<ReadablePath>,
     /// Extra environment variables injected into the child process.
     pub env_overrides: HashMap<String, String>,
     /// Human-readable reasons when capabilities were downgraded.
@@ -117,7 +120,7 @@ pub struct IsolationPlanBuilder {
     resource: ResourceCapability,
     filesystem: FilesystemCapability,
     writable_paths: Vec<PathBuf>,
-    readable_paths: Vec<PathBuf>,
+    readable_paths: Vec<ReadablePath>,
     env_overrides: HashMap<String, String>,
     degraded_reasons: Vec<String>,
     memory_max_mb: Option<u64>,
@@ -174,8 +177,8 @@ impl IsolationPlanBuilder {
     }
 
     /// Add a single read-only readable path to the plan.
-    pub fn with_readable_path(mut self, path: PathBuf) -> Self {
-        self.readable_paths.push(path);
+    pub fn with_readable_path(mut self, path: impl Into<ReadablePath>) -> Self {
+        self.readable_paths.push(path.into());
         self
     }
 
@@ -505,7 +508,12 @@ impl IsolationPlanBuilder {
             self.writable_paths.extend([common_dir, git_dir]);
         }
 
-        self.add_runtime_daemon_socket_readable_paths();
+        readable::push_runtime_daemon_socket_readable_paths(
+            self.filesystem,
+            self.user_daemon_ipc,
+            &self.writable_paths,
+            &mut self.readable_paths,
+        );
 
         codex_paths::validate_required_writable_dirs(
             self.filesystem,
@@ -531,43 +539,12 @@ impl IsolationPlanBuilder {
         })
     }
 
-    fn add_runtime_daemon_socket_readable_paths(&mut self) {
-        if self.filesystem != FilesystemCapability::Bwrap {
-            return;
-        }
-        // #2404: D-Bus socket exposure is now an explicit named capability,
-        // not an implicit side-effect of having writable runtime children.
-        if !self.user_daemon_ipc {
-            return;
-        }
-        let Some(runtime_root) = runtime_path::xdg_runtime_root() else {
-            return;
-        };
-
-        for socket_path in runtime_path::runtime_daemon_socket_paths(&runtime_root) {
-            if !socket_path.exists() || self.path_already_exposed(&socket_path) {
-                continue;
-            }
-            self.readable_paths.push(socket_path);
-        }
-    }
-
     #[allow(dead_code)]
     fn has_writable_runtime_child(&self, runtime_root: &Path) -> bool {
         self.writable_paths.iter().any(|path| {
             let comparable = runtime_path::canonicalize_or_fallback(path);
             comparable.starts_with(runtime_root) && comparable != runtime_root
         })
-    }
-
-    fn path_already_exposed(&self, path: &Path) -> bool {
-        self.readable_paths
-            .iter()
-            .any(|candidate| path == candidate)
-            || self
-                .writable_paths
-                .iter()
-                .any(|candidate| path.starts_with(candidate))
     }
 }
 

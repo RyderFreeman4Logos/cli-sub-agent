@@ -17,11 +17,11 @@ fn comparable_test_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn contains_equivalent_path(paths: &[PathBuf], expected: &Path) -> bool {
+fn contains_equivalent_path<P: AsRef<Path>>(paths: &[P], expected: &Path) -> bool {
     let expected = comparable_test_path(expected);
     paths
         .iter()
-        .any(|path| comparable_test_path(path) == expected)
+        .any(|path| comparable_test_path(path.as_ref()) == expected)
 }
 
 struct CurrentDirGuard {
@@ -605,7 +605,13 @@ enforcement_mode = "off"
     assert!(!plan.user_daemon_ipc);
     assert!(plan.degraded_reasons.is_empty());
     assert!(plan.env_overrides.is_empty());
-    assert_eq!(plan.readable_paths, vec![evidence.canonicalize().unwrap()]);
+    assert_eq!(
+        plan.readable_paths
+            .iter()
+            .map(|path| path.requested().to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![evidence.canonicalize().unwrap()]
+    );
     assert_eq!(
         plan.writable_paths,
         vec![

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+use super::readable::ReadablePath;
 use super::runtime_path::{
     canonicalize_or_fallback, home_dir, is_sensitive_system_path, is_xdg_runtime_child_path,
     normalize_path_components, xdg_runtime_root,
@@ -41,13 +42,13 @@ fn resolve_writable_paths_impl(
             canonicalize_for_allowlist: true,
             allow_requested_path_for_allowlist: true,
             allow_outside_default_roots,
-            preserve_requested_path: false,
         },
         &[],
     )
+    .map(|paths| paths.into_iter().map(|path| path.resolved).collect())
 }
 
-/// Validate readable paths and return normalized absolute requested paths.
+/// Validate readable paths and pin each bind source at validation time.
 ///
 /// Read-only binds are stricter than writable paths: every path must exist on
 /// disk, `/tmp` itself is forbidden, and symlinked paths are validated against
@@ -55,9 +56,9 @@ fn resolve_writable_paths_impl(
 /// resolves somewhere outside the allowlist.
 ///
 /// Project-local relative paths are resolved against `project_root` before
-/// validation, so every returned path is absolute. Symlink targets remain
-/// canonicalized for validation, but the requested path is stored in an
-/// `IsolationPlan` so Bwrap preserves logical `/tmp` destinations (#3074).
+/// validation, so every returned destination is absolute. The requested path
+/// remains the mount destination so Bwrap can preserve logical `/tmp` paths
+/// (#3074), while `bind_source` stays the validated target (#3102).
 ///
 /// # Errors
 ///
@@ -67,7 +68,7 @@ fn resolve_writable_paths_impl(
 pub fn validate_readable_paths(
     paths: &[PathBuf],
     project_root: &Path,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<Vec<ReadablePath>> {
     let mirror_roots = default_ssd_mirror_roots();
     validate_readable_paths_with_mirror_roots(paths, project_root, &mirror_roots)
 }
@@ -76,13 +77,16 @@ pub(super) fn validate_readable_paths_with_mirror_roots(
     paths: &[PathBuf],
     project_root: &Path,
     mirror_roots: &[PathBuf],
-) -> anyhow::Result<Vec<PathBuf>> {
-    validate_sandbox_paths(
+) -> anyhow::Result<Vec<ReadablePath>> {
+    Ok(validate_sandbox_paths(
         paths,
         project_root,
         readable_path_validation_options(),
         mirror_roots,
-    )
+    )?
+    .into_iter()
+    .map(|path| ReadablePath::pinned(path.requested, path.resolved))
+    .collect())
 }
 
 fn readable_path_validation_options() -> PathValidationOptions<'static> {
@@ -94,7 +98,6 @@ fn readable_path_validation_options() -> PathValidationOptions<'static> {
         canonicalize_for_allowlist: true,
         allow_requested_path_for_allowlist: false,
         allow_outside_default_roots: false,
-        preserve_requested_path: true,
     }
 }
 
@@ -167,7 +170,6 @@ struct PathValidationOptions<'a> {
     canonicalize_for_allowlist: bool,
     allow_requested_path_for_allowlist: bool,
     allow_outside_default_roots: bool,
-    preserve_requested_path: bool,
 }
 
 fn default_ssd_mirror_roots() -> [PathBuf; 1] {
@@ -179,7 +181,7 @@ fn validate_sandbox_paths(
     project_root: &Path,
     options: PathValidationOptions<'_>,
     mirror_roots: &[PathBuf],
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<Vec<ValidatedPath>> {
     let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
     let lexical_allowed_roots = [
         normalize_path_components(project_root.to_path_buf()),
@@ -250,11 +252,7 @@ fn validate_sandbox_paths(
             ));
             continue;
         }
-        resolved_paths.push(if options.preserve_requested_path {
-            validated.requested
-        } else {
-            validated.resolved
-        });
+        resolved_paths.push(validated);
     }
 
     if rejected.is_empty() {
