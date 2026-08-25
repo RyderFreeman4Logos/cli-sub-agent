@@ -472,47 +472,6 @@ fn persist_review_verdict_uncertain_meta_without_pass_prose_fails_closed() {
 }
 
 #[test]
-fn persist_review_verdict_findings_dominate_prose_clean_summary() {
-    let session_id = "01TESTFINDINGSDOMINATE000000";
-    let (_env_lock, project_root, session_dir) =
-        lock_test_session("persist-review-verdict-findings-dominate", session_id);
-    let findings = vec![make_finding(Severity::High, "blocking-high")];
-    let artifact = json!({
-        "findings": findings,
-        "severity_summary": SeveritySummary {
-            critical: 0,
-            high: 1,
-            medium: 0,
-            low: 0,
-        },
-        "overall_risk": "low"
-    });
-    fs::write(
-        session_dir.join("review-findings.json"),
-        serde_json::to_vec_pretty(&artifact).expect("serialize findings"),
-    )
-    .expect("write findings artifact");
-    csa_session::persist_structured_output(
-        &session_dir,
-        "<!-- CSA:SECTION:summary -->\nNo blocking issues found.\n<!-- CSA:SECTION:summary:END -->\n",
-    )
-    .expect("persist summary");
-
-    let meta = make_review_meta(session_id);
-    persist_review_verdict(&project_root, &meta, &[], Vec::new());
-
-    let verdict_path = session_dir.join("output").join("review-verdict.json");
-    let artifact: ReviewVerdictArtifact =
-        serde_json::from_str(&fs::read_to_string(&verdict_path).expect("read verdict"))
-            .expect("parse verdict");
-    assert_eq!(artifact.decision, ReviewDecision::Fail);
-    assert_eq!(artifact.verdict_legacy, "HAS_ISSUES");
-    assert_eq!(artifact.severity_counts.get(&Severity::High), Some(&1));
-
-    fs::remove_dir_all(project_root).expect("remove temp project root");
-}
-
-#[test]
 fn persist_review_verdict_prose_clean_summary_respects_high_overall_risk_fail_closed() {
     let session_id = "01TESTPROSECLEANRISK0000000";
     let (_env_lock, project_root, session_dir) =
@@ -549,3 +508,6 @@ fn persist_review_verdict_prose_clean_summary_respects_high_overall_risk_fail_cl
 
 #[path = "review_cmd_output_prose_clean_2425_tests.rs"]
 mod issue_2425;
+
+#[path = "review_cmd_output_prose_clean_3114_tests.rs"]
+mod issue_3114;

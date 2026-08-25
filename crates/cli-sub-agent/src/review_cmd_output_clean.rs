@@ -15,6 +15,7 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
         "no issues found",
         "no issues were found",
         "no actionable findings",
+        "findings: 0",
         "ship-ready",
         "ship ready",
         "\u{672a}\u{53d1}\u{73b0}\u{9700}\u{8981}\u{963b}\u{585e}\u{5408}\u{5e76}",
