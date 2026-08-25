@@ -287,6 +287,7 @@ require_source_contract() {
   assert_not_matches source-contract-deny-not-static 'just deny' "$static_source"
   for suite in \
     quality-gate-receipt-tests.sh \
+    quality-gate-receipt-intentional-local-tests.sh \
     quality-gate-receipt-hostile-tests.sh \
     quality-gate-isolation-tests.sh \
     pre-push-quality-gates-tests.sh \

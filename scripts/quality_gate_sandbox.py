@@ -21,6 +21,7 @@ from quality_gate_toolchain import (
 from quality_gate_host_attestation import (
     GIT,
     IsolationError,
+    classified_untracked_listing as _classified_untracked_listing,
     host_clean_state as _host_clean_state,
     run_git as _run_git,
 )
@@ -100,7 +101,9 @@ def _source_fingerprint(
     digest = hashlib.sha256()
     digest.update(_run_git(repo, "rev-parse", "HEAD").strip())
     digest.update(_run_git(repo, "ls-files", "--stage", "-z"))
-    untracked = _run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    untracked = _classified_untracked_listing(
+        _run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    )
     if excluded_prefix is not None:
         prefix = os.fsencode(excluded_prefix)
         untracked = b"\0".join(
