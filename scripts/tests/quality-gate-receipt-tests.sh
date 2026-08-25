@@ -67,8 +67,12 @@ new_fixture() {
     "$fixture/scripts/quality_gate_secure_state.py"
   cp "${repo_root}/scripts/quality_gate_provenance.py" \
     "$fixture/scripts/quality_gate_provenance.py"
+  cp "${repo_root}/scripts/quality_gate_file_provenance.py" \
+    "$fixture/scripts/quality_gate_file_provenance.py"
   cp "${repo_root}/scripts/quality_gate_sandbox.py" \
     "$fixture/scripts/quality_gate_sandbox.py"
+  cp "${repo_root}/scripts/quality_gate_tool_selection.py" \
+    "$fixture/scripts/quality_gate_tool_selection.py"
   cp "${repo_root}/scripts/quality_gate_host_attestation.py" \
     "$fixture/scripts/quality_gate_host_attestation.py"
   cp "${repo_root}/scripts/quality_gate_process.py" \
@@ -163,7 +167,9 @@ assert_manifest_contract() {
     justfile_sha256 lefthook_sha256 gate_script_sha256 recipe_sha256 \
     implementation_sha256 quality_gate_state_helper_sha256 \
     quality_gate_secure_state_sha256 \
-    quality_gate_provenance_sha256 quality_gate_sandbox_sha256 \
+    quality_gate_provenance_sha256 quality_gate_file_provenance_sha256 \
+    quality_gate_sandbox_sha256 \
+    quality_gate_tool_selection_sha256 \
     quality_gate_host_attestation_sha256 \
     quality_gate_toolchain_sha256 \
     quality_gate_process_sha256 quality_gate_environment_sha256 \
@@ -303,10 +309,20 @@ run_fixture_and_interface_contracts() {
   assert_not_matches interface-secret-marker-absent 'PASSWORD|do-not-print' "$output"
 
   exports="$(python3 - "$repo_root/scripts/quality_gate_provenance.py" \
-    "$repo_root/scripts/quality_gate_secure_state.py" <<'PY'
+    "$repo_root/scripts/quality_gate_secure_state.py" \
+    "$repo_root/scripts/quality_gate_file_provenance.py" \
+    "$repo_root/scripts/quality_gate_tool_selection.py" <<'PY'
 import ast
 import sys
 
+expected_exports = {
+    "quality_gate_file_provenance.py": (
+        "ProvenanceError",
+        "hash_open_file",
+        "toolchain_closure_provenance",
+    ),
+    "quality_gate_tool_selection.py": ("selected_tools",),
+}
 for filename in sys.argv[1:]:
     tree = ast.parse(open(filename, encoding="utf-8").read())
     assignments = [
@@ -320,11 +336,16 @@ for filename in sys.argv[1:]:
     ]
     if len(assignments) != 1:
         raise SystemExit(1)
-    print(filename.rsplit("/", 1)[-1])
+    name = filename.rsplit("/", 1)[-1]
+    if name in expected_exports and ast.literal_eval(assignments[0].value) != expected_exports[name]:
+        raise SystemExit(1)
+    print(name)
 PY
 )"
   assert_contains interface-provenance-all quality_gate_provenance.py "$exports"
   assert_contains interface-secure-state-all quality_gate_secure_state.py "$exports"
+  assert_contains interface-file-provenance-all quality_gate_file_provenance.py "$exports"
+  assert_contains interface-tool-selection-all quality_gate_tool_selection.py "$exports"
 
   assert_path_absent interface-no-bytecode-cache-before \
     "$repo_root/scripts/__pycache__"
@@ -461,6 +482,10 @@ case "$scenario" in
   fixture-interface)
     receipt_contract_set_case fixture-interface
     run_fixture_and_interface_contracts
+    ;;
+  manifest-contract)
+    receipt_contract_set_case manifest-contract
+    assert_manifest_contract
     ;;
   path-toolchain-canonicalization)
     receipt_contract_set_case path-toolchain-canonicalization

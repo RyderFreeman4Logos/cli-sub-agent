@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -16,10 +15,7 @@ from quality_gate_environment import PRIVATE_BIN_PATH, normalized_static_environ
 from quality_gate_process import ProcessResult, collect_bounded, execute_supervised
 from quality_gate_toolchain import (
     SANDBOX_RUST_TOOLCHAIN_ROOT,
-    PinnedRustToolchain,
     ToolchainError,
-    resolve_pinned_nextest,
-    resolve_pinned_rust_tools,
 )
 
 from quality_gate_host_attestation import (
@@ -28,6 +24,7 @@ from quality_gate_host_attestation import (
     host_clean_state as _host_clean_state,
     run_git as _run_git,
 )
+from quality_gate_tool_selection import selected_tools as _selected_tools
 
 __all__ = (
     "GateSandbox",
@@ -36,29 +33,6 @@ __all__ = (
 )
 
 BWRAP = Path("/usr/bin/bwrap")
-
-_REQUIRED_TOOLS = ("bash", "git", "python3")
-_OPTIONAL_TOOLS = (
-    "ar",
-    "cargo-deny",
-    "cargo-nextest",
-    "cc",
-    "just",
-    "ld",
-    "lefthook",
-    "make",
-    "pkg-config",
-    "rg",
-    "shellcheck",
-    "timeout",
-)
-_FIXED_TOOLS = {
-    "bash": Path("/usr/bin/bash"),
-    "git": GIT,
-    "python3": Path(sys.executable).resolve(),
-    "rg": Path("/usr/bin/rg"),
-}
-
 
 def _tracked_entries(repo: Path) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
@@ -205,34 +179,6 @@ def _projection_fingerprint(
         digest.update(len(value).to_bytes(8, "big"))
         digest.update(value)
     return digest.hexdigest()
-
-
-def _selected_tools(
-    repo: Path, environment: Mapping[str, str]
-) -> tuple[PinnedRustToolchain, dict[str, Path]]:
-    rust_toolchain = resolve_pinned_rust_tools(repo, environment)
-    selected: dict[str, Path] = {}
-    search_path = environment.get("PATH", os.defpath)
-    pinned_nextest = resolve_pinned_nextest(repo, environment)
-    for name in (*_REQUIRED_TOOLS, *_OPTIONAL_TOOLS):
-        candidate = pinned_nextest if name == "cargo-nextest" else _FIXED_TOOLS.get(name)
-        if candidate is None and name != "cargo-nextest":
-            located = shutil.which(name, path=search_path)
-            if located:
-                candidate = Path(located)
-        if candidate is None or not candidate.exists():
-            if name in _REQUIRED_TOOLS:
-                raise IsolationError("required sandbox tool unavailable")
-            continue
-        try:
-            resolved = candidate.resolve(strict=True)
-            status = resolved.stat()
-        except OSError as error:
-            raise IsolationError("sandbox tool provenance invalid") from error
-        if not stat.S_ISREG(status.st_mode) or not os.access(resolved, os.X_OK):
-            raise IsolationError("sandbox tool provenance invalid")
-        selected[name] = resolved
-    return rust_toolchain, selected
 
 
 def _visible_in_sandbox(repo: Path, path: Path) -> bool:

@@ -36,9 +36,13 @@ new_isolation_fixture() {
   cp "$repo_root/scripts/cargo-env-normalize.sh" "$fixture/scripts/"
   cp "$repo_root/scripts/quality-gate-state.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_provenance.py" "$fixture/scripts/"
+  cp "$repo_root/scripts/quality_gate_file_provenance.py" "$fixture/scripts/"
   cp "$repo_root/scripts/quality_gate_secure_state.py" "$fixture/scripts/"
   if [ -f "$repo_root/scripts/quality_gate_sandbox.py" ]; then
     cp "$repo_root/scripts/quality_gate_sandbox.py" "$fixture/scripts/"
+  fi
+  if [ -f "$repo_root/scripts/quality_gate_tool_selection.py" ]; then
+    cp "$repo_root/scripts/quality_gate_tool_selection.py" "$fixture/scripts/"
   fi
   if [ -f "$repo_root/scripts/quality_gate_host_attestation.py" ]; then
     cp "$repo_root/scripts/quality_gate_host_attestation.py" "$fixture/scripts/"
@@ -422,7 +426,17 @@ case "$scenario" in
   ambient-inputs)
     receipt_contract_set_case ambient-inputs
     run_python_boundary_contracts
+    run_path_symlink_loop_isolation
+    run_mise_shims_symlink_loop_isolation
     run_ambient_input_isolation
+    ;;
+  path-symlink-loop)
+    receipt_contract_set_case path-symlink-loop
+    run_path_symlink_loop_isolation
+    ;;
+  mise-shims-symlink-loop)
+    receipt_contract_set_case mise-shims-symlink-loop
+    run_mise_shims_symlink_loop_isolation
     ;;
   source-exactness)
     receipt_contract_set_case source-exactness
@@ -456,6 +470,8 @@ case "$scenario" in
     receipt_contract_set_case ambient-inputs
     run_python_boundary_contracts
     run_source_exactness_contracts
+    run_path_symlink_loop_isolation
+    run_mise_shims_symlink_loop_isolation
     run_ambient_input_isolation
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
