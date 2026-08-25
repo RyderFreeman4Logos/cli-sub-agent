@@ -283,6 +283,11 @@ if [ "${1:-}" = "session" ] && [ "${2:-}" = "list" ]; then
   exit 0
 fi
 if [ "${1:-}" = "session" ] && [ "${2:-}" = "wait" ]; then
+  if [ "${TEST_SESSION_WAIT_NONZERO:-false}" = "true" ]; then
+    printf '%s\n' "$*" > "${TEST_CSA_SESSION_WAIT_ARGS:?missing TEST_CSA_SESSION_WAIT_ARGS}"
+    echo "BOT_REPLY=timeout"
+    exit 2
+  fi
   if [ "${TEST_SESSION_WAIT_TIMEOUT:-false}" = "true" ]; then
     echo "BOT_REPLY=timeout"
     exit 0

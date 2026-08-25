@@ -5,6 +5,9 @@ use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
 mod support;
 use support::*;
 
+#[path = "plan_cmd_tests_pr_bot_degraded_provider.rs"]
+mod provider;
+
 #[tokio::test]
 async fn execute_pr_bot_local_review_accepts_same_sha_native_bypass_evidence() {
     let tmp = tempfile::tempdir().unwrap();
