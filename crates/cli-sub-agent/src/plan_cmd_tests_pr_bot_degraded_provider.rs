@@ -9,6 +9,7 @@ async fn execute_pr_bot_local_review_derives_provider_when_var_unset() {
     let wait_args_path = tmp.path().join("session-wait-args");
     let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
     vars.insert("CSA_MODEL_PROVIDER".into(), String::new());
+    vars.insert("CSA_CALLER_TOOL".into(), "hermes".into());
     vars.insert("HERMES_MODEL_PROVIDER".into(), "xai-oauth".into());
     vars.insert("HOME".into(), tmp.path().display().to_string());
     vars.insert("TEST_CSA_REVIEW_MODE".into(), "success".into());
@@ -45,6 +46,7 @@ async fn execute_pr_bot_bot_unavailable_wait_derives_provider() {
     let wait_args_path = tmp.path().join("session-wait-args");
     let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
     vars.insert("CSA_MODEL_PROVIDER".into(), String::new());
+    vars.insert("CSA_CALLER_TOOL".into(), "hermes".into());
     vars.insert("HERMES_MODEL_PROVIDER".into(), "zhipuai".into());
     vars.insert("HOME".into(), tmp.path().display().to_string());
     vars.insert("MERGE_COMPLETED".into(), "false".into());
@@ -74,6 +76,41 @@ async fn execute_pr_bot_bot_unavailable_wait_derives_provider() {
     assert!(
         wait_args.contains("--model-provider glm"),
         "Step 4a wait must derive the caller provider: {wait_args}"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_preserves_explicit_provider_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    let wait_args_path = tmp.path().join("session-wait-args");
+    let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    vars.insert("CSA_MODEL_PROVIDER".into(), "  AnThRoPiC  ".into());
+    vars.insert("HOME".into(), tmp.path().display().to_string());
+    vars.insert("TEST_CSA_REVIEW_MODE".into(), "success".into());
+    vars.insert(
+        "TEST_CSA_SESSION_WAIT_ARGS".into(),
+        wait_args_path.display().to_string(),
+    );
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-explicit-provider-key".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("explicit-provider review wait should execute");
+
+    assert_eq!(results[0].exit_code, 0, "local review should pass");
+    let wait_args = std::fs::read_to_string(&wait_args_path).unwrap();
+    assert!(
+        wait_args.contains("--model-provider anthropic"),
+        "session wait must preserve an explicit configured key: {wait_args}"
     );
 }
 

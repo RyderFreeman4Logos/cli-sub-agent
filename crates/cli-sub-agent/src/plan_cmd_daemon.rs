@@ -29,9 +29,15 @@ const PLAN_RESULT_SUMMARY_MAX_CHARS: usize = 500;
 
 #[path = "plan_cmd_daemon_session.rs"]
 mod daemon_session;
+#[path = "plan_cmd_daemon_provider.rs"]
+mod provider;
+#[cfg(test)]
+#[path = "plan_cmd_daemon_provider_tests.rs"]
+mod provider_tests;
 use daemon_session::{
     describe_plan_run, mark_session_as_plan, persist_placeholder_plan_session, retire_plan_session,
 };
+use provider::{PR_BOT_PROVIDER_VAR, inject_pr_bot_parent_provider};
 
 pub(crate) struct PlanRunDispatchInput {
     pub foreground: bool,
@@ -106,6 +112,30 @@ pub(crate) async fn dispatch(
         forwarded_args = Some(forwarded_args_with_feature_input(&body, issue_number));
         vars.push(format!("{FEATURE_INPUT_VAR}={body}"));
         vars.push(format!("{ISSUE_NUMBER_VAR}={issue_number}"));
+    }
+
+    let parent_tool = crate::run_helpers::detect_parent_tool();
+    let hermes_provider = (parent_tool.as_deref() == Some("hermes"))
+        .then(csa_config::detect_model_provider)
+        .flatten();
+    if let Some(provider) = inject_pr_bot_parent_provider(
+        &file,
+        &pattern,
+        &mut vars,
+        parent_tool.as_deref(),
+        hermes_provider
+            .as_ref()
+            .map(csa_config::ModelProvider::as_str),
+    ) && !daemon_child
+    {
+        let base = forwarded_args
+            .take()
+            .unwrap_or_else(|| build_forwarded_plan_args(&std::env::args().collect::<Vec<_>>()));
+        forwarded_args = Some(forwarded_args_with_var(
+            base,
+            PR_BOT_PROVIDER_VAR,
+            &provider,
+        ));
     }
 
     let pipeline_source = if daemon_child {
@@ -590,7 +620,9 @@ fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
 
 #[path = "plan_cmd_daemon_forwarding.rs"]
 mod forwarding;
-pub(crate) use forwarding::{build_forwarded_plan_args, forwarded_args_with_feature_input};
+pub(crate) use forwarding::{
+    build_forwarded_plan_args, forwarded_args_with_feature_input, forwarded_args_with_var,
+};
 
 #[cfg(test)]
 #[path = "plan_cmd_daemon_completion_tests.rs"]

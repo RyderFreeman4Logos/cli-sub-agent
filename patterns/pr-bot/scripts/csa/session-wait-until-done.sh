@@ -10,7 +10,7 @@ fi
 session_id="$1"
 shift
 
-normalize_model_provider() {
+normalize_model_provider_key() {
   local raw="${1:-}"
   raw="${raw#\"}"
   raw="${raw%\"}"
@@ -19,12 +19,18 @@ normalize_model_provider() {
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
   raw="${raw#"${raw%%[![:space:]]*}"}"
   raw="${raw%"${raw##*[![:space:]]}"}"
-  case "${raw}" in
+  printf '%s' "${raw}"
+}
+
+normalize_hermes_model_provider() {
+  local provider
+  provider="$(normalize_model_provider_key "${1:-}")"
+  case "${provider}" in
     anthropic|claude) printf 'claude' ;;
     openai|openai-codex) printf 'openai' ;;
     zai|zhipu|zhipuai|glm) printf 'glm' ;;
     xai|xai-oauth|grok) printf 'xai' ;;
-    *) printf '%s' "${raw}" ;;
+    *) printf '%s' "${provider}" ;;
   esac
 }
 
@@ -62,15 +68,15 @@ hermes_config_provider() {
   ' "${path}"
 }
 
-model_provider="$(normalize_model_provider "${CSA_MODEL_PROVIDER:-}")"
-if [ -z "${model_provider}" ]; then
-  model_provider="$(normalize_model_provider "${HERMES_MODEL_PROVIDER:-}")"
+model_provider="$(normalize_model_provider_key "${CSA_MODEL_PROVIDER:-}")"
+if [ -z "${model_provider}" ] && [ "${CSA_CALLER_TOOL:-}" = "hermes" ]; then
+  model_provider="$(normalize_hermes_model_provider "${HERMES_MODEL_PROVIDER:-}")"
+  if [ -z "${model_provider}" ]; then
+    model_provider="$(normalize_hermes_model_provider "$(hermes_config_provider)")"
+  fi
 fi
 if [ -z "${model_provider}" ]; then
-  model_provider="$(normalize_model_provider "$(hermes_config_provider)")"
-fi
-if [ -z "${model_provider}" ]; then
-  echo "ERROR: could not derive CSA_MODEL_PROVIDER from HERMES_MODEL_PROVIDER or ~/.hermes/config.yaml; pass --var CSA_MODEL_PROVIDER=<configured provider>" >&2
+  echo "ERROR: CSA_MODEL_PROVIDER is required; run pr-bot from a supported parent agent or pass --var CSA_MODEL_PROVIDER=<configured provider>" >&2
   exit 2
 fi
 

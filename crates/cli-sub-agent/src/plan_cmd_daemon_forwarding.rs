@@ -117,6 +117,22 @@ fn forwarded_args_with_issue_vars(
     forwarded
 }
 
+pub(crate) fn forwarded_args_with_var(
+    mut forwarded: Vec<String>,
+    key: &str,
+    value: &str,
+) -> Vec<String> {
+    let insertion = forwarded
+        .iter()
+        .position(|token| token == "--")
+        .unwrap_or(forwarded.len());
+    forwarded.splice(
+        insertion..insertion,
+        ["--var".to_string(), format!("{key}={value}")],
+    );
+    forwarded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
