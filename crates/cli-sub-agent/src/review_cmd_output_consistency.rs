@@ -214,22 +214,32 @@ pub(super) fn enforce_final_verdict_consistency(
     let resume_to_fix_blocks_clean_recovery = resume_to_fix
         && !artifact_failure_reason_is_placeholder(artifact.failure_reason.as_deref())
         && !placeholder_findings_only;
-    let empty_fail_placeholder_allows_clean_recovery = artifact
+    let synthetic_placeholder_count = artifact.severity_counts.get(&Severity::Medium) == Some(&1)
+        && artifact
+            .severity_counts
+            .iter()
+            .all(|(severity, count)| *count == 0 || (*severity == Severity::Medium && *count == 1));
+    let empty_findings_failure_reason = artifact
         .failure_reason
         .as_deref()
-        .is_some_and(|reason| reason.trim() == EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
-        || (placeholder_findings_only
-            && findings_file.findings.first().is_some_and(|finding| {
-                finding
-                    .description
-                    .contains(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
-            }));
-
+        .is_some_and(|reason| reason.trim() == EMPTY_FAIL_FINDINGS_ARTIFACT_REASON);
+    let placeholder_failure_reason = artifact.failure_reason.as_deref().is_some_and(|reason| {
+        matches!(
+            reason.trim(),
+            EMPTY_FAIL_FINDINGS_ARTIFACT_REASON | PROSE_FINDINGS_UNPARSED_REASON
+        )
+    }) || findings_file.findings.first().is_some_and(|finding| {
+        finding
+            .description
+            .contains(EMPTY_FAIL_FINDINGS_ARTIFACT_REASON)
+    });
     if clean_review_can_recover_to_pass(
         artifact,
         CleanReviewRecoverySignals {
             artifact_counts_clean: severity_counts_are_zero(&artifact.severity_counts)
-                || empty_fail_placeholder_allows_clean_recovery,
+                || (synthetic_placeholder_count
+                    && ((findings_file.findings.is_empty() && empty_findings_failure_reason)
+                        || (placeholder_findings_only && placeholder_failure_reason))),
             has_structured_findings,
             has_prose_failure_evidence: has_hard_prose_failure_evidence,
             resume_to_fix: resume_to_fix_blocks_clean_recovery,

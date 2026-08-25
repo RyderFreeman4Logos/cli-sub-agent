@@ -22,6 +22,7 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
     ]
     .iter()
     .any(|phrase| lower.contains(phrase))
+        || contains_bounded_zero_findings(&lower)
         || (lower.contains("no correctness")
             && [
                 "issue", "issues", "problem", "problems", "finding", "findings",
@@ -29,6 +30,20 @@ pub(super) fn detect_prose_clean_conclusion(text: &str) -> bool {
             .iter()
             .any(|noun| lower.contains(noun)))
         || verdict_tokens::verdict_token_pass_or_clean(&current_prose)
+}
+
+fn contains_bounded_zero_findings(lower: &str) -> bool {
+    lower.lines().any(|line| {
+        let Some((_, count)) = line.split_once("findings:") else {
+            return false;
+        };
+        let Some(tail) = count.trim_start().strip_prefix('0') else {
+            return false;
+        };
+        let tail = tail.trim_start().as_bytes();
+        matches!(tail, [] | [b'.' | b'!' | b'?'])
+            || matches!(tail, [b'.' | b'!' | b'?', next, ..] if next.is_ascii_whitespace())
+    })
 }
 
 fn current_reviewer_prose_without_quoted_repro(text: &str) -> String {
