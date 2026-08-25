@@ -390,7 +390,7 @@ is_head_ref() {
 
 is_safe_local_command() {
   case "${1}" in
-    ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
+    ""|add|am|annotate|apply|bisect|blame|branch|cat-file|check-attr|check-ignore|check-mailmap|check-ref-format|checkout|cherry|cherry-pick|clean|commit|config|count-objects|describe|diff|diff-tree|difftool|fast-export|fast-import|format-patch|fsck|gc|grep|hash-object|log|ls-files|ls-tree|merge|merge-base|merge-file|merge-index|merge-tree|mv|name-rev|notes|pack-objects|prune|read-tree|rebase|reflog|reset|restore|rev-list|rev-parse|rm|show|show-branch|sparse-checkout|stash|status|switch|symbolic-ref|tag|update-index|update-ref|verify-commit|verify-pack|verify-tag|worktree|write-tree)
       return 0
       ;;
     *) return 1 ;;

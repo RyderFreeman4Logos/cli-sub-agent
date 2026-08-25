@@ -633,6 +633,7 @@ fn wrapper_allows_leading_dash_after_file_option() {
 }
 
 include!("git_guard_tests_local_grammar.rs");
+include!("git_guard_tests_readonly_diff_tree.rs");
 
 #[cfg(unix)]
 #[test]
