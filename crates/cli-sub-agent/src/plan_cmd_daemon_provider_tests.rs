@@ -1,9 +1,42 @@
 use super::*;
 use std::collections::HashMap;
 
+fn trusted_parent_model_spec(model_spec: &str) -> crate::startup_env::StartupSubtreeEnv {
+    crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
+        (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
+        (
+            csa_core::env::CSA_INTERNAL_INVOCATION_ENV_KEY,
+            "1".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_ID_ENV_KEY,
+            "01M0PARENT".to_string(),
+        ),
+        (
+            csa_core::env::CSA_SESSION_DIR_ENV_KEY,
+            "/tmp/01M0PARENT".to_string(),
+        ),
+        (
+            csa_core::env::CSA_PROJECT_ROOT_ENV_KEY,
+            "/tmp/project".to_string(),
+        ),
+        (
+            csa_core::env::CSA_MODEL_SPEC_ENV_KEY,
+            model_spec.to_string(),
+        ),
+        (
+            csa_core::env::CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
+            "1".to_string(),
+        ),
+    ]))
+    .with_trusted_inherited_model_pin(model_spec.to_string(), true, false)
+}
+
 #[test]
 fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
-    let provider = native_parent_provider(Some("codex"), None).expect("native provider");
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let provider =
+        native_parent_provider(Some("codex"), &startup_env, None).expect("native provider");
     let outer_startup =
         crate::startup_env::StartupSubtreeEnv::default().with_parent_model_provider(provider);
     let mut daemon_env = HashMap::new();
@@ -28,7 +61,8 @@ fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
         &Some("pr-bot".to_string()),
         &mut nested_vars,
         nested_startup.parent_model_provider(),
-    );
+    )
+    .expect("nested provider must be accepted");
 
     assert_eq!(nested_vars, ["CSA_MODEL_PROVIDER=openai"]);
 }
@@ -36,13 +70,15 @@ fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
 #[test]
 fn native_codex_pr_bot_entrypoint_injects_parent_provider() {
     let mut vars = Vec::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
 
     inject_pr_bot_parent_provider(
         &None,
         &Some("pr-bot".to_string()),
         &mut vars,
-        native_parent_provider(Some("codex"), None).as_deref(),
-    );
+        native_parent_provider(Some("codex"), &startup_env, None).as_deref(),
+    )
+    .expect("Codex provider must be accepted");
 
     assert_eq!(vars, ["CSA_MODEL_PROVIDER=openai"]);
 }
@@ -50,13 +86,15 @@ fn native_codex_pr_bot_entrypoint_injects_parent_provider() {
 #[test]
 fn native_claude_file_entrypoint_injects_parent_provider() {
     let mut vars = Vec::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
 
     inject_pr_bot_parent_provider(
         &Some("patterns/pr-bot/workflow.toml".to_string()),
         &None,
         &mut vars,
-        native_parent_provider(Some("claude-code"), None).as_deref(),
-    );
+        native_parent_provider(Some("claude-code"), &startup_env, None).as_deref(),
+    )
+    .expect("Claude provider must be accepted");
 
     assert_eq!(vars, ["CSA_MODEL_PROVIDER=claude"]);
 }
@@ -64,36 +102,88 @@ fn native_claude_file_entrypoint_injects_parent_provider() {
 #[test]
 fn explicit_pr_bot_provider_key_wins_unchanged() {
     let mut vars = vec!["CSA_MODEL_PROVIDER=anthropic".to_string()];
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
 
     inject_pr_bot_parent_provider(
         &None,
         &Some("pr-bot".to_string()),
         &mut vars,
-        native_parent_provider(Some("claude-code"), None).as_deref(),
-    );
+        native_parent_provider(Some("claude-code"), &startup_env, None).as_deref(),
+    )
+    .expect("explicit provider must be accepted");
 
     assert_eq!(vars, ["CSA_MODEL_PROVIDER=anthropic"]);
 }
 
 #[test]
 fn hermes_config_provider_requires_detected_hermes_parent() {
-    let mut native_vars = Vec::new();
-    inject_pr_bot_parent_provider(
-        &None,
-        &Some("pr-bot".to_string()),
-        &mut native_vars,
-        native_parent_provider(Some("opencode"), Some("xai")).as_deref(),
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    assert_eq!(
+        native_parent_provider(Some("opencode"), &startup_env, Some("xai")),
+        None,
+        "an unrelated Hermes config must not become OpenCode's provider"
     );
-    assert!(native_vars.is_empty());
 
     let mut hermes_vars = Vec::new();
     inject_pr_bot_parent_provider(
         &None,
         &Some("pr-bot".to_string()),
         &mut hermes_vars,
-        native_parent_provider(Some("hermes"), Some("xai")).as_deref(),
-    );
+        native_parent_provider(Some("hermes"), &startup_env, Some("xai")).as_deref(),
+    )
+    .expect("Hermes provider must be accepted");
     assert_eq!(hermes_vars, ["CSA_MODEL_PROVIDER=xai"]);
+}
+
+#[test]
+fn cross_provider_native_plan_entries_use_the_trusted_parent_model_spec() {
+    for (tool, model_spec, expected_provider) in [
+        ("opencode", "opencode/openai/gpt-5/xhigh", "openai"),
+        (
+            "opencode",
+            "opencode/anthropic/claude-sonnet-4/high",
+            "anthropic",
+        ),
+        (
+            "antigravity-cli",
+            "antigravity-cli/google/gemini-3.1-pro/high",
+            "google",
+        ),
+    ] {
+        let startup_env = trusted_parent_model_spec(model_spec);
+        let mut vars = Vec::new();
+
+        inject_pr_bot_parent_provider(
+            &None,
+            &Some("pr-bot".to_string()),
+            &mut vars,
+            native_parent_provider(Some(tool), &startup_env, None).as_deref(),
+        )
+        .expect("canonical pr-bot entry must have an explicit provider before execution");
+
+        assert_eq!(
+            vars,
+            [format!("CSA_MODEL_PROVIDER={expected_provider}")],
+            "{tool} must preserve the live routed provider rather than guessing from its name"
+        );
+    }
+}
+
+#[test]
+fn canonical_pr_bot_entry_rejects_an_unknown_parent_provider_before_any_wait() {
+    let mut vars = Vec::new();
+    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+
+    let error = inject_pr_bot_parent_provider(
+        &None,
+        &Some("pr-bot".to_string()),
+        &mut vars,
+        native_parent_provider(Some("opencode"), &startup_env, None).as_deref(),
+    )
+    .expect_err("unknown cross-provider routing must fail before the plan starts");
+
+    assert!(error.to_string().contains("CSA_MODEL_PROVIDER"));
+    assert!(vars.is_empty());
 }
 
 #[test]

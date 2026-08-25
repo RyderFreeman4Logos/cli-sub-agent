@@ -115,13 +115,14 @@ pub(crate) async fn dispatch(
     }
 
     let mut startup_env = startup_env.clone();
-    if !daemon_child && current_depth == 0 && startup_env.parent_model_provider().is_none() {
+    if !daemon_child && startup_env.parent_model_provider().is_none() {
         let parent_tool = crate::run_helpers::detect_parent_tool();
         let hermes_provider = (parent_tool.as_deref() == Some("hermes"))
             .then(csa_config::detect_model_provider)
             .flatten();
         if let Some(provider) = native_parent_provider(
             parent_tool.as_deref(),
+            &startup_env,
             hermes_provider
                 .as_ref()
                 .map(csa_config::ModelProvider::as_str),
@@ -134,7 +135,7 @@ pub(crate) async fn dispatch(
         &pattern,
         &mut vars,
         startup_env.parent_model_provider(),
-    ) && !daemon_child
+    )? && !daemon_child
     {
         let base = forwarded_args
             .take()
