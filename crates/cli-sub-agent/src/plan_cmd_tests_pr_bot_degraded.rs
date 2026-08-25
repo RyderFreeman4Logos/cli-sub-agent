@@ -77,6 +77,109 @@ async fn execute_pr_bot_local_review_rejects_stale_native_bypass_evidence() {
 }
 
 #[tokio::test]
+async fn execute_pr_bot_local_review_passes_configured_provider_to_wait() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    let wait_args_path = tmp.path().join("session-wait-args");
+    let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    vars.insert("CSA_MODEL_PROVIDER".into(), "openai".into());
+    vars.insert("TEST_CSA_REVIEW_MODE".into(), "success".into());
+    vars.insert(
+        "TEST_CSA_SESSION_WAIT_ARGS".into(),
+        wait_args_path.display().to_string(),
+    );
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-provider-aware-wait".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("provider-aware review wait should execute");
+
+    assert_eq!(results[0].exit_code, 0, "local review should pass");
+    let wait_args = std::fs::read_to_string(&wait_args_path).unwrap();
+    assert!(
+        wait_args.contains("--model-provider openai"),
+        "session wait must receive the configured provider: {wait_args}"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_reuses_exact_pass_after_newer_stale_pass() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let stale_head = "1234567890abcdef1234567890abcdef12345678";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_passing_review_metadata(tmp.path(), "stale", stale_head);
+    write_passing_review_metadata(tmp.path(), "current", current_head);
+
+    let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    vars.insert(
+        "TEST_CSA_SESSION_LIST_JSON".into(),
+        r#"[{"session_id":"stale","last_accessed":"2026-08-25T12:00:00Z","task_context":{"task_type":"review"}},{"session_id":"current","last_accessed":"2026-08-25T11:00:00Z","task_context":{"task_type":"review"}}]"#.into(),
+    );
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-reuse-exact-pass".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("an exact-head pass should satisfy local review");
+
+    assert_eq!(results[0].exit_code, 0, "exact-head pass should be reused");
+    assert!(
+        !csa_called_path.exists(),
+        "a stale newer review must not hide an existing exact-head pass"
+    );
+}
+
+#[tokio::test]
+async fn execute_pr_bot_local_review_rejects_cd_without_pr_bot_pattern() {
+    let tmp = tempfile::tempdir().unwrap();
+    let current_head = "abcdef1234567890abcdef1234567890abcdef12";
+    let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    std::fs::remove_dir_all(tmp.path().join("patterns")).unwrap();
+    let vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
+    let (variables, steps) =
+        pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
+    let plan = ExecutionPlan {
+        name: "pr-bot-missing-pattern".into(),
+        description: String::new(),
+        variables,
+        steps,
+    };
+
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .expect("missing-pattern path should return a failed step");
+
+    assert_ne!(results[0].exit_code, 0, "missing pattern must fail closed");
+    assert!(
+        !csa_called_path.exists(),
+        "missing pattern must not launch a review against the wrong checkout"
+    );
+    assert!(
+        results[0]
+            .stderr
+            .as_deref()
+            .unwrap_or("")
+            .contains("run from the checkout that contains patterns/pr-bot"),
+        "missing pattern error must identify the required checkout"
+    );
+}
+
+#[tokio::test]
 async fn execute_pr_bot_local_review_rejects_review_check_skip_audit_log() {
     let tmp = tempfile::tempdir().unwrap();
     let current_head = "abcdef1234567890abcdef1234567890abcdef12";

@@ -150,6 +150,10 @@ Review default-branch diff; reuse prior CSA review only on exact HEAD match.
 
 ```bash
 set -euo pipefail
+if [ ! -d "patterns/pr-bot" ]; then
+  echo "ERROR: run from the checkout that contains patterns/pr-bot" >&2
+  exit 2
+fi
 if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
   CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
 else
@@ -168,6 +172,10 @@ elif native_bypass_reason="$(bash "${CSA_HELPER_DIR}/native-review-bypass.sh" "$
   echo "Fast-path: structured native review bypass artifact covers current HEAD."; echo "Review bypass evidence: ${native_bypass_reason}"; LOCAL_REVIEW_SESSION_ID="native-review-bypass-$(printf '%.12s' "${CURRENT_HEAD}")"
 else
   [ ! -f ".csa/review-bypass.log" ] || echo "Audit-only review-bypass log found, but no trusted native review artifact matched current HEAD; running CSA review." >&2
+  if [ -z "${CSA_MODEL_PROVIDER:-}" ]; then
+    echo "ERROR: CSA_MODEL_PROVIDER is required; pass --var CSA_MODEL_PROVIDER=<configured provider>" >&2
+    exit 2
+  fi
   SID=$(csa review --branch "${DEFAULT_BRANCH}"); LOCAL_REVIEW_SESSION_ID="${SID}"; bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
 fi
 REVIEW_COMPLETED=true

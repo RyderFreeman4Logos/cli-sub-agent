@@ -10,7 +10,13 @@ fi
 session_id="$1"
 shift
 
-wait_args=(--session "${session_id}")
+model_provider="${CSA_MODEL_PROVIDER:-}"
+if [ -z "${model_provider}" ]; then
+  echo "ERROR: CSA_MODEL_PROVIDER is required; pass --var CSA_MODEL_PROVIDER=<configured provider>" >&2
+  exit 2
+fi
+
+wait_args=(--session "${session_id}" --model-provider "${model_provider}")
 if [ "$#" -gt 0 ]; then
   wait_args+=("$@")
 fi
