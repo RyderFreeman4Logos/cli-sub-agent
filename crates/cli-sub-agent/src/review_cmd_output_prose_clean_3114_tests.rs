@@ -33,6 +33,39 @@ fn repairs_prose_unparsed_placeholder_when_review_is_clean() {
 }
 
 #[test]
+fn unresolved_continuation_after_zero_fixed_stays_fail_closed() {
+    let session_id = "01TEST3114UNRESOLVED00000";
+    let (_env_lock, project_root, session_dir) =
+        lock_test_session("issue-3114-zero-fixed-unresolved", session_id);
+    write_fail_meta(&session_dir, session_id);
+    csa_session::persist_structured_output(
+        &session_dir,
+        "<!-- CSA:SECTION:summary -->\nFindings: 0 fixed; one unresolved item remains.\n<!-- CSA:SECTION:summary:END -->\n",
+    )
+    .expect("persist unresolved review");
+    write_empty_fail_placeholder_artifacts(&session_dir, session_id);
+    let mut verdict = read_output_verdict(&session_dir);
+    verdict.failure_reason = Some("prose_findings_present_but_unparsed".to_string());
+    csa_session::write_review_verdict(&session_dir, &verdict).expect("write prose fail verdict");
+
+    assert!(
+        !super::super::super::consistency::repair_clean_empty_fail_review_verdict(&session_dir)
+            .expect("repair verdict"),
+        "zero fixed must not mean zero unresolved findings"
+    );
+
+    let verdict = read_output_verdict(&session_dir);
+    assert_eq!(verdict.decision, ReviewDecision::Fail);
+    assert_eq!(
+        verdict.failure_reason.as_deref(),
+        Some("prose_findings_present_but_unparsed")
+    );
+    assert_eq!(read_output_findings(&session_dir).findings.len(), 1);
+
+    fs::remove_dir_all(project_root).expect("remove temp project root");
+}
+
+#[test]
 fn concrete_findings_dominate_prose_clean_summary() {
     let session_id = "01TESTFINDINGSDOMINATE000000";
     let (_env_lock, project_root, session_dir) =
