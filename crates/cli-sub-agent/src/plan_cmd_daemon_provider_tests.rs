@@ -125,6 +125,42 @@ fn explicit_pr_bot_provider_key_wins_unchanged() {
 }
 
 #[test]
+fn foreground_pr_bot_normalizes_the_last_repeated_provider_assignment() {
+    let mut vars = vec![
+        "CSA_MODEL_PROVIDER=anthropic".to_string(),
+        "CSA_MODEL_PROVIDER=google".to_string(),
+    ];
+
+    let provider = inject_pr_bot_parent_provider(
+        &None,
+        &Some("pr-bot".to_string()),
+        &mut vars,
+        None,
+        &default_wait_config(),
+    )
+    .expect("effective provider must be accepted");
+
+    assert_eq!(provider.as_deref(), Some("other"));
+    assert_eq!(
+        vars,
+        ["CSA_MODEL_PROVIDER=anthropic", "CSA_MODEL_PROVIDER=other"]
+    );
+
+    let mut vars = vec![
+        "CSA_MODEL_PROVIDER=anthropic".to_string(),
+        "CSA_MODEL_PROVIDER=   ".to_string(),
+    ];
+    inject_pr_bot_parent_provider(
+        &None,
+        &Some("pr-bot".to_string()),
+        &mut vars,
+        None,
+        &default_wait_config(),
+    )
+    .expect_err("an empty effective provider must be rejected");
+}
+
+#[test]
 fn hermes_config_provider_requires_detected_hermes_parent() {
     let startup_env = crate::startup_env::StartupSubtreeEnv::default();
     assert_eq!(

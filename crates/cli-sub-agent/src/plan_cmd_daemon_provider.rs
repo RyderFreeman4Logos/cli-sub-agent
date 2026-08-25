@@ -33,10 +33,10 @@ pub(super) fn inject_pr_bot_parent_provider(
         || file.as_deref().is_some_and(|path| {
             Path::new(path).ends_with(Path::new("patterns/pr-bot/workflow.toml"))
         });
-    let explicit = vars.iter().position(|entry| {
+    let explicit = vars.iter().rposition(|entry| {
         entry
             .split_once('=')
-            .is_some_and(|(key, value)| key == PR_BOT_PROVIDER_VAR && !value.trim().is_empty())
+            .is_some_and(|(key, _)| key == PR_BOT_PROVIDER_VAR)
     });
     if !is_pr_bot {
         return Ok(None);
