@@ -10,10 +10,8 @@ pub(super) fn native_parent_provider(
     hermes_provider: Option<&str>,
 ) -> Option<String> {
     match parent_tool {
-        Some("codex") => Some("openai".to_string()),
-        Some("claude-code") => Some("claude".to_string()),
         Some("hermes") => hermes_provider.map(str::to_string),
-        Some("opencode" | "antigravity-cli") => {
+        Some("codex" | "claude-code" | "opencode" | "antigravity-cli") => {
             crate::daemon_caller_hints::explicit_wait_provider_from_launch_routing(
                 None,
                 startup_env,

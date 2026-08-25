@@ -34,7 +34,7 @@ fn trusted_parent_model_spec(model_spec: &str) -> crate::startup_env::StartupSub
 
 #[test]
 fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
-    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let startup_env = trusted_parent_model_spec("codex/XAI/gpt-5.5/xhigh");
     let provider =
         native_parent_provider(Some("codex"), &startup_env, None).expect("native provider");
     let outer_startup =
@@ -64,39 +64,26 @@ fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
     )
     .expect("nested provider must be accepted");
 
-    assert_eq!(nested_vars, ["CSA_MODEL_PROVIDER=openai"]);
+    assert_eq!(nested_vars, ["CSA_MODEL_PROVIDER=xai"]);
 }
 
 #[test]
-fn native_codex_pr_bot_entrypoint_injects_parent_provider() {
-    let mut vars = Vec::new();
+fn native_tool_without_proven_routing_fails_closed() {
     let startup_env = crate::startup_env::StartupSubtreeEnv::default();
 
-    inject_pr_bot_parent_provider(
-        &None,
-        &Some("pr-bot".to_string()),
-        &mut vars,
-        native_parent_provider(Some("codex"), &startup_env, None).as_deref(),
-    )
-    .expect("Codex provider must be accepted");
+    for tool in ["codex", "claude-code"] {
+        let mut vars = Vec::new();
+        let error = inject_pr_bot_parent_provider(
+            &None,
+            &Some("pr-bot".to_string()),
+            &mut vars,
+            native_parent_provider(Some(tool), &startup_env, None).as_deref(),
+        )
+        .expect_err("unproven native routing must fail before the plan starts");
 
-    assert_eq!(vars, ["CSA_MODEL_PROVIDER=openai"]);
-}
-
-#[test]
-fn native_claude_file_entrypoint_injects_parent_provider() {
-    let mut vars = Vec::new();
-    let startup_env = crate::startup_env::StartupSubtreeEnv::default();
-
-    inject_pr_bot_parent_provider(
-        &Some("patterns/pr-bot/workflow.toml".to_string()),
-        &None,
-        &mut vars,
-        native_parent_provider(Some("claude-code"), &startup_env, None).as_deref(),
-    )
-    .expect("Claude provider must be accepted");
-
-    assert_eq!(vars, ["CSA_MODEL_PROVIDER=claude"]);
+        assert!(error.to_string().contains("CSA_MODEL_PROVIDER"));
+        assert!(vars.is_empty());
+    }
 }
 
 #[test]
@@ -138,6 +125,12 @@ fn hermes_config_provider_requires_detected_hermes_parent() {
 #[test]
 fn cross_provider_native_plan_entries_use_the_trusted_parent_model_spec() {
     for (tool, model_spec, expected_provider) in [
+        ("codex", "codex/XAI/grok-code-fast-1/xhigh", "xai"),
+        (
+            "claude-code",
+            "claude-code/anthropic/claude-sonnet-4/high",
+            "anthropic",
+        ),
         ("opencode", "opencode/openai/gpt-5/xhigh", "openai"),
         (
             "opencode",
