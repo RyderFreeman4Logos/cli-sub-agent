@@ -22,12 +22,21 @@ from pathlib import Path
 
 __all__ = (
     "IsolationError",
+    "classified_untracked_listing",
     "host_clean_state",
     "run_git",
     "safe_git_environment",
 )
 
 GIT = Path("/usr/bin/git")
+# Exact checkout-relative names. Lefthook local overrides and a Hermes TUI
+# session sidecar are operator-owned; they must not block reusable receipts.
+INTENTIONAL_LOCAL_OPERATIONAL_ARTIFACTS = frozenset(
+    (
+        b".lefthook-local.yml",
+        b"hermes-tui-active-session-dllg3s3s.json",
+    )
+)
 
 
 class IsolationError(RuntimeError):
@@ -43,6 +52,19 @@ def safe_git_environment() -> dict[str, str]:
         "LC_ALL": "C",
         "PATH": "/usr/bin:/bin",
     }
+
+
+def classified_untracked_listing(untracked: bytes) -> bytes:
+    """Drop exact intentional local operational artifacts from a NUL listing."""
+
+    kept = [
+        path
+        for path in untracked.split(b"\0")
+        if path and path not in INTENTIONAL_LOCAL_OPERATIONAL_ARTIFACTS
+    ]
+    if not kept:
+        return b""
+    return b"\0".join(kept) + b"\0"
 
 
 def run_git(repo: Path, *arguments: str) -> bytes:
@@ -165,7 +187,9 @@ def host_clean_state(repo: Path) -> tuple[str, str, str, str]:
         tracked_clean = str(
             refreshed.returncode == 0 and compared.returncode == 0
         ).lower()
-    untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    untracked = classified_untracked_listing(
+        run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    )
     return (
         index_clean,
         tracked_clean,

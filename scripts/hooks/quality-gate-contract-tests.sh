@@ -42,9 +42,10 @@ run_contract_suite() {
 }
 
 run_quality_gate_contract_suites() {
-  # Exact ratchet: 46 core + 8 hostile + 19 isolation + 8 pre-push + 2
-  # dev2merge runtime contracts = 83 independently named PASS cases.
+  # Exact ratchet: 46 core + 1 intentional-local + 8 hostile + 19 isolation + 8
+  # pre-push + 2 dev2merge runtime contracts = 84 independently named PASS cases.
   run_contract_suite scripts/tests/quality-gate-receipt-tests.sh 46
+  run_contract_suite scripts/tests/quality-gate-receipt-intentional-local-tests.sh 1
   run_contract_suite scripts/tests/quality-gate-receipt-hostile-tests.sh 8
   run_contract_suite scripts/tests/quality-gate-isolation-tests.sh 19
   run_contract_suite scripts/tests/pre-push-quality-gates-tests.sh 8
