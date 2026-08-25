@@ -42,6 +42,13 @@ _FIXED_TOOLS = {
 _MISE = Path("/usr/local/bin/mise")
 
 
+def _resolve_ambient_path(path: Path) -> Path:
+    try:
+        return path.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise IsolationError("sandbox tool provenance invalid") from error
+
+
 def selected_tools(
     repo: Path, environment: Mapping[str, str]
 ) -> tuple[PinnedRustToolchain, dict[str, Path]]:
@@ -51,7 +58,7 @@ def selected_tools(
         entry
         for entry in environment.get("PATH", os.defpath).split(os.pathsep)
         if not (
-            Path(entry).resolve(strict=False) == mise_shims.resolve(strict=False)
+            _resolve_ambient_path(Path(entry)) == _resolve_ambient_path(mise_shims)
             or (Path(entry).name == "shims" and Path(entry).parent.name == "mise")
         )
     )

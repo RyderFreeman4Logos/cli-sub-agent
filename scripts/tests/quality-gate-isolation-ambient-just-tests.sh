@@ -1,6 +1,55 @@
 # shellcheck shell=bash
 # Ambient Just shim isolation contract.
 
+run_path_symlink_loop_isolation() {
+  local fixture runner output code errfile err loop_a loop_b
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  errfile="$fixture/target/path-symlink-loop.err"
+  loop_a="$fixture/target/path-loop-a"
+  loop_b="$fixture/target/path-loop-b"
+  ln -s path-loop-b "$loop_a"
+  ln -s path-loop-a "$loop_b"
+  set +e
+  output="$(cd "$fixture" && PATH="$PATH:$loop_a" \
+    "$runner" -- scripts/hooks/true-gate.sh target/gate-counter 2>"$errfile")"
+  code=$?
+  set -e
+  err="$(<"$errfile")"
+  assert_eq isolation-path-symlink-loop-exit 125 "$code"
+  assert_eq isolation-path-symlink-loop-status gate_failed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq isolation-path-symlink-loop-reason isolation_unavailable \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_not_matches isolation-path-symlink-loop-no-traceback 'Traceback' \
+    "${output}${err}"
+  echo "PASS isolation-path-symlink-loop"
+}
+
+run_mise_shims_symlink_loop_isolation() {
+  local fixture runner output code errfile err mise_data_dir
+  fixture="$(new_isolation_fixture)"
+  runner="$fixture/scripts/hooks/quality-gate-receipt.sh"
+  errfile="$fixture/target/mise-shims-symlink-loop.err"
+  mise_data_dir="$fixture/target/mise-data"
+  mkdir -p "$mise_data_dir"
+  ln -s shims "$mise_data_dir/shims"
+  set +e
+  output="$(cd "$fixture" && MISE_DATA_DIR="$mise_data_dir" \
+    "$runner" -- scripts/hooks/true-gate.sh target/gate-counter 2>"$errfile")"
+  code=$?
+  set -e
+  err="$(<"$errfile")"
+  assert_eq isolation-mise-shims-symlink-loop-exit 125 "$code"
+  assert_eq isolation-mise-shims-symlink-loop-status gate_failed \
+    "$(printf '%s' "$output" | json_field status)"
+  assert_eq isolation-mise-shims-symlink-loop-reason isolation_unavailable \
+    "$(printf '%s' "$output" | json_field rejection_reason)"
+  assert_not_matches isolation-mise-shims-symlink-loop-no-traceback 'Traceback' \
+    "${output}${err}"
+  echo "PASS isolation-mise-shims-symlink-loop"
+}
+
 run_nested_just_ambient_input_isolation() {
   local fixture runner counter just_victim mise_data_dir ambient_shims first second
   local first_identity second_identity

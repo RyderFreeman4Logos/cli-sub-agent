@@ -426,7 +426,17 @@ case "$scenario" in
   ambient-inputs)
     receipt_contract_set_case ambient-inputs
     run_python_boundary_contracts
+    run_path_symlink_loop_isolation
+    run_mise_shims_symlink_loop_isolation
     run_ambient_input_isolation
+    ;;
+  path-symlink-loop)
+    receipt_contract_set_case path-symlink-loop
+    run_path_symlink_loop_isolation
+    ;;
+  mise-shims-symlink-loop)
+    receipt_contract_set_case mise-shims-symlink-loop
+    run_mise_shims_symlink_loop_isolation
     ;;
   source-exactness)
     receipt_contract_set_case source-exactness
@@ -460,6 +470,8 @@ case "$scenario" in
     receipt_contract_set_case ambient-inputs
     run_python_boundary_contracts
     run_source_exactness_contracts
+    run_path_symlink_loop_isolation
+    run_mise_shims_symlink_loop_isolation
     run_ambient_input_isolation
     receipt_contract_set_case offline-toolchain
     run_offline_pinned_toolchain
