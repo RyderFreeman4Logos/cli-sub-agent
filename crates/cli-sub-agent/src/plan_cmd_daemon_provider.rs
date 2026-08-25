@@ -2,12 +2,23 @@ use std::path::Path;
 
 pub(super) const PR_BOT_PROVIDER_VAR: &str = "CSA_MODEL_PROVIDER";
 
+pub(super) fn native_parent_provider(
+    parent_tool: Option<&str>,
+    hermes_provider: Option<&str>,
+) -> Option<String> {
+    match parent_tool {
+        Some("codex") => Some("openai".to_string()),
+        Some("claude-code") => Some("claude".to_string()),
+        Some("hermes") => hermes_provider.map(str::to_string),
+        _ => None,
+    }
+}
+
 pub(super) fn inject_pr_bot_parent_provider(
     file: &Option<String>,
     pattern: &Option<String>,
     vars: &mut Vec<String>,
-    parent_tool: Option<&str>,
-    hermes_provider: Option<&str>,
+    parent_provider: Option<&str>,
 ) -> Option<String> {
     let is_pr_bot = pattern.as_deref() == Some("pr-bot")
         || file.as_deref().is_some_and(|path| {
@@ -22,12 +33,7 @@ pub(super) fn inject_pr_bot_parent_provider(
         return None;
     }
 
-    let provider = match parent_tool {
-        Some("codex") => "openai",
-        Some("claude-code") => "claude",
-        Some("hermes") => hermes_provider?,
-        _ => return None,
-    };
+    let provider = parent_provider?;
     vars.push(format!("{PR_BOT_PROVIDER_VAR}={provider}"));
     Some(provider.to_string())
 }

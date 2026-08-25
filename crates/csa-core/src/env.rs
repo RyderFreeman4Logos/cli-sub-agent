@@ -22,6 +22,9 @@ pub const MISE_DATA_DIR_ENV_KEY: &str = "MISE_DATA_DIR";
 /// Exact model spec inherited by nested CSA invocations in a pinned SA subtree.
 pub const CSA_MODEL_SPEC_ENV_KEY: &str = "CSA_MODEL_SPEC";
 
+/// Native caller's model provider preserved across plan daemon and nested-plan boundaries.
+pub const CSA_PARENT_MODEL_PROVIDER_ENV_KEY: &str = "CSA_PARENT_MODEL_PROVIDER";
+
 /// Whether nested CSA invocations should bypass tier settings for the inherited model spec.
 pub const CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY: &str = "CSA_FORCE_IGNORE_TIER_SETTING";
 
@@ -324,6 +327,7 @@ pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
     CSA_PARENT_SESSION_ID_ENV_KEY,
     CSA_PARENT_SESSION_DIR_ENV_KEY,
     CSA_INTERNAL_INVOCATION_ENV_KEY,
+    CSA_PARENT_MODEL_PROVIDER_ENV_KEY,
     CSA_MODEL_SPEC_ENV_KEY,
     CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
     CSA_NO_FAILOVER_ENV_KEY,

@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use csa_core::env::{
     CSA_DEPTH_ENV_KEY, CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY, CSA_INTERNAL_INVOCATION_ENV_KEY,
-    CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY, CSA_PARENT_SESSION_DIR_ENV_KEY,
-    CSA_PARENT_SESSION_ENV_KEY, CSA_PATTERN_INTERNAL_ENV_KEY, CSA_PROJECT_ROOT_ENV_KEY,
-    CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY, STARTUP_SUBTREE_ENV_KEYS,
+    CSA_MODEL_SPEC_ENV_KEY, CSA_NO_FAILOVER_ENV_KEY, CSA_PARENT_MODEL_PROVIDER_ENV_KEY,
+    CSA_PARENT_SESSION_DIR_ENV_KEY, CSA_PARENT_SESSION_ENV_KEY, CSA_PATTERN_INTERNAL_ENV_KEY,
+    CSA_PROJECT_ROOT_ENV_KEY, CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY,
+    STARTUP_SUBTREE_ENV_KEYS,
 };
 
 const CSA_CHILD_CONTRACT_ENV_KEYS: &[&str] = &[
@@ -12,6 +13,7 @@ const CSA_CHILD_CONTRACT_ENV_KEYS: &[&str] = &[
     CSA_SESSION_DIR_ENV_KEY,
     CSA_PARENT_SESSION_ENV_KEY,
     CSA_PARENT_SESSION_DIR_ENV_KEY,
+    CSA_PARENT_MODEL_PROVIDER_ENV_KEY,
     CSA_MODEL_SPEC_ENV_KEY,
     CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
     CSA_NO_FAILOVER_ENV_KEY,
@@ -27,6 +29,7 @@ pub(crate) struct StartupSubtreeEnv {
     parent_session_dir: Option<String>,
     internal_invocation: bool,
     pattern_internal: bool,
+    parent_model_provider: Option<String>,
     model_spec: Option<String>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
@@ -64,6 +67,7 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     parent_session_dir: None,
     internal_invocation: false,
     pattern_internal: false,
+    parent_model_provider: None,
     model_spec: None,
     force_ignore_tier_setting: false,
     no_failover: false,
@@ -102,6 +106,7 @@ impl StartupSubtreeEnv {
         let raw_parent_session_dir = values.get(CSA_PARENT_SESSION_DIR_ENV_KEY).cloned();
         let raw_internal_invocation = values.get(CSA_INTERNAL_INVOCATION_ENV_KEY).cloned();
         let raw_pattern_internal = values.get(CSA_PATTERN_INTERNAL_ENV_KEY).cloned();
+        let parent_model_provider = non_empty(values.get(CSA_PARENT_MODEL_PROVIDER_ENV_KEY));
         let raw_model_spec = values.get(CSA_MODEL_SPEC_ENV_KEY).cloned();
         let raw_force_ignore_tier_setting =
             values.get(CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY).cloned();
@@ -133,6 +138,7 @@ impl StartupSubtreeEnv {
             parent_session_dir: non_empty(raw_parent_session_dir.as_ref()),
             internal_invocation,
             pattern_internal,
+            parent_model_provider,
             model_spec: non_empty(raw_model_spec.as_ref()),
             force_ignore_tier_setting,
             no_failover,
@@ -200,6 +206,11 @@ impl StartupSubtreeEnv {
         self
     }
 
+    pub(crate) fn with_parent_model_provider(mut self, provider: impl AsRef<str>) -> Self {
+        self.parent_model_provider = non_empty_str(provider.as_ref());
+        self
+    }
+
     pub(crate) fn trusted_inherited_model_pin(&self) -> Option<(&str, bool, bool)> {
         self.trusted_inherited_model_pin.as_ref().map(|pin| {
             (
@@ -254,6 +265,11 @@ impl StartupSubtreeEnv {
             CSA_PARENT_SESSION_DIR_ENV_KEY,
             &self.raw_parent_session_dir,
         );
+        self.push_child_env_var(
+            &mut vars,
+            CSA_PARENT_MODEL_PROVIDER_ENV_KEY,
+            &self.parent_model_provider,
+        );
         let inherited_model_pin = crate::run_cmd_model_pin::inherited_model_pin_from_startup(self);
         if let Some(pin) =
             crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref())
@@ -304,6 +320,10 @@ impl StartupSubtreeEnv {
 
     pub(crate) fn model_spec(&self) -> Option<&str> {
         self.model_spec.as_deref()
+    }
+
+    pub(crate) fn parent_model_provider(&self) -> Option<&str> {
+        self.parent_model_provider.as_deref()
     }
 
     pub(crate) fn force_ignore_tier_setting(&self) -> bool {
