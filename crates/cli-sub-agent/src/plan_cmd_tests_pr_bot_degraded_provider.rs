@@ -2,7 +2,7 @@ use super::*;
 use weave::compiler::ExecutionPlan;
 
 #[tokio::test]
-async fn execute_pr_bot_local_review_derives_provider_when_var_unset() {
+async fn execute_pr_bot_local_review_rejects_legacy_hermes_provider_fallback() {
     let tmp = tempfile::tempdir().unwrap();
     let current_head = "abcdef1234567890abcdef1234567890abcdef12";
     let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
@@ -30,24 +30,26 @@ async fn execute_pr_bot_local_review_derives_provider_when_var_unset() {
         .await
         .expect("derived-provider review wait should execute");
 
-    assert_eq!(results[0].exit_code, 0, "local review should pass");
-    let wait_args = std::fs::read_to_string(&wait_args_path).unwrap();
+    assert_ne!(results[0].exit_code, 0, "unset provider must fail closed");
     assert!(
-        wait_args.contains("--model-provider xai"),
-        "session wait must derive the caller provider: {wait_args}"
+        results[0]
+            .stderr
+            .as_deref()
+            .unwrap_or("")
+            .contains("CSA_MODEL_PROVIDER is required"),
+        "legacy Hermes hints must not bypass pre-plan normalization"
     );
+    assert!(!wait_args_path.exists(), "session wait must not start");
 }
 
 #[tokio::test]
-async fn execute_pr_bot_bot_unavailable_wait_derives_provider() {
+async fn execute_pr_bot_bot_unavailable_wait_uses_normalized_provider() {
     let tmp = tempfile::tempdir().unwrap();
     let current_head = "abcdef1234567890abcdef1234567890abcdef12";
     let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
     let wait_args_path = tmp.path().join("session-wait-args");
     let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
-    vars.insert("CSA_MODEL_PROVIDER".into(), String::new());
-    vars.insert("CSA_CALLER_TOOL".into(), "hermes".into());
-    vars.insert("HERMES_MODEL_PROVIDER".into(), "zhipuai".into());
+    vars.insert("CSA_MODEL_PROVIDER".into(), "glm".into());
     vars.insert("HOME".into(), tmp.path().display().to_string());
     vars.insert("MERGE_COMPLETED".into(), "false".into());
     vars.insert("TEST_CLOUD_BOT".into(), "false".into());
@@ -80,13 +82,13 @@ async fn execute_pr_bot_bot_unavailable_wait_derives_provider() {
 }
 
 #[tokio::test]
-async fn execute_pr_bot_local_review_preserves_explicit_provider_key() {
+async fn execute_pr_bot_local_review_uses_normalized_explicit_provider_key() {
     let tmp = tempfile::tempdir().unwrap();
     let current_head = "abcdef1234567890abcdef1234567890abcdef12";
     let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
     let wait_args_path = tmp.path().join("session-wait-args");
     let mut vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
-    vars.insert("CSA_MODEL_PROVIDER".into(), "  AnThRoPiC  ".into());
+    vars.insert("CSA_MODEL_PROVIDER".into(), "claude".into());
     vars.insert("HOME".into(), tmp.path().display().to_string());
     vars.insert("TEST_CSA_REVIEW_MODE".into(), "success".into());
     vars.insert(
@@ -109,8 +111,8 @@ async fn execute_pr_bot_local_review_preserves_explicit_provider_key() {
     assert_eq!(results[0].exit_code, 0, "local review should pass");
     let wait_args = std::fs::read_to_string(&wait_args_path).unwrap();
     assert!(
-        wait_args.contains("--model-provider anthropic"),
-        "session wait must preserve an explicit configured key: {wait_args}"
+        wait_args.contains("--model-provider claude"),
+        "session wait must receive the normalized configured key: {wait_args}"
     );
 }
 

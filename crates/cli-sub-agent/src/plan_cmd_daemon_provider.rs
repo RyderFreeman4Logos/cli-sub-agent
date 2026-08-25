@@ -27,27 +27,43 @@ pub(super) fn inject_pr_bot_parent_provider(
     pattern: &Option<String>,
     vars: &mut Vec<String>,
     parent_provider: Option<&str>,
+    wait_config: &csa_config::KvCacheConfig,
 ) -> Result<Option<String>> {
     let is_pr_bot = pattern.as_deref() == Some("pr-bot")
         || file.as_deref().is_some_and(|path| {
             Path::new(path).ends_with(Path::new("patterns/pr-bot/workflow.toml"))
         });
-    let explicit = vars.iter().any(|entry| {
+    let explicit = vars.iter().position(|entry| {
         entry
             .split_once('=')
             .is_some_and(|(key, value)| key == PR_BOT_PROVIDER_VAR && !value.trim().is_empty())
     });
-    if !is_pr_bot || explicit {
+    if !is_pr_bot {
         return Ok(None);
     }
 
-    let Some(provider) = parent_provider else {
+    let provider = explicit
+        .and_then(|index| vars[index].split_once('=').map(|(_, value)| value))
+        .or(parent_provider);
+    let Some(provider) = provider else {
         bail!(
             "pr-bot requires the calling parent provider before execution; pass \
              --var {PR_BOT_PROVIDER_VAR}=<configured provider> when live parent routing cannot \
              supply a trusted model spec"
         );
     };
-    vars.push(format!("{PR_BOT_PROVIDER_VAR}={provider}"));
-    Ok(Some(provider.to_string()))
+    let Some(provider) = csa_config::wait_provider_key(provider, wait_config) else {
+        bail!(
+            "pr-bot provider does not resolve to a configured positive \
+             [kv_cache.provider_ttls] key; pass --var \
+             {PR_BOT_PROVIDER_VAR}=<configured provider>"
+        );
+    };
+    let assignment = format!("{PR_BOT_PROVIDER_VAR}={}", provider.as_str());
+    if let Some(index) = explicit {
+        vars[index] = assignment;
+    } else {
+        vars.push(assignment);
+    }
+    Ok(Some(provider.as_str().to_string()))
 }

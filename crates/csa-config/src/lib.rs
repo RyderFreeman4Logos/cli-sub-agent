@@ -82,7 +82,7 @@ pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_
 pub use paths::{APP_NAME, LEGACY_APP_NAME};
 pub use project_profile::{ProjectProfile, detect_project_profile};
 pub use provider_detection::{
-    ModelProvider, detect_model_provider, parse_model_provider, provider_ttl,
+    ModelProvider, detect_model_provider, parse_model_provider, provider_ttl, wait_provider_key,
 };
 pub use validate::validate_config;
 pub use weave_lock::{VersionCheckResult, WeaveLock, check_version};

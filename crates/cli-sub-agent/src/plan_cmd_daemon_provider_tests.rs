@@ -1,6 +1,12 @@
 use super::*;
 use std::collections::HashMap;
 
+fn default_wait_config() -> csa_config::KvCacheConfig {
+    toml::from_str::<csa_config::GlobalConfig>(&csa_config::GlobalConfig::default_template())
+        .expect("default generated config")
+        .kv_cache
+}
+
 fn trusted_parent_model_spec(model_spec: &str) -> crate::startup_env::StartupSubtreeEnv {
     crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([
         (csa_core::env::CSA_DEPTH_ENV_KEY, "1".to_string()),
@@ -61,6 +67,7 @@ fn detached_outer_plan_preserves_native_provider_for_nested_pr_bot() {
         &Some("pr-bot".to_string()),
         &mut nested_vars,
         nested_startup.parent_model_provider(),
+        &default_wait_config(),
     )
     .expect("nested provider must be accepted");
 
@@ -78,6 +85,7 @@ fn native_tool_without_proven_routing_fails_closed() {
             &Some("pr-bot".to_string()),
             &mut vars,
             native_parent_provider(Some(tool), &startup_env, None).as_deref(),
+            &default_wait_config(),
         )
         .expect_err("unproven native routing must fail before the plan starts");
 
@@ -90,16 +98,30 @@ fn native_tool_without_proven_routing_fails_closed() {
 fn explicit_pr_bot_provider_key_wins_unchanged() {
     let mut vars = vec!["CSA_MODEL_PROVIDER=anthropic".to_string()];
     let startup_env = crate::startup_env::StartupSubtreeEnv::default();
+    let mut config = default_wait_config();
+    config.provider_ttls.0.insert("anthropic".to_string(), 17);
 
     inject_pr_bot_parent_provider(
         &None,
         &Some("pr-bot".to_string()),
         &mut vars,
         native_parent_provider(Some("claude-code"), &startup_env, None).as_deref(),
+        &config,
     )
     .expect("explicit provider must be accepted");
 
     assert_eq!(vars, ["CSA_MODEL_PROVIDER=anthropic"]);
+
+    let mut default_vars = vec!["CSA_MODEL_PROVIDER=xai".to_string()];
+    inject_pr_bot_parent_provider(
+        &None,
+        &Some("pr-bot".to_string()),
+        &mut default_vars,
+        None,
+        &default_wait_config(),
+    )
+    .expect("default configured provider must be accepted");
+    assert_eq!(default_vars, ["CSA_MODEL_PROVIDER=xai"]);
 }
 
 #[test]
@@ -117,6 +139,7 @@ fn hermes_config_provider_requires_detected_hermes_parent() {
         &Some("pr-bot".to_string()),
         &mut hermes_vars,
         native_parent_provider(Some("hermes"), &startup_env, Some("xai")).as_deref(),
+        &default_wait_config(),
     )
     .expect("Hermes provider must be accepted");
     assert_eq!(hermes_vars, ["CSA_MODEL_PROVIDER=xai"]);
@@ -129,18 +152,18 @@ fn cross_provider_native_plan_entries_use_the_trusted_parent_model_spec() {
         (
             "claude-code",
             "claude-code/anthropic/claude-sonnet-4/high",
-            "anthropic",
+            "claude",
         ),
         ("opencode", "opencode/openai/gpt-5/xhigh", "openai"),
         (
             "opencode",
             "opencode/anthropic/claude-sonnet-4/high",
-            "anthropic",
+            "claude",
         ),
         (
             "antigravity-cli",
             "antigravity-cli/google/gemini-3.1-pro/high",
-            "google",
+            "other",
         ),
     ] {
         let startup_env = trusted_parent_model_spec(model_spec);
@@ -151,13 +174,20 @@ fn cross_provider_native_plan_entries_use_the_trusted_parent_model_spec() {
             &Some("pr-bot".to_string()),
             &mut vars,
             native_parent_provider(Some(tool), &startup_env, None).as_deref(),
+            &default_wait_config(),
         )
         .expect("canonical pr-bot entry must have an explicit provider before execution");
 
         assert_eq!(
             vars,
             [format!("CSA_MODEL_PROVIDER={expected_provider}")],
-            "{tool} must preserve the live routed provider rather than guessing from its name"
+            "{tool} must pass a configured wait-TTL key"
+        );
+        let key = vars[0].split_once('=').expect("provider assignment").1;
+        let provider = csa_config::parse_model_provider(key).expect("normalized provider");
+        assert!(
+            csa_config::provider_ttl(&provider, &default_wait_config()).is_some(),
+            "{key} must resolve through the real wait-TTL resolver"
         );
     }
 }
@@ -172,10 +202,28 @@ fn canonical_pr_bot_entry_rejects_an_unknown_parent_provider_before_any_wait() {
         &Some("pr-bot".to_string()),
         &mut vars,
         native_parent_provider(Some("opencode"), &startup_env, None).as_deref(),
+        &default_wait_config(),
     )
     .expect_err("unknown cross-provider routing must fail before the plan starts");
 
     assert!(error.to_string().contains("CSA_MODEL_PROVIDER"));
+    assert!(vars.is_empty());
+}
+
+#[test]
+fn canonical_pr_bot_entry_rejects_unmapped_provider_before_plan_start() {
+    let mut vars = Vec::new();
+
+    let error = inject_pr_bot_parent_provider(
+        &None,
+        &Some("pr-bot".to_string()),
+        &mut vars,
+        Some("unmapped"),
+        &default_wait_config(),
+    )
+    .expect_err("unmapped provider must fail before the plan starts");
+
+    assert!(error.to_string().contains("configured provider"));
     assert!(vars.is_empty());
 }
 

@@ -130,11 +130,13 @@ pub(crate) async fn dispatch(
             startup_env = startup_env.with_parent_model_provider(provider);
         }
     }
+    let wait_config = csa_config::GlobalConfig::load()?.kv_cache;
     if let Some(provider) = inject_pr_bot_parent_provider(
         &file,
         &pattern,
         &mut vars,
         startup_env.parent_model_provider(),
+        &wait_config,
     )? && !daemon_child
     {
         let base = forwarded_args
