@@ -436,8 +436,16 @@ enforcement_mode = "best-effort"
         2,
         "expected two readable paths in the isolation plan"
     );
-    assert!(sandbox.isolation_plan.readable_paths.contains(&first));
-    assert!(sandbox.isolation_plan.readable_paths.contains(&second));
+    assert!(sandbox
+        .isolation_plan
+        .readable_paths
+        .iter()
+        .any(|path| path == &first));
+    assert!(sandbox
+        .isolation_plan
+        .readable_paths
+        .iter()
+        .any(|path| path == &second));
 }
 
 #[test]

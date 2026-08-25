@@ -205,7 +205,13 @@ fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
         temp.path(),
     )
     .expect("/tmp symlink should be accepted after canonical source validation");
-    assert_eq!(readable_paths, vec![logical_destination.clone()]);
+    assert_eq!(
+        readable_paths
+            .iter()
+            .map(|path| path.requested().to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![logical_destination.clone()]
+    );
 
     let plan = IsolationPlan {
         resource: ResourceCapability::None,
@@ -259,7 +265,7 @@ fn from_isolation_plan_does_not_remount_writable_canonical_child_readonly_throug
         resource: ResourceCapability::None,
         filesystem: FilesystemCapability::Bwrap,
         writable_paths: vec![writable_tree],
-        readable_paths: vec![readable_alias],
+        readable_paths: vec![readable_alias.into()],
         env_overrides: HashMap::new(),
         degraded_reasons: Vec::new(),
         memory_max_mb: None,
@@ -345,5 +351,78 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
             && window[1] == logical_str
             && window[2] == logical_str),
         "readable bind must not target the logical dest; args: {args:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let validated_target = temp.path().join("validated-target.json");
+    let replaced_target = temp.path().join("replaced-target.json");
+    let readable_symlink = temp.path().join("readable-link.json");
+    std::fs::write(&validated_target, "validated").expect("write validated target");
+    std::fs::write(&replaced_target, "replaced").expect("write replaced target");
+    symlink(&validated_target, &readable_symlink).expect("create readable symlink");
+
+    let readable_paths = crate::isolation_plan::validate_readable_paths(
+        std::slice::from_ref(&readable_symlink),
+        temp.path(),
+    )
+    .expect("readable symlink should validate against its canonical target");
+    assert_eq!(
+        readable_paths
+            .iter()
+            .map(|path| path.requested().to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![readable_symlink.clone()]
+    );
+    assert_eq!(
+        readable_paths[0].bind_source(),
+        validated_target
+            .canonicalize()
+            .expect("canonical validated target")
+            .as_path()
+    );
+
+    std::fs::remove_file(&readable_symlink).expect("remove symlink for replacement");
+    symlink(&replaced_target, &readable_symlink).expect("replace readable symlink");
+
+    let plan = IsolationPlan {
+        resource: ResourceCapability::None,
+        filesystem: FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        readable_paths,
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
+    };
+    let args = command_args(
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+    );
+    let validated = validated_target.to_string_lossy();
+    let replaced = replaced_target.to_string_lossy();
+    let dest = readable_symlink.to_string_lossy();
+
+    assert!(
+        args.windows(3).any(|window| {
+            window[0] == "--ro-bind" && window[1] == validated && window[2] == dest
+        }),
+        "bind source must stay the validated target after symlink replacement; args: {args:?}"
+    );
+    assert!(
+        !args
+            .windows(3)
+            .any(|window| window[0] == "--ro-bind" && window[1] == replaced),
+        "replaced symlink target must not become the bind source; args: {args:?}"
     );
 }

@@ -14,7 +14,7 @@ pub struct BwrapCommandBuilder {
     tool_binary: String,
     tool_args: Vec<String>,
     writable_paths: Vec<PathBuf>,
-    readable_paths: Vec<PathBuf>,
+    readable_paths: Vec<crate::isolation_plan::ReadablePath>,
     ro_binds: Vec<(PathBuf, PathBuf)>,
     env_vars: Vec<(String, String)>,
 }
@@ -39,22 +39,29 @@ impl BwrapCommandBuilder {
     }
 
     /// Add a path that the sandboxed process may read (bind-mounted ro).
-    pub fn with_readable_path(&mut self, path: &Path) -> &mut Self {
+    ///
+    /// A [`crate::isolation_plan::ReadablePath`] keeps its validated bind
+    /// source. A bare path is pinned at this call.
+    pub fn with_readable_path(
+        &mut self,
+        path: impl Into<crate::isolation_plan::ReadablePath>,
+    ) -> &mut Self {
+        let path = path.into();
         assert!(
-            path.is_absolute(),
+            path.requested().is_absolute(),
             "readable sandbox path must be absolute: {}",
-            path.display()
+            path.requested().display()
         );
         assert!(
-            path != Path::new("/tmp"),
+            path.requested() != Path::new("/tmp"),
             "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
         );
         assert!(
-            path.exists(),
+            path.requested().exists() || path.bind_source().exists(),
             "readable sandbox path must exist: {}",
-            path.display()
+            path.requested().display()
         );
-        self.readable_paths.push(path.to_path_buf());
+        self.readable_paths.push(path);
         self
     }
 
@@ -140,10 +147,12 @@ impl BwrapCommandBuilder {
             if self.is_covered_by_writable_path(path) {
                 continue;
             }
-            let resolved = resolve_for_bind(path);
+            // Use the bind source pinned at validation/add time. Re-resolving
+            // here would reopen the #3102 TOCTOU after a symlink replacement.
+            let resolved = path.bind_source();
             let s = resolved.to_string_lossy();
             assert!(
-                path != tmp_prefix,
+                path.requested() != tmp_prefix,
                 "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
             );
             // Under a fresh virtual filesystem (/tmp) the resolved destination
@@ -151,10 +160,10 @@ impl BwrapCommandBuilder {
             // create its parents explicitly. Elsewhere bind at the resolved
             // destination: creating the logical parent can fail when it is a
             // symlink into an autofs-backed CSA session-state root (#3075).
-            let dest_path = if fresh_writable_mount_root(path).is_some() {
-                path.as_path()
+            let dest_path = if fresh_writable_mount_root(path.requested()).is_some() {
+                path.requested()
             } else {
-                resolved.as_path()
+                resolved
             };
             if let Some(parent) = dest_path.parent()
                 && parent != tmp_prefix
@@ -205,11 +214,18 @@ impl BwrapCommandBuilder {
         cmd
     }
 
-    fn is_covered_by_writable_path(&self, readable_path: &Path) -> bool {
-        let readable_dest = effective_mount_destination(readable_path);
+    fn is_covered_by_writable_path(
+        &self,
+        readable_path: &crate::isolation_plan::ReadablePath,
+    ) -> bool {
+        let readable_dest = if fresh_writable_mount_root(readable_path.requested()).is_some() {
+            readable_path.requested().to_path_buf()
+        } else {
+            readable_path.bind_source().to_path_buf()
+        };
         self.writable_paths.iter().any(|writable_path| {
             let writable_dest = effective_mount_destination(writable_path);
-            readable_dest == writable_dest || readable_dest.starts_with(writable_dest)
+            readable_dest == writable_dest || readable_dest.starts_with(&writable_dest)
         })
     }
 
@@ -283,7 +299,7 @@ pub fn from_isolation_plan(
     }
 
     for path in &plan.readable_paths {
-        builder.with_readable_path(path);
+        builder.with_readable_path(path.clone());
     }
 
     let mut env_overrides = plan.env_overrides.clone();
