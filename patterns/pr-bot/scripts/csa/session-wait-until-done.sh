@@ -10,7 +10,13 @@ fi
 session_id="$1"
 shift
 
-wait_args=(--session "${session_id}")
+model_provider="${CSA_MODEL_PROVIDER:-}"
+if [ -z "${model_provider}" ]; then
+  echo "ERROR: CSA_MODEL_PROVIDER is required; run pr-bot from a supported parent agent or pass --var CSA_MODEL_PROVIDER=<configured provider>" >&2
+  exit 2
+fi
+
+wait_args=(--session "${session_id}" --model-provider "${model_provider}")
 if [ "$#" -gt 0 ]; then
   wait_args+=("$@")
 fi
@@ -25,7 +31,11 @@ while true; do
     printf '%s\n' "${wait_output}"
   fi
 
-  if [ "${wait_rc}" -eq 124 ]; then
+  if printf '%s\n' "${wait_output}" | grep -Eq '^<!-- CSA:SESSION_WAIT_COMPLETED .* -->$'; then
+    exit "${wait_rc}"
+  fi
+
+  if printf '%s\n' "${wait_output}" | grep -Eq '^<!-- CSA:SESSION_WAIT_KV_WARM .* status=alive .* -->$'; then
     echo "INFO: session ${session_id} is still running after one wait window; retrying." >&2
     continue
   fi

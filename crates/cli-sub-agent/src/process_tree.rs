@@ -27,6 +27,7 @@ const KNOWN_TOOL_EXECUTABLES: &[(&str, &str)] = &[
     ("antigravity", "antigravity-cli"),
     ("codex", "codex"),
     ("opencode", "opencode"),
+    ("hermes", "hermes"),
     // Standalone ACP adapter binaries (Zed ACP packages)
     // NOTE: /proc/*/comm truncates to 15 chars; "claude-code-acp" is exactly 15 — OK.
     ("codex-acp", "codex"),
@@ -255,6 +256,11 @@ mod tests {
     #[test]
     fn test_match_tool_by_comm_codex() {
         assert_eq!(match_tool_by_comm("codex"), Some("codex"));
+    }
+
+    #[test]
+    fn test_match_tool_by_comm_hermes() {
+        assert_eq!(match_tool_by_comm("hermes"), Some("hermes"));
     }
 
     #[test]

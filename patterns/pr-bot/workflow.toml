@@ -132,6 +132,9 @@ name = "CREATE_RC"
 name = "CSA_HELPER_DIR"
 
 [[workflow.variables]]
+name = "CSA_MODEL_PROVIDER"
+
+[[workflow.variables]]
 name = "CSA_WORKFLOW_DIR"
 
 [[workflow.variables]]
@@ -2200,20 +2203,15 @@ WAIT_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${WAIT_SID}"
 WAIT_RC=$?
 set -e
 
-if [ "${WAIT_RC}" -ne 0 ]; then
-  echo "" >&2
-  echo "ERROR: Post-fix cloud bot (${CLOUD_BOT_NAME}) did not produce a current-HEAD re-review signal within the polling window (rc=${WAIT_RC})." >&2
-  echo "ABORTING: Will not merge without cloud bot confirmation after fixes." >&2
-  echo "Re-run pr-bot to start a new review cycle." >&2
-  exit 1
-else
-  WAIT_MARKER="$(
-    printf '%s\n' "${WAIT_RESULT}" \
-      | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
-      | tail -n 1 \
-      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-      || true
-  )"
+WAIT_MARKER="$(
+  printf '%s\n' "${WAIT_RESULT}" \
+    | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
+    | tail -n 1 \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    || true
+)"
+if [ "${WAIT_RC}" -ne 0 ] && [ "${WAIT_MARKER}" != "BOT_REPLY=received" ]; then
+  echo "WARN: Post-fix cloud bot (${CLOUD_BOT_NAME}) did not produce a current-HEAD re-review signal within the polling window (rc=${WAIT_RC}). Falling back to local review." >&2
 fi
 fi
 

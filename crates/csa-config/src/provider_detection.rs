@@ -59,6 +59,28 @@ pub fn provider_ttl(provider: &ModelProvider, config: &KvCacheConfig) -> Option<
         .filter(|seconds| *seconds > 0)
 }
 
+/// Resolve a routed provider name to a configured positive session-wait TTL key.
+///
+/// An exact configured key wins over aliases so custom provider names remain
+/// stable. Unknown names and aliases without a configured target fail closed.
+pub fn wait_provider_key(value: &str, config: &KvCacheConfig) -> Option<ModelProvider> {
+    let provider = ModelProvider::new(value);
+    if provider_ttl(&provider, config).is_some() {
+        return Some(provider);
+    }
+
+    let alias = match provider.as_str() {
+        "anthropic" => "claude",
+        "openai-codex" => "openai",
+        "zai" | "zhipu" | "zhipuai" => "glm",
+        "xai-oauth" | "grok" => "xai",
+        "google" | "gemini" => "other",
+        _ => return None,
+    };
+    let provider = ModelProvider::new(alias);
+    provider_ttl(&provider, config).map(|_| provider)
+}
+
 fn detect_model_provider_from_env() -> Option<ModelProvider> {
     std::env::var(HERMES_MODEL_PROVIDER_ENV)
         .ok()
@@ -209,6 +231,30 @@ model:
             provider_ttl(&ModelProvider::new("openai"), &config),
             Some(1800)
         );
+    }
+
+    #[test]
+    fn wait_provider_key_normalizes_aliases_against_default_generated_config() {
+        let global: crate::GlobalConfig =
+            toml::from_str(&crate::GlobalConfig::default_template()).unwrap();
+
+        for (raw, expected) in [("XAI", "xai"), ("anthropic", "claude"), ("google", "other")] {
+            let provider = wait_provider_key(raw, &global.kv_cache).expect("configured wait key");
+            assert_eq!(provider.as_str(), expected);
+            assert!(provider_ttl(&provider, &global.kv_cache).is_some());
+        }
+    }
+
+    #[test]
+    fn wait_provider_key_preserves_configured_key_and_rejects_unmapped_name() {
+        let mut config = KvCacheConfig::default();
+        config.provider_ttls.0.insert("anthropic".to_string(), 17);
+
+        assert_eq!(
+            wait_provider_key("  AnThRoPiC  ", &config).map(|provider| provider.0),
+            Some("anthropic".to_string())
+        );
+        assert_eq!(wait_provider_key("unmapped", &config), None);
     }
 
     #[test]

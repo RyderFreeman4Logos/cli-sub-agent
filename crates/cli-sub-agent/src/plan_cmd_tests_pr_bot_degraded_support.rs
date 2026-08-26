@@ -219,6 +219,7 @@ pub(super) fn pr_bot_degraded_gate_vars(
 pub(super) fn install_pr_bot_local_review_stubs(root: &Path, current_head: &str) -> PathBuf {
     let bin_dir = root.join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::create_dir_all(root.join("patterns/pr-bot")).unwrap();
     let csa_called_path = root.join("csa-review-called");
 
     write_executable(
@@ -227,6 +228,14 @@ pub(super) fn install_pr_bot_local_review_stubs(root: &Path, current_head: &str)
             r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ "${{1:-}}" = "rev-parse" ] && [ "${{2:-}}" = "HEAD" ]; then
+  echo "{current_head}"
+  exit 0
+fi
+if [ "${{1:-}}" = "-C" ] && [ "${{3:-}}" = "branch" ] && [ "${{4:-}}" = "--show-current" ]; then
+  echo "fix/3117"
+  exit 0
+fi
+if [ "${{1:-}}" = "-C" ] && [ "${{3:-}}" = "rev-parse" ] && [ "${{4:-}}" = "HEAD" ]; then
   echo "{current_head}"
   exit 0
 fi
@@ -269,8 +278,29 @@ if [ "${1:-}" = "run" ]; then
   echo "01ARZ3NDEKTSV4RRFFQ69G5FAV"
   exit 0
 fi
+if [ "${1:-}" = "session" ] && [ "${2:-}" = "list" ]; then
+  printf '%s\n' "${TEST_CSA_SESSION_LIST_JSON:-[]}"
+  exit 0
+fi
+if [ "${1:-}" = "session" ] && [ "${2:-}" = "wait" ]; then
+  if [ "${TEST_SESSION_WAIT_NONZERO:-false}" = "true" ]; then
+    printf '%s\n' "$*" > "${TEST_CSA_SESSION_WAIT_ARGS:?missing TEST_CSA_SESSION_WAIT_ARGS}"
+    echo "BOT_REPLY=timeout"
+    exit 2
+  fi
+  if [ "${TEST_SESSION_WAIT_TIMEOUT:-false}" = "true" ]; then
+    echo "BOT_REPLY=timeout"
+    exit 0
+  fi
+  printf '%s\n' "$*" > "${TEST_CSA_SESSION_WAIT_ARGS:?missing TEST_CSA_SESSION_WAIT_ARGS}"
+  exit 0
+fi
 if [ "${1:-}" = "review" ]; then
   touch "${TEST_CSA_REVIEW_CALLED:?missing TEST_CSA_REVIEW_CALLED}"
+  if [ "${TEST_CSA_REVIEW_MODE:-}" = "success" ]; then
+    echo "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    exit 0
+  fi
   echo "CSA review should only run when no bounded native bypass evidence matches" >&2
   exit 42
 fi
@@ -297,25 +327,15 @@ exit 2
 
     let helper_dir = root.join("scripts/csa");
     std::fs::create_dir_all(&helper_dir).unwrap();
-    write_executable(
-        &helper_dir.join("latest-pass-review-head.sh"),
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-exit 0
-"#,
-    );
-    write_executable(
-        &helper_dir.join("session-wait-until-done.sh"),
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-if [ "${TEST_SESSION_WAIT_TIMEOUT:-false}" = "true" ]; then
-  echo "BOT_REPLY=timeout"
-  exit 0
-fi
-echo "unexpected session wait for $*" >&2
-exit 42
-"#,
-    );
+    for helper in ["latest-pass-review-head.sh", "session-wait-until-done.sh"] {
+        std::fs::copy(
+            workspace_root()
+                .join("patterns/pr-bot/scripts/csa")
+                .join(helper),
+            helper_dir.join(helper),
+        )
+        .unwrap();
+    }
     std::fs::copy(
         workspace_root().join("patterns/pr-bot/scripts/csa/native-review-bypass.sh"),
         helper_dir.join("native-review-bypass.sh"),
@@ -340,6 +360,21 @@ pub(super) fn write_native_review_bypass_artifact(root: &Path, head: &str) {
         format!(
             "schema_version=1\nartifact_kind=\"native_review_bypass\"\nsource=\"native\"\nhead_sha=\"{head}\"\nrange=\"main...HEAD\"\nverdict=\"clean\"\n"
         ),
+    )
+    .unwrap();
+}
+
+pub(super) fn write_passing_review_metadata(root: &Path, session_id: &str, head: &str) {
+    let project_key = root.strip_prefix("/").unwrap_or(root);
+    let review_dir = root
+        .join("state/cli-sub-agent")
+        .join(project_key)
+        .join("sessions")
+        .join(session_id);
+    std::fs::create_dir_all(&review_dir).unwrap();
+    std::fs::write(
+        review_dir.join("review_meta.json"),
+        format!(r#"{{"decision":"pass","scope":"base:main","head_sha":"{head}"}}"#),
     )
     .unwrap();
 }
@@ -378,10 +413,59 @@ pub(super) fn pr_bot_local_review_vars(
         format!("{}:{}", bin_dir.display(), existing_path),
     );
     vars.insert("CSA_WORKFLOW_DIR".into(), root.display().to_string());
+    vars.insert("CSA_MODEL_PROVIDER".into(), "openai".into());
     vars.insert("DEFAULT_BRANCH".into(), "main".into());
+    vars.insert(
+        "XDG_STATE_HOME".into(),
+        root.join("state").display().to_string(),
+    );
     vars.insert(
         "TEST_CSA_REVIEW_CALLED".into(),
         csa_called_path.display().to_string(),
     );
     vars
+}
+
+#[test]
+fn session_wait_helper_prefers_terminal_carrier_over_live_marker_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin_dir = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let calls_path = tmp.path().join("calls");
+    write_executable(
+        &bin_dir.join("csa"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+calls=0
+if [ -f "${TEST_CSA_CALLS}" ]; then calls="$(cat "${TEST_CSA_CALLS}")"; fi
+calls=$((calls + 1))
+printf '%s' "${calls}" > "${TEST_CSA_CALLS}"
+if [ "${calls}" -eq 1 ]; then
+  echo 'Summary mentions CSA:SESSION_WAIT_KV_WARM but this session is terminal.'
+  echo '<!-- CSA:SESSION_WAIT_COMPLETED session=01ARZ3NDEKTSV4RRFFQ69G5FAV status=failed exit=7 synthetic=false -->'
+  exit 7
+fi
+exit 99
+"#,
+    );
+
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let status = status_with_timeout(
+        {
+            let mut command = Command::new("bash");
+            command
+                .arg(
+                    workspace_root().join("patterns/pr-bot/scripts/csa/session-wait-until-done.sh"),
+                )
+                .arg("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                .env("CSA_MODEL_PROVIDER", "openai")
+                .env("PATH", format!("{}:{existing_path}", bin_dir.display()))
+                .env("TEST_CSA_CALLS", &calls_path);
+            command
+        },
+        Duration::from_secs(5),
+    );
+
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(std::fs::read_to_string(calls_path).unwrap(), "1");
 }

@@ -29,9 +29,15 @@ const PLAN_RESULT_SUMMARY_MAX_CHARS: usize = 500;
 
 #[path = "plan_cmd_daemon_session.rs"]
 mod daemon_session;
+#[path = "plan_cmd_daemon_provider.rs"]
+mod provider;
+#[cfg(test)]
+#[path = "plan_cmd_daemon_provider_tests.rs"]
+mod provider_tests;
 use daemon_session::{
     describe_plan_run, mark_session_as_plan, persist_placeholder_plan_session, retire_plan_session,
 };
+use provider::{PR_BOT_PROVIDER_VAR, inject_pr_bot_parent_provider, native_parent_provider};
 
 pub(crate) struct PlanRunDispatchInput {
     pub foreground: bool,
@@ -108,6 +114,41 @@ pub(crate) async fn dispatch(
         vars.push(format!("{ISSUE_NUMBER_VAR}={issue_number}"));
     }
 
+    let mut startup_env = startup_env.clone();
+    if !daemon_child && startup_env.parent_model_provider().is_none() {
+        let parent_tool = crate::run_helpers::detect_parent_tool();
+        let hermes_provider = (parent_tool.as_deref() == Some("hermes"))
+            .then(csa_config::detect_model_provider)
+            .flatten();
+        if let Some(provider) = native_parent_provider(
+            parent_tool.as_deref(),
+            &startup_env,
+            hermes_provider
+                .as_ref()
+                .map(csa_config::ModelProvider::as_str),
+        ) {
+            startup_env = startup_env.with_parent_model_provider(provider);
+        }
+    }
+    let wait_config = csa_config::GlobalConfig::load()?.kv_cache;
+    if let Some(provider) = inject_pr_bot_parent_provider(
+        &file,
+        &pattern,
+        &mut vars,
+        startup_env.parent_model_provider(),
+        &wait_config,
+    )? && !daemon_child
+    {
+        let base = forwarded_args
+            .take()
+            .unwrap_or_else(|| build_forwarded_plan_args(&std::env::args().collect::<Vec<_>>()));
+        forwarded_args = Some(forwarded_args_with_var(
+            base,
+            PR_BOT_PROVIDER_VAR,
+            &provider,
+        ));
+    }
+
     let pipeline_source = if daemon_child {
         std::env::var(PLAN_PIPELINE_SOURCE_ENV)
             .ok()
@@ -131,7 +172,7 @@ pub(crate) async fn dispatch(
         resources: RunResourceOverrides::from_cli(memory_max_mb, min_free_memory_mb),
         current_depth,
         pipeline_source,
-        startup_env: startup_env.clone(),
+        startup_env,
     };
     dispatch_plan_run(
         plan_args,
@@ -590,7 +631,9 @@ fn nested_session_env_present(startup_env: &StartupSubtreeEnv) -> bool {
 
 #[path = "plan_cmd_daemon_forwarding.rs"]
 mod forwarding;
-pub(crate) use forwarding::{build_forwarded_plan_args, forwarded_args_with_feature_input};
+pub(crate) use forwarding::{
+    build_forwarded_plan_args, forwarded_args_with_feature_input, forwarded_args_with_var,
+};
 
 #[cfg(test)]
 #[path = "plan_cmd_daemon_completion_tests.rs"]

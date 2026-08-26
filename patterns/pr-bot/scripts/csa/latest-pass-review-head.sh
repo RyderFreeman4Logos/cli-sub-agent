@@ -10,6 +10,7 @@ fi
 
 project_root="${CSA_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
 branch="${1:-$(git -C "${project_root}" branch --show-current)}"
+current_head="$(git -C "${project_root}" rev-parse HEAD)"
 state_base="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent"
 project_key="${project_root#/}"
 session_root="${state_base}/${project_key}/sessions"
@@ -30,7 +31,7 @@ while IFS= read -r session_id; do
       | .head_sha
     ' "${review_meta_path}" 2>/dev/null || true
   )"
-  if [ -n "${head_sha}" ]; then
+  if [ "${head_sha}" = "${current_head}" ]; then
     if [ "${mode}" = "session-record" ]; then
       printf '%s\t%s\n' "${session_id}" "${head_sha}"
     else
