@@ -384,38 +384,19 @@ impl TmuxTransport {
             claude_args.push(level.to_string());
         }
 
-        let mut tmux_args: Vec<&str> = vec![
-            "new-session",
-            "-d",
-            "-s",
+        // execute_session passes a trusted merged child env: generic input
+        // was scrubbed before fresh CSA session/pin values were inserted.
+        let inner = crate::executor::executor_env::tmux_inner_child_with_gate(
+            no_post_exec_gate,
+            &claude_args,
+        );
+        let mut cmd = crate::executor::executor_env::tmux_new_session_command(
             session_name,
-            "-c",
             work_dir_str,
-            "--",
-        ];
-        let claude_arg_refs: Vec<&str> = claude_args.iter().map(String::as_str).collect();
-        tmux_args.extend_from_slice(&claude_arg_refs);
-
-        let mut cmd = tokio::process::Command::new("tmux");
-        cmd.args(&tmux_args);
-
-        // Strip inherited CSA/hook env vars, then re-inject the current
-        // session's values via extra_env (populated by execute_session).
-        for var in crate::executor::executor_env::STRIPPED_ENV_VARS {
-            cmd.env_remove(var);
-        }
-        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
-
-        if let Some(env) = extra_env {
-            // execute_session passes a trusted merged child env: generic input
-            // was scrubbed before fresh CSA session/pin values were inserted.
-            for (k, v) in env {
-                cmd.env(k, v);
-            }
-        }
-        crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
-
-        crate::transport::LegacyTransport::normalize_tmux_server_env(no_post_exec_gate).await?;
+            extra_env,
+            no_post_exec_gate,
+            &inner,
+        );
 
         let status = cmd.status().await.context("tmux new-session")?;
         if !status.success() {

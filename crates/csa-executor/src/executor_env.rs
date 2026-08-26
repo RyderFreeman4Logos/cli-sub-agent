@@ -60,6 +60,59 @@ pub(crate) fn apply_no_post_exec_gate(cmd: &mut Command, no_post_exec_gate: bool
     }
 }
 
+/// Build `tmux new-session` so `CSA_NO_POST_EXEC_GATE` is bound on that
+/// session's inner child only — never via unrestored global server env.
+pub(crate) fn tmux_new_session_command(
+    session_name: &str,
+    work_dir: &str,
+    extra_env: Option<&HashMap<String, String>>,
+    no_post_exec_gate: bool,
+    inner_args: &[String],
+) -> Command {
+    let mut cmd = Command::new("tmux");
+    cmd.args([
+        "new-session",
+        "-d",
+        "-s",
+        session_name,
+        "-c",
+        work_dir,
+        "--",
+    ]);
+    cmd.args(inner_args);
+    for var in STRIPPED_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
+    if let Some(env) = extra_env {
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+    }
+    apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
+    cmd
+}
+
+/// Prefix an inner tmux child so the trusted gate decision is bound on that
+/// child only. `env -u KEY` clears a poisoned global server value.
+pub(crate) fn tmux_inner_child_with_gate(
+    no_post_exec_gate: bool,
+    inner_args: &[String],
+) -> Vec<String> {
+    let mut args = vec!["env".to_string()];
+    if no_post_exec_gate {
+        args.push(format!(
+            "{}=1",
+            csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
+        ));
+    } else {
+        args.push("-u".to_string());
+        args.push(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string());
+    }
+    args.extend(inner_args.iter().cloned());
+    args
+}
+
 pub(crate) fn inject_git_guard_env(cmd: &mut Command) {
     let mut guard_env = HashMap::new();
     for key in ["PATH", "CSA_SESSION_DIR"] {

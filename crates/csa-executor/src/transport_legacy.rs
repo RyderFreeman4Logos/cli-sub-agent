@@ -1,6 +1,5 @@
 use super::*;
 use crate::executor::executor_env;
-use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -36,29 +35,6 @@ struct LegacyAttemptEnv<'a> {
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
-    }
-
-    pub(crate) async fn normalize_tmux_server_env(no_post_exec_gate: bool) -> Result<()> {
-        let start_server = tokio::process::Command::new("tmux")
-            .arg("start-server")
-            .status()
-            .await
-            .context("tmux start-server")?;
-        if !start_server.success() {
-            anyhow::bail!("tmux start-server exited with {start_server}");
-        }
-        let mut server_env = tokio::process::Command::new("tmux");
-        server_env.args(["set-environment", "-g"]);
-        if no_post_exec_gate {
-            server_env.args([csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "1"]);
-        } else {
-            server_env.args(["-u", csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY]);
-        }
-        let status = server_env.status().await.context("tmux set-environment")?;
-        if !status.success() {
-            anyhow::bail!("tmux set-environment exited with {status}");
-        }
-        Ok(())
     }
 
     pub(super) fn should_retry_gemini_rate_limited(

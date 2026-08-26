@@ -54,8 +54,15 @@ printf "%s\n" "$code" > "$status_file"
 exit "$code"
 '
 
+gate_env=()
+if [ "${CSA_NO_POST_EXEC_GATE+x}" = x ]; then
+  gate_env=(env "CSA_NO_POST_EXEC_GATE=$CSA_NO_POST_EXEC_GATE")
+else
+  gate_env=(env -u CSA_NO_POST_EXEC_GATE)
+fi
+
 if ! tmux new-session -d -s "$session_name" -c "$work_dir" -- \
-  bash -c "$inner" bash "$stdin_fifo" "$stdout_fifo" "$stderr_fifo" "$status_file" "$program" "$@"; then
+  "${gate_env[@]}" bash -c "$inner" bash "$stdin_fifo" "$stdout_fifo" "$stderr_fifo" "$status_file" "$program" "$@"; then
   echo "failed to start codex tmux session: $session_name" >&2
   exit 127
 fi
@@ -132,13 +139,83 @@ mod tests {
     use super::*;
 
     fn session(project_path: &Path) -> MetaSessionState {
+        session_named(project_path, "01KTESTCODEXTMUXMODE000000")
+    }
+
+    fn session_named(project_path: &Path, meta_session_id: &str) -> MetaSessionState {
         MetaSessionState {
-            meta_session_id: "01KTESTCODEXTMUXMODE000000".to_string(),
+            meta_session_id: meta_session_id.to_string(),
             project_path: project_path.to_string_lossy().into_owned(),
             created_at: chrono::Utc::now(),
             last_accessed: chrono::Utc::now(),
             ..Default::default()
         }
+    }
+
+    fn dump_gate_script(path: &Path) -> String {
+        format!(
+            r#"if [ "${{CSA_NO_POST_EXEC_GATE+x}}" = x ]; then printf 'set:%s\n' "$CSA_NO_POST_EXEC_GATE"; else printf 'unset\n'; fi > '{}'"#,
+            path.display()
+        )
+    }
+
+    fn read_gate_dump(path: &Path) -> String {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+            .trim()
+            .to_string()
+    }
+
+    struct RestoreTmuxGlobalGate {
+        previous: Option<String>,
+    }
+
+    impl Drop for RestoreTmuxGlobalGate {
+        fn drop(&mut self) {
+            let mut cmd = std::process::Command::new("tmux");
+            cmd.args(["set-environment", "-g"]);
+            match &self.previous {
+                Some(value) => {
+                    cmd.args([csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, value]);
+                }
+                None => {
+                    cmd.args(["-u", csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY]);
+                }
+            }
+            let _ = cmd.status();
+        }
+    }
+
+    fn poison_tmux_global_gate() -> RestoreTmuxGlobalGate {
+        let show = std::process::Command::new("tmux")
+            .args([
+                "show-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+            ])
+            .output()
+            .expect("tmux show-environment -g");
+        let previous = if show.status.success() {
+            let text = String::from_utf8_lossy(&show.stdout);
+            text.strip_prefix(&format!(
+                "{}=",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
+            ))
+            .map(|value| value.trim().to_string())
+        } else {
+            None
+        };
+        let status = std::process::Command::new("tmux")
+            .args([
+                "set-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+                "1",
+            ])
+            .status()
+            .expect("tmux set-environment -g poison");
+        assert!(status.success(), "failed to poison tmux global env");
+        RestoreTmuxGlobalGate { previous }
     }
 
     #[test]
@@ -161,5 +238,195 @@ mod tests {
         );
         assert!(args.iter().any(|arg| arg == "codex"));
         assert!(args.iter().any(|arg| arg == "exec"));
+    }
+
+    struct TmuxGateTestLock {
+        path: PathBuf,
+    }
+
+    impl Drop for TmuxGateTestLock {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+
+    fn lock_tmux_gate_test() -> TmuxGateTestLock {
+        let path = std::env::temp_dir().join("csa-tmux-no-post-exec-gate-test.lockdir");
+        for _ in 0..200 {
+            if std::fs::create_dir(&path).is_ok() {
+                return TmuxGateTestLock { path };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("timed out waiting for tmux gate test lock");
+    }
+
+    fn unique_session_id(tag: &str) -> String {
+        format!(
+            "01T{:08}{:010}{tag}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_millis()
+                % 10_000_000_000u128
+        )
+    }
+
+    async fn run_wrapped_dump(
+        session_id: &str,
+        no_post_exec_gate: bool,
+        dump: &Path,
+        session_dir: &Path,
+    ) -> String {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(dump_gate_script(dump));
+        cmd.env("CSA_SESSION_DIR", session_dir);
+        crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
+        let mut wrapped = wrap_codex_command_for_tmux(cmd, &session_named(session_dir, session_id));
+        wrapped.stdin(std::process::Stdio::null());
+        wrapped.stdout(std::process::Stdio::null());
+        wrapped.stderr(std::process::Stdio::null());
+        let status = tokio::time::timeout(std::time::Duration::from_secs(15), wrapped.status())
+            .await
+            .unwrap_or_else(|_| panic!("codex tmux wrap timed out for {session_id}"))
+            .expect("spawn wrapped dump");
+        assert!(
+            status.success(),
+            "wrapped dump failed for {session_id}: {status}"
+        );
+        read_gate_dump(dump)
+    }
+
+    async fn run_direct_tmux_dump(
+        session_name: &str,
+        no_post_exec_gate: bool,
+        dump: &Path,
+        work_dir: &Path,
+    ) -> String {
+        let work_dir_str = work_dir.to_str().expect("utf8 work_dir");
+        let dump_args = vec!["sh".to_string(), "-c".to_string(), dump_gate_script(dump)];
+        let inner = crate::executor::executor_env::tmux_inner_child_with_gate(
+            no_post_exec_gate,
+            &dump_args,
+        );
+        let mut cmd = crate::executor::executor_env::tmux_new_session_command(
+            session_name,
+            work_dir_str,
+            None,
+            no_post_exec_gate,
+            &inner,
+        );
+        let status = cmd.status().await.expect("direct tmux new-session");
+        assert!(status.success(), "direct tmux new-session failed: {status}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !dump.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let dump_value = read_gate_dump(dump);
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", session_name])
+            .status();
+        dump_value
+    }
+
+    fn global_gate_value() -> Option<String> {
+        let show = std::process::Command::new("tmux")
+            .args([
+                "show-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+            ])
+            .output()
+            .expect("tmux show-environment -g");
+        if !show.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&show.stdout);
+        text.strip_prefix(&format!(
+            "{}=",
+            csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
+        ))
+        .map(|value| value.trim().to_string())
+    }
+
+    #[tokio::test]
+    async fn tmux_inner_child_isolates_no_post_exec_gate_from_global_server_env() {
+        which::which("tmux").expect("tmux must be on PATH");
+        let _lock = lock_tmux_gate_test();
+        let started = std::process::Command::new("tmux")
+            .arg("start-server")
+            .status()
+            .expect("tmux start-server");
+        assert!(started.success(), "tmux start-server failed: {started}");
+        let _restore = poison_tmux_global_gate();
+        assert_eq!(global_gate_value().as_deref(), Some("1"));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work_dir = dir.path();
+
+        let enabled_direct = work_dir.join("enabled-direct");
+        let disabled_legacy = work_dir.join("disabled-legacy");
+        let disabled_direct = work_dir.join("disabled-direct");
+        let enabled_legacy = work_dir.join("enabled-legacy");
+        let disabled_legacy_fallback = work_dir.join("disabled-legacy-fallback");
+
+        assert_eq!(
+            run_direct_tmux_dump(
+                &format!("csa-{}", unique_session_id("ed")),
+                true,
+                &enabled_direct,
+                work_dir,
+            )
+            .await,
+            "set:1",
+            "enabled direct tmux inner child must have the gate flag"
+        );
+        assert_eq!(
+            global_gate_value().as_deref(),
+            Some("1"),
+            "direct tmux must not restore or rewrite the pre-existing global server env"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(&unique_session_id("dl"), false, &disabled_legacy, work_dir,).await,
+            "unset",
+            "disabled legacy Codex tmux inner child must not inherit a poisoned global flag"
+        );
+
+        assert_eq!(
+            run_direct_tmux_dump(
+                &format!("csa-{}", unique_session_id("dd")),
+                false,
+                &disabled_direct,
+                work_dir,
+            )
+            .await,
+            "unset",
+            "disabled direct tmux inner child must clear a poisoned global flag"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(&unique_session_id("el"), true, &enabled_legacy, work_dir,).await,
+            "set:1",
+            "enabled legacy Codex tmux inner child must bind the gate flag"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(
+                &unique_session_id("fb"),
+                false,
+                &disabled_legacy_fallback,
+                work_dir,
+            )
+            .await,
+            "unset",
+            "best-effort fallback uses the same wrap; inner child must stay isolated"
+        );
+        assert_eq!(
+            global_gate_value().as_deref(),
+            Some("1"),
+            "legacy Codex tmux must not leave CSA_NO_POST_EXEC_GATE in the global server env"
+        );
     }
 }
