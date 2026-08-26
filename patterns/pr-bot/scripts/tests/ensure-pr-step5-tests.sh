@@ -52,6 +52,7 @@ run_case() {
   local pr_title_mode="${12:-set}"
   local git_head_subject="${13-Fix 1171}"
   local pr_body_mode="${14:-set}"
+  local expected_pushes="${15:-1}"
   local case_dir="${TMP_ROOT}/${case_name}"
   local bin_dir="${case_dir}/bin"
   local stdout_file="${case_dir}/stdout.txt"
@@ -70,6 +71,7 @@ run_case() {
     export GIT_STUB_STATE_DIR="${case_dir}"
     export GIT_STUB_BRANCH_PUSHED="${branch_pushed}"
     export GIT_STUB_SOURCE_OWNER="test-owner"
+    export GIT_STUB_HEAD_SHA="reviewed-sha"
     export GIT_STUB_HEAD_SUBJECT="${git_head_subject}"
     export GH_STUB_STATE_DIR="${case_dir}"
     export GH_STUB_SCENARIO="${scenario}"
@@ -106,7 +108,7 @@ run_case() {
     exit 1
   fi
 
-  assert_file_value "${case_dir}/push-count" "1"
+  assert_file_value "${case_dir}/push-count" "${expected_pushes}"
   assert_file_value "${case_dir}/pr-create-count" "${expected_creates}"
 
   if [ "${expected_rc}" = "0" ]; then
@@ -122,7 +124,7 @@ run_case() {
 
 run_case "branch-unpushed-create" "false" "create-success" "0" "101" "1"
 run_case "branch-pushed-create" "true" "create-success" "0" "101" "1"
-run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0"
+run_case "lookup-hits-reuse" "true" "preexisting" "0" "202" "0" "" "fix/1171" "fix/1171" "test-owner:fix/1171" "Fix 1171" "set" "Fix 1171" "set" "0"
 run_case "lookup-hits-merged-noop" "true" "merged" "0" "909" "0"
 run_case "cross-owner-create" "true" "cross-owner" "0" "101" "1"
 run_case "unset-title-derives-head" "true" "create-success" "0" "101" "1" "PR_TITLE unset; using derived title: fix(pr-bot): derive title" "fix/1171" "fix/1171" "test-owner:fix/1171" "fix(pr-bot): derive title" "unset" "fix(pr-bot): derive title"

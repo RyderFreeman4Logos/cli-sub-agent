@@ -23,6 +23,11 @@ if [ "${1:-}" = "push" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "rev-parse" ] && [ "${2:-}" = "HEAD" ]; then
+  printf '%s\n' "${GIT_STUB_HEAD_SHA-reviewed-sha}"
+  exit 0
+fi
+
 if [ "${1:-}" = "log" ] && [ "${2:-}" = "-1" ] && [ "${3:-}" = "--pretty=%s" ]; then
   printf '%s\n' "${GIT_STUB_HEAD_SUBJECT-Fix 1171}"
   exit 0
