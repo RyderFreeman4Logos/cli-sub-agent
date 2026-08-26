@@ -52,7 +52,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
     echo "unexpected --state: ${state_arg}" >&2
     exit 1
   fi
-  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt" ]; then
+  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt,headRefOid" ]; then
     echo "unexpected --json: ${json_arg}" >&2
     exit 1
   fi
@@ -117,7 +117,7 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
     echo "unexpected pr view branch: ${branch_arg}" >&2
     exit 1
   fi
-  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt" ]; then
+  if [ "${json_arg}" != "number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt,headRefOid" ] && [ "${json_arg}" != "baseRefName,headRefName,headRepositoryOwner,headRefOid" ]; then
     echo "unexpected pr view --json: ${json_arg}" >&2
     exit 1
   fi
@@ -125,23 +125,23 @@ if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
   view_call="$(count_call pr-view)"
   case "${scenario}" in
     preexisting)
-      printf '{"number":202,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+      printf '{"number":202,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null,"headRefOid":"reviewed-sha"}\n'
       ;;
     merged)
-      printf '{"number":909,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"MERGED","mergedAt":"2026-05-22T21:19:08Z"}\n'
+      printf '{"number":909,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"MERGED","mergedAt":"2026-05-22T21:19:08Z","headRefOid":"old-sha"}\n'
       ;;
     closed)
-      printf '{"number":410,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"CLOSED","mergedAt":null}\n'
+      printf '{"number":410,"baseRefName":"main","headRefName":"fix/1171","headRepositoryOwner":{"login":"test-owner"},"state":"CLOSED","mergedAt":null,"headRefOid":"old-sha"}\n'
       ;;
     create-success)
       if [ -f "${state_dir}/pr-create-count" ] && [ "${view_call}" -ge 2 ]; then
-        printf '{"number":101,"baseRefName":"main","headRefName":"%s","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n' "${expected_list_head}"
+        printf '{"number":101,"baseRefName":"main","headRefName":"%s","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null,"headRefOid":"reviewed-sha"}\n' "${expected_list_head}"
       else
         exit 1
       fi
       ;;
     quoted-branch)
-      printf '{"number":707,"baseRefName":"main","headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null}\n'
+      printf '{"number":707,"baseRefName":"main","headRefName":"feat/has\\"quote","headRepositoryOwner":{"login":"test-owner"},"state":"OPEN","mergedAt":null,"headRefOid":"old-sha"}\n'
       ;;
     *)
       exit 1

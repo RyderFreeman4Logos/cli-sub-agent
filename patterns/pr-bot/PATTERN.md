@@ -252,15 +252,7 @@ if [ -z "${PR_TITLE}" ]; then
   PR_TITLE="$(derive_default_pr_title)"
   echo "INFO: PR_TITLE unset; using derived title: ${PR_TITLE}" >&2
 fi
-# --- Early-push detection: warn if branch was already pushed before review ---
-if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
-  echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
-  echo "Unreviewed code may have been visible to CI/reviewers. Continuing with force-push of reviewed code."
-fi
-
-CSA_SKIP_REVIEW_CHECK=1 \
-CSA_SKIP_REVIEW_CHECK_REASON="pr-bot initial branch push for CI/review" \
-  git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+REVIEWED_SHA="$(git rev-parse HEAD)"
 ORIGIN_URL="$(git remote get-url --push "${REMOTE_NAME}")"
 SOURCE_OWNER="$(
   printf '%s\n' "${ORIGIN_URL}" | sed -nE \
@@ -271,12 +263,34 @@ SOURCE_OWNER="$(
 if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view "${REPO_SLUG}" --json owner -q '.owner.login')"
 fi
+EXISTING_PR_SHA="$(
+  gh pr view "${WORKFLOW_BRANCH}" \
+    --repo "${REPO_SLUG}" \
+    --json baseRefName,headRefName,headRepositoryOwner,headRefOid 2>/dev/null \
+  | jq -r \
+      --arg base "${DEFAULT_BRANCH}" --arg branch "${WORKFLOW_BRANCH}" --arg owner "${SOURCE_OWNER}" \
+      'select(.baseRefName == $base and .headRefName == $branch and .headRepositoryOwner.login == $owner) | .headRefOid // empty' \
+    2>/dev/null || true
+ )"
+if [ "${EXISTING_PR_SHA}" = "${REVIEWED_SHA}" ]; then
+  echo "Using existing PR at reviewed SHA ${REVIEWED_SHA}; skipping redundant push."
+else
+  # --- Early-push detection: warn if branch was already pushed before review ---
+  if git ls-remote --heads "${REMOTE_NAME}" "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
+    echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
+    echo "Unreviewed code may have been visible to CI/reviewers. Continuing with force-push of reviewed code."
+  fi
+
+  CSA_SKIP_REVIEW_CHECK=1 \
+  CSA_SKIP_REVIEW_CHECK_REASON="pr-bot initial branch push for CI/review" \
+    git push --force-with-lease -u "${REMOTE_NAME}" "${WORKFLOW_BRANCH}"
+fi
 resolve_branch_pr_record() {
   local lookup status pr_num pr_state pr_merged_at
   lookup="$(
     gh pr view "${WORKFLOW_BRANCH}" \
       --repo "${REPO_SLUG}" \
-      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt,headRefOid \
       2>/dev/null \
     | jq -r \
         --arg base "${DEFAULT_BRANCH}" \
@@ -302,7 +316,7 @@ resolve_branch_pr_record() {
       --base "${DEFAULT_BRANCH}" \
       --state all \
       --head "${WORKFLOW_BRANCH}" \
-      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt \
+      --json number,baseRefName,headRefName,headRepositoryOwner,state,mergedAt,headRefOid \
       2>/dev/null \
     | jq -r \
         --arg base "${DEFAULT_BRANCH}" \
