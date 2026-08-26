@@ -20,7 +20,7 @@ count=$((count + 1))
 printf '%s' "${count}" >"${count_file}"
 
 if [ "${count}" -eq 1 ]; then
-  echo "CSA:SESSION_WAIT_KV_WARM"
+  echo '<!-- CSA:SESSION_WAIT_KV_WARM session=test-session status=alive elapsed=0s action=re-wait -->'
 else
   echo "terminal result"
 fi
