@@ -67,7 +67,7 @@ fn require_commit_recovery_rejects_multi_record_marker_as_probe_uncertainty() {
                 sa_mode: false,
                 require_commit: true,
                 changed_paths: Some(&["tracked.txt".to_string()]),
-                commit_created: Some(false),
+                commit_created: None,
                 large_diff_config: &RunLargeDiffWarningConfig::default(),
             },
         );

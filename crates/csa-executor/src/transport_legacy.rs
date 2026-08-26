@@ -1,5 +1,6 @@
 use super::*;
 use crate::executor::executor_env;
+use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -35,6 +36,29 @@ struct LegacyAttemptEnv<'a> {
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
+    }
+
+    pub(crate) async fn normalize_tmux_server_env(no_post_exec_gate: bool) -> Result<()> {
+        let start_server = tokio::process::Command::new("tmux")
+            .arg("start-server")
+            .status()
+            .await
+            .context("tmux start-server")?;
+        if !start_server.success() {
+            anyhow::bail!("tmux start-server exited with {start_server}");
+        }
+        let mut server_env = tokio::process::Command::new("tmux");
+        server_env.args(["set-environment", "-g"]);
+        if no_post_exec_gate {
+            server_env.args([csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "1"]);
+        } else {
+            server_env.args(["-u", csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY]);
+        }
+        let status = server_env.status().await.context("tmux set-environment")?;
+        if !status.success() {
+            anyhow::bail!("tmux set-environment exited with {status}");
+        }
+        Ok(())
     }
 
     pub(super) fn should_retry_gemini_rate_limited(
@@ -188,20 +212,19 @@ impl LegacyTransport {
             .then(|| executor.antigravity_settings_guard())
             .transpose()?
             .flatten();
-        let (cmd, stdin_data) = if let Some(contract) = clean_contract {
+        let (mut cmd, stdin_data) = if let Some(contract) = clean_contract {
             executor.build_clean_command(prompt, tool_state, contract)?
         } else {
-            let (mut cmd, stdin_data) = executor.build_command_with_git_push_allowed(
+            executor.build_command_with_git_push_allowed(
                 prompt,
                 tool_state,
                 session,
                 attempt_env.extra_env,
                 options.subtree_pin.as_ref(),
                 options.allow_git_push,
-            );
-            executor_env::apply_no_post_exec_gate(&mut cmd, options.no_post_exec_gate);
-            (cmd, stdin_data)
+            )
         };
+        executor_env::apply_no_post_exec_gate(&mut cmd, options.no_post_exec_gate);
 
         let gemini_sandbox_plan = options
             .sandbox

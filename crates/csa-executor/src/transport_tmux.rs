@@ -415,6 +415,8 @@ impl TmuxTransport {
         }
         crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
 
+        crate::transport::LegacyTransport::normalize_tmux_server_env(no_post_exec_gate).await?;
+
         let status = cmd.status().await.context("tmux new-session")?;
         if !status.success() {
             bail!("tmux new-session exited with {status}");

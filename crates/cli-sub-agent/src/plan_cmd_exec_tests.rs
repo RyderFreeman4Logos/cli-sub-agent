@@ -286,6 +286,31 @@ fn next_csa_depth_increments_or_defaults() {
 
 const PIN_SPEC: &str = "codex/openai/gpt-5.5/xhigh";
 
+#[test]
+fn spawn_bash_env_reapplies_no_post_exec_gate_without_stale_normal_value() {
+    let gated = crate::startup_env::StartupSubtreeEnv::from_values(HashMap::from([(
+        csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+        "1".to_string(),
+    )]));
+    let mut gated_cmd = tokio::process::Command::new("bash");
+    gated_cmd.env(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "spoofed");
+    apply_startup_child_contract_env(&mut gated_cmd, &gated);
+    assert_eq!(
+        recorded_env(&gated_cmd).get(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY),
+        Some(&Some("1".to_string()))
+    );
+
+    let normal = crate::startup_env::StartupSubtreeEnv::default();
+    let mut normal_cmd = tokio::process::Command::new("bash");
+    normal_cmd.env(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "1");
+    apply_startup_child_contract_env(&mut normal_cmd, &normal);
+    assert_eq!(
+        recorded_env(&normal_cmd).get(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY),
+        Some(&None),
+        "a normal plan bash step must not retain a stale no-post-exec-gate flag"
+    );
+}
+
 /// Inspect the explicit env overrides recorded on a `tokio::process::Command`.
 /// `env_remove(k)` is recorded as `(k, None)`; `env(k, v)` as `(k, Some(v))`.
 fn recorded_env(

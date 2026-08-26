@@ -260,9 +260,6 @@ impl StartupSubtreeEnv {
         if self.pattern_internal {
             vars.push((CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string()));
         }
-        if self.no_post_exec_gate {
-            vars.push((CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(), "1".to_string()));
-        }
         vars
     }
 
@@ -289,6 +286,9 @@ impl StartupSubtreeEnv {
             CSA_PARENT_MODEL_PROVIDER_ENV_KEY,
             &self.parent_model_provider,
         );
+        if self.no_post_exec_gate {
+            vars.push((CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(), "1".to_string()));
+        }
         let inherited_model_pin = crate::run_cmd_model_pin::inherited_model_pin_from_startup(self);
         if let Some(pin) =
             crate::run_cmd_model_pin::inherited_subtree_model_pin(inherited_model_pin.as_ref())

@@ -60,13 +60,7 @@ pub(super) fn contract_failure_reason_with_state(
 pub(super) fn persisted_contract_failure_reason(
     recovery: &csa_session::RequireCommitRecoveryDiagnostic,
 ) -> &'static str {
-    if recovery.commit_created.is_none() && recovery.dirty_worktree {
-        super::REQUIRE_COMMIT_REASON
-    } else if recovery.suggested_recovery_action == PARTIAL_COMMIT_PLUS_DIRTY_WORK {
-        super::REQUIRE_COMMIT_PARTIAL_REASON
-    } else if recovery.suggested_recovery_action == TRACKED_DIRTY_WORK_WITHOUT_COMMIT {
-        super::REQUIRE_COMMIT_DIRTY_REASON
-    } else if recovery.suggested_recovery_action
+    if recovery.suggested_recovery_action
         == super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
     {
         SANDBOX_HOOK_PROBE_REASON
@@ -74,6 +68,12 @@ pub(super) fn persisted_contract_failure_reason(
         == super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
     {
         super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+    } else if recovery.commit_created.is_none() && recovery.dirty_worktree {
+        super::REQUIRE_COMMIT_REASON
+    } else if recovery.suggested_recovery_action == PARTIAL_COMMIT_PLUS_DIRTY_WORK {
+        super::REQUIRE_COMMIT_PARTIAL_REASON
+    } else if recovery.suggested_recovery_action == TRACKED_DIRTY_WORK_WITHOUT_COMMIT {
+        super::REQUIRE_COMMIT_DIRTY_REASON
     } else if recovery.dirty_worktree && recovery.commit_created == Some(true) {
         super::REQUIRE_COMMIT_PARTIAL_REASON
     } else if recovery.dirty_worktree {

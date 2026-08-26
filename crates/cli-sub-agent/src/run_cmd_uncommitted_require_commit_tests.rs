@@ -496,6 +496,12 @@ fn no_post_exec_gate_propagates_to_nested_csa_invocations() {
             .contains(&("CSA_NO_POST_EXEC_GATE".to_string(), "1".to_string())),
         "the parent no-post-exec-gate flag must reach nested CSA processes"
     );
+    assert!(
+        startup
+            .to_csa_child_contract_env_vars()
+            .contains(&("CSA_NO_POST_EXEC_GATE".to_string(), "1".to_string())),
+        "the child-contract env must carry the parent no-post-exec-gate flag"
+    );
 }
 
 fn session_result(status: &str, exit_code: i32) -> csa_session::SessionResult {
