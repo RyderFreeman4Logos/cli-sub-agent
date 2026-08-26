@@ -141,7 +141,7 @@ fn require_commit_recovery_diagnostic_preserves_signal_exit_and_sanitized_paths(
         .require_commit_recovery
         .expect("recovery diagnostic should be attached");
     assert!(persisted.require_commit);
-    assert!(!persisted.commit_created);
+    assert_eq!(persisted.commit_created, Some(false));
     assert!(persisted.dirty_worktree);
     assert_eq!(persisted.termination_status, "signal");
     assert_eq!(persisted.exit_code, 143);

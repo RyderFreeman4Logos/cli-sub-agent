@@ -277,6 +277,7 @@ echo "ok persistent"
                     thinking_budget: None,
                     subtree_pin: None,
                     allow_git_push: false,
+                    no_post_exec_gate: false,
                     cancellation: None,
                 },
             )
@@ -345,7 +346,7 @@ fn test_build_env_codex_strips_lefthook_bypass_env_only_for_codex() {
         ("SAFE_ENV".to_string(), "ok".to_string()),
     ]);
 
-    let env = transport.build_env(&session, Some(&extra), None, false);
+    let env = transport.build_env(&session, Some(&extra), None, false, false);
 
     assert!(!env.contains_key("LEFTHOOK"));
     assert!(!env.contains_key("LEFTHOOK_SKIP_PRE_COMMIT"));
@@ -367,7 +368,7 @@ fn test_build_env_non_codex_preserves_lefthook_bypass_env() {
         ("LEFTHOOK_SKIP_PRE_COMMIT".to_string(), "1".to_string()),
     ]);
 
-    let env = transport.build_env(&session, Some(&extra), None, false);
+    let env = transport.build_env(&session, Some(&extra), None, false, false);
 
     assert_eq!(env.get("LEFTHOOK").map(String::as_str), Some("0"));
     assert_eq!(
@@ -731,6 +732,7 @@ fn test_acp_build_env_injects_parent_session_dir_for_child_sessions() {
             "/tmp/spoofed-parent-session-dir".to_string(),
         )])),
         None,
+        false,
         false,
     );
 

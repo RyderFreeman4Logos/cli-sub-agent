@@ -52,6 +52,14 @@ pub(crate) fn apply_git_push_authorization(cmd: &mut Command, allow_git_push: bo
     }
 }
 
+/// Apply CSA's trusted post-execution-gate decision after generic env scrubbing.
+pub(crate) fn apply_no_post_exec_gate(cmd: &mut Command, no_post_exec_gate: bool) {
+    cmd.env_remove(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY);
+    if no_post_exec_gate {
+        cmd.env(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "1");
+    }
+}
+
 pub(crate) fn inject_git_guard_env(cmd: &mut Command) {
     let mut guard_env = HashMap::new();
     for key in ["PATH", "CSA_SESSION_DIR"] {

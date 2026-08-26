@@ -268,6 +268,7 @@ impl Transport for AcpTransport {
                 thinking_budget: None,
                 subtree_pin: subtree_pin.cloned(),
                 allow_git_push,
+                no_post_exec_gate: false,
                 cancellation: None,
             },
         )

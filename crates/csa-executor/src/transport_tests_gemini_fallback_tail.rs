@@ -66,6 +66,7 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 

@@ -16,7 +16,7 @@ fn build_result_json_payload_includes_require_commit_recovery() {
             require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
                 sa_mode: Some(false),
-                commit_created: false,
+                commit_created: Some(false),
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string()],
                 changed_paths_truncated: 0,
@@ -70,7 +70,7 @@ fn build_result_json_payload_with_identity_includes_require_commit_recovery_guid
             require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
                 sa_mode: Some(false),
-                commit_created: false,
+                commit_created: Some(false),
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string()],
                 changed_paths_truncated: 0,

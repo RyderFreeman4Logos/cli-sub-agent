@@ -369,7 +369,8 @@ async fn prepare_session_runtime_inner(
     );
     execute_options = execute_options
         .with_subtree_pin(input.subtree_pin.cloned())
-        .with_git_push_allowed(input.allow_git_push);
+        .with_git_push_allowed(input.allow_git_push)
+        .with_no_post_exec_gate(input.startup_env.no_post_exec_gate());
     apply_transport_failover_overrides(
         &mut execute_options,
         (!merged_env.is_empty()).then_some(&merged_env),

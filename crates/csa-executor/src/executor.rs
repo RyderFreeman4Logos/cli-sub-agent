@@ -461,6 +461,7 @@ impl Executor {
             thinking_budget: self.thinking_budget().cloned(),
             subtree_pin: options.subtree_pin.clone(),
             allow_git_push: options.allow_git_push,
+            no_post_exec_gate: options.no_post_exec_gate,
             cancellation: options.cancellation.clone(),
         };
         if options

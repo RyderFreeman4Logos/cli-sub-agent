@@ -88,7 +88,7 @@ fn require_commit_recovery(
     csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
         sa_mode: Some(true),
-        commit_created,
+        commit_created: Some(commit_created),
         dirty_worktree,
         changed_paths: Vec::new(),
         changed_paths_truncated: 0,

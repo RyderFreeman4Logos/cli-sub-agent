@@ -367,6 +367,7 @@ impl TmuxTransport {
         extra_env: Option<&HashMap<String, String>>,
         model_override: Option<&str>,
         thinking_budget: Option<&crate::model_spec::ThinkingBudget>,
+        no_post_exec_gate: bool,
     ) -> Result<()> {
         let work_dir_str = work_dir.to_str().context("work_dir is not valid UTF-8")?;
         let claude_bin = Self::resolve_claude_binary()?;
@@ -412,6 +413,7 @@ impl TmuxTransport {
                 cmd.env(k, v);
             }
         }
+        crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
 
         let status = cmd.status().await.context("tmux new-session")?;
         if !status.success() {
@@ -454,7 +456,7 @@ impl TmuxTransport {
         idle_timeout_seconds: u64,
         session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
-        let (subtree_pin, allow_git_push) = trust;
+        let (subtree_pin, allow_git_push, no_post_exec_gate) = trust;
         let session_name = Self::session_name();
         let prompt_file_path = prompt_file_path_for_session(&session_name);
         tracing::debug!(
@@ -558,6 +560,7 @@ impl TmuxTransport {
             Some(&merged_env),
             model_override,
             thinking_budget,
+            no_post_exec_gate,
         )
         .await?;
         // RAII guard: kills the session when this function exits (normal or panic).
@@ -672,7 +675,11 @@ impl Transport for TmuxTransport {
             prompt,
             &work_dir,
             extra_env,
-            (options.subtree_pin.as_ref(), options.allow_git_push),
+            (
+                options.subtree_pin.as_ref(),
+                options.allow_git_push,
+                options.no_post_exec_gate,
+            ),
             options.idle_timeout_seconds,
             Some(session),
         )
@@ -694,7 +701,7 @@ impl Transport for TmuxTransport {
             prompt,
             work_dir,
             extra_env,
-            (subtree_pin, allow_git_push),
+            (subtree_pin, allow_git_push, false),
             idle_timeout_seconds,
             None,
         )
@@ -707,7 +714,7 @@ impl Transport for TmuxTransport {
     }
 }
 
-type TmuxTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool);
+type TmuxTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool, bool);
 
 // ── csa gc integration ────────────────────────────────────────────────────────
 

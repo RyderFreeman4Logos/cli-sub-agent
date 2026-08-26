@@ -277,14 +277,14 @@ fn test_acp_build_env_propagates_extra_env() {
 
     let mut extra = HashMap::new();
     extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-    let env = transport.build_env(&session, Some(&extra), None, false);
+    let env = transport.build_env(&session, Some(&extra), None, false, false);
     assert_eq!(
         env.get("CSA_SUPPRESS_NOTIFY"),
         Some(&"1".to_string()),
         "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
     );
 
-    let env_no_extra = transport.build_env(&session, None, None, false);
+    let env_no_extra = transport.build_env(&session, None, None, false, false);
     assert_eq!(
         env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
         None,
@@ -329,7 +329,7 @@ fn test_acp_build_env_includes_csa_session_dir() {
         identity_version: 1,
     };
 
-    let env = transport.build_env(&session, None, None, false);
+    let env = transport.build_env(&session, None, None, false, false);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present in env");
@@ -401,7 +401,7 @@ fn test_acp_build_env_reserved_session_paths_override_extra_env() {
         "/tmp/fake-session/result.toml".to_string(),
     );
 
-    let env = transport.build_env(&session, Some(&extra), None, false);
+    let env = transport.build_env(&session, Some(&extra), None, false, false);
     let session_dir = env
         .get("CSA_SESSION_DIR")
         .expect("CSA_SESSION_DIR should be present");
@@ -706,57 +706,5 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
     );
 }
 
-#[tokio::test]
-async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
-    let (temp, env, model_log_path) = setup_fake_gemini_environment(99);
-    let transport = LegacyTransport::new(Executor::GeminiCli {
-        model_override: None,
-        thinking_budget: None,
-    });
-    let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
-    let options = TransportOptions {
-        stream_mode: StreamMode::BufferOnly,
-        idle_timeout_seconds: 30,
-        acp_crash_max_attempts: 2,
-        initial_response_timeout: super::ResolvedTimeout(None),
-        liveness_dead_seconds: 30,
-        stdin_write_timeout_seconds: 30,
-        acp_init_timeout_seconds: 30,
-        termination_grace_period_seconds: 1,
-        output_spool: None,
-        output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
-        output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
-        error_marker_scan_enabled: true,
-        setting_sources: None,
-        sandbox: None,
-        thinking_budget: None,
-        subtree_pin: None,
-        allow_git_push: false,
-        cancellation: None,
-    };
-
-    let result = transport
-        .execute("test retry loop", None, &session, Some(&env), options)
-        .await
-        .expect("execute should return final failed attempt result");
-
-    assert_ne!(result.execution.exit_code, 0);
-    assert!(
-        result.execution.stderr_output.contains("Too Many Requests"),
-        "unexpected stderr: {}",
-        result.execution.stderr_output
-    );
-    let models = read_model_log(&model_log_path);
-    // All transport retry phases preserve the configured model.
-    assert_eq!(
-        models,
-        vec![
-            "inherit".to_string(),
-            "inherit".to_string(),
-            "inherit".to_string()
-        ],
-        "retry loop should stop after 3 attempts"
-    );
-}
-
+include!("transport_tests_tail_max_attempts.rs");
 include!("transport_tests_tail_retry.rs");

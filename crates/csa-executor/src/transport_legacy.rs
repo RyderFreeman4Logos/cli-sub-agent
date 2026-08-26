@@ -1,4 +1,5 @@
 use super::*;
+use crate::executor::executor_env;
 
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -106,6 +107,7 @@ impl LegacyTransport {
                 request.extra_env,
                 request.subtree_pin,
                 request.allow_git_push,
+                false,
             );
         let spawn_options = SpawnOptions {
             stdin_write_timeout: std::time::Duration::from_secs(
@@ -189,14 +191,16 @@ impl LegacyTransport {
         let (cmd, stdin_data) = if let Some(contract) = clean_contract {
             executor.build_clean_command(prompt, tool_state, contract)?
         } else {
-            executor.build_command_with_git_push_allowed(
+            let (mut cmd, stdin_data) = executor.build_command_with_git_push_allowed(
                 prompt,
                 tool_state,
                 session,
                 attempt_env.extra_env,
                 options.subtree_pin.as_ref(),
                 options.allow_git_push,
-            )
+            );
+            executor_env::apply_no_post_exec_gate(&mut cmd, options.no_post_exec_gate);
+            (cmd, stdin_data)
         };
 
         let gemini_sandbox_plan = options
@@ -281,16 +285,15 @@ impl LegacyTransport {
                 tracing::warn!(
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
-                let fallback_cmd = executor
-                    .build_command_with_git_push_allowed(
-                        prompt,
-                        tool_state,
-                        session,
-                        attempt_env.extra_env,
-                        options.subtree_pin.as_ref(),
-                        options.allow_git_push,
-                    )
-                    .0;
+                let (mut fallback_cmd, _) = executor.build_command_with_git_push_allowed(
+                    prompt,
+                    tool_state,
+                    session,
+                    attempt_env.extra_env,
+                    options.subtree_pin.as_ref(),
+                    options.allow_git_push,
+                );
+                executor_env::apply_no_post_exec_gate(&mut fallback_cmd, options.no_post_exec_gate);
                 let child =
                     spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options.clone())
                         .await?;

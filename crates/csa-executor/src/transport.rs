@@ -260,6 +260,7 @@ impl AcpTransport {
             extra_env,
             options.subtree_pin.as_ref(),
             options.allow_git_push,
+            options.no_post_exec_gate,
         );
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());

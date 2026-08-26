@@ -93,7 +93,7 @@ fn require_commit_with_commit_created_and_dirty_tracked_work_fails() {
         .require_commit_recovery
         .expect("dirty tracked work should be a require-commit contract failure");
     assert!(recovery.require_commit);
-    assert!(recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(true));
     assert!(recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
     assert_eq!(
@@ -171,7 +171,7 @@ fn require_commit_without_created_commit_and_dirty_tracked_work_has_consistent_s
             sa_mode: false,
             require_commit: true,
             changed_paths: Some(&["seed.txt".to_string()]),
-            commit_created: Some(false),
+            commit_created: None,
             large_diff_config: &RunLargeDiffWarningConfig::default(),
         },
     );
@@ -181,12 +181,16 @@ fn require_commit_without_created_commit_and_dirty_tracked_work_has_consistent_s
         .expect("result should exist");
     assert_eq!(
         loaded.summary,
-        "require-commit contract failed: tracked dirty work remains without a qualifying commit"
+        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+    );
+    assert_eq!(
+        execution.summary,
+        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
     );
     let recovery = loaded
         .require_commit_recovery
         .expect("dirty tracked work should have recovery details");
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, None);
     assert!(recovery.dirty_worktree);
     assert_eq!(
         recovery.suggested_recovery_action,
@@ -238,7 +242,7 @@ fn require_commit_with_commit_created_fails_when_clean_tree_probe_is_unknown() {
     let recovery = loaded
         .require_commit_recovery
         .expect("unverified clean tree should be a require-commit contract failure");
-    assert!(recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(true));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     let blocker = recovery
@@ -288,7 +292,7 @@ fn require_commit_without_created_commit_fails_successful_self_report() {
         .require_commit_recovery
         .expect("require-commit failure should be machine-readable");
     assert!(recovery.require_commit);
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     assert_eq!(recovery.blocker_summary.as_deref(), Some("summary=done"));
@@ -352,7 +356,7 @@ fn require_commit_fails_closed_after_sandbox_hook_preserving_staged_tree() {
         .require_commit_recovery
         .expect("explicit require-commit must fail closed in sa-mode");
     assert!(recovery.require_commit);
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
     assert!(
@@ -471,7 +475,7 @@ fn require_commit_recovery_does_not_label_untracked_scratch_as_tracked_dirty() {
     let recovery = loaded
         .require_commit_recovery
         .expect("missing commit should be a require-commit contract failure");
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     let uncommitted = loaded
