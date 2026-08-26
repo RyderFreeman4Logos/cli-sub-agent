@@ -49,6 +49,7 @@ pub(crate) async fn handle_skill_run(
     } else {
         Some(prompt.join(" "))
     };
+    let no_post_exec_gate = startup_env.no_post_exec_gate();
 
     goal_loop::handle_run_or_goal(goal_loop::GoalRunRequest {
         goal_criteria: None,
@@ -102,7 +103,7 @@ pub(crate) async fn handle_skill_run(
         error_marker_scan_override: None,
         no_hook_bypass_scan: false,
         no_preflight: false,
-        no_post_exec_gate: false,
+        no_post_exec_gate,
         require_commit: false,
         allow_git_push: false,
         extra_writable: vec![],

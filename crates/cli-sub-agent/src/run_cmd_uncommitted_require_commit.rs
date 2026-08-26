@@ -8,6 +8,8 @@ use std::time::Duration;
 const SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES: usize = 1024;
 const REQUIRE_COMMIT_GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const SANDBOX_HOOK_PROBE_REASON: &str = "require-commit blocked: sandbox hook failure state could not be verified; staged tree preserved for host recovery";
+const PARTIAL_COMMIT_PLUS_DIRTY_WORK: &str = "partial_commit_plus_dirty_work";
+const TRACKED_DIRTY_WORK_WITHOUT_COMMIT: &str = "tracked_dirty_work_without_qualifying_commit";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum SandboxHookProbeState<'a> {
@@ -39,10 +41,30 @@ pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'sta
     }
 }
 
+pub(super) fn contract_failure_reason_with_state(
+    state: SandboxHookProbeState<'_>,
+    commit_created: bool,
+    dirty_worktree: bool,
+) -> &'static str {
+    if dirty_worktree && matches!(state, SandboxHookProbeState::Clear) {
+        if commit_created {
+            super::REQUIRE_COMMIT_PARTIAL_REASON
+        } else {
+            super::REQUIRE_COMMIT_DIRTY_REASON
+        }
+    } else {
+        contract_failure_reason(state)
+    }
+}
+
 pub(super) fn persisted_contract_failure_reason(
     recovery: &csa_session::RequireCommitRecoveryDiagnostic,
 ) -> &'static str {
-    if recovery.suggested_recovery_action
+    if recovery.suggested_recovery_action == PARTIAL_COMMIT_PLUS_DIRTY_WORK {
+        super::REQUIRE_COMMIT_PARTIAL_REASON
+    } else if recovery.suggested_recovery_action == TRACKED_DIRTY_WORK_WITHOUT_COMMIT {
+        super::REQUIRE_COMMIT_DIRTY_REASON
+    } else if recovery.suggested_recovery_action
         == super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
     {
         SANDBOX_HOOK_PROBE_REASON
@@ -190,14 +212,24 @@ pub(super) fn build_recovery_diagnostic_for_state(
             clean_tree_verification_failure,
             sandbox_hook_state,
         ),
-        suggested_recovery_action: match sandbox_hook_state {
-            SandboxHookProbeState::Uncertain(_) => {
-                super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
+        suggested_recovery_action: if changes.is_some()
+            && matches!(sandbox_hook_state, SandboxHookProbeState::Clear)
+        {
+            if commit_created {
+                PARTIAL_COMMIT_PLUS_DIRTY_WORK
+            } else {
+                TRACKED_DIRTY_WORK_WITHOUT_COMMIT
             }
-            SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
-                super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+        } else {
+            match sandbox_hook_state {
+                SandboxHookProbeState::Uncertain(_) => {
+                    super::REQUIRE_COMMIT_SANDBOX_HOOK_PROBE_RECOVERY_ACTION
+                }
+                SandboxHookProbeState::Blocked | SandboxHookProbeState::Retryable => {
+                    super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
+                }
+                SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_RECOVERY_ACTION,
             }
-            SandboxHookProbeState::Clear => super::REQUIRE_COMMIT_RECOVERY_ACTION,
         }
         .to_string(),
     }

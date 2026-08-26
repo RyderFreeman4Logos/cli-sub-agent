@@ -8,6 +8,8 @@ use csa_core::env::{
     STARTUP_SUBTREE_ENV_KEYS,
 };
 
+pub(crate) const CSA_NO_POST_EXEC_GATE_ENV_KEY: &str = "CSA_NO_POST_EXEC_GATE";
+
 const CSA_CHILD_CONTRACT_ENV_KEYS: &[&str] = &[
     CSA_SESSION_ID_ENV_KEY,
     CSA_SESSION_DIR_ENV_KEY,
@@ -33,6 +35,7 @@ pub(crate) struct StartupSubtreeEnv {
     model_spec: Option<String>,
     force_ignore_tier_setting: bool,
     no_failover: bool,
+    no_post_exec_gate: bool,
     raw_session_id: Option<String>,
     raw_depth: Option<String>,
     raw_project_root: Option<String>,
@@ -71,6 +74,7 @@ pub(crate) static EMPTY_STARTUP_SUBTREE_ENV: StartupSubtreeEnv = StartupSubtreeE
     model_spec: None,
     force_ignore_tier_setting: false,
     no_failover: false,
+    no_post_exec_gate: false,
     raw_session_id: None,
     raw_depth: None,
     raw_project_root: None,
@@ -93,6 +97,9 @@ impl StartupSubtreeEnv {
         // outside STARTUP_SUBTREE_ENV_KEYS — read it explicitly here (#1847).
         if let Ok(value) = std::env::var(CSA_PATTERN_INTERNAL_ENV_KEY) {
             values.insert(CSA_PATTERN_INTERNAL_ENV_KEY, value);
+        }
+        if let Ok(value) = std::env::var(CSA_NO_POST_EXEC_GATE_ENV_KEY) {
+            values.insert(CSA_NO_POST_EXEC_GATE_ENV_KEY, value);
         }
         Self::from_values(values)
     }
@@ -128,6 +135,9 @@ impl StartupSubtreeEnv {
         let no_failover = raw_no_failover
             .as_ref()
             .is_some_and(|value| is_truthy_env_value(value));
+        let no_post_exec_gate = values
+            .get(CSA_NO_POST_EXEC_GATE_ENV_KEY)
+            .is_some_and(|value| is_truthy_env_value(value));
 
         Self {
             session_id: non_empty(raw_session_id.as_ref()),
@@ -142,6 +152,7 @@ impl StartupSubtreeEnv {
             model_spec: non_empty(raw_model_spec.as_ref()),
             force_ignore_tier_setting,
             no_failover,
+            no_post_exec_gate,
             raw_session_id,
             raw_depth,
             raw_project_root,
@@ -211,6 +222,15 @@ impl StartupSubtreeEnv {
         self
     }
 
+    pub(crate) fn with_no_post_exec_gate(mut self, enabled: bool) -> Self {
+        self.no_post_exec_gate = enabled;
+        self
+    }
+
+    pub(crate) fn no_post_exec_gate(&self) -> bool {
+        self.no_post_exec_gate
+    }
+
     pub(crate) fn trusted_inherited_model_pin(&self) -> Option<(&str, bool, bool)> {
         self.trusted_inherited_model_pin.as_ref().map(|pin| {
             (
@@ -243,6 +263,9 @@ impl StartupSubtreeEnv {
         // CSA process inherits the scan-default suppression (#1847).
         if self.pattern_internal {
             vars.push((CSA_PATTERN_INTERNAL_ENV_KEY.to_string(), "1".to_string()));
+        }
+        if self.no_post_exec_gate {
+            vars.push((CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(), "1".to_string()));
         }
         vars
     }

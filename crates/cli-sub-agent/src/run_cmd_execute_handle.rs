@@ -98,6 +98,8 @@ pub(crate) async fn handle_run(
     extra_readable: Vec<PathBuf>,
     startup_env: StartupSubtreeEnv,
 ) -> Result<i32> {
+    let no_post_exec_gate = no_post_exec_gate || startup_env.no_post_exec_gate();
+    let startup_env = startup_env.with_no_post_exec_gate(no_post_exec_gate);
     let cli_model_spec_explicit = model_spec.is_some();
     let cli_model_explicit = model.is_some();
     let cli_thinking_explicit = thinking.is_some();

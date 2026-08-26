@@ -194,6 +194,12 @@ async fn prepare_session_runtime_inner(
             pattern_internal: input.startup_env.pattern_internal(),
             allow_git_push: input.allow_git_push,
         });
+    if input.startup_env.no_post_exec_gate() {
+        merged_env.insert(
+            crate::startup_env::CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(),
+            "1".to_string(),
+        );
+    }
     input
         .resource_overrides
         .apply_to_child_env(&mut merged_env)?;

@@ -10,6 +10,10 @@ use tracing::warn;
 const MAX_UNCOMMITTED_FILES: usize = 20;
 const REQUIRE_COMMIT_REASON: &str =
     "require-commit contract failed: no qualifying commit or tracked dirty work remains";
+const REQUIRE_COMMIT_PARTIAL_REASON: &str =
+    "require-commit contract failed: partial_commit_plus_dirty_work";
+const REQUIRE_COMMIT_DIRTY_REASON: &str =
+    "require-commit contract failed: tracked dirty work remains without a qualifying commit";
 const REQUIRE_COMMIT_SANDBOX_HOOK_REASON: &str = "require-commit blocked: mandatory hook-enabled commit failed in the filesystem sandbox; staged tree preserved for host recovery";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
 const REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION: &str = "run_hook_enabled_commit_outside_sandbox";
@@ -241,6 +245,8 @@ fn record_writer_uncommitted_changes_with_config(
                 result,
                 sandbox_hook_state,
                 preserved_summary.as_deref(),
+                commit_created,
+                dirty_tracked_changes.is_some(),
             );
         }
         return warning;
@@ -336,6 +342,8 @@ fn record_writer_uncommitted_changes_with_config(
             result,
             sandbox_hook_state,
             preserved_summary.as_deref(),
+            commit_created,
+            dirty_tracked_changes.is_some(),
         );
     }
     warning

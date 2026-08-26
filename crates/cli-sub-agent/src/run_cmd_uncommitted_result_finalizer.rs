@@ -82,9 +82,15 @@ pub(super) fn mark_require_commit_contract_failure(
     result: &mut csa_process::ExecutionResult,
     sandbox_hook_state: require_commit::SandboxHookProbeState<'_>,
     preserved_summary: Option<&str>,
+    commit_created: bool,
+    dirty_worktree: bool,
 ) {
     result.mark_gate_failure("writer-uncommitted");
-    let reason = require_commit::contract_failure_reason(sandbox_hook_state);
+    let reason = require_commit::contract_failure_reason_with_state(
+        sandbox_hook_state,
+        commit_created,
+        dirty_worktree,
+    );
     result.summary = preserved_summary.unwrap_or(reason).to_string();
     if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
         result.stderr_output.push('\n');
