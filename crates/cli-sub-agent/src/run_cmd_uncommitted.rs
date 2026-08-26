@@ -212,9 +212,9 @@ fn record_writer_uncommitted_changes_with_config(
     let warning = changes
         .as_ref()
         .and_then(|changes| large_diff_warning_report(changes, record.large_diff_config));
-    let commit_created = record.commit_created.unwrap_or(false);
+    let commit_created = record.commit_created;
     let require_commit_contract_failure = record.require_commit
-        && (!commit_created
+        && (!commit_created.unwrap_or(false)
             || dirty_tracked_probe
                 .as_ref()
                 .is_some_and(|probe| !probe.is_clean()));
@@ -266,7 +266,7 @@ fn record_writer_uncommitted_changes_with_config(
                 require_commit::build_recovery_diagnostic_for_state(
                     &session_result,
                     contract_changes,
-                    commit_created,
+                    record.commit_created,
                     result.csa_gate_failure.as_deref(),
                     clean_tree_verification_failure,
                     Some(record.sa_mode),
@@ -357,7 +357,7 @@ fn build_require_commit_recovery_diagnostic(
     require_commit::build_recovery_diagnostic_for_state(
         result,
         Some(changes),
-        false,
+        None,
         None,
         None,
         Some(false),

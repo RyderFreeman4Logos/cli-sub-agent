@@ -33,7 +33,7 @@ pub(super) fn apply_uncommitted_changes_to_result_with_preserved_summary(
             require_commit::build_recovery_diagnostic_for_state(
                 result,
                 result.uncommitted_changes.as_ref(),
-                false,
+                None,
                 None,
                 None,
                 None,
@@ -82,7 +82,7 @@ pub(super) fn mark_require_commit_contract_failure(
     result: &mut csa_process::ExecutionResult,
     sandbox_hook_state: require_commit::SandboxHookProbeState<'_>,
     preserved_summary: Option<&str>,
-    commit_created: bool,
+    commit_created: Option<bool>,
     dirty_worktree: bool,
 ) {
     result.mark_gate_failure("writer-uncommitted");

@@ -563,7 +563,7 @@ async fn require_commit_gate_failure_preserves_structured_evidence() {
     assert_eq!(execution.exit_code, 1);
     assert_eq!(
         persisted_result(project_dir.path(), &session_id).summary,
-        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+        "require-commit contract failed: tracked dirty work remains without a qualifying commit"
     );
     // No employee sections seeded: exercises the branch that CREATES summary.md
     // with the banner when the employee emitted none.

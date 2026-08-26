@@ -43,14 +43,14 @@ pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'sta
 
 pub(super) fn contract_failure_reason_with_state(
     state: SandboxHookProbeState<'_>,
-    commit_created: bool,
+    commit_created: Option<bool>,
     dirty_worktree: bool,
 ) -> &'static str {
     if dirty_worktree && matches!(state, SandboxHookProbeState::Clear) {
-        if commit_created {
-            super::REQUIRE_COMMIT_PARTIAL_REASON
-        } else {
-            super::REQUIRE_COMMIT_DIRTY_REASON
+        match commit_created {
+            Some(true) => super::REQUIRE_COMMIT_PARTIAL_REASON,
+            Some(false) => super::REQUIRE_COMMIT_DIRTY_REASON,
+            None => super::REQUIRE_COMMIT_REASON,
         }
     } else {
         contract_failure_reason(state)
@@ -172,7 +172,7 @@ fn bound_redacted_one_line(value: &str, max_chars: usize) -> String {
 pub(super) fn build_recovery_diagnostic_for_state(
     result: &csa_session::SessionResult,
     changes: Option<&csa_session::UncommittedChanges>,
-    commit_created: bool,
+    commit_created: Option<bool>,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
     sa_mode: Option<bool>,
@@ -186,7 +186,7 @@ pub(super) fn build_recovery_diagnostic_for_state(
     csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
         sa_mode,
-        commit_created,
+        commit_created: commit_created.unwrap_or(false),
         dirty_worktree: changes.is_some(),
         changed_paths: changes
             .map(|changes| {
@@ -215,10 +215,10 @@ pub(super) fn build_recovery_diagnostic_for_state(
         suggested_recovery_action: if changes.is_some()
             && matches!(sandbox_hook_state, SandboxHookProbeState::Clear)
         {
-            if commit_created {
-                PARTIAL_COMMIT_PLUS_DIRTY_WORK
-            } else {
-                TRACKED_DIRTY_WORK_WITHOUT_COMMIT
+            match commit_created {
+                Some(true) => PARTIAL_COMMIT_PLUS_DIRTY_WORK,
+                Some(false) => TRACKED_DIRTY_WORK_WITHOUT_COMMIT,
+                None => super::REQUIRE_COMMIT_RECOVERY_ACTION,
             }
         } else {
             match sandbox_hook_state {
