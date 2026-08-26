@@ -105,7 +105,7 @@ fn apply_uncommitted_changes_require_commit_flips_to_failure() {
 
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);
-    assert_eq!(result.summary, REQUIRE_COMMIT_REASON);
+    assert_eq!(result.summary, REQUIRE_COMMIT_DIRTY_REASON);
     assert!(result.uncommitted_changes.is_some());
 }
 
