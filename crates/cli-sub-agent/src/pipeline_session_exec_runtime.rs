@@ -196,7 +196,7 @@ async fn prepare_session_runtime_inner(
         });
     if input.startup_env.no_post_exec_gate() {
         merged_env.insert(
-            crate::startup_env::CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(),
+            csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(),
             "1".to_string(),
         );
     }

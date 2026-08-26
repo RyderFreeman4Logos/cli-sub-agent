@@ -98,7 +98,7 @@ fn require_commit_with_commit_created_and_dirty_tracked_work_fails() {
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
     assert_eq!(
         recovery.suggested_recovery_action,
-        "partial_commit_plus_dirty_work"
+        "inspect_changed_paths_then_commit_or_revert"
     );
     assert_eq!(
         recovery.blocker_summary.as_deref(),
@@ -190,7 +190,7 @@ fn require_commit_without_created_commit_and_dirty_tracked_work_has_consistent_s
     assert!(recovery.dirty_worktree);
     assert_eq!(
         recovery.suggested_recovery_action,
-        "tracked_dirty_work_without_qualifying_commit"
+        "inspect_changed_paths_then_commit_or_revert"
     );
 }
 

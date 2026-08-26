@@ -308,6 +308,16 @@ fn startup_subtree_env_with_current_session_does_not_self_parent() {
 }
 
 #[test]
+fn startup_subtree_env_apply_to_child_env_strips_spoofed_post_exec_gate() {
+    let startup = StartupSubtreeEnv::default();
+    let mut env = HashMap::from([(CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(), "1".to_string())]);
+
+    startup.apply_to_child_env(&mut env);
+
+    assert!(!env.contains_key(CSA_NO_POST_EXEC_GATE_ENV_KEY));
+}
+
+#[test]
 #[serial]
 fn startup_capture_preserves_subtree_keys_in_process_env() {
     let _depth = ScopedEnvVarRestore::set(CSA_DEPTH_ENV_KEY, "2");

@@ -49,6 +49,9 @@ pub const CSA_PARENT_SESSION_ID_ENV_KEY: &str = "CSA_PARENT_SESSION_ID";
 /// Marker that a nested execution command was spawned by CSA itself.
 pub const CSA_INTERNAL_INVOCATION_ENV_KEY: &str = "CSA_INTERNAL_INVOCATION";
 
+/// Whether a trusted CSA parent disables the post-execution gate.
+pub const CSA_NO_POST_EXEC_GATE_ENV_KEY: &str = "CSA_NO_POST_EXEC_GATE";
+
 /// Typed explicit-resource snapshot inherited by a nested CSA invocation.
 ///
 /// Intentionally not part of [`STARTUP_SUBTREE_ENV_KEYS`]: the run pipeline
@@ -314,10 +317,10 @@ pub const CSA_PARENT_SESSION_DIR_ENV_KEY: &str = "CSA_PARENT_SESSION_DIR";
 
 /// CSA-owned subtree context env keys captured at CLI startup.
 ///
-/// These keys describe the caller/session subtree and the trusted model-pin
-/// reservation. A child process may receive them from its CSA parent. The CLI
-/// freezes them into its startup snapshot, and leaf tool subprocess builders
-/// scrub ambient copies before applying fresh per-session values.
+/// These keys describe the caller/session subtree and trusted model-pin or
+/// execution-control reservations. A child process may receive them from its
+/// CSA parent. The CLI freezes them into its startup snapshot, and leaf tool
+/// subprocess builders scrub ambient copies before applying fresh per-session values.
 pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
     CSA_SESSION_ID_ENV_KEY,
     CSA_DEPTH_ENV_KEY,
@@ -331,6 +334,7 @@ pub const STARTUP_SUBTREE_ENV_KEYS: &[&str] = &[
     CSA_MODEL_SPEC_ENV_KEY,
     CSA_FORCE_IGNORE_TIER_SETTING_ENV_KEY,
     CSA_NO_FAILOVER_ENV_KEY,
+    CSA_NO_POST_EXEC_GATE_ENV_KEY,
 ];
 
 /// Return true when `key` belongs to the startup subtree contract.
