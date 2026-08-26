@@ -31,7 +31,11 @@ while true; do
     printf '%s\n' "${wait_output}"
   fi
 
-  if [ "${wait_rc}" -eq 124 ] || [[ "${wait_output}" == *"CSA:SESSION_WAIT_KV_WARM"* ]]; then
+  if printf '%s\n' "${wait_output}" | grep -Eq '^<!-- CSA:SESSION_WAIT_COMPLETED .* -->$'; then
+    exit "${wait_rc}"
+  fi
+
+  if printf '%s\n' "${wait_output}" | grep -Eq '^<!-- CSA:SESSION_WAIT_KV_WARM .* status=alive .* -->$'; then
     echo "INFO: session ${session_id} is still running after one wait window; retrying." >&2
     continue
   fi

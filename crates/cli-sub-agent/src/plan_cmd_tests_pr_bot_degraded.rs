@@ -148,16 +148,17 @@ async fn execute_pr_bot_local_review_reuses_exact_pass_after_newer_stale_pass() 
 }
 
 #[tokio::test]
-async fn execute_pr_bot_local_review_rejects_cd_without_pr_bot_pattern() {
+async fn execute_pr_bot_local_review_uses_workflow_helpers_outside_pattern_checkout() {
     let tmp = tempfile::tempdir().unwrap();
     let current_head = "abcdef1234567890abcdef1234567890abcdef12";
     let csa_called_path = install_pr_bot_local_review_stubs(tmp.path(), current_head);
+    write_native_review_bypass_artifact(tmp.path(), current_head);
     std::fs::remove_dir_all(tmp.path().join("patterns")).unwrap();
     let vars = pr_bot_local_review_vars(tmp.path(), &csa_called_path);
     let (variables, steps) =
         pr_bot_plan_steps_by_title(&["Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"]);
     let plan = ExecutionPlan {
-        name: "pr-bot-missing-pattern".into(),
+        name: "pr-bot-external-repo".into(),
         description: String::new(),
         variables,
         steps,
@@ -165,20 +166,12 @@ async fn execute_pr_bot_local_review_rejects_cd_without_pr_bot_pattern() {
 
     let results = execute_plan(&plan, &vars, tmp.path(), None, None)
         .await
-        .expect("missing-pattern path should return a failed step");
+        .expect("workflow helpers should run outside the pattern checkout");
 
-    assert_ne!(results[0].exit_code, 0, "missing pattern must fail closed");
+    assert_eq!(results[0].exit_code, 0, "external target repo should pass");
     assert!(
         !csa_called_path.exists(),
-        "missing pattern must not launch a review against the wrong checkout"
-    );
-    assert!(
-        results[0]
-            .stderr
-            .as_deref()
-            .unwrap_or("")
-            .contains("run from the checkout that contains patterns/pr-bot"),
-        "missing pattern error must identify the required checkout"
+        "current-head native evidence should avoid a new review"
     );
 }
 

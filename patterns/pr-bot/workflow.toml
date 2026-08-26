@@ -635,10 +635,6 @@ Review default-branch diff; reuse prior CSA review only on exact HEAD match.
 
 ```bash
 set -euo pipefail
-if [ ! -d "patterns/pr-bot" ]; then
-  echo "ERROR: run from the checkout that contains patterns/pr-bot" >&2
-  exit 2
-fi
 if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
   CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
 else

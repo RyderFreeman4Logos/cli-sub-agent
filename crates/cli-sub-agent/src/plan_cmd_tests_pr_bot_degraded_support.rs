@@ -425,3 +425,47 @@ pub(super) fn pr_bot_local_review_vars(
     );
     vars
 }
+
+#[test]
+fn session_wait_helper_prefers_terminal_carrier_over_live_marker_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bin_dir = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let calls_path = tmp.path().join("calls");
+    write_executable(
+        &bin_dir.join("csa"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+calls=0
+if [ -f "${TEST_CSA_CALLS}" ]; then calls="$(cat "${TEST_CSA_CALLS}")"; fi
+calls=$((calls + 1))
+printf '%s' "${calls}" > "${TEST_CSA_CALLS}"
+if [ "${calls}" -eq 1 ]; then
+  echo 'Summary mentions CSA:SESSION_WAIT_KV_WARM but this session is terminal.'
+  echo '<!-- CSA:SESSION_WAIT_COMPLETED session=01ARZ3NDEKTSV4RRFFQ69G5FAV status=failed exit=7 synthetic=false -->'
+  exit 7
+fi
+exit 99
+"#,
+    );
+
+    let existing_path = std::env::var("PATH").unwrap_or_default();
+    let status = status_with_timeout(
+        {
+            let mut command = Command::new("bash");
+            command
+                .arg(
+                    workspace_root().join("patterns/pr-bot/scripts/csa/session-wait-until-done.sh"),
+                )
+                .arg("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+                .env("CSA_MODEL_PROVIDER", "openai")
+                .env("PATH", format!("{}:{existing_path}", bin_dir.display()))
+                .env("TEST_CSA_CALLS", &calls_path);
+            command
+        },
+        Duration::from_secs(5),
+    );
+
+    assert_eq!(status.code(), Some(7));
+    assert_eq!(std::fs::read_to_string(calls_path).unwrap(), "1");
+}
