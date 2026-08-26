@@ -164,6 +164,15 @@ impl Drop for TestConnectionGuard {
     }
 }
 
+async fn wait_for_test_future<F, T>(label: &str, timeout: Duration, future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| format!("{label} timed out after {timeout:?}"))
+}
+
 #[cfg(target_os = "linux")]
 struct CpuBoundChildFixture {
     _temp_dir: tempfile::TempDir,
@@ -200,10 +209,14 @@ impl CpuBoundChildFixture {
             .expect("release CPU-bound child into its load loop");
 
         let mut started = [0];
-        tokio::time::timeout(Duration::from_secs(5), control.read_exact(&mut started))
-            .await
-            .expect("CPU-bound child did not begin its load loop")
-            .expect("read CPU-bound child load-loop acknowledgement");
+        wait_for_test_future(
+            "CPU-bound child load-loop acknowledgement",
+            Duration::from_secs(5),
+            control.read_exact(&mut started),
+        )
+        .await
+        .expect("CPU-bound child did not begin its load loop")
+        .expect("read CPU-bound child load-loop acknowledgement");
         assert_eq!(started, [1], "unexpected CPU-bound child load-loop acknowledgement");
     }
 }
@@ -234,11 +247,15 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
 
 #[cfg(target_os = "linux")]
 async fn wait_for_cpu_fixture_connection(listener: &UnixListener) -> UnixStream {
-    tokio::time::timeout(Duration::from_secs(5), listener.accept())
-        .await
-        .expect("CPU-bound child did not reach its control handshake")
-        .expect("accept CPU-bound child control connection")
-        .0
+    wait_for_test_future(
+        "CPU-bound child control handshake",
+        Duration::from_secs(5),
+        listener.accept(),
+    )
+    .await
+    .expect("CPU-bound child did not reach its control handshake")
+    .expect("accept CPU-bound child control connection")
+    .0
 }
 
 fn append_test_stderr_tail(stderr_buf: &mut String, chunk: &str) {
@@ -369,6 +386,19 @@ async fn build_test_connection(
             ..AcpConnectionOptions::default()
         },
     }))
+}
+
+#[tokio::test]
+async fn bounded_test_wait_returns_success_before_deadline() {
+    assert_eq!(wait_for_test_future("successful fixture", Duration::ZERO, async { 7 }).await.unwrap(), 7);
+}
+
+#[tokio::test]
+async fn bounded_test_wait_reports_context_on_timeout() {
+    let error = wait_for_test_future("stalled fixture", Duration::ZERO, std::future::pending::<()>())
+        .await
+        .unwrap_err();
+    assert_eq!(error, "stalled fixture timed out after 0ns");
 }
 
 #[test]
@@ -605,16 +635,20 @@ async fn idle_timeout_still_fires_for_alive_child_with_no_cpu_progress() {
         .await
         .expect("new session");
 
-    let result = connection
-        .prompt_with_io(
+    let result = wait_for_test_future(
+        "idle-timeout ACP prompt",
+        Duration::from_secs(10),
+        connection.prompt_with_io(
             &session_id,
             "ping",
             Duration::from_millis(150),
             None,
             PromptIoOptions::default(),
-        )
-        .await
-        .expect("prompt returns timeout result");
+        ),
+    )
+    .await
+    .expect("idle-timeout ACP prompt must finish")
+    .expect("prompt returns timeout result");
 
     assert!(result.timed_out, "sleeping child must remain killable");
     assert_eq!(result.exit_reason.as_deref(), Some("idle_timeout"));
@@ -636,16 +670,20 @@ async fn initial_response_timeout_fires_when_only_protocol_notifications() {
         .await
         .expect("new session");
 
-    let result = connection
-        .prompt_with_io(
+    let result = wait_for_test_future(
+        "initial-response protocol-only ACP prompt",
+        Duration::from_secs(10),
+        connection.prompt_with_io(
             &session_id,
             "ping",
             Duration::from_secs(5),
             Some(Duration::from_millis(150)),
             PromptIoOptions::default(),
-        )
-        .await
-        .expect("prompt result");
+        ),
+    )
+    .await
+    .expect("initial-response protocol-only ACP prompt must finish")
+    .expect("prompt result");
 
     assert!(result.timed_out, "protocol-only chatter must trip the watchdog");
     assert_eq!(
