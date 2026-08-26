@@ -105,7 +105,7 @@ fn apply_uncommitted_changes_require_commit_flips_to_failure() {
 
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);
-    assert_eq!(result.summary, REQUIRE_COMMIT_DIRTY_REASON);
+    assert_eq!(result.summary, REQUIRE_COMMIT_REASON);
     assert!(result.uncommitted_changes.is_some());
 }
 
@@ -141,7 +141,7 @@ fn require_commit_recovery_diagnostic_preserves_signal_exit_and_sanitized_paths(
         .require_commit_recovery
         .expect("recovery diagnostic should be attached");
     assert!(persisted.require_commit);
-    assert_eq!(persisted.commit_created, Some(false));
+    assert_eq!(persisted.commit_created, None);
     assert!(persisted.dirty_worktree);
     assert_eq!(persisted.termination_status, "signal");
     assert_eq!(persisted.exit_code, 143);
