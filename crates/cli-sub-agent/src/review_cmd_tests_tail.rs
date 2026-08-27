@@ -337,6 +337,7 @@ fn test_build_review_instruction_basic() {
 fn test_build_review_instruction_with_context() {
     let context = ResolvedReviewContext {
         path: "/path/to/TODO.md".to_string(),
+        digest: "sha256:1234".to_string(),
         kind: ResolvedReviewContextKind::TodoMarkdown,
     };
     let result = build_review_instruction(

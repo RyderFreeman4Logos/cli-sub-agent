@@ -137,6 +137,7 @@ fn resolve_review_context_explicit_spec_still_parses_when_auto_discovery_disable
         .unwrap();
 
     assert_eq!(context.path, spec_path.display().to_string());
+    assert!(context.digest.starts_with("sha256:"));
     assert!(matches!(
         context.kind,
         ResolvedReviewContextKind::SpecToml { .. }

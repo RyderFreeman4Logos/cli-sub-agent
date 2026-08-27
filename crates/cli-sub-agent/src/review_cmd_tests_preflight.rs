@@ -117,6 +117,32 @@ fn review_invalid_tier_is_rejected_before_session_creation() {
 }
 
 #[test]
+fn review_context_outside_workspace_is_rejected_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let context_path = outside_dir.path().join("context.md");
+    std::fs::write(&context_path, "mandatory context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--context", context_path.to_str().unwrap()],
+    );
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("outside review context must fail before provider launch");
+
+    assert!(format!("{error:#}").contains("outside the project workspace"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn review_host_memory_admission_is_rejected_before_session_creation() {
     let project_dir = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);

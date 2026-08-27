@@ -395,7 +395,10 @@ fn build_review_instruction_without_design_anchor(
         "\nUNAVAILABLE means infrastructure/tool failure (for example quota/auth/network), not low confidence; use UNCERTAIN for insufficient context. Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.",
     );
     if let Some(ctx) = context {
-        instruction.push_str(&format!(" context={}", ctx.path));
+        instruction.push_str(&format!(
+            " context={} context_digest={}",
+            ctx.path, ctx.digest
+        ));
         if let ResolvedReviewContextKind::SpecToml { spec } = &ctx.kind {
             instruction.push_str(
                 "\nSpec alignment context (parsed from spec.toml; use this criteria set directly):\n",

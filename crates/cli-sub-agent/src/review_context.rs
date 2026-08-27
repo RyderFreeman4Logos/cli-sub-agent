@@ -1,8 +1,11 @@
-use std::path::Path;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use csa_session::{Finding, ReviewSessionMeta, Severity};
 use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager};
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::review_session_findings::read_session_findings_or_fall_back;
@@ -17,6 +20,7 @@ pub(crate) enum ResolvedReviewContextKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedReviewContext {
     pub(crate) path: String,
+    pub(crate) digest: String,
     pub(crate) kind: ResolvedReviewContextKind,
 }
 
@@ -26,7 +30,7 @@ pub(crate) fn resolve_review_context(
     allow_auto_discovery: bool,
 ) -> Result<Option<ResolvedReviewContext>> {
     match requested_context {
-        Some(path) => Ok(Some(resolve_explicit_review_context(path)?)),
+        Some(path) => Ok(Some(resolve_explicit_review_context(path, project_root)?)),
         None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
         None => Ok(None),
     }
@@ -42,25 +46,59 @@ pub(crate) fn validate_review_prompt_file(path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_explicit_review_context(path: &str) -> Result<ResolvedReviewContext> {
-    let path_ref = Path::new(path);
+fn resolve_explicit_review_context(
+    path: &str,
+    project_root: &Path,
+) -> Result<ResolvedReviewContext> {
+    let (path_ref, digest) = admit_review_context(Path::new(path), project_root)?;
 
-    match csa_core::spec_validate::validate_spec(path_ref) {
-        Ok(spec_path) => return load_spec_review_context(&spec_path),
+    match csa_core::spec_validate::validate_spec(&path_ref) {
+        Ok(spec_path) => return load_spec_review_context(&spec_path, digest),
         Err(csa_core::spec_validate::SpecValidationError::InvalidExtension { .. }) => {}
         Err(error) => return Err(error.into()),
     }
 
-    let kind = if has_extension(path_ref, "md") {
+    let kind = if has_extension(&path_ref, "md") {
         ResolvedReviewContextKind::TodoMarkdown
     } else {
         ResolvedReviewContextKind::Passthrough
     };
 
     Ok(ResolvedReviewContext {
-        path: path.to_string(),
+        path: path_ref.display().to_string(),
+        digest,
         kind,
     })
+}
+
+fn admit_review_context(path: &Path, project_root: &Path) -> Result<(PathBuf, String)> {
+    let project_root = project_root
+        .canonicalize()
+        .context("--context: failed to resolve project root")?;
+    let requested = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    };
+    let metadata = std::fs::symlink_metadata(&requested)
+        .with_context(|| format!("--context: failed to inspect '{}'", path.display()))?;
+    if !metadata.file_type().is_file() {
+        anyhow::bail!(
+            "--context: '{}' must be a regular, non-symlink file",
+            path.display()
+        );
+    }
+    let resolved = requested
+        .canonicalize()
+        .with_context(|| format!("--context: failed to resolve '{}'", path.display()))?;
+    if !resolved.starts_with(&project_root) {
+        anyhow::bail!(
+            "--context: '{}' is outside the project workspace; copy it into the project and retry",
+            path.display()
+        );
+    }
+
+    Ok((resolved.clone(), digest_review_context_file(&resolved)?))
 }
 
 fn auto_discover_review_context(project_root: &Path) -> Option<ResolvedReviewContext> {
@@ -99,10 +137,10 @@ pub(crate) fn discover_review_context_for_branch(
         return Ok(None);
     }
 
-    load_spec_review_context(&spec_path).map(Some)
+    load_spec_review_context(&spec_path, digest_review_context_file(&spec_path)?).map(Some)
 }
 
-fn load_spec_review_context(path: &Path) -> Result<ResolvedReviewContext> {
+fn load_spec_review_context(path: &Path, digest: String) -> Result<ResolvedReviewContext> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read spec context: {}", path.display()))?;
     let spec: SpecDocument = toml::from_str(&content)
@@ -110,8 +148,26 @@ fn load_spec_review_context(path: &Path) -> Result<ResolvedReviewContext> {
 
     Ok(ResolvedReviewContext {
         path: path.display().to_string(),
+        digest,
         kind: ResolvedReviewContextKind::SpecToml { spec },
     })
+}
+
+fn digest_review_context_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("--context: failed to read '{}'", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .with_context(|| format!("--context: failed to read '{}'", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 fn current_git_branch(project_root: &Path) -> Option<String> {
