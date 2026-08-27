@@ -1,4 +1,5 @@
 use super::*;
+use crate::executor::executor_env;
 
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -199,7 +200,7 @@ impl LegacyTransport {
                 options.allow_git_push,
             )
         };
-        cmd.env_remove(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY);
+        executor_env::apply_no_post_exec_gate(&mut cmd, options.no_post_exec_gate);
 
         let gemini_sandbox_plan = options
             .sandbox
@@ -291,7 +292,7 @@ impl LegacyTransport {
                     options.subtree_pin.as_ref(),
                     options.allow_git_push,
                 );
-                fallback_cmd.env_remove(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY);
+                executor_env::apply_no_post_exec_gate(&mut fallback_cmd, options.no_post_exec_gate);
                 let child =
                     spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options.clone())
                         .await?;

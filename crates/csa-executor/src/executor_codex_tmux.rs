@@ -168,6 +168,7 @@ mod tests {
                 Ok(Some(_)) | Err(_) => return,
                 Ok(None) if std::time::Instant::now() >= deadline => {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return;
                 }
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
