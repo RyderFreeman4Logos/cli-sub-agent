@@ -39,6 +39,7 @@ fn clean_environment_rejects_invalid_and_reserved_entries() {
         ("BAD\0KEY", "value"),
         ("BAD_VALUE", "bad\0value"),
         (csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true"),
+        (csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, "1"),
         (csa_core::env::CSA_MODEL_SPEC_ENV_KEY, "model"),
     ] {
         let error = CleanEnvironment::try_new(Map::from([(key.to_string(), value.to_string())]))
