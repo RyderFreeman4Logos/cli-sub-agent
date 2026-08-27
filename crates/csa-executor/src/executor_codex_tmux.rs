@@ -152,11 +152,40 @@ mod tests {
         }
     }
 
-    fn dump_gate_script(path: &Path) -> String {
+    fn dump_gate_script(path: &Path, ready_token: Option<&str>) -> String {
+        let ready_signal = ready_token
+            .map(|token| format!("; tmux wait-for -S '{token}'"))
+            .unwrap_or_default();
         format!(
-            r#"if [ "${{CSA_NO_POST_EXEC_GATE+x}}" = x ]; then printf 'set:%s\n' "$CSA_NO_POST_EXEC_GATE"; else printf 'unset\n'; fi > '{}'"#,
+            r#"if [ "${{CSA_NO_POST_EXEC_GATE+x}}" = x ]; then printf 'set:%s\n' "$CSA_NO_POST_EXEC_GATE"; else printf 'unset\n'; fi > '{}'{ready_signal}"#,
             path.display()
         )
+    }
+
+    async fn wait_for_tmux_event(tmux_tmpdir: &Path, token: &str) {
+        let mut wait = Command::new("tmux");
+        wait.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args(["wait-for", token]);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), wait.status())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for tmux event {token}"))
+            .unwrap_or_else(|err| panic!("wait for tmux event {token}: {err}"));
+        assert!(status.success(), "tmux wait-for {token} failed: {status}");
+    }
+
+    struct TmuxServerCleanup {
+        tmux_tmpdir: PathBuf,
+    }
+
+    impl Drop for TmuxServerCleanup {
+        fn drop(&mut self) {
+            let mut kill = std::process::Command::new("tmux");
+            kill.env("TMUX_TMPDIR", &self.tmux_tmpdir)
+                .env_remove("TMUX")
+                .arg("kill-server");
+            let _ = kill.status();
+        }
     }
 
     fn read_gate_dump(path: &Path) -> String {
@@ -295,7 +324,7 @@ mod tests {
         tmux_tmpdir: &Path,
     ) -> String {
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(dump_gate_script(dump));
+        cmd.arg("-c").arg(dump_gate_script(dump, None));
         cmd.env("CSA_SESSION_DIR", session_dir);
         cmd.env("TMUX_TMPDIR", tmux_tmpdir).env_remove("TMUX");
         crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
@@ -321,8 +350,13 @@ mod tests {
         work_dir: &Path,
         tmux_tmpdir: &Path,
     ) -> String {
+        let ready_token = format!("csa-tmux-inner-ready-{session_name}");
         let work_dir_str = work_dir.to_str().expect("utf8 work_dir");
-        let dump_args = vec!["sh".to_string(), "-c".to_string(), dump_gate_script(dump)];
+        let dump_args = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            dump_gate_script(dump, Some(&ready_token)),
+        ];
         let inner = crate::executor::executor_env::tmux_inner_child_with_gate(
             no_post_exec_gate,
             &dump_args,
@@ -337,10 +371,7 @@ mod tests {
         cmd.env("TMUX_TMPDIR", tmux_tmpdir).env_remove("TMUX");
         let status = cmd.status().await.expect("direct tmux new-session");
         assert!(status.success(), "direct tmux new-session failed: {status}");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !dump.exists() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        wait_for_tmux_event(tmux_tmpdir, &ready_token).await;
         let dump_value = read_gate_dump(dump);
         let _ = std::process::Command::new("tmux")
             .env("TMUX_TMPDIR", tmux_tmpdir)
@@ -378,14 +409,21 @@ mod tests {
         let _lock = lock_tmux_gate_test();
         let tmux_tmpdir = tempfile::tempdir().expect("tmux tempdir");
         let dir = tempfile::tempdir().expect("tempdir");
+        let _cleanup = TmuxServerCleanup {
+            tmux_tmpdir: tmux_tmpdir.path().to_path_buf(),
+        };
+        let fixture_ready = "csa-tmux-gate-fixture-ready";
         let started = std::process::Command::new("tmux")
             .env("TMUX_TMPDIR", tmux_tmpdir.path())
             .env_remove("TMUX")
             .args(["new-session", "-d", "-s", "csa-tmux-gate-fixture", "-c"])
             .arg(dir.path())
+            .args(["--", "sh", "-c"])
+            .arg(format!("tmux wait-for -S '{fixture_ready}'; exec sh"))
             .status()
             .expect("tmux new-session");
         assert!(started.success(), "tmux new-session failed: {started}");
+        wait_for_tmux_event(tmux_tmpdir.path(), fixture_ready).await;
         let _restore = poison_tmux_global_gate(tmux_tmpdir.path());
         assert_eq!(global_gate_value(tmux_tmpdir.path()).as_deref(), Some("1"));
 
