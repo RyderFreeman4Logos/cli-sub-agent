@@ -10,7 +10,9 @@ pub(crate) fn format_require_commit_recovery_lines(
         format!(
             "Require-commit recovery: CONTRACT FAILURE; dirty_tracked_worktree={} commit_created={} changed_paths={}{}",
             diagnostic.dirty_worktree,
-            diagnostic.commit_created,
+            diagnostic
+                .commit_created
+                .map_or("unknown", |created| if created { "true" } else { "false" }),
             diagnostic.changed_paths.len(),
             format_termination_suffix(diagnostic)
         ),
@@ -143,17 +145,14 @@ fn format_changed_paths(paths: &[String], truncated: usize) -> String {
 }
 
 fn recovery_note(diagnostic: &csa_session::RequireCommitRecoveryDiagnostic) -> String {
-    if diagnostic.dirty_worktree && !diagnostic.commit_created {
-        return "Work was applied but not committed; use fork-from to continue from this session before changing the worktree.".to_string();
+    match (diagnostic.dirty_worktree, diagnostic.commit_created) {
+        (true, Some(false)) => "Work was applied but not committed; use fork-from to continue from this session before changing the worktree.".to_string(),
+        (true, None) => "Worktree changes remain, but commit state could not be verified; use fork-from to inspect and continue this session before changing the worktree.".to_string(),
+        (true, Some(true)) => "Additional tracked work remains uncommitted after the session commit; use fork-from to inspect and finish it.".to_string(),
+        (false, Some(false)) => "No commit satisfying --require-commit was recorded; use fork-from to inspect and continue this session.".to_string(),
+        (false, None) => "Commit state could not be verified; use fork-from to inspect and continue this session.".to_string(),
+        (false, Some(true)) => "The require-commit contract failed; use fork-from to inspect and continue this session.".to_string(),
     }
-    if diagnostic.dirty_worktree {
-        return "Additional tracked work remains uncommitted after the session commit; use fork-from to inspect and finish it.".to_string();
-    }
-    if !diagnostic.commit_created {
-        return "No commit satisfying --require-commit was recorded; use fork-from to inspect and continue this session.".to_string();
-    }
-    "The require-commit contract failed; use fork-from to inspect and continue this session."
-        .to_string()
 }
 
 fn continuation_prompt_guidance(
@@ -197,7 +196,7 @@ mod tests {
             &csa_session::RequireCommitRecoveryDiagnostic {
                 require_commit: true,
                 sa_mode: Some(false),
-                commit_created: false,
+                commit_created: Some(false),
                 dirty_worktree: true,
                 changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
                 changed_paths_truncated: 1,
@@ -240,7 +239,7 @@ mod tests {
         let mut diagnostic = csa_session::RequireCommitRecoveryDiagnostic {
             require_commit: true,
             sa_mode: Some(false),
-            commit_created: false,
+            commit_created: Some(false),
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string()],
             changed_paths_truncated: 0,

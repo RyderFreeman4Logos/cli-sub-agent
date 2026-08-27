@@ -58,6 +58,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::executor::Executor;
+use crate::executor::executor_env;
 
 use super::{
     ResolvedTimeout, SandboxTransportConfig, Transport, TransportCapabilities, TransportMode,
@@ -133,7 +134,7 @@ impl ClaudeCodeCliTransport {
         extra_env: Option<&HashMap<String, String>>,
         trust: CommandTrustOptions<'_>,
     ) -> Command {
-        let (subtree_pin, allow_git_push) = trust;
+        let (subtree_pin, allow_git_push, no_post_exec_gate) = trust;
         let mut cmd = Command::new(self.executor.executable_name());
         cmd.current_dir(work_dir);
         for var in CLI_TRANSPORT_STRIPPED_ENV_VARS {
@@ -163,6 +164,7 @@ impl ClaudeCodeCliTransport {
         if allow_git_push {
             cmd.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
         }
+        executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
         for arg in Self::build_argv(&self.executor, prompt, resume_session_id) {
             cmd.arg(arg);
         }
@@ -179,7 +181,11 @@ impl ClaudeCodeCliTransport {
             request.session,
             request.resume_session_id,
             request.extra_env,
-            (request.subtree_pin, request.allow_git_push),
+            (
+                request.subtree_pin,
+                request.allow_git_push,
+                request.no_post_exec_gate,
+            ),
         );
         // Mirror `LegacyTransport::execute_single_attempt` (transport.rs L313):
         // route every spawn through `spawn_tool_sandboxed` so cgroup/bwrap/
@@ -227,7 +233,7 @@ impl ClaudeCodeCliTransport {
     }
 }
 
-type CommandTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool);
+type CommandTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool, bool);
 
 /// Single-attempt execution request for [`ClaudeCodeCliTransport::execute_once`].
 ///
@@ -242,6 +248,7 @@ struct ExecuteOnceRequest<'a> {
     extra_env: Option<&'a HashMap<String, String>>,
     subtree_pin: Option<&'a csa_core::env::SubtreeModelPin>,
     allow_git_push: bool,
+    no_post_exec_gate: bool,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     initial_response_timeout: ResolvedTimeout,
@@ -302,6 +309,7 @@ impl Transport for ClaudeCodeCliTransport {
             extra_env,
             subtree_pin: options.subtree_pin.as_ref(),
             allow_git_push: options.allow_git_push,
+            no_post_exec_gate: options.no_post_exec_gate,
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
             initial_response_timeout: options.initial_response_timeout,
@@ -331,6 +339,7 @@ impl Transport for ClaudeCodeCliTransport {
             extra_env,
             subtree_pin,
             allow_git_push,
+            no_post_exec_gate: false,
             stream_mode,
             idle_timeout_seconds,
             initial_response_timeout,
@@ -680,37 +689,7 @@ fn extract_tool_input_command(input: Option<&serde_json::Value>) -> Option<Strin
     }
 }
 
-/// Extract the textual content from a claude `message` payload.
-///
-/// Claude emits `message.content` either as a plain string or as an array of
-/// content blocks `[{"type": "text", "text": "..."}, ...]`.  We concatenate
-/// all text blocks and ignore non-text blocks — they appear separately as
-/// `tool_use` envelopes anyway.
-fn extract_message_text(message: &Option<serde_json::Value>) -> Option<String> {
-    let value = message.as_ref()?;
-    if let Some(content) = value.get("content") {
-        if let Some(s) = content.as_str() {
-            return Some(s.to_string());
-        }
-        if let Some(arr) = content.as_array() {
-            let mut buf = String::new();
-            for block in arr {
-                if block.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                    && let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
-                {
-                    buf.push_str(text);
-                }
-            }
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-    }
-    if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
-        return Some(text.to_string());
-    }
-    None
-}
+include!("transport_cli_helpers.rs");
 
 #[cfg(test)]
 #[path = "transport_cli_tests.rs"]

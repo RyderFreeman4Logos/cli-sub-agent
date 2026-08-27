@@ -10,6 +10,10 @@ use tracing::warn;
 const MAX_UNCOMMITTED_FILES: usize = 20;
 const REQUIRE_COMMIT_REASON: &str =
     "require-commit contract failed: no qualifying commit or tracked dirty work remains";
+const REQUIRE_COMMIT_PARTIAL_REASON: &str =
+    "require-commit contract failed: partial_commit_plus_dirty_work";
+const REQUIRE_COMMIT_DIRTY_REASON: &str =
+    "require-commit contract failed: tracked dirty work remains without a qualifying commit";
 const REQUIRE_COMMIT_SANDBOX_HOOK_REASON: &str = "require-commit blocked: mandatory hook-enabled commit failed in the filesystem sandbox; staged tree preserved for host recovery";
 const REQUIRE_COMMIT_RECOVERY_ACTION: &str = "inspect_changed_paths_then_commit_or_revert";
 const REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION: &str = "run_hook_enabled_commit_outside_sandbox";
@@ -208,9 +212,9 @@ fn record_writer_uncommitted_changes_with_config(
     let warning = changes
         .as_ref()
         .and_then(|changes| large_diff_warning_report(changes, record.large_diff_config));
-    let commit_created = record.commit_created.unwrap_or(false);
+    let commit_created = record.commit_created;
     let require_commit_contract_failure = record.require_commit
-        && (!commit_created
+        && (!commit_created.unwrap_or(false)
             || dirty_tracked_probe
                 .as_ref()
                 .is_some_and(|probe| !probe.is_clean()));
@@ -241,6 +245,8 @@ fn record_writer_uncommitted_changes_with_config(
                 result,
                 sandbox_hook_state,
                 preserved_summary.as_deref(),
+                commit_created,
+                dirty_tracked_changes.is_some(),
             );
         }
         return warning;
@@ -260,7 +266,7 @@ fn record_writer_uncommitted_changes_with_config(
                 require_commit::build_recovery_diagnostic_for_state(
                     &session_result,
                     contract_changes,
-                    commit_created,
+                    record.commit_created,
                     result.csa_gate_failure.as_deref(),
                     clean_tree_verification_failure,
                     Some(record.sa_mode),
@@ -336,6 +342,8 @@ fn record_writer_uncommitted_changes_with_config(
             result,
             sandbox_hook_state,
             preserved_summary.as_deref(),
+            commit_created,
+            dirty_tracked_changes.is_some(),
         );
     }
     warning
@@ -349,7 +357,7 @@ fn build_require_commit_recovery_diagnostic(
     require_commit::build_recovery_diagnostic_for_state(
         result,
         Some(changes),
-        false,
+        None,
         None,
         None,
         Some(false),

@@ -85,14 +85,21 @@ fn require_commit_with_commit_created_and_dirty_tracked_work_fails() {
     );
     assert_eq!(loaded.status, "failure");
     assert_eq!(loaded.exit_code, 1);
-    assert_eq!(loaded.summary, REQUIRE_COMMIT_REASON);
+    assert_eq!(
+        loaded.summary,
+        "require-commit contract failed: partial_commit_plus_dirty_work"
+    );
     let recovery = loaded
         .require_commit_recovery
         .expect("dirty tracked work should be a require-commit contract failure");
     assert!(recovery.require_commit);
-    assert!(recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(true));
     assert!(recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
+    assert_eq!(
+        recovery.suggested_recovery_action,
+        "inspect_changed_paths_then_commit_or_revert"
+    );
     assert_eq!(
         recovery.blocker_summary.as_deref(),
         Some("summary=self-reported success")
@@ -140,6 +147,58 @@ fn require_commit_with_commit_created_and_clean_tracked_work_passes() {
 }
 
 #[test]
+fn require_commit_without_created_commit_and_dirty_tracked_work_has_consistent_summary() {
+    let (temp, _sandbox) = init_repo_with_initial_commit();
+    let root = temp.path();
+    std::fs::write(root.join("seed.txt"), "dirty\n").expect("dirty tracked file");
+    let session = csa_session::create_session(root, Some("run"), None, Some("codex"))
+        .expect("session should be created");
+    let mut session_result = session_result("success", 0);
+    session_result.summary = "self-reported success".to_string();
+    csa_session::save_result(root, &session.meta_session_id, &session_result)
+        .expect("result should be saved");
+    let mut execution = csa_process::ExecutionResult {
+        exit_code: 0,
+        summary: "self-reported success".to_string(),
+        ..Default::default()
+    };
+
+    record_writer_uncommitted_changes_with_config(
+        root,
+        Some(&session.meta_session_id),
+        &mut execution,
+        WriterUncommittedRecord {
+            sa_mode: false,
+            require_commit: true,
+            changed_paths: Some(&["seed.txt".to_string()]),
+            commit_created: None,
+            large_diff_config: &RunLargeDiffWarningConfig::default(),
+        },
+    );
+
+    let loaded = csa_session::load_result(root, &session.meta_session_id)
+        .expect("load result")
+        .expect("result should exist");
+    assert_eq!(
+        loaded.summary,
+        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+    );
+    assert_eq!(
+        execution.summary,
+        "require-commit contract failed: no qualifying commit or tracked dirty work remains"
+    );
+    let recovery = loaded
+        .require_commit_recovery
+        .expect("dirty tracked work should have recovery details");
+    assert_eq!(recovery.commit_created, None);
+    assert!(recovery.dirty_worktree);
+    assert_eq!(
+        recovery.suggested_recovery_action,
+        "inspect_changed_paths_then_commit_or_revert"
+    );
+}
+
+#[test]
 fn require_commit_with_commit_created_fails_when_clean_tree_probe_is_unknown() {
     let (temp, _sandbox) = init_repo_with_initial_commit();
     let root = temp.path();
@@ -183,7 +242,7 @@ fn require_commit_with_commit_created_fails_when_clean_tree_probe_is_unknown() {
     let recovery = loaded
         .require_commit_recovery
         .expect("unverified clean tree should be a require-commit contract failure");
-    assert!(recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(true));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     let blocker = recovery
@@ -233,7 +292,7 @@ fn require_commit_without_created_commit_fails_successful_self_report() {
         .require_commit_recovery
         .expect("require-commit failure should be machine-readable");
     assert!(recovery.require_commit);
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     assert_eq!(recovery.blocker_summary.as_deref(), Some("summary=done"));
@@ -297,7 +356,7 @@ fn require_commit_fails_closed_after_sandbox_hook_preserving_staged_tree() {
         .require_commit_recovery
         .expect("explicit require-commit must fail closed in sa-mode");
     assert!(recovery.require_commit);
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(recovery.dirty_worktree);
     assert_eq!(recovery.changed_paths, vec!["tracked.txt".to_string()]);
     assert!(
@@ -416,13 +475,33 @@ fn require_commit_recovery_does_not_label_untracked_scratch_as_tracked_dirty() {
     let recovery = loaded
         .require_commit_recovery
         .expect("missing commit should be a require-commit contract failure");
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(!recovery.dirty_worktree);
     assert!(recovery.changed_paths.is_empty());
     let uncommitted = loaded
         .uncommitted_changes
         .expect("untracked session scratch should still be reported as uncommitted work");
     assert_eq!(uncommitted.files, vec!["scratch.txt".to_string()]);
+}
+
+#[test]
+fn no_post_exec_gate_propagates_to_nested_csa_invocations() {
+    let startup = crate::startup_env::StartupSubtreeEnv::from_values(
+        std::collections::HashMap::from([("CSA_NO_POST_EXEC_GATE", "1".to_string())]),
+    );
+
+    assert!(
+        startup
+            .to_child_env_vars()
+            .contains(&("CSA_NO_POST_EXEC_GATE".to_string(), "1".to_string())),
+        "the parent no-post-exec-gate flag must reach nested CSA processes"
+    );
+    assert!(
+        startup
+            .to_csa_child_contract_env_vars()
+            .contains(&("CSA_NO_POST_EXEC_GATE".to_string(), "1".to_string())),
+        "the child-contract env must carry the parent no-post-exec-gate flag"
+    );
 }
 
 fn session_result(status: &str, exit_code: i32) -> csa_session::SessionResult {

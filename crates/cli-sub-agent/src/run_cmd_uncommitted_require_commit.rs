@@ -8,6 +8,8 @@ use std::time::Duration;
 const SANDBOX_COMMIT_FAILURE_MARKER_MAX_BYTES: usize = 1024;
 const REQUIRE_COMMIT_GIT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const SANDBOX_HOOK_PROBE_REASON: &str = "require-commit blocked: sandbox hook failure state could not be verified; staged tree preserved for host recovery";
+const PARTIAL_COMMIT_PLUS_DIRTY_WORK: &str = "partial_commit_plus_dirty_work";
+const TRACKED_DIRTY_WORK_WITHOUT_COMMIT: &str = "tracked_dirty_work_without_qualifying_commit";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum SandboxHookProbeState<'a> {
@@ -39,6 +41,22 @@ pub(super) fn contract_failure_reason(state: SandboxHookProbeState<'_>) -> &'sta
     }
 }
 
+pub(super) fn contract_failure_reason_with_state(
+    state: SandboxHookProbeState<'_>,
+    commit_created: Option<bool>,
+    dirty_worktree: bool,
+) -> &'static str {
+    if dirty_worktree && matches!(state, SandboxHookProbeState::Clear) {
+        match commit_created {
+            Some(true) => super::REQUIRE_COMMIT_PARTIAL_REASON,
+            Some(false) => super::REQUIRE_COMMIT_DIRTY_REASON,
+            None => super::REQUIRE_COMMIT_REASON,
+        }
+    } else {
+        contract_failure_reason(state)
+    }
+}
+
 pub(super) fn persisted_contract_failure_reason(
     recovery: &csa_session::RequireCommitRecoveryDiagnostic,
 ) -> &'static str {
@@ -50,6 +68,16 @@ pub(super) fn persisted_contract_failure_reason(
         == super::REQUIRE_COMMIT_SANDBOX_HOOK_RECOVERY_ACTION
     {
         super::REQUIRE_COMMIT_SANDBOX_HOOK_REASON
+    } else if recovery.commit_created.is_none() && recovery.dirty_worktree {
+        super::REQUIRE_COMMIT_REASON
+    } else if recovery.suggested_recovery_action == PARTIAL_COMMIT_PLUS_DIRTY_WORK {
+        super::REQUIRE_COMMIT_PARTIAL_REASON
+    } else if recovery.suggested_recovery_action == TRACKED_DIRTY_WORK_WITHOUT_COMMIT {
+        super::REQUIRE_COMMIT_DIRTY_REASON
+    } else if recovery.dirty_worktree && recovery.commit_created == Some(true) {
+        super::REQUIRE_COMMIT_PARTIAL_REASON
+    } else if recovery.dirty_worktree {
+        super::REQUIRE_COMMIT_DIRTY_REASON
     } else {
         super::REQUIRE_COMMIT_REASON
     }
@@ -150,7 +178,7 @@ fn bound_redacted_one_line(value: &str, max_chars: usize) -> String {
 pub(super) fn build_recovery_diagnostic_for_state(
     result: &csa_session::SessionResult,
     changes: Option<&csa_session::UncommittedChanges>,
-    commit_created: bool,
+    commit_created: Option<bool>,
     gate_failure: Option<&str>,
     clean_tree_verification_failure: Option<&str>,
     sa_mode: Option<bool>,

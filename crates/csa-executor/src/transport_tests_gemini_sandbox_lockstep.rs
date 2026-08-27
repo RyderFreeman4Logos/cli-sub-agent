@@ -156,6 +156,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_added() {
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 
@@ -265,6 +266,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_bind_cannot_be_add
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 
@@ -374,6 +376,7 @@ async fn test_execute_fails_fast_when_shared_npm_cache_path_violates_writable_al
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 
@@ -490,6 +493,7 @@ async fn test_legacy_execute_fails_fast_when_shared_npm_cache_path_violates_writ
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 
@@ -614,6 +618,7 @@ async fn test_execute_fails_fast_when_symlinked_shared_npm_cache_resolves_outsid
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 

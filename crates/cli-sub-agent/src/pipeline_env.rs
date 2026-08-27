@@ -393,4 +393,26 @@ mod tests {
         assert_ne!(cargo_home, project.path().join(".cargo-local"));
         assert_ne!(cargo_home, Path::new("/usr/local"));
     }
+
+    #[test]
+    fn build_merged_env_strips_spoofed_post_exec_gate() {
+        let extra_env = HashMap::from([
+            ("CSA_NO_POST_EXEC_GATE".to_string(), "1".to_string()),
+            ("KEEP_ME".to_string(), "value".to_string()),
+        ]);
+
+        let merged = build_merged_env(MergedEnvRequest {
+            extra_env: Some(&extra_env),
+            config: None,
+            global_config: None,
+            project_root: None,
+            tool_name: "test",
+            current_depth: 0,
+            pattern_internal: false,
+            allow_git_push: false,
+        });
+
+        assert!(!merged.contains_key("CSA_NO_POST_EXEC_GATE"));
+        assert_eq!(merged.get("KEEP_ME").map(String::as_str), Some("value"));
+    }
 }

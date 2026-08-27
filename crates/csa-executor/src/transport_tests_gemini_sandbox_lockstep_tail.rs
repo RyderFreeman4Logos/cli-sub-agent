@@ -68,6 +68,7 @@ async fn test_legacy_execute_fails_fast_when_symlinked_shared_npm_cache_resolves
         thinking_budget: None,
         subtree_pin: None,
         allow_git_push: false,
+        no_post_exec_gate: false,
         cancellation: None,
     };
 

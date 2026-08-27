@@ -11,12 +11,9 @@ const GIT_FIXTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn csa_cmd(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("CSA_") {
-            cmd.env_remove(key);
-        }
-    }
-    cmd.env("HOME", home)
+    cmd.env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", home)
         .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("TOKIO_WORKER_THREADS", "1")
@@ -103,7 +100,8 @@ fn run_fixture_git(project: &Path, args: &[&str]) {
         ])
         .args(args)
         .current_dir(project)
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", project)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

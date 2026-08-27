@@ -54,8 +54,15 @@ printf "%s\n" "$code" > "$status_file"
 exit "$code"
 '
 
-if ! tmux new-session -d -s "$session_name" -c "$work_dir" -- \
-  bash -c "$inner" bash "$stdin_fifo" "$stdout_fifo" "$stderr_fifo" "$status_file" "$program" "$@"; then
+gate_env=()
+if [ "${CSA_NO_POST_EXEC_GATE+x}" = x ]; then
+  gate_env=(env "CSA_NO_POST_EXEC_GATE=$CSA_NO_POST_EXEC_GATE")
+else
+  gate_env=(env -u CSA_NO_POST_EXEC_GATE)
+fi
+
+if ! env -u CSA_NO_POST_EXEC_GATE tmux new-session -d -s "$session_name" -c "$work_dir" -- \
+  "${gate_env[@]}" bash -c "$inner" bash "$stdin_fifo" "$stdout_fifo" "$stderr_fifo" "$status_file" "$program" "$@"; then
   echo "failed to start codex tmux session: $session_name" >&2
   exit 127
 fi
@@ -131,13 +138,154 @@ pub(crate) fn wrap_codex_command_for_tmux(cmd: Command, session: &MetaSessionSta
 mod tests {
     use super::*;
 
+    const TMUX_FIXTURE_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
     fn session(project_path: &Path) -> MetaSessionState {
+        session_named(project_path, "01KTESTCODEXTMUXMODE000000")
+    }
+
+    fn session_named(project_path: &Path, meta_session_id: &str) -> MetaSessionState {
         MetaSessionState {
-            meta_session_id: "01KTESTCODEXTMUXMODE000000".to_string(),
+            meta_session_id: meta_session_id.to_string(),
             project_path: project_path.to_string_lossy().into_owned(),
             created_at: chrono::Utc::now(),
             last_accessed: chrono::Utc::now(),
             ..Default::default()
+        }
+    }
+
+    fn run_sync_command_bounded(mut command: std::process::Command, context: &str) {
+        let deadline = std::time::Instant::now() + TMUX_FIXTURE_COMMAND_TIMEOUT;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                eprintln!("{context}: {err}");
+                return;
+            }
+        };
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+    }
+
+    fn dump_gate_script(path: &Path, ready_token: Option<&str>) -> String {
+        let ready_signal = ready_token
+            .map(|token| format!("; tmux wait-for -S '{token}'"))
+            .unwrap_or_default();
+        format!(
+            r#"if [ "${{CSA_NO_POST_EXEC_GATE+x}}" = x ]; then printf 'set:%s\n' "$CSA_NO_POST_EXEC_GATE"; else printf 'unset\n'; fi > '{}'{ready_signal}"#,
+            path.display()
+        )
+    }
+
+    async fn wait_for_tmux_event(tmux_tmpdir: &Path, token: &str) {
+        let mut wait = Command::new("tmux");
+        wait.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args(["wait-for", token]);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), wait.status())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for tmux event {token}"))
+            .unwrap_or_else(|err| panic!("wait for tmux event {token}: {err}"));
+        assert!(status.success(), "tmux wait-for {token} failed: {status}");
+    }
+
+    struct TmuxServerCleanup {
+        tmux_tmpdir: PathBuf,
+    }
+
+    impl Drop for TmuxServerCleanup {
+        fn drop(&mut self) {
+            let mut kill = std::process::Command::new("tmux");
+            kill.env("TMUX_TMPDIR", &self.tmux_tmpdir)
+                .env_remove("TMUX")
+                .arg("kill-server");
+            run_sync_command_bounded(kill, "tmux cleanup");
+        }
+    }
+
+    fn read_gate_dump(path: &Path) -> String {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+            .trim()
+            .to_string()
+    }
+
+    struct RestoreTmuxGlobalGate {
+        tmux_tmpdir: PathBuf,
+        previous: Option<String>,
+    }
+
+    impl Drop for RestoreTmuxGlobalGate {
+        fn drop(&mut self) {
+            let mut cmd = std::process::Command::new("tmux");
+            cmd.env("TMUX_TMPDIR", &self.tmux_tmpdir).env_remove("TMUX");
+            cmd.args(["set-environment", "-g"]);
+            match &self.previous {
+                Some(value) => {
+                    cmd.args([csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY, value]);
+                }
+                None => {
+                    cmd.args(["-u", csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY]);
+                }
+            }
+            run_sync_command_bounded(cmd, "tmux restore global env");
+            let mut kill = std::process::Command::new("tmux");
+            kill.env("TMUX_TMPDIR", &self.tmux_tmpdir)
+                .env_remove("TMUX")
+                .arg("kill-server");
+            run_sync_command_bounded(kill, "tmux cleanup");
+        }
+    }
+
+    async fn poison_tmux_global_gate(tmux_tmpdir: &Path) -> RestoreTmuxGlobalGate {
+        let mut show = Command::new("tmux");
+        show.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args([
+                "show-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+            ]);
+        let show = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, show.output())
+            .await
+            .unwrap_or_else(|_| panic!("tmux show-environment -g timed out"))
+            .expect("tmux show-environment -g");
+        let previous = if show.status.success() {
+            let text = String::from_utf8_lossy(&show.stdout);
+            text.strip_prefix(&format!(
+                "{}=",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
+            ))
+            .map(|value| value.trim().to_string())
+        } else {
+            None
+        };
+        let mut set = Command::new("tmux");
+        set.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args([
+                "set-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+                "1",
+            ]);
+        let status = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, set.status())
+            .await
+            .unwrap_or_else(|_| panic!("tmux set-environment -g poison timed out"))
+            .expect("tmux set-environment -g poison");
+        assert!(status.success(), "failed to poison tmux global env");
+        RestoreTmuxGlobalGate {
+            tmux_tmpdir: tmux_tmpdir.to_path_buf(),
+            previous,
         }
     }
 
@@ -161,5 +309,289 @@ mod tests {
         );
         assert!(args.iter().any(|arg| arg == "codex"));
         assert!(args.iter().any(|arg| arg == "exec"));
+    }
+
+    struct TmuxGateTestLock {
+        path: PathBuf,
+    }
+
+    impl Drop for TmuxGateTestLock {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+
+    fn lock_tmux_gate_test() -> TmuxGateTestLock {
+        let path = std::env::temp_dir().join("csa-tmux-no-post-exec-gate-test.lockdir");
+        for _ in 0..200 {
+            if std::fs::create_dir(&path).is_ok() {
+                return TmuxGateTestLock { path };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("timed out waiting for tmux gate test lock");
+    }
+
+    fn unique_session_id(tag: &str) -> String {
+        format!(
+            "01T{:08}{:010}{tag}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_millis()
+                % 10_000_000_000u128
+        )
+    }
+
+    async fn run_wrapped_dump(
+        session_id: &str,
+        no_post_exec_gate: bool,
+        dump: &Path,
+        session_dir: &Path,
+        tmux_tmpdir: &Path,
+    ) -> String {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(dump_gate_script(dump, None));
+        cmd.env("CSA_SESSION_DIR", session_dir);
+        cmd.env("TMUX_TMPDIR", tmux_tmpdir).env_remove("TMUX");
+        crate::executor::executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
+        let mut wrapped = wrap_codex_command_for_tmux(cmd, &session_named(session_dir, session_id));
+        wrapped.stdin(std::process::Stdio::null());
+        wrapped.stdout(std::process::Stdio::null());
+        wrapped.stderr(std::process::Stdio::null());
+        let status = tokio::time::timeout(std::time::Duration::from_secs(15), wrapped.status())
+            .await
+            .unwrap_or_else(|_| panic!("codex tmux wrap timed out for {session_id}"))
+            .expect("spawn wrapped dump");
+        assert!(
+            status.success(),
+            "wrapped dump failed for {session_id}: {status}"
+        );
+        read_gate_dump(dump)
+    }
+
+    async fn run_direct_tmux_dump(
+        session_name: &str,
+        no_post_exec_gate: bool,
+        dump: &Path,
+        work_dir: &Path,
+        tmux_tmpdir: &Path,
+        assert_global_gate_unset_during_execution: bool,
+    ) -> String {
+        let ready_token = format!("csa-tmux-inner-ready-{session_name}");
+        let work_dir_str = work_dir.to_str().expect("utf8 work_dir");
+        let dump_args = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; exec sh", dump_gate_script(dump, Some(&ready_token))),
+        ];
+        let inner = crate::executor::executor_env::tmux_inner_child_with_gate(
+            no_post_exec_gate,
+            &dump_args,
+        );
+        let mut cmd = crate::executor::executor_env::tmux_new_session_command(
+            session_name,
+            work_dir_str,
+            None,
+            &inner,
+        );
+        cmd.env("TMUX_TMPDIR", tmux_tmpdir).env_remove("TMUX");
+        let status = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, cmd.status())
+            .await
+            .unwrap_or_else(|_| panic!("direct tmux new-session timed out"))
+            .expect("direct tmux new-session");
+        assert!(status.success(), "direct tmux new-session failed: {status}");
+        wait_for_tmux_event(tmux_tmpdir, &ready_token).await;
+        if assert_global_gate_unset_during_execution {
+            assert_eq!(
+                global_gate_value(tmux_tmpdir).await,
+                None,
+                "enabled cold-start tmux must keep the gate flag out of global server env during execution"
+            );
+        }
+        let dump_value = read_gate_dump(dump);
+        let mut kill = Command::new("tmux");
+        kill.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args(["kill-session", "-t", session_name]);
+        let _ = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, kill.status()).await;
+        dump_value
+    }
+
+    async fn global_gate_value(tmux_tmpdir: &Path) -> Option<String> {
+        let mut show = Command::new("tmux");
+        show.env("TMUX_TMPDIR", tmux_tmpdir)
+            .env_remove("TMUX")
+            .args([
+                "show-environment",
+                "-g",
+                csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY,
+            ]);
+        let show = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, show.output())
+            .await
+            .unwrap_or_else(|_| panic!("tmux show-environment -g timed out"))
+            .expect("tmux show-environment -g");
+        if !show.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&show.stdout);
+        text.strip_prefix(&format!(
+            "{}=",
+            csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
+        ))
+        .map(|value| value.trim().to_string())
+    }
+
+    #[tokio::test]
+    async fn tmux_cold_start_keeps_no_post_exec_gate_out_of_global_server_env() {
+        which::which("tmux").expect("tmux must be on PATH");
+        let _lock = lock_tmux_gate_test();
+        let tmux_tmpdir = tempfile::tempdir().expect("tmux tempdir");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cleanup = TmuxServerCleanup {
+            tmux_tmpdir: tmux_tmpdir.path().to_path_buf(),
+        };
+        assert_eq!(
+            global_gate_value(tmux_tmpdir.path()).await,
+            None,
+            "cold-start tmux socket must have no global gate flag"
+        );
+
+        let dump = dir.path().join("enabled-cold-start");
+        assert_eq!(
+            run_direct_tmux_dump(
+                &format!("csa-{}", unique_session_id("cold")),
+                true,
+                &dump,
+                dir.path(),
+                tmux_tmpdir.path(),
+                true,
+            )
+            .await,
+            "set:1",
+            "enabled direct tmux inner child must have the gate flag"
+        );
+        assert_eq!(
+            global_gate_value(tmux_tmpdir.path()).await,
+            None,
+            "enabled cold-start tmux must keep the gate flag out of global server env"
+        );
+    }
+
+    #[tokio::test]
+    async fn tmux_inner_child_isolates_no_post_exec_gate_from_global_server_env() {
+        which::which("tmux").expect("tmux must be on PATH");
+        let _lock = lock_tmux_gate_test();
+        let tmux_tmpdir = tempfile::tempdir().expect("tmux tempdir");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cleanup = TmuxServerCleanup {
+            tmux_tmpdir: tmux_tmpdir.path().to_path_buf(),
+        };
+        let fixture_ready = "csa-tmux-gate-fixture-ready";
+        let mut started = Command::new("tmux");
+        started
+            .env("TMUX_TMPDIR", tmux_tmpdir.path())
+            .env_remove("TMUX")
+            .args(["new-session", "-d", "-s", "csa-tmux-gate-fixture", "-c"])
+            .arg(dir.path())
+            .args(["--", "sh", "-c"])
+            .arg(format!("tmux wait-for -S '{fixture_ready}'; exec sh"));
+        let started = tokio::time::timeout(TMUX_FIXTURE_COMMAND_TIMEOUT, started.status())
+            .await
+            .unwrap_or_else(|_| panic!("tmux new-session timed out"))
+            .expect("tmux new-session");
+        assert!(started.success(), "tmux new-session failed: {started}");
+        wait_for_tmux_event(tmux_tmpdir.path(), fixture_ready).await;
+        let _restore = poison_tmux_global_gate(tmux_tmpdir.path()).await;
+        assert_eq!(
+            global_gate_value(tmux_tmpdir.path()).await.as_deref(),
+            Some("1")
+        );
+
+        let work_dir = dir.path();
+
+        let enabled_direct = work_dir.join("enabled-direct");
+        let disabled_legacy = work_dir.join("disabled-legacy");
+        let disabled_direct = work_dir.join("disabled-direct");
+        let enabled_legacy = work_dir.join("enabled-legacy");
+        let disabled_legacy_fallback = work_dir.join("disabled-legacy-fallback");
+
+        assert_eq!(
+            run_direct_tmux_dump(
+                &format!("csa-{}", unique_session_id("ed")),
+                true,
+                &enabled_direct,
+                work_dir,
+                tmux_tmpdir.path(),
+                false,
+            )
+            .await,
+            "set:1",
+            "enabled direct tmux inner child must have the gate flag"
+        );
+        assert_eq!(
+            global_gate_value(tmux_tmpdir.path()).await.as_deref(),
+            Some("1"),
+            "direct tmux must not restore or rewrite the pre-existing global server env"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(
+                &unique_session_id("dl"),
+                false,
+                &disabled_legacy,
+                work_dir,
+                tmux_tmpdir.path(),
+            )
+            .await,
+            "unset",
+            "disabled legacy Codex tmux inner child must not inherit a poisoned global flag"
+        );
+
+        assert_eq!(
+            run_direct_tmux_dump(
+                &format!("csa-{}", unique_session_id("dd")),
+                false,
+                &disabled_direct,
+                work_dir,
+                tmux_tmpdir.path(),
+                false,
+            )
+            .await,
+            "unset",
+            "disabled direct tmux inner child must clear a poisoned global flag"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(
+                &unique_session_id("el"),
+                true,
+                &enabled_legacy,
+                work_dir,
+                tmux_tmpdir.path(),
+            )
+            .await,
+            "set:1",
+            "enabled legacy Codex tmux inner child must bind the gate flag"
+        );
+
+        assert_eq!(
+            run_wrapped_dump(
+                &unique_session_id("fb"),
+                false,
+                &disabled_legacy_fallback,
+                work_dir,
+                tmux_tmpdir.path(),
+            )
+            .await,
+            "unset",
+            "best-effort fallback uses the same wrap; inner child must stay isolated"
+        );
+        assert_eq!(
+            global_gate_value(tmux_tmpdir.path()).await.as_deref(),
+            Some("1"),
+            "legacy Codex tmux must not leave CSA_NO_POST_EXEC_GATE in the global server env"
+        );
     }
 }

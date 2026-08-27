@@ -17,7 +17,7 @@ fn compact_summary_and_json_include_require_commit_recovery() {
         require_commit_recovery: Some(csa_session::RequireCommitRecoveryDiagnostic {
             require_commit: true,
             sa_mode: Some(false),
-            commit_created: false,
+            commit_created: Some(false),
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
             changed_paths_truncated: 0,

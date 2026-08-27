@@ -113,6 +113,7 @@ fn validate_entries(entries: &BTreeMap<String, String>) -> Result<(), CleanEnvir
         }
         if csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS.contains(&key.as_str())
             || csa_core::env::SUBTREE_PIN_ENV_KEYS.contains(&key.as_str())
+            || key == csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY
         {
             return Err(CleanEnvironmentError::ReservedKey(key.clone()));
         }

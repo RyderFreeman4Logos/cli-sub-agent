@@ -367,6 +367,7 @@ impl TmuxTransport {
         extra_env: Option<&HashMap<String, String>>,
         model_override: Option<&str>,
         thinking_budget: Option<&crate::model_spec::ThinkingBudget>,
+        no_post_exec_gate: bool,
     ) -> Result<()> {
         let work_dir_str = work_dir.to_str().context("work_dir is not valid UTF-8")?;
         let claude_bin = Self::resolve_claude_binary()?;
@@ -383,35 +384,18 @@ impl TmuxTransport {
             claude_args.push(level.to_string());
         }
 
-        let mut tmux_args: Vec<&str> = vec![
-            "new-session",
-            "-d",
-            "-s",
+        // execute_session passes a trusted merged child env: generic input
+        // was scrubbed before fresh CSA session/pin values were inserted.
+        let inner = crate::executor::executor_env::tmux_inner_child_with_gate(
+            no_post_exec_gate,
+            &claude_args,
+        );
+        let mut cmd = crate::executor::executor_env::tmux_new_session_command(
             session_name,
-            "-c",
             work_dir_str,
-            "--",
-        ];
-        let claude_arg_refs: Vec<&str> = claude_args.iter().map(String::as_str).collect();
-        tmux_args.extend_from_slice(&claude_arg_refs);
-
-        let mut cmd = tokio::process::Command::new("tmux");
-        cmd.args(&tmux_args);
-
-        // Strip inherited CSA/hook env vars, then re-inject the current
-        // session's values via extra_env (populated by execute_session).
-        for var in crate::executor::executor_env::STRIPPED_ENV_VARS {
-            cmd.env_remove(var);
-        }
-        csa_core::env::scrub_subtree_contract_env_tokio(&mut cmd);
-
-        if let Some(env) = extra_env {
-            // execute_session passes a trusted merged child env: generic input
-            // was scrubbed before fresh CSA session/pin values were inserted.
-            for (k, v) in env {
-                cmd.env(k, v);
-            }
-        }
+            extra_env,
+            &inner,
+        );
 
         let status = cmd.status().await.context("tmux new-session")?;
         if !status.success() {
@@ -454,7 +438,7 @@ impl TmuxTransport {
         idle_timeout_seconds: u64,
         session: Option<&MetaSessionState>,
     ) -> Result<TransportResult> {
-        let (subtree_pin, allow_git_push) = trust;
+        let (subtree_pin, allow_git_push, no_post_exec_gate) = trust;
         let session_name = Self::session_name();
         let prompt_file_path = prompt_file_path_for_session(&session_name);
         tracing::debug!(
@@ -558,6 +542,7 @@ impl TmuxTransport {
             Some(&merged_env),
             model_override,
             thinking_budget,
+            no_post_exec_gate,
         )
         .await?;
         // RAII guard: kills the session when this function exits (normal or panic).
@@ -672,7 +657,11 @@ impl Transport for TmuxTransport {
             prompt,
             &work_dir,
             extra_env,
-            (options.subtree_pin.as_ref(), options.allow_git_push),
+            (
+                options.subtree_pin.as_ref(),
+                options.allow_git_push,
+                options.no_post_exec_gate,
+            ),
             options.idle_timeout_seconds,
             Some(session),
         )
@@ -694,7 +683,7 @@ impl Transport for TmuxTransport {
             prompt,
             work_dir,
             extra_env,
-            (subtree_pin, allow_git_push),
+            (subtree_pin, allow_git_push, false),
             idle_timeout_seconds,
             None,
         )
@@ -707,7 +696,7 @@ impl Transport for TmuxTransport {
     }
 }
 
-type TmuxTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool);
+type TmuxTrustOptions<'a> = (Option<&'a csa_core::env::SubtreeModelPin>, bool, bool);
 
 // ── csa gc integration ────────────────────────────────────────────────────────
 

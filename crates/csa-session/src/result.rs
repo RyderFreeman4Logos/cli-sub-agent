@@ -213,8 +213,9 @@ pub struct RequireCommitRecoveryDiagnostic {
     /// caller to provide an explicit value rather than guessing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sa_mode: Option<bool>,
-    /// Whether CSA observed a commit satisfying the contract.
-    pub commit_created: bool,
+    /// Whether CSA observed a commit satisfying the contract, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_created: Option<bool>,
     /// Whether dirty tracked worktree changes remained after the run.
     pub dirty_worktree: bool,
     /// Sanitized relative tracked paths still dirty after the run, capped by the caller.

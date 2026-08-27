@@ -116,7 +116,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
         require_commit_recovery: Some(RequireCommitRecoveryDiagnostic {
             require_commit: true,
             sa_mode: Some(false),
-            commit_created: false,
+            commit_created: Some(false),
             dirty_worktree: true,
             changed_paths: vec!["src/lib.rs".to_string(), "README.md".to_string()],
             changed_paths_truncated: 2,
@@ -144,7 +144,7 @@ fn test_session_result_require_commit_recovery_roundtrip() {
         .expect("recovery diagnostic should roundtrip");
     assert!(recovery.require_commit);
     assert_eq!(recovery.sa_mode, Some(false));
-    assert!(!recovery.commit_created);
+    assert_eq!(recovery.commit_created, Some(false));
     assert!(recovery.dirty_worktree);
     assert_eq!(
         recovery.changed_paths,

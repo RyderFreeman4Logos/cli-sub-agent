@@ -49,6 +49,8 @@ pub struct ExecuteOptions {
     /// Defaults to `false`. Generic env maps are scrubbed; this typed option is
     /// the only executor-side source that may set `CSA_GIT_PUSH_ALLOWED=true`.
     pub allow_git_push: bool,
+    /// Whether CSA authorized the child to skip its post-execution gate.
+    pub no_post_exec_gate: bool,
     /// Cancel and reap the session-owned process group before returning.
     pub cancellation: Option<csa_process::ExecutionCancellation>,
 }
@@ -91,6 +93,7 @@ impl ExecuteOptions {
             pre_session_hook: None,
             subtree_pin: None,
             allow_git_push: false,
+            no_post_exec_gate: false,
             cancellation: None,
         }
     }
@@ -104,6 +107,12 @@ impl ExecuteOptions {
     /// Attach CSA's explicit `git push` authorization.
     pub fn with_git_push_allowed(mut self, allow_git_push: bool) -> Self {
         self.allow_git_push = allow_git_push;
+        self
+    }
+
+    /// Attach CSA's trusted post-execution-gate decision.
+    pub fn with_no_post_exec_gate(mut self, no_post_exec_gate: bool) -> Self {
+        self.no_post_exec_gate = no_post_exec_gate;
         self
     }
 

@@ -140,6 +140,7 @@ impl Executor {
             extra_env,
             subtree_pin,
             false,
+            false,
         )
     }
 
@@ -150,6 +151,7 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         subtree_pin: Option<&csa_core::env::SubtreeModelPin>,
         allow_git_push: bool,
+        no_post_exec_gate: bool,
     ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
@@ -168,6 +170,7 @@ impl Executor {
         // which stripped the pin keys) — the only writer of the pin keys.
         executor_env::apply_subtree_pin(&mut cmd, subtree_pin);
         executor_env::apply_git_push_authorization(&mut cmd, allow_git_push);
+        executor_env::apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
         executor_env::inject_git_guard_env(&mut cmd);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(work_dir));

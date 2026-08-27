@@ -111,7 +111,7 @@ fn issue_2825_wait_reconciles_late_require_commit_contract_failure() {
     terminal.require_commit_recovery = Some(csa_session::RequireCommitRecoveryDiagnostic {
         require_commit: true,
         sa_mode: Some(true),
-        commit_created: false,
+        commit_created: Some(false),
         dirty_worktree: true,
         changed_paths: vec!["src/lib.rs".to_string()],
         changed_paths_truncated: 0,

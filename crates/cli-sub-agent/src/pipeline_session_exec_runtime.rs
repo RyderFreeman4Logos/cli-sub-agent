@@ -194,6 +194,12 @@ async fn prepare_session_runtime_inner(
             pattern_internal: input.startup_env.pattern_internal(),
             allow_git_push: input.allow_git_push,
         });
+    if input.startup_env.no_post_exec_gate() {
+        merged_env.insert(
+            csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY.to_string(),
+            "1".to_string(),
+        );
+    }
     input
         .resource_overrides
         .apply_to_child_env(&mut merged_env)?;
@@ -363,7 +369,8 @@ async fn prepare_session_runtime_inner(
     );
     execute_options = execute_options
         .with_subtree_pin(input.subtree_pin.cloned())
-        .with_git_push_allowed(input.allow_git_push);
+        .with_git_push_allowed(input.allow_git_push)
+        .with_no_post_exec_gate(input.startup_env.no_post_exec_gate());
     apply_transport_failover_overrides(
         &mut execute_options,
         (!merged_env.is_empty()).then_some(&merged_env),
