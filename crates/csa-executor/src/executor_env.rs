@@ -60,13 +60,11 @@ pub(crate) fn apply_no_post_exec_gate(cmd: &mut Command, no_post_exec_gate: bool
     }
 }
 
-/// Build `tmux new-session` so `CSA_NO_POST_EXEC_GATE` is bound on that
-/// session's inner child only — never via unrestored global server env.
+/// Build `tmux new-session` with no gate flag on the outer client.
 pub(crate) fn tmux_new_session_command(
     session_name: &str,
     work_dir: &str,
     extra_env: Option<&HashMap<String, String>>,
-    no_post_exec_gate: bool,
     inner_args: &[String],
 ) -> Command {
     let mut cmd = Command::new("tmux");
@@ -89,7 +87,7 @@ pub(crate) fn tmux_new_session_command(
             cmd.env(k, v);
         }
     }
-    apply_no_post_exec_gate(&mut cmd, no_post_exec_gate);
+    cmd.env_remove(csa_core::env::CSA_NO_POST_EXEC_GATE_ENV_KEY);
     cmd
 }
 

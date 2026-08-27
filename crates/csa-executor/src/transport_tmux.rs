@@ -394,7 +394,6 @@ impl TmuxTransport {
             session_name,
             work_dir_str,
             extra_env,
-            no_post_exec_gate,
             &inner,
         );
 
