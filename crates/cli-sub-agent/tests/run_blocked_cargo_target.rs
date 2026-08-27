@@ -210,6 +210,23 @@ fn output_with_timeout(command: &mut Command, description: &str) -> Output {
     output_with_deadline(command, description, COMMAND_TIMEOUT)
 }
 
+fn wait_for_durable_edit(project_root: &Path) {
+    let marker = project_root.join("dirty-edit-ready.txt");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::metadata(&marker) {
+            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => return,
+            Ok(_) => panic!("fake writer edit marker is not a non-empty file"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("inspect fake writer edit marker: {error}"),
+        }
+        if Instant::now() >= deadline {
+            panic!("fake writer did not publish a durable edit marker");
+        }
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
+}
+
 fn output_with_deadline(
     command: &mut Command,
     description: &str,
@@ -358,12 +375,9 @@ fn csa_cmd(home: &Path) -> Command {
     std::fs::create_dir_all(&rustup_home).expect("create isolated rustup home");
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("CSA_") {
-            cmd.env_remove(key);
-        }
-    }
-    cmd.env("HOME", home)
+    cmd.env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", home)
         .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("CARGO_HOME", cargo_home)
@@ -380,7 +394,15 @@ fn csa_cmd(home: &Path) -> Command {
 
 fn run_git(project_root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new("git");
-    command.args(args).current_dir(project_root);
+    command
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", project_root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(args)
+        .current_dir(project_root);
     output_with_timeout(&mut command, "git test fixture command")
 }
 
@@ -587,6 +609,7 @@ fn unmet_done_summary_is_terminal_failure_after_dirty_edit_without_blocked_marke
 set -eu
 printf 'provider reached\n' > "$CSA_PROJECT_ROOT/provider-ran.txt"
 printf 'dirty edit\n' > "$CSA_PROJECT_ROOT/dirty-edit.txt"
+printf 'dirty edit complete\n' > "$CSA_PROJECT_ROOT/dirty-edit-ready.txt"
 printf '%s\n' '{"type":"thread.started","thread_id":"unmet-done"}' '{"type":"item.completed","item":{"type":"agent_message","text":"tests and commit omitted"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 "#,
     )
@@ -619,6 +642,7 @@ printf '%s\n' '{"type":"thread.started","thread_id":"unmet-done"}' '{"type":"ite
         !output.status.success(),
         "dirty SA-mode work without a completion receipt must fail: {combined}"
     );
+    wait_for_durable_edit(&project);
     assert!(
         project.join("dirty-edit.txt").exists(),
         "fake writer must have edited"

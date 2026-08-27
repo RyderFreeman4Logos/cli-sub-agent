@@ -11,11 +11,7 @@ use serde_json::Value;
 // This suite intentionally uses local mock MCP backends and does not hit external APIs.
 
 fn scrub_inherited_csa_env(cmd: &mut Command) {
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("CSA_") {
-            cmd.env_remove(key);
-        }
-    }
+    cmd.env_clear().env("PATH", "/usr/local/bin:/usr/bin:/bin");
 }
 
 fn write_mock_mcp_script(dir: &Path) -> Result<PathBuf> {
@@ -102,6 +98,8 @@ fn connect_and_request(socket_path: &Path, request: &Value) -> Result<Value> {
 
 fn open_direct_client(script_path: &Path) -> Result<(Child, ChildStdin, BufReader<ChildStdout>)> {
     let mut child = Command::new("sh")
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .arg(script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -297,6 +295,7 @@ fn http_mcp_post(
     let header_path = header_file.path().to_str().context("header file path")?;
 
     let mut cmd = Command::new("curl");
+    cmd.env_clear().env("PATH", "/usr/local/bin:/usr/bin:/bin");
     cmd.args([
         "-sS",
         "-D",
