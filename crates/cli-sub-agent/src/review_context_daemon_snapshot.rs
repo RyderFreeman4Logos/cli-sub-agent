@@ -70,6 +70,12 @@ impl ResolvedReviewContext {
         );
         let snapshot: DaemonReviewContextSnapshot = serde_json::from_slice(&encoded)
             .context("failed to decode admitted daemon review context")?;
+        let expected_digest = std::env::var(super::DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY)
+            .context("missing admitted daemon review context launch digest")?;
+        anyhow::ensure!(
+            expected_digest == snapshot.digest,
+            "admitted daemon review context digest mismatch"
+        );
         anyhow::ensure!(
             digest_review_context(&snapshot.snapshot) == snapshot.digest,
             "admitted daemon review context digest mismatch"

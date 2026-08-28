@@ -1,4 +1,5 @@
 use crate::cli::{Cli, Commands, validate_review_args};
+use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use clap::Parser;
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 use tempfile::tempdir;
@@ -31,6 +32,10 @@ fn daemon_review_context_snapshot_survives_source_replacement() {
 
     parent.persist_daemon_snapshot(session.path()).unwrap();
     std::fs::write(&path, "replacement context").unwrap();
+    let lock = TEST_ENV_LOCK.clone();
+    let _lock = lock.blocking_lock();
+    let _launch_digest =
+        ScopedEnvVarRestore::set(DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY, &parent.digest);
     let child = ResolvedReviewContext::load_daemon_snapshot(session.path())
         .unwrap()
         .expect("daemon child should receive the admitted snapshot");
@@ -38,6 +43,80 @@ fn daemon_review_context_snapshot_survives_source_replacement() {
     assert_eq!(child.snapshot(), "admitted context");
     assert_eq!(child.digest, parent.digest);
     assert_eq!(child.kind, parent.kind);
+}
+
+#[test]
+fn daemon_child_rejects_replacement_with_recomputed_digest_for_each_context_flag() {
+    let lock = TEST_ENV_LOCK.clone();
+    let _lock = lock.blocking_lock();
+    let project = tempdir().unwrap();
+    let session_id = "daemon-context-digest-binding";
+    let session_dir = csa_session::get_session_dir(project.path(), session_id).unwrap();
+
+    for (flag, file_name, admitted, replacement, kind) in [
+        (
+            "--spec",
+            "review.toml",
+            "plan_ulid = \"01JTESTPLAN0000000000000003\"\nsummary = \"admitted spec\"\n",
+            "plan_ulid = \"01JTESTPLAN0000000000000004\"\nsummary = \"replacement spec\"\n",
+            "SpecToml",
+        ),
+        (
+            "--context",
+            "context.md",
+            "admitted context",
+            "replacement context",
+            "TodoMarkdown",
+        ),
+        (
+            "--prompt-file",
+            "prompt.md",
+            "admitted prompt",
+            "replacement prompt",
+            "TodoMarkdown",
+        ),
+    ] {
+        let path = project.path().join(file_name);
+        std::fs::write(&path, admitted).unwrap();
+        let parent = parse_review_args(project.path(), &[flag, path.to_str().unwrap()]);
+        let admitted_context =
+            resolve_review_context_for_args(&parent, project.path(), false, None)
+                .unwrap()
+                .expect("parent should admit explicit context");
+        let _launch_digest = ScopedEnvVarRestore::set(
+            DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY,
+            &admitted_context.digest,
+        );
+        admitted_context
+            .persist_daemon_snapshot(&session_dir)
+            .unwrap();
+
+        let replacement_digest = digest_review_context(replacement);
+        let replacement_snapshot = serde_json::json!({
+            "digest": replacement_digest,
+            "kind": kind,
+            "snapshot": replacement,
+        });
+        std::fs::write(
+            session_dir.join("input/review-context.json"),
+            serde_json::to_vec(&replacement_snapshot).unwrap(),
+        )
+        .unwrap();
+
+        let child = parse_review_args(
+            project.path(),
+            &[
+                "--daemon-child",
+                "--session-id",
+                session_id,
+                flag,
+                path.to_str().unwrap(),
+            ],
+        );
+        let error = resolve_review_context_for_args(&child, project.path(), false, None)
+            .expect_err("daemon child must reject a replacement snapshot");
+        assert!(format!("{error:#}").contains("admitted daemon review context digest mismatch"));
+    }
 }
 
 #[test]
@@ -52,6 +131,10 @@ fn daemon_snapshot_round_trips_max_escaped_context_without_source_path() {
     };
 
     parent.persist_daemon_snapshot(session.path()).unwrap();
+    let lock = TEST_ENV_LOCK.clone();
+    let _lock = lock.blocking_lock();
+    let _launch_digest =
+        ScopedEnvVarRestore::set(DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY, &parent.digest);
     let child = ResolvedReviewContext::load_daemon_snapshot(session.path())
         .unwrap()
         .expect("daemon child should accept the maximum admitted context");

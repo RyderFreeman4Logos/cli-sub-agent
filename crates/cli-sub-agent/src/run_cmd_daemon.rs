@@ -376,6 +376,12 @@ pub(crate) fn spawn_and_exit(
         project_root.display().to_string(),
     );
     startup_env.apply_to_child_env(&mut daemon_env);
+    if let Some(context) = spawn_options.review_context.as_ref() {
+        daemon_env.insert(
+            crate::review_context::DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY.to_string(),
+            context.digest.clone(),
+        );
+    }
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: sid.clone(),

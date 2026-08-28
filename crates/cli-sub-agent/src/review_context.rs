@@ -16,6 +16,7 @@ use tracing::warn;
 use crate::review_session_findings::read_session_findings_or_fall_back;
 
 const REVIEW_CONTEXT_MAX_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY: &str = "CSA_DAEMON_REVIEW_CONTEXT_DIGEST";
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedReviewContextKind {
