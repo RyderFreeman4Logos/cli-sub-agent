@@ -197,6 +197,8 @@ fn daemon_snapshot_fifo_fails_without_blocking() {
     std::fs::create_dir(&input_dir).unwrap();
     let fifo = input_dir.join("review-context.json");
     let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `fifo_name` is NUL-free and remains alive for the call; the
+    // assertion checks `mkfifo`'s return status before the FIFO is used.
     assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
 
     let (sender, receiver) = std::sync::mpsc::channel();

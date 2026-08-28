@@ -93,6 +93,9 @@ impl LegacyTransport {
         &self,
         request: ExecuteInAttempt<'_>,
     ) -> Result<TransportResult> {
+        request
+            .executor
+            .validate_prompt_for_execution(request.prompt)?;
         // Stage the antigravity-cli `model` field in
         // `~/.gemini/antigravity-cli/settings.json` before spawning `agy`,
         // and hold the RAII guard so the original contents are restored
@@ -167,6 +170,7 @@ impl LegacyTransport {
         attempt_env: LegacyAttemptEnv<'_>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        executor.validate_prompt_for_execution(prompt)?;
         // Shared attempt boundary: degraded-MCP / OAuth / initial-stall retries
         // all re-enter here. Fail closed if the owning execution was cancelled
         // after the previous attempt returned.
