@@ -15,6 +15,8 @@ use tracing::warn;
 
 use crate::review_session_findings::read_session_findings_or_fall_back;
 
+const REVIEW_CONTEXT_MAX_BYTES: usize = 10 * 1024 * 1024;
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedReviewContextKind {
     TodoMarkdown,
@@ -39,6 +41,9 @@ pub(crate) struct ResolvedReviewContext {
     pub(crate) kind: ResolvedReviewContextKind,
     snapshot: String,
 }
+
+#[path = "review_context_daemon_snapshot.rs"]
+mod daemon_snapshot;
 
 impl fmt::Debug for ResolvedReviewContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,6 +84,12 @@ pub(crate) fn resolve_review_context_for_args(
     project_root: &Path,
     allow_auto_discovery: bool,
 ) -> Result<Option<ResolvedReviewContext>> {
+    if let (true, Some(session_id)) = (args.daemon_child, args.session_id.as_deref()) {
+        let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+        if let Some(context) = ResolvedReviewContext::load_daemon_snapshot(&session_dir)? {
+            return Ok(Some(context));
+        }
+    }
     let explicit = args
         .spec
         .as_deref()
@@ -148,7 +159,10 @@ fn admit_review_context(
     } else {
         path.to_path_buf()
     };
-    let components: Vec<_> = relative.components().collect();
+    let components: Vec<_> = relative
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect();
     if components.is_empty()
         || components
             .iter()
@@ -196,7 +210,7 @@ fn read_beneath_root_snapshot(
         Some(Component::Normal(name)) => name,
         _ => anyhow::bail!("{label}: context path must name a file beneath the project workspace"),
     };
-    let mut file = openat_file(
+    let file = openat_file(
         directory.as_raw_fd(),
         name,
         libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
@@ -214,8 +228,14 @@ fn read_beneath_root_snapshot(
         );
     }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.take(REVIEW_CONTEXT_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
         .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
+    anyhow::ensure!(
+        bytes.len() <= REVIEW_CONTEXT_MAX_BYTES,
+        "{label}: '{}' exceeds the {REVIEW_CONTEXT_MAX_BYTES} byte limit",
+        resolved.display()
+    );
     String::from_utf8(bytes)
         .with_context(|| format!("{label}: '{}' must be valid UTF-8", resolved.display()))
 }
@@ -578,6 +598,9 @@ fn criterion_status_label(status: CriterionStatus) -> &'static str {
     }
 }
 
+#[cfg(test)]
+#[path = "review_context_admission_tests.rs"]
+mod admission_tests;
 #[cfg(test)]
 #[path = "review_context_tests.rs"]
 mod tests;

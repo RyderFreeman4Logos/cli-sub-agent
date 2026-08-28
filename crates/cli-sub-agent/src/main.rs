@@ -527,9 +527,11 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
-            if !args.daemon_child && args.session_id.is_none() {
-                review_cmd::preflight::validate_before_session(&args, &startup_env)?;
-            }
+            let admitted_context = if !args.daemon_child && args.session_id.is_none() {
+                review_cmd::preflight::validate_before_session(&args, &startup_env)?
+            } else {
+                None
+            };
             let wait_hint_provider =
                 daemon_caller_hints::explicit_wait_provider_from_launch_routing(
                     args.model_spec.as_deref(),
@@ -541,7 +543,7 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                     args.prompt_file.as_deref(),
                 )
             } else {
-                run_cmd_daemon::DaemonSpawnOptions::default()
+                run_cmd_daemon::DaemonSpawnOptions::for_review(admitted_context)
             }
             .with_wait_hint_provider(wait_hint_provider);
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
