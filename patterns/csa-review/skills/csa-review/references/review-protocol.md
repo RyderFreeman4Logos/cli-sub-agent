@@ -140,11 +140,18 @@ When `consistency_scope=touched-files`, extend only the consistency scan:
 
 ## Step 2.5: Plan / Spec Alignment (when context is provided)
 
-Context: {context}
+Context may be absent or supplied as a trusted inline snapshot. When present, the
+instruction includes `context_kind` metadata and the original filesystem path is
+not part of the review input:
 
-When a context path is provided, detect its type and verify implementation alignment:
+- `context_kind=todo-markdown`: treat the inline snapshot as the TODO/plan and verify
+  task completion, design drift, scope creep, and risk coverage.
+- `context_kind=spec-toml`: use the embedded parsed SpecDocument criteria below the
+  snapshot instead of attempting to rediscover a path.
+- `context_kind=passthrough`: use the inline snapshot as background only; skip plan
+  and spec alignment checks.
 
-### If `context` points to `TODO.md`
+### If `context_kind=todo-markdown`
 
 1. **Task completion**: Are all `[ ]` tasks from the plan addressed in the diff?
 2. **Design drift**: Does the implementation deviate from key decisions documented in the plan?
@@ -153,7 +160,7 @@ When a context path is provided, detect its type and verify implementation align
 
 Flag deviations as findings with `finding_type: "plan-deviation"` at P2 priority.
 
-### If `context` points to `spec.toml`
+### If `context_kind=spec-toml`
 
 1. Parse the TOML as `SpecDocument`, unless the initial prompt already embeds a parsed
    "Spec alignment context" block. If both are present, prefer the embedded block because
@@ -172,7 +179,7 @@ Flag deviations as findings with `finding_type: "plan-deviation"` at P2 priority
 Spec alignment findings should normally be P2, escalating to P1 when the criterion covers
 correctness, security, tenancy, data loss, or an AGENTS.md MUST/FORBIDDEN rule.
 
-If no context path is provided, skip this step entirely.
+If no `context_kind` is provided, skip this step entirely.
 
 ## Step 2.6: Project Profile Routing
 

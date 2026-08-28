@@ -22,6 +22,23 @@ impl Executor {
         )
     }
 
+    pub(crate) fn validate_prompt_for_execution(&self, prompt: &str) -> anyhow::Result<()> {
+        if !matches!(self, Self::Opencode { .. }) {
+            return Ok(());
+        }
+        if prompt.as_bytes().contains(&0) {
+            anyhow::bail!("OpenCode prompt contains an embedded NUL; refusing argv transport");
+        }
+        if prompt.len() > MAX_ARGV_PROMPT_LEN {
+            anyhow::bail!(
+                "OpenCode prompt length {} exceeds argv safety limit {}; refusing provider launch",
+                prompt.len(),
+                MAX_ARGV_PROMPT_LEN
+            );
+        }
+        Ok(())
+    }
+
     /// Append minimal prompt args for execute_in.
     pub(super) fn append_prompt_args(&self, cmd: &mut Command, prompt: &str) {
         self.append_prompt_args_with_transport(cmd, prompt, PromptTransport::Argv);

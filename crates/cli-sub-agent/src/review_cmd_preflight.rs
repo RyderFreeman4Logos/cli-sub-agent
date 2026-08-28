@@ -4,6 +4,7 @@ use csa_core::types::ToolName;
 use csa_resource::{ResourceGuard, ResourceLimits};
 
 use crate::cli::ReviewArgs;
+use crate::review_context::ResolvedReviewContext;
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 
@@ -13,7 +14,7 @@ const REVIEWER_SUB_SESSION_TASK_TYPE: &str = "reviewer_sub_session";
 pub(crate) fn validate_before_session(
     args: &ReviewArgs,
     startup_env: &StartupSubtreeEnv,
-) -> Result<()> {
+) -> Result<Option<ResolvedReviewContext>> {
     let argv: Vec<String> = std::env::args().collect();
     validate_before_session_with_argv(args, startup_env, &argv)
 }
@@ -22,18 +23,22 @@ fn validate_before_session_with_argv(
     args: &ReviewArgs,
     startup_env: &StartupSubtreeEnv,
     argv: &[String],
-) -> Result<()> {
+) -> Result<Option<ResolvedReviewContext>> {
     if args.check_verdict {
-        return Ok(());
+        return Ok(None);
     }
 
     super::session_fix::validate_session_fix_before_daemon(args)?;
     super::fix_finding::validate_fix_finding_before_daemon(args)?;
     if args.fix_finding {
-        return validate_fix_finding_resources_before_session(args, argv);
+        validate_fix_finding_resources_before_session(args, argv)?;
+        return Ok(None);
     }
-    super::validate_review_prompt_file(args.prompt_file.as_deref())?;
-    validate_review_routing_before_session(args, startup_env, argv)
+    let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
+    let context =
+        crate::review_context::resolve_review_context_for_args(args, &project_root, false, None)?;
+    validate_review_routing_before_session(args, startup_env, argv)?;
+    Ok(context)
 }
 
 fn validate_fix_finding_resources_before_session(args: &ReviewArgs, argv: &[String]) -> Result<()> {

@@ -137,10 +137,26 @@ fn resolve_review_context_explicit_spec_still_parses_when_auto_discovery_disable
         .unwrap();
 
     assert_eq!(context.path, spec_path.display().to_string());
+    assert!(context.digest.starts_with("sha256:"));
     assert!(matches!(
         context.kind,
         ResolvedReviewContextKind::SpecToml { .. }
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_review_context_rejects_symlinked_parent_directory() {
+    let project = tempdir().unwrap();
+    let source = project.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("context.md"), "context").unwrap();
+    std::os::unix::fs::symlink(&source, project.path().join("alias")).unwrap();
+
+    let error = resolve_review_context(Some("alias/context.md"), project.path(), false)
+        .expect_err("context paths must not traverse symlinked directories");
+
+    assert!(format!("{error:#}").contains("failed to open"));
 }
 
 #[test]

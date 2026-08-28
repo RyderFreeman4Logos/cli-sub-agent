@@ -28,11 +28,14 @@ fn resolve_review_context_parses_spec_toml() {
 
 #[test]
 fn resolve_review_context_keeps_markdown_path_behavior() {
-    let context = resolve_review_context(Some("/tmp/TODO.md"), std::path::Path::new("/tmp"), false)
+    let project = tempdir().unwrap();
+    let path = project.path().join("TODO.md");
+    std::fs::write(&path, "context").unwrap();
+    let context = resolve_review_context(Some(path.to_str().unwrap()), project.path(), false)
         .unwrap()
         .unwrap();
 
-    assert_eq!(context.path, "/tmp/TODO.md");
+    assert_eq!(context.path, path.display().to_string());
     assert!(matches!(
         context.kind,
         ResolvedReviewContextKind::TodoMarkdown

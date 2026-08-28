@@ -117,6 +117,186 @@ fn review_invalid_tier_is_rejected_before_session_creation() {
 }
 
 #[test]
+fn review_context_outside_workspace_is_rejected_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let context_path = outside_dir.path().join("context.md");
+    std::fs::write(&context_path, "mandatory context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--context", context_path.to_str().unwrap()],
+    );
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("outside review context must fail before provider launch");
+
+    assert!(format!("{error:#}").contains("outside the project workspace"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn oversized_review_context_is_rejected_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let context_path = project_dir.path().join("context.md");
+    std::fs::write(&context_path, vec![b'x'; 10 * 1024 * 1024 + 1]).unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--context", context_path.to_str().unwrap()],
+    );
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("oversized review context must fail before provider launch");
+
+    assert!(format!("{error:#}").contains("exceeds the 10485760 byte limit"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn review_spec_outside_workspace_is_rejected_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let spec_path = outside_dir.path().join("context.toml");
+    std::fs::write(
+        &spec_path,
+        "plan_ulid = \"01JTESTPLAN0000000000000000\"\nsummary = \"x\"\n",
+    )
+    .unwrap();
+    let args = parse_review_args(project_dir.path(), &["--spec", spec_path.to_str().unwrap()]);
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("outside review spec must fail before provider launch");
+
+    assert!(format!("{error:#}").contains("outside the project workspace"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn review_prompt_file_outside_workspace_is_rejected_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let prompt_path = outside_dir.path().join("context.md");
+    std::fs::write(&prompt_path, "mandatory context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--prompt-file", prompt_path.to_str().unwrap()],
+    );
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("outside review prompt file must fail before provider launch");
+
+    assert!(format!("{error:#}").contains("outside the project workspace"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn foreground_no_daemon_review_uses_admitted_context_after_source_replacement() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let context_path = project_dir.path().join("context.md");
+    std::fs::write(&context_path, "admitted foreground context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--no-daemon", "--context", context_path.to_str().unwrap()],
+    );
+    let admitted = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        None,
+    )
+    .unwrap();
+
+    std::fs::write(&context_path, "replacement foreground context").unwrap();
+    let context = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        admitted,
+    )
+    .unwrap();
+    let prompt = super::super::build_review_instruction(
+        "uncommitted",
+        "review-only",
+        "auto",
+        crate::cli::ReviewMode::Standard,
+        context.as_ref(),
+    );
+
+    assert!(prompt.contains("admitted foreground context"));
+    assert!(!prompt.contains("replacement foreground context"));
+}
+
+#[test]
+fn review_spec_precedence_ignores_outside_context_before_session_creation() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);
+    let _config_home =
+        ScopedEnvVarRestore::set("XDG_CONFIG_HOME", project_dir.path().join("xdg-config"));
+    write_project_config(project_dir.path(), &project_config_with_quality_tier());
+    let spec_path = project_dir.path().join("context.toml");
+    std::fs::write(
+        &spec_path,
+        "plan_ulid = \"01JTESTPLAN0000000000000000\"\nsummary = \"x\"\n",
+    )
+    .unwrap();
+    let outside_context = outside_dir.path().join("context.md");
+    std::fs::write(&outside_context, "ignored context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &[
+            "--spec",
+            spec_path.to_str().unwrap(),
+            "--context",
+            outside_context.to_str().unwrap(),
+            "--tier",
+            "missing-tier",
+        ],
+    );
+
+    let error = super::validate_before_session(&args, &StartupSubtreeEnv::default())
+        .expect_err("preflight must continue past an ignored outside context");
+
+    assert!(format!("{error:#}").contains("Tier selector 'missing-tier' not found"));
+    assert!(
+        csa_session::list_sessions(project_dir.path(), None)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn review_host_memory_admission_is_rejected_before_session_creation() {
     let project_dir = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);

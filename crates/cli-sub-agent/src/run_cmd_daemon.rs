@@ -26,6 +26,7 @@ pub(crate) use tier_policy::{
 pub(crate) struct DaemonSpawnOptions {
     run_stdin_prompt: RunStdinPrompt,
     prompt_file_to_capture: Option<PathBuf>,
+    review_context: Option<crate::review_context::ResolvedReviewContext>,
     remove_prompt_file_arg: bool,
     prompt_file_forward_arg: PromptFileForwardArg,
     no_fs_sandbox: bool,
@@ -68,6 +69,15 @@ impl PromptFileForwardArg {
 }
 
 impl DaemonSpawnOptions {
+    pub(crate) fn for_review(
+        context: Option<crate::review_context::ResolvedReviewContext>,
+    ) -> Self {
+        Self {
+            review_context: context,
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn with_wait_hint_provider(
         mut self,
         wait_hint_provider: Option<csa_config::ModelProvider>,
@@ -342,6 +352,7 @@ pub(crate) fn spawn_and_exit(
     let session_dir = session_root.join("sessions").join(&sid);
     let prompt_input = read_daemon_prompt_input_if_needed(&spawn_options)?;
     persist_daemon_placeholder_session(&project_root, &session_dir, &sid, subcommand)?;
+    write_daemon_review_context_if_needed(&session_dir, spawn_options.review_context.as_ref())?;
     let prompt_input_file = write_daemon_prompt_input_if_needed(&session_dir, prompt_input)?;
 
     // Forward args after the subcommand verb; spawn_daemon injects child/session flags.
@@ -365,6 +376,12 @@ pub(crate) fn spawn_and_exit(
         project_root.display().to_string(),
     );
     startup_env.apply_to_child_env(&mut daemon_env);
+    if let Some(context) = spawn_options.review_context.as_ref() {
+        daemon_env.insert(
+            crate::review_context::DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY.to_string(),
+            context.digest.clone(),
+        );
+    }
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: sid.clone(),
@@ -577,6 +594,16 @@ fn write_daemon_prompt_input_if_needed(
         )
     })?;
     Ok(Some(prompt_path))
+}
+
+fn write_daemon_review_context_if_needed(
+    session_dir: &Path,
+    context: Option<&crate::review_context::ResolvedReviewContext>,
+) -> Result<()> {
+    if let Some(context) = context {
+        context.persist_daemon_snapshot(session_dir)?;
+    }
+    Ok(())
 }
 
 fn build_forwarded_args(

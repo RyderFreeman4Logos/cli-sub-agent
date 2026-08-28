@@ -7,9 +7,9 @@ use crate::review_consensus::CLEAN;
 use crate::review_consensus::{consensus_strategy_label, parse_consensus_strategy};
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
+use crate::review_context::resolve_review_context_for_args;
 #[cfg(test)]
-use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
-use crate::review_context::{resolve_review_context, validate_review_prompt_file};
+use crate::review_context::{ResolvedReviewContextKind, resolve_review_context};
 #[cfg(test)]
 use crate::review_routing::ReviewRoutingMetadata;
 use crate::startup_env::StartupSubtreeEnv;
@@ -132,7 +132,9 @@ pub(crate) use execute::compute_diff_fingerprint as compute_review_diff_fingerpr
 
 #[path = "review_cmd_handle.rs"]
 mod handle;
+#[cfg(test)]
 pub(crate) use handle::handle_review;
+pub(crate) use handle::handle_review_with_admitted_context;
 
 #[cfg(test)]
 #[path = "review_cmd_tests_barrel.rs"]

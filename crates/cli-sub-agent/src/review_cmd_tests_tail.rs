@@ -335,10 +335,12 @@ fn test_build_review_instruction_basic() {
 
 #[test]
 fn test_build_review_instruction_with_context() {
-    let context = ResolvedReviewContext {
-        path: "/path/to/TODO.md".to_string(),
-        kind: ResolvedReviewContextKind::TodoMarkdown,
-    };
+    let project = tempdir().unwrap();
+    let path = project.path().join("TODO.md");
+    std::fs::write(&path, "context snapshot").unwrap();
+    let context = resolve_review_context(Some(path.to_str().unwrap()), project.path(), false)
+        .unwrap()
+        .unwrap();
     let result = build_review_instruction(
         "range:main...HEAD",
         "review-only",
@@ -347,7 +349,36 @@ fn test_build_review_instruction_with_context() {
         Some(&context),
     );
     assert!(result.contains("scope=range:main...HEAD"));
-    assert!(result.contains("context=/path/to/TODO.md"));
+    assert!(result.contains("context_digest=sha256:"));
+    assert!(result.contains("context_kind=todo-markdown"));
+    assert!(result.contains("TODO/plan alignment"));
+    assert!(result.contains("context snapshot"));
+    assert!(!result.contains(&path.display().to_string()));
+}
+
+#[test]
+fn test_build_review_instruction_uses_context_snapshot_not_path() {
+    let project = tempdir().unwrap();
+    let path = project.path().join("TODO.md");
+    std::fs::write(&path, "snapshot context").unwrap();
+    let context = resolve_review_context(Some(path.to_str().unwrap()), project.path(), false)
+        .unwrap()
+        .unwrap();
+    std::fs::write(&path, "replacement context").unwrap();
+
+    let result = build_review_instruction(
+        "range:main...HEAD",
+        "review-only",
+        "on",
+        ReviewMode::Standard,
+        Some(&context),
+    );
+
+    assert!(result.contains("snapshot context"));
+    assert!(result.contains("context_kind=todo-markdown"));
+    assert!(result.contains("TODO/plan alignment"));
+    assert!(!result.contains("replacement context"));
+    assert!(!result.contains(&path.display().to_string()));
 }
 
 #[test]

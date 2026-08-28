@@ -262,3 +262,61 @@ fn test_build_command_long_prompt_opencode_emits_warning() {
     // warning output best-effort for observability.
     let _ = logs;
 }
+
+#[test]
+fn opencode_prompt_validation_rejects_argv_overflow_and_nul() {
+    let exec = Executor::Opencode {
+        model_override: None,
+        agent: None,
+        thinking_budget: None,
+    };
+
+    for (source, prompt) in [
+        ("--spec", "x".repeat(MAX_ARGV_PROMPT_LEN + 1)),
+        ("--context", "x".repeat(MAX_ARGV_PROMPT_LEN + 1)),
+        ("--prompt-file", "x".repeat(MAX_ARGV_PROMPT_LEN + 1)),
+        ("--context", "safe\0unsafe".to_string()),
+        ("--prompt-file", "safe\0unsafe".to_string()),
+    ] {
+        let error = exec
+            .validate_prompt_for_execution(&prompt)
+            .expect_err("OpenCode prompt must fail before argv construction");
+        assert!(
+            error.to_string().contains("refusing"),
+            "{source} should return a bounded validation error: {error:#}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn opencode_prompt_validation_runs_before_execute_in_spawn() {
+    let exec = Executor::Opencode {
+        model_override: None,
+        agent: None,
+        thinking_budget: None,
+    };
+    let temp = tempfile::tempdir().expect("tempdir");
+    for (prompt, expected) in [
+        ("x".repeat(MAX_ARGV_PROMPT_LEN + 1), "argv safety limit"),
+        ("safe\0unsafe".to_string(), "embedded NUL"),
+    ] {
+        let error = exec
+            .execute_in(
+                &prompt,
+                temp.path(),
+                None,
+                None,
+                false,
+                csa_process::StreamMode::BufferOnly,
+                1,
+                ResolvedTimeout(None),
+            )
+            .await
+            .expect_err("invalid OpenCode prompt must fail before provider launch");
+
+        assert!(
+            error.to_string().contains(expected),
+            "expected bounded {expected} validation error, got: {error:#}"
+        );
+    }
+}
