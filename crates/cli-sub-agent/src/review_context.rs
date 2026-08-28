@@ -1,6 +1,11 @@
-use std::fs::File;
+use std::ffi::CString;
+use std::fmt;
+use std::fs::{File, OpenOptions};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use csa_session::{Finding, ReviewSessionMeta, Severity};
@@ -10,56 +15,109 @@ use tracing::warn;
 
 use crate::review_session_findings::read_session_findings_or_fall_back;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedReviewContextKind {
     TodoMarkdown,
     Passthrough,
     SpecToml { spec: SpecDocument },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for ResolvedReviewContextKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::TodoMarkdown => "TodoMarkdown",
+            Self::Passthrough => "Passthrough",
+            Self::SpecToml { .. } => "SpecToml",
+        })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedReviewContext {
     pub(crate) path: String,
     pub(crate) digest: String,
     pub(crate) kind: ResolvedReviewContextKind,
+    snapshot: String,
 }
 
+impl fmt::Debug for ResolvedReviewContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResolvedReviewContext")
+            .field("path", &self.path)
+            .field("digest", &self.digest)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ResolvedReviewContext {
+    pub(crate) fn snapshot(&self) -> &str {
+        &self.snapshot
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_review_context(
     requested_context: Option<&str>,
     project_root: &Path,
     allow_auto_discovery: bool,
 ) -> Result<Option<ResolvedReviewContext>> {
     match requested_context {
-        Some(path) => Ok(Some(resolve_explicit_review_context(path, project_root)?)),
+        Some(path) => Ok(Some(resolve_explicit_review_context(
+            Path::new(path),
+            project_root,
+            "--context",
+        )?)),
         None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
         None => Ok(None),
     }
 }
 
-pub(crate) fn validate_review_prompt_file(path: Option<&Path>) -> Result<()> {
-    let Some(path) = path else {
-        return Ok(());
-    };
-
-    std::fs::read_to_string(path)
-        .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
-    Ok(())
+pub(crate) fn resolve_review_context_for_args(
+    args: &crate::cli::ReviewArgs,
+    project_root: &Path,
+    allow_auto_discovery: bool,
+) -> Result<Option<ResolvedReviewContext>> {
+    let explicit = args
+        .spec
+        .as_deref()
+        .map(|path| (Path::new(path), "--spec"))
+        .or_else(|| {
+            args.context
+                .as_deref()
+                .map(|path| (Path::new(path), "--context"))
+        })
+        .or_else(|| {
+            args.prompt_file
+                .as_deref()
+                .map(|path| (path, "--prompt-file"))
+        });
+    match explicit {
+        Some((path, label)) => Ok(Some(resolve_explicit_review_context(
+            path,
+            project_root,
+            label,
+        )?)),
+        None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
+        None => Ok(None),
+    }
 }
 
 fn resolve_explicit_review_context(
-    path: &str,
+    path: &Path,
     project_root: &Path,
+    label: &str,
 ) -> Result<ResolvedReviewContext> {
-    let (path_ref, digest) = admit_review_context(Path::new(path), project_root)?;
-
-    match csa_core::spec_validate::validate_spec(&path_ref) {
-        Ok(spec_path) => return load_spec_review_context(&spec_path, digest),
-        Err(csa_core::spec_validate::SpecValidationError::InvalidExtension { .. }) => {}
-        Err(error) => return Err(error.into()),
-    }
+    let (path_ref, snapshot) = admit_review_context(path, project_root, label)?;
+    let digest = digest_review_context(&snapshot);
 
     let kind = if has_extension(&path_ref, "md") {
         ResolvedReviewContextKind::TodoMarkdown
+    } else if has_extension(&path_ref, "toml") || has_extension(&path_ref, "spec") {
+        let spec: SpecDocument = toml::from_str(&snapshot)
+            .with_context(|| format!("Failed to parse spec context: {}", path_ref.display()))?;
+        ResolvedReviewContextKind::SpecToml { spec }
     } else {
         ResolvedReviewContextKind::Passthrough
     };
@@ -68,37 +126,119 @@ fn resolve_explicit_review_context(
         path: path_ref.display().to_string(),
         digest,
         kind,
+        snapshot,
     })
 }
 
-fn admit_review_context(path: &Path, project_root: &Path) -> Result<(PathBuf, String)> {
+fn admit_review_context(
+    path: &Path,
+    project_root: &Path,
+    label: &str,
+) -> Result<(PathBuf, String)> {
     let project_root = project_root
         .canonicalize()
-        .context("--context: failed to resolve project root")?;
-    let requested = if path.is_absolute() {
-        path.to_path_buf()
+        .with_context(|| format!("{label}: failed to resolve project root"))?;
+    let relative = if path.is_absolute() {
+        path.strip_prefix(&project_root).map(Path::to_path_buf).map_err(|_| {
+            anyhow::anyhow!(
+                "{label}: '{}' is outside the project workspace; copy it into the project and retry",
+                path.display()
+            )
+        })?
     } else {
-        project_root.join(path)
+        path.to_path_buf()
     };
-    let metadata = std::fs::symlink_metadata(&requested)
-        .with_context(|| format!("--context: failed to inspect '{}'", path.display()))?;
-    if !metadata.file_type().is_file() {
+    let components: Vec<_> = relative.components().collect();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
         anyhow::bail!(
-            "--context: '{}' must be a regular, non-symlink file",
+            "{label}: '{}' must be a file beneath the project workspace",
             path.display()
         );
     }
-    let resolved = requested
-        .canonicalize()
-        .with_context(|| format!("--context: failed to resolve '{}'", path.display()))?;
-    if !resolved.starts_with(&project_root) {
-        anyhow::bail!(
-            "--context: '{}' is outside the project workspace; copy it into the project and retry",
-            path.display()
-        );
-    }
+    let resolved = project_root.join(&relative);
+    let snapshot = read_beneath_root_snapshot(&project_root, &components, &resolved, label)?;
+    Ok((resolved, snapshot))
+}
 
-    Ok((resolved.clone(), digest_review_context_file(&resolved)?))
+fn read_beneath_root_snapshot(
+    project_root: &Path,
+    components: &[Component<'_>],
+    resolved: &Path,
+    label: &str,
+) -> Result<String> {
+    let root = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(project_root)
+        .with_context(|| format!("{label}: failed to open project root"))?;
+    let mut directory = root;
+    for component in &components[..components.len() - 1] {
+        let name = match component {
+            Component::Normal(name) => name,
+            _ => anyhow::bail!("{label}: context path must stay beneath the project workspace"),
+        };
+        directory = openat_file(
+            directory.as_raw_fd(),
+            name,
+            libc::O_RDONLY
+                | libc::O_DIRECTORY
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
+                | libc::O_NONBLOCK,
+        )
+        .with_context(|| format!("{label}: failed to open '{}'", resolved.display()))?;
+    }
+    let name = match components.last() {
+        Some(Component::Normal(name)) => name,
+        _ => anyhow::bail!("{label}: context path must name a file beneath the project workspace"),
+    };
+    let mut file = openat_file(
+        directory.as_raw_fd(),
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+    )
+    .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("{label}: failed to inspect '{}'", resolved.display()))?
+        .file_type()
+        .is_file()
+    {
+        anyhow::bail!(
+            "{label}: '{}' must be a regular, non-symlink file",
+            resolved.display()
+        );
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
+    String::from_utf8(bytes)
+        .with_context(|| format!("{label}: '{}' must be valid UTF-8", resolved.display()))
+}
+
+fn openat_file(
+    directory_fd: std::os::fd::RawFd,
+    name: &std::ffi::OsStr,
+    flags: i32,
+) -> std::io::Result<File> {
+    let name = CString::new(name.as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "context path contains a null byte",
+        )
+    })?;
+    // SAFETY: `directory_fd` is owned by a live `File`; `name` is NUL-terminated; a successful
+    // `openat` returns a new descriptor transferred immediately to the returned `File`.
+    let descriptor = unsafe { libc::openat(directory_fd, name.as_ptr(), flags, 0) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `descriptor` is a successful, uniquely owned `openat` result.
+    Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
 fn auto_discover_review_context(project_root: &Path) -> Option<ResolvedReviewContext> {
@@ -137,37 +277,27 @@ pub(crate) fn discover_review_context_for_branch(
         return Ok(None);
     }
 
-    load_spec_review_context(&spec_path, digest_review_context_file(&spec_path)?).map(Some)
+    let snapshot = std::fs::read_to_string(&spec_path)
+        .with_context(|| format!("Failed to read spec context: {}", spec_path.display()))?;
+    load_spec_review_context(&spec_path, snapshot).map(Some)
 }
 
-fn load_spec_review_context(path: &Path, digest: String) -> Result<ResolvedReviewContext> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read spec context: {}", path.display()))?;
-    let spec: SpecDocument = toml::from_str(&content)
+fn load_spec_review_context(path: &Path, snapshot: String) -> Result<ResolvedReviewContext> {
+    let spec: SpecDocument = toml::from_str(&snapshot)
         .with_context(|| format!("Failed to parse spec context: {}", path.display()))?;
 
     Ok(ResolvedReviewContext {
         path: path.display().to_string(),
-        digest,
+        digest: digest_review_context(&snapshot),
         kind: ResolvedReviewContextKind::SpecToml { spec },
+        snapshot,
     })
 }
 
-fn digest_review_context_file(path: &Path) -> Result<String> {
-    let mut file = File::open(path)
-        .with_context(|| format!("--context: failed to read '{}'", path.display()))?;
+fn digest_review_context(snapshot: &str) -> String {
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 8192];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .with_context(|| format!("--context: failed to read '{}'", path.display()))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    hasher.update(snapshot.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn current_git_branch(project_root: &Path) -> Option<String> {

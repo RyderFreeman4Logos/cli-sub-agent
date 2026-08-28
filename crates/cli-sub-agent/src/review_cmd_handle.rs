@@ -16,7 +16,7 @@ async fn handle_review_inner(
     if args.converge && !args.discovery_only && !args.execute_completion {
         return review_convergence::emit_report_only(args.range.as_deref());
     }
-    validate_review_prompt_file(args.prompt_file.as_deref())?;
+
     if let Some(commit) = args.commit.as_deref() {
         super::resolve::validate_single_parent_commit_scope(&project_root, commit)?;
     }
@@ -111,13 +111,7 @@ async fn handle_review_inner(
         args.effective_security_mode_for(review_mode)
     };
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
-    let prompt_file_path = args.prompt_file.as_ref().map(|p| p.display().to_string());
-    let explicit_context = args
-        .spec
-        .as_deref()
-        .or(args.context.as_deref())
-        .or(prompt_file_path.as_deref());
-    let context = resolve_review_context(explicit_context, &project_root, auto_discover_context)?;
+    let context = resolve_review_context_for_args(&args, &project_root, auto_discover_context)?;
 
     debug!(
         scope = %scope,

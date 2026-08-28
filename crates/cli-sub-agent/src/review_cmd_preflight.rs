@@ -32,9 +32,8 @@ fn validate_before_session_with_argv(
     if args.fix_finding {
         return validate_fix_finding_resources_before_session(args, argv);
     }
-    super::validate_review_prompt_file(args.prompt_file.as_deref())?;
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
-    crate::review_context::resolve_review_context(args.context.as_deref(), &project_root, false)?;
+    crate::review_context::resolve_review_context_for_args(args, &project_root, false)?;
     validate_review_routing_before_session(args, startup_env, argv)
 }
 
