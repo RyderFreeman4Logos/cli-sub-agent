@@ -39,6 +39,27 @@ fn daemon_review_context_snapshot_survives_source_replacement() {
 }
 
 #[test]
+fn daemon_snapshot_round_trips_max_escaped_context_without_source_path() {
+    let session = tempdir().unwrap();
+    let snapshot = "\0".repeat(REVIEW_CONTEXT_MAX_BYTES);
+    let parent = ResolvedReviewContext {
+        path: "x".repeat(16 * 1024),
+        digest: digest_review_context(&snapshot),
+        kind: ResolvedReviewContextKind::TodoMarkdown,
+        snapshot,
+    };
+
+    parent.persist_daemon_snapshot(session.path()).unwrap();
+    let child = ResolvedReviewContext::load_daemon_snapshot(session.path())
+        .unwrap()
+        .expect("daemon child should accept the maximum admitted context");
+
+    assert_eq!(child.snapshot(), parent.snapshot());
+    assert_eq!(child.digest, parent.digest);
+    assert!(child.path.is_empty());
+}
+
+#[test]
 fn resolve_review_context_accepts_dot_relative_explicit_paths() {
     let project = tempdir().unwrap();
     std::fs::write(project.path().join("TODO.md"), "todo context").unwrap();

@@ -7,12 +7,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{ResolvedReviewContext, ResolvedReviewContextKind, digest_review_context};
 
-const DAEMON_REVIEW_CONTEXT_SNAPSHOT_MAX_BYTES: usize = super::REVIEW_CONTEXT_MAX_BYTES * 6 + 4096;
+const DAEMON_REVIEW_CONTEXT_SNAPSHOT_MAX_BYTES: usize = super::REVIEW_CONTEXT_MAX_BYTES * 6
+    + r#"{"digest":""#.len()
+    + "sha256:".len()
+    + 64
+    + r#"","kind":"TodoMarkdown","snapshot":""#.len()
+    + r#""}"#.len();
 const DAEMON_REVIEW_CONTEXT_SNAPSHOT_FILE: &str = "review-context.json";
 
 #[derive(Serialize, Deserialize)]
 struct DaemonReviewContextSnapshot {
-    path: String,
     digest: String,
     kind: DaemonReviewContextKind,
     snapshot: String,
@@ -33,7 +37,6 @@ impl ResolvedReviewContext {
             ResolvedReviewContextKind::SpecToml { .. } => DaemonReviewContextKind::SpecToml,
         };
         let encoded = serde_json::to_vec(&DaemonReviewContextSnapshot {
-            path: self.path.clone(),
             digest: self.digest.clone(),
             kind,
             snapshot: self.snapshot.clone(),
@@ -80,7 +83,7 @@ impl ResolvedReviewContext {
             },
         };
         Ok(Some(Self {
-            path: snapshot.path,
+            path: String::new(),
             digest: snapshot.digest,
             kind,
             snapshot: snapshot.snapshot,

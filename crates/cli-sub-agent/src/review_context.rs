@@ -83,7 +83,11 @@ pub(crate) fn resolve_review_context_for_args(
     args: &crate::cli::ReviewArgs,
     project_root: &Path,
     allow_auto_discovery: bool,
+    admitted_context: Option<ResolvedReviewContext>,
 ) -> Result<Option<ResolvedReviewContext>> {
+    if admitted_context.is_some() {
+        return Ok(admitted_context);
+    }
     if let (true, Some(session_id)) = (args.daemon_child, args.session_id.as_deref()) {
         let session_dir = csa_session::get_session_dir(project_root, session_id)?;
         if let Some(context) = ResolvedReviewContext::load_daemon_snapshot(&session_dir)? {

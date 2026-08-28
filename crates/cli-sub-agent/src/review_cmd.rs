@@ -132,7 +132,9 @@ pub(crate) use execute::compute_diff_fingerprint as compute_review_diff_fingerpr
 
 #[path = "review_cmd_handle.rs"]
 mod handle;
+#[cfg(test)]
 pub(crate) use handle::handle_review;
+pub(crate) use handle::handle_review_with_admitted_context;
 
 #[cfg(test)]
 #[path = "review_cmd_tests_barrel.rs"]

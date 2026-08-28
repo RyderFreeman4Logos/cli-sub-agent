@@ -36,7 +36,7 @@ fn validate_before_session_with_argv(
     }
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
     let context =
-        crate::review_context::resolve_review_context_for_args(args, &project_root, false)?;
+        crate::review_context::resolve_review_context_for_args(args, &project_root, false, None)?;
     validate_review_routing_before_session(args, startup_env, argv)?;
     Ok(context)
 }

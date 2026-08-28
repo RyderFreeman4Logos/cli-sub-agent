@@ -543,7 +543,7 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                     args.prompt_file.as_deref(),
                 )
             } else {
-                run_cmd_daemon::DaemonSpawnOptions::for_review(admitted_context)
+                run_cmd_daemon::DaemonSpawnOptions::for_review(admitted_context.clone())
             }
             .with_wait_hint_provider(wait_hint_provider);
             let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
@@ -555,7 +555,13 @@ async fn run(wait_caller_identity: session_cmds::WaitCallerIdentity) -> Result<(
                 &mut startup_env,
                 review_daemon_options,
             )?;
-            let result = review_cmd::handle_review(args, current_depth, &startup_env).await;
+            let result = review_cmd::handle_review_with_admitted_context(
+                args,
+                current_depth,
+                &startup_env,
+                admitted_context,
+            )
+            .await;
             let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,

@@ -221,6 +221,43 @@ fn review_prompt_file_outside_workspace_is_rejected_before_session_creation() {
 }
 
 #[test]
+fn foreground_no_daemon_review_uses_admitted_context_after_source_replacement() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let context_path = project_dir.path().join("context.md");
+    std::fs::write(&context_path, "admitted foreground context").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--no-daemon", "--context", context_path.to_str().unwrap()],
+    );
+    let admitted = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        None,
+    )
+    .unwrap();
+
+    std::fs::write(&context_path, "replacement foreground context").unwrap();
+    let context = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        admitted,
+    )
+    .unwrap();
+    let prompt = super::super::build_review_instruction(
+        "uncommitted",
+        "review-only",
+        "auto",
+        crate::cli::ReviewMode::Standard,
+        context.as_ref(),
+    );
+
+    assert!(prompt.contains("admitted foreground context"));
+    assert!(!prompt.contains("replacement foreground context"));
+}
+
+#[test]
 fn review_spec_precedence_ignores_outside_context_before_session_creation() {
     let project_dir = tempfile::tempdir().unwrap();
     let outside_dir = tempfile::tempdir().unwrap();
