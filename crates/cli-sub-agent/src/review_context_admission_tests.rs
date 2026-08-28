@@ -2,6 +2,14 @@ use crate::cli::{Cli, Commands, validate_review_args};
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use clap::Parser;
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::time::Duration;
 use tempfile::tempdir;
 
 use super::*;
@@ -91,7 +99,13 @@ fn daemon_child_rejects_replacement_with_recomputed_digest_for_each_context_flag
             .persist_daemon_snapshot(&session_dir)
             .unwrap();
 
-        let replacement_digest = digest_review_context(replacement);
+        let replacement_kind = match kind {
+            "SpecToml" => "spec-toml",
+            "TodoMarkdown" => "todo-markdown",
+            "Passthrough" => "passthrough",
+            _ => unreachable!("serialized daemon context kind"),
+        };
+        let replacement_digest = digest_review_context(replacement_kind, replacement);
         let replacement_snapshot = serde_json::json!({
             "digest": replacement_digest,
             "kind": kind,
@@ -120,12 +134,105 @@ fn daemon_child_rejects_replacement_with_recomputed_digest_for_each_context_flag
 }
 
 #[test]
+fn daemon_child_rejects_kind_tampering_for_each_context_flag() {
+    let lock = TEST_ENV_LOCK.clone();
+    let _lock = lock.blocking_lock();
+    let project = tempdir().unwrap();
+    let session_id = "daemon-context-kind-binding";
+    let session_dir = csa_session::get_session_dir(project.path(), session_id).unwrap();
+
+    for (flag, file_name, admitted) in [
+        (
+            "--spec",
+            "review.toml",
+            r#"plan_ulid = "01JTESTPLAN0000000000000003"
+summary = "admitted spec"
+"#,
+        ),
+        ("--context", "context.md", "admitted context"),
+        ("--prompt-file", "prompt.md", "admitted prompt"),
+    ] {
+        let path = project.path().join(file_name);
+        std::fs::write(&path, admitted).unwrap();
+        let parent = parse_review_args(project.path(), &[flag, path.to_str().unwrap()]);
+        let admitted_context =
+            resolve_review_context_for_args(&parent, project.path(), false, None)
+                .unwrap()
+                .expect("parent should admit explicit context");
+        let _launch_digest = ScopedEnvVarRestore::set(
+            DAEMON_REVIEW_CONTEXT_DIGEST_ENV_KEY,
+            &admitted_context.digest,
+        );
+        admitted_context
+            .persist_daemon_snapshot(&session_dir)
+            .unwrap();
+
+        let snapshot_path = session_dir.join("input/review-context.json");
+        let mut tampered: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+        tampered["kind"] = serde_json::Value::String("Passthrough".to_string());
+        std::fs::write(&snapshot_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+
+        let child = parse_review_args(
+            project.path(),
+            &[
+                "--daemon-child",
+                "--session-id",
+                session_id,
+                flag,
+                path.to_str().unwrap(),
+            ],
+        );
+        let error = resolve_review_context_for_args(&child, project.path(), false, None)
+            .expect_err("daemon child must reject kind tampering");
+        assert!(format!("{error:#}").contains("admitted daemon review context digest mismatch"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_snapshot_fifo_fails_without_blocking() {
+    let session = tempdir().unwrap();
+    let input_dir = session.path().join("input");
+    std::fs::create_dir(&input_dir).unwrap();
+    let fifo = input_dir.join("review-context.json");
+    let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let session_path = session.path().to_path_buf();
+    let worker = std::thread::spawn(move || {
+        sender
+            .send(ResolvedReviewContext::load_daemon_snapshot(&session_path))
+            .unwrap();
+    });
+    let finished = match receiver.recv_timeout(Duration::from_secs(1)) {
+        Ok(result) => {
+            let error = result.expect_err("FIFO snapshot must be rejected");
+            assert!(format!("{error:#}").contains("regular"));
+            true
+        }
+        Err(_) => {
+            let _writer = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+                .unwrap();
+            let _ = receiver.recv_timeout(Duration::from_secs(1));
+            false
+        }
+    };
+    worker.join().unwrap();
+    assert!(finished, "FIFO snapshot open exceeded the bounded deadline");
+}
+
+#[test]
 fn daemon_snapshot_round_trips_max_escaped_context_without_source_path() {
     let session = tempdir().unwrap();
     let snapshot = "\0".repeat(REVIEW_CONTEXT_MAX_BYTES);
     let parent = ResolvedReviewContext {
         path: "x".repeat(16 * 1024),
-        digest: digest_review_context(&snapshot),
+        digest: digest_review_context("todo-markdown", &snapshot),
         kind: ResolvedReviewContextKind::TodoMarkdown,
         snapshot,
     };

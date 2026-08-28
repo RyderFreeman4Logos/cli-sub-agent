@@ -350,6 +350,8 @@ fn test_build_review_instruction_with_context() {
     );
     assert!(result.contains("scope=range:main...HEAD"));
     assert!(result.contains("context_digest=sha256:"));
+    assert!(result.contains("context_kind=todo-markdown"));
+    assert!(result.contains("TODO/plan alignment"));
     assert!(result.contains("context snapshot"));
     assert!(!result.contains(&path.display().to_string()));
 }
@@ -373,6 +375,8 @@ fn test_build_review_instruction_uses_context_snapshot_not_path() {
     );
 
     assert!(result.contains("snapshot context"));
+    assert!(result.contains("context_kind=todo-markdown"));
+    assert!(result.contains("TODO/plan alignment"));
     assert!(!result.contains("replacement context"));
     assert!(!result.contains(&path.display().to_string()));
 }

@@ -1,5 +1,6 @@
-use std::fs::File;
+use std::ffi::OsStr;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -50,10 +51,18 @@ impl ResolvedReviewContext {
     }
 
     pub(crate) fn load_daemon_snapshot(session_dir: &Path) -> Result<Option<Self>> {
-        let path = session_dir
-            .join("input")
-            .join(DAEMON_REVIEW_CONTEXT_SNAPSHOT_FILE);
-        let file = match File::open(&path) {
+        let input_dir = session_dir.join("input");
+        let directory = match super::open_directory(&input_dir) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).context("failed to read admitted daemon review context");
+            }
+        };
+        let file = match super::open_regular_file_at(
+            directory.as_raw_fd(),
+            OsStr::new(DAEMON_REVIEW_CONTEXT_SNAPSHOT_FILE),
+        ) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
@@ -76,8 +85,13 @@ impl ResolvedReviewContext {
             expected_digest == snapshot.digest,
             "admitted daemon review context digest mismatch"
         );
+        let kind_tag = match &snapshot.kind {
+            DaemonReviewContextKind::TodoMarkdown => "todo-markdown",
+            DaemonReviewContextKind::Passthrough => "passthrough",
+            DaemonReviewContextKind::SpecToml => "spec-toml",
+        };
         anyhow::ensure!(
-            digest_review_context(&snapshot.snapshot) == snapshot.digest,
+            digest_review_context(kind_tag, &snapshot.snapshot) == snapshot.digest,
             "admitted daemon review context digest mismatch"
         );
         let kind = match snapshot.kind {

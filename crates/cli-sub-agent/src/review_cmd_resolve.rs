@@ -395,15 +395,25 @@ fn build_review_instruction_without_design_anchor(
         "\nUNAVAILABLE means infrastructure/tool failure (for example quota/auth/network), not low confidence; use UNCERTAIN for insufficient context. Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.",
     );
     if let Some(ctx) = context {
-        instruction.push_str(&format!(" context_digest={}", ctx.digest));
+        instruction.push_str(&format!(
+            " context_digest={} context_kind={}",
+            ctx.digest,
+            ctx.kind.tag()
+        ));
         instruction.push_str("\n<review-context-snapshot>\n");
         instruction.push_str(ctx.snapshot());
         instruction.push_str("\n</review-context-snapshot>");
-        if let ResolvedReviewContextKind::SpecToml { spec } = &ctx.kind {
-            instruction.push_str(
-                "\nSpec alignment context (parsed from spec.toml; use this criteria set directly):\n",
-            );
-            instruction.push_str(&render_spec_review_context(spec));
+        match &ctx.kind {
+            ResolvedReviewContextKind::TodoMarkdown => instruction.push_str(
+                "\nTODO/plan alignment (trusted inline Markdown context; the original path is intentionally omitted):\nCheck task completion, design drift, scope creep, and risk coverage against the snapshot above.",
+            ),
+            ResolvedReviewContextKind::SpecToml { spec } => {
+                instruction.push_str(
+                    "\nSpec alignment context (parsed from spec.toml; use this criteria set directly):\n",
+                );
+                instruction.push_str(&render_spec_review_context(spec));
+            }
+            ResolvedReviewContextKind::Passthrough => {}
         }
     }
     if let (Some(project_root), Some(pattern)) = (project_root, pattern) {

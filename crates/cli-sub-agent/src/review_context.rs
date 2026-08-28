@@ -25,6 +25,16 @@ pub(crate) enum ResolvedReviewContextKind {
     SpecToml { spec: SpecDocument },
 }
 
+impl ResolvedReviewContextKind {
+    pub(crate) fn tag(&self) -> &'static str {
+        match self {
+            Self::TodoMarkdown => "todo-markdown",
+            Self::Passthrough => "passthrough",
+            Self::SpecToml { .. } => "spec-toml",
+        }
+    }
+}
+
 impl fmt::Debug for ResolvedReviewContextKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -129,7 +139,6 @@ fn resolve_explicit_review_context(
     label: &str,
 ) -> Result<ResolvedReviewContext> {
     let (path_ref, snapshot) = admit_review_context(path, project_root, label)?;
-    let digest = digest_review_context(&snapshot);
 
     let kind = if has_extension(&path_ref, "md") {
         ResolvedReviewContextKind::TodoMarkdown
@@ -140,6 +149,7 @@ fn resolve_explicit_review_context(
     } else {
         ResolvedReviewContextKind::Passthrough
     };
+    let digest = digest_review_context(kind.tag(), &snapshot);
 
     Ok(ResolvedReviewContext {
         path: path_ref.display().to_string(),
@@ -192,10 +202,7 @@ fn read_beneath_root_snapshot(
     resolved: &Path,
     label: &str,
 ) -> Result<String> {
-    let root = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(project_root)
+    let root = open_directory(project_root)
         .with_context(|| format!("{label}: failed to open project root"))?;
     let mut directory = root;
     for component in &components[..components.len() - 1] {
@@ -218,23 +225,8 @@ fn read_beneath_root_snapshot(
         Some(Component::Normal(name)) => name,
         _ => anyhow::bail!("{label}: context path must name a file beneath the project workspace"),
     };
-    let file = openat_file(
-        directory.as_raw_fd(),
-        name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-    )
-    .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
-    if !file
-        .metadata()
-        .with_context(|| format!("{label}: failed to inspect '{}'", resolved.display()))?
-        .file_type()
-        .is_file()
-    {
-        anyhow::bail!(
-            "{label}: '{}' must be a regular, non-symlink file",
-            resolved.display()
-        );
-    }
+    let file = open_regular_file_at(directory.as_raw_fd(), name)
+        .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
     let mut bytes = Vec::new();
     file.take(REVIEW_CONTEXT_MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
@@ -246,6 +238,31 @@ fn read_beneath_root_snapshot(
     );
     String::from_utf8(bytes)
         .with_context(|| format!("{label}: '{}' must be valid UTF-8", resolved.display()))
+}
+
+fn open_directory(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+}
+
+fn open_regular_file_at(
+    directory_fd: std::os::fd::RawFd,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<File> {
+    let file = openat_file(
+        directory_fd,
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+    )?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 fn openat_file(
@@ -313,17 +330,21 @@ pub(crate) fn discover_review_context_for_branch(
 fn load_spec_review_context(path: &Path, snapshot: String) -> Result<ResolvedReviewContext> {
     let spec: SpecDocument = toml::from_str(&snapshot)
         .with_context(|| format!("Failed to parse spec context: {}", path.display()))?;
+    let kind = ResolvedReviewContextKind::SpecToml { spec };
 
     Ok(ResolvedReviewContext {
         path: path.display().to_string(),
-        digest: digest_review_context(&snapshot),
-        kind: ResolvedReviewContextKind::SpecToml { spec },
+        digest: digest_review_context(kind.tag(), &snapshot),
+        kind,
         snapshot,
     })
 }
 
-fn digest_review_context(snapshot: &str) -> String {
+fn digest_review_context(kind: &str, snapshot: &str) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(b"csa-review-context-v1|");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"|");
     hasher.update(snapshot.as_bytes());
     format!("sha256:{:x}", hasher.finalize())
 }
