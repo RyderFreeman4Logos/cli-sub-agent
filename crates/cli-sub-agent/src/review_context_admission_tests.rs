@@ -1,3 +1,5 @@
+use crate::cli::{Cli, Commands, validate_review_args};
+use clap::Parser;
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 use tempfile::tempdir;
 
@@ -57,6 +59,59 @@ fn daemon_snapshot_round_trips_max_escaped_context_without_source_path() {
     assert_eq!(child.snapshot(), parent.snapshot());
     assert_eq!(child.digest, parent.digest);
     assert!(child.path.is_empty());
+}
+
+#[test]
+fn daemon_child_rejects_missing_admitted_snapshot_for_explicit_context() {
+    let project = tempdir().unwrap();
+    let session_id = "daemon-context-snapshot";
+    let session_dir = csa_session::get_session_dir(project.path(), session_id).unwrap();
+
+    for (flag, file_name, admitted) in [
+        (
+            "--spec",
+            "review.toml",
+            "plan_ulid = \"01JTESTPLAN0000000000000003\"\nsummary = \"admitted spec\"\n",
+        ),
+        ("--context", "context.md", "admitted context"),
+        ("--prompt-file", "prompt.md", "admitted prompt"),
+    ] {
+        let path = project.path().join(file_name);
+        let path_arg = path.to_str().unwrap();
+        std::fs::write(&path, admitted).unwrap();
+        let parent = parse_review_args(project.path(), &[flag, path_arg]);
+        let admitted_context =
+            resolve_review_context_for_args(&parent, project.path(), false, None)
+                .unwrap()
+                .expect("parent should admit explicit context");
+        admitted_context
+            .persist_daemon_snapshot(&session_dir)
+            .unwrap();
+        std::fs::remove_file(session_dir.join("input/review-context.json")).unwrap();
+        std::fs::write(&path, "replacement context").unwrap();
+
+        let child = parse_review_args(
+            project.path(),
+            &["--daemon-child", "--session-id", session_id, flag, path_arg],
+        );
+        let error = resolve_review_context_for_args(&child, project.path(), false, None)
+            .expect_err("daemon child must reject a missing admitted snapshot");
+
+        assert!(format!("{error:#}").contains("missing admitted daemon review context"));
+    }
+}
+
+fn parse_review_args(project_root: &std::path::Path, extra: &[&str]) -> crate::cli::ReviewArgs {
+    let cd = project_root.display().to_string();
+    let mut argv = vec!["csa", "review", "--cd", cd.as_str(), "--diff"];
+    argv.extend_from_slice(extra);
+    match Cli::try_parse_from(argv).unwrap().command {
+        Commands::Review(args) => {
+            validate_review_args(&args).unwrap();
+            args
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]

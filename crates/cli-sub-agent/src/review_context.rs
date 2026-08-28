@@ -88,12 +88,6 @@ pub(crate) fn resolve_review_context_for_args(
     if admitted_context.is_some() {
         return Ok(admitted_context);
     }
-    if let (true, Some(session_id)) = (args.daemon_child, args.session_id.as_deref()) {
-        let session_dir = csa_session::get_session_dir(project_root, session_id)?;
-        if let Some(context) = ResolvedReviewContext::load_daemon_snapshot(&session_dir)? {
-            return Ok(Some(context));
-        }
-    }
     let explicit = args
         .spec
         .as_deref()
@@ -108,6 +102,15 @@ pub(crate) fn resolve_review_context_for_args(
                 .as_deref()
                 .map(|path| (path, "--prompt-file"))
         });
+    if let (true, Some(session_id)) = (args.daemon_child, args.session_id.as_deref()) {
+        let session_dir = csa_session::get_session_dir(project_root, session_id)?;
+        if let Some(context) = ResolvedReviewContext::load_daemon_snapshot(&session_dir)? {
+            return Ok(Some(context));
+        }
+        if explicit.is_some() {
+            anyhow::bail!("missing admitted daemon review context snapshot")
+        }
+    }
     match explicit {
         Some((path, label)) => Ok(Some(resolve_explicit_review_context(
             path,
