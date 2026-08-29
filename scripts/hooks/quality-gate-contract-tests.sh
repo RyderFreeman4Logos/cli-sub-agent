@@ -49,7 +49,7 @@ run_quality_gate_contract_suites() {
   run_contract_suite scripts/tests/quality-gate-receipt-hostile-tests.sh 8
   run_contract_suite scripts/tests/quality-gate-isolation-tests.sh 19
   run_contract_suite scripts/tests/pre-push-quality-gates-tests.sh 8
-  run_contract_suite scripts/tests/dev2merge-quality-gate-receipt-tests.sh 2
+  run_contract_suite scripts/tests/dev2merge-quality-gate-receipt-tests.sh 3
 }
 
 quality_gate_contract_tests_main() {

@@ -175,31 +175,44 @@ for gate in branch-protection version-check review-check; do
     >"$fixture/scripts/hooks/${gate}.sh"
 done
 chmod +x "$fixture/scripts/hooks/"*.sh
+rust_channel="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["toolchain"]["channel"])' "$fixture/rust-toolchain.toml")"
+rustc_path="$(RUSTUP_TOOLCHAIN="$rust_channel" rustc --print sysroot)/bin/rustc"
+test -x "$rustc_path"
+mkdir "$fixture/target/quality-gate-test-tools"
+printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$rustc_path" >"$fixture/target/quality-gate-test-tools/rustc"
+chmod +x "$fixture/target/quality-gate-test-tools/rustc"
+for state_root in cargo-home-a rustup-home-a cargo-home-b rustup-home-b; do
+  mkdir -p "$fixture/target/quality-gate-test-state/$state_root"
+done
 cat >"$fixture/justfile" <<'EOF'
 quality-gates:
-    @scripts/hooks/quality-gates.sh
+    @PATH="{{env_var('DEV2MERGE_RUST_BIN')}}:/usr/bin:/bin" CARGO_HOME="{{env_var('DEV2MERGE_CARGO_HOME')}}" RUSTUP_HOME="{{env_var('DEV2MERGE_RUSTUP_HOME')}}" RUSTUP_TOOLCHAIN="{{env_var('DEV2MERGE_RUSTUP_TOOLCHAIN')}}" scripts/hooks/quality-gates.sh
 
 pre-push:
-    @CSA_QUALITY_GATE_HOOK_MODE=1 scripts/hooks/quality-gates.sh
+    @CSA_QUALITY_GATE_HOOK_MODE=1 PATH="{{env_var('DEV2MERGE_RUST_BIN')}}:/usr/bin:/bin" CARGO_HOME="{{env_var('DEV2MERGE_CARGO_HOME')}}" RUSTUP_HOME="{{env_var('DEV2MERGE_RUSTUP_HOME')}}" RUSTUP_TOOLCHAIN="{{env_var('DEV2MERGE_RUSTUP_TOOLCHAIN')}}" scripts/hooks/quality-gates.sh
 EOF
 cp "$repo_root/lefthook.yml" "$fixture/lefthook.yml"
 git -C "$fixture" add .gitignore Cargo.toml Cargo.lock weave.lock justfile \
   lefthook.yml rust-toolchain.toml scripts
 git -C "$fixture" commit -qm "test: initialize dev2merge fixture"
-
+negative_fixture="$test_root/repo-negative"
+cp -a "$fixture" "$negative_fixture"
+producer_cargo_home="$fixture/target/quality-gate-test-state/cargo-home-a"
+producer_rustup_home="$fixture/target/quality-gate-test-state/rustup-home-a"
+consumer_cargo_home="$fixture/target/quality-gate-test-state/cargo-home-a"
+consumer_rustup_home="$fixture/target/quality-gate-test-state/rustup-home-a"
 producer_started_ns="$(date +%s%N)"
-producer="$(cd "$fixture" && just quality-gates)"
+producer="$(cd "$fixture" && DEV2MERGE_CARGO_HOME="$producer_cargo_home" DEV2MERGE_RUSTUP_HOME="$producer_rustup_home" DEV2MERGE_RUSTUP_TOOLCHAIN="$rust_channel" DEV2MERGE_RUST_BIN="$fixture/target/quality-gate-test-tools" just quality-gates)"
 producer_elapsed_ms="$(( ($(date +%s%N) - producer_started_ns) / 1000000 ))"
 producer_status="$(hook_receipt_field status <<<"$producer")"
 producer_identity="$(hook_receipt_field receipt_identity <<<"$producer")"
 assert_eq dev2merge-producer-status executed "$producer_status"
 (cd "$fixture" && scripts/hooks/review-check.sh)
 consumer_started_ns="$(date +%s%N)"
-consumer="$(cd "$fixture" && lefthook run pre-push 2>&1)"
+consumer="$(cd "$fixture" && DEV2MERGE_CARGO_HOME="$consumer_cargo_home" DEV2MERGE_RUSTUP_HOME="$consumer_rustup_home" DEV2MERGE_RUSTUP_TOOLCHAIN="$rust_channel" DEV2MERGE_RUST_BIN="$fixture/target/quality-gate-test-tools" lefthook run pre-push 2>&1)"
 consumer_elapsed_ms="$(( ($(date +%s%N) - consumer_started_ns) / 1000000 ))"
 consumer_status="$(hook_receipt_field status <<<"$consumer")"
 consumer_identity="$(hook_receipt_field receipt_identity <<<"$consumer")"
-
 assert_eq dev2merge-consumer-status reused "$consumer_status"
 assert_eq dev2merge-consumer-identity "$producer_identity" "$consumer_identity"
 assert_eq dev2merge-reuse-quality-runs 1 "$(wc -c <"$fixture/target/quality-gate-test-state/quality-counter")"
@@ -211,5 +224,32 @@ assert_eq dev2merge-reuse-version-check-runs 1 \
   "$(wc -c <"$fixture/target/quality-gate-test-state/version-check-counter")"
 assert_eq dev2merge-reuse-review-check-runs 2 \
   "$(wc -c <"$fixture/target/quality-gate-test-state/review-check-counter")"
+assert_eq dev2merge-positive-receipts 1 \
+  "$(find "$fixture/.csa/state/quality-gate-receipts" -type f -name '*.json' -print | wc -l)"
+echo "PASS dev2merge-quality-gate-receipt-positive identity=${producer_identity} static_runs=1 receipts=1 executed_ms=${producer_elapsed_ms} reused_ms=${consumer_elapsed_ms}"
 
-echo "PASS dev2merge-quality-gate-receipt identity=${producer_identity} quality_runs=1 executed_ms=${producer_elapsed_ms} reused_ms=${consumer_elapsed_ms}"
+producer_cargo_home="$negative_fixture/target/quality-gate-test-state/cargo-home-a"
+producer_rustup_home="$negative_fixture/target/quality-gate-test-state/rustup-home-a"
+consumer_cargo_home="$negative_fixture/target/quality-gate-test-state/cargo-home-b"
+consumer_rustup_home="$negative_fixture/target/quality-gate-test-state/rustup-home-b"
+producer_started_ns="$(date +%s%N)"
+producer="$(cd "$negative_fixture" && DEV2MERGE_CARGO_HOME="$producer_cargo_home" DEV2MERGE_RUSTUP_HOME="$producer_rustup_home" DEV2MERGE_RUSTUP_TOOLCHAIN="$rust_channel" DEV2MERGE_RUST_BIN="$negative_fixture/target/quality-gate-test-tools" just quality-gates)"
+producer_elapsed_ms="$(( ($(date +%s%N) - producer_started_ns) / 1000000 ))"
+producer_status="$(hook_receipt_field status <<<"$producer")"
+producer_identity="$(hook_receipt_field receipt_identity <<<"$producer")"
+assert_eq dev2merge-negative-producer-status executed "$producer_status"
+(cd "$negative_fixture" && scripts/hooks/review-check.sh)
+consumer_started_ns="$(date +%s%N)"
+consumer="$(cd "$negative_fixture" && DEV2MERGE_CARGO_HOME="$consumer_cargo_home" DEV2MERGE_RUSTUP_HOME="$consumer_rustup_home" DEV2MERGE_RUSTUP_TOOLCHAIN="$rust_channel" DEV2MERGE_RUST_BIN="$negative_fixture/target/quality-gate-test-tools" lefthook run pre-push 2>&1)"
+consumer_elapsed_ms="$(( ($(date +%s%N) - consumer_started_ns) / 1000000 ))"
+consumer_status="$(hook_receipt_field status <<<"$consumer")"
+consumer_identity="$(hook_receipt_field receipt_identity <<<"$consumer")"
+consumer_reason="$(hook_receipt_field rejection_reason <<<"$consumer")"
+assert_eq dev2merge-negative-consumer-status executed "$consumer_status"
+assert_eq dev2merge-negative-consumer-reason receipt_missing "$consumer_reason"
+assert_ne dev2merge-negative-identities "$producer_identity" "$consumer_identity"
+assert_eq dev2merge-negative-quality-runs 2 \
+  "$(wc -c <"$negative_fixture/target/quality-gate-test-state/quality-counter")"
+assert_eq dev2merge-negative-receipts 2 \
+  "$(find "$negative_fixture/.csa/state/quality-gate-receipts" -type f -name '*.json' -print | wc -l)"
+echo "PASS dev2merge-quality-gate-receipt-negative producer_identity=${producer_identity} consumer_identity=${consumer_identity} static_runs=2 receipts=2 rejection_reason=${consumer_reason} executed_ms=${producer_elapsed_ms}/${consumer_elapsed_ms}"
