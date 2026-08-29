@@ -294,6 +294,8 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         .tempdir()
         .unwrap();
     let mut sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    let _skip_host_memory_admission =
+        ScopedEnvVarRestore::set("CSA_TEST_SKIP_HOST_MEMORY_ADMISSION", "1");
     sandbox.track_env(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV);
     sandbox.track_env("PATH");
     // SAFETY: ScopedSessionSandbox holds TEST_ENV_LOCK for the full test.
@@ -363,7 +365,7 @@ async fn handle_run_fails_fast_when_worktree_write_lock_is_held() {
         false,
         false,
         None,
-        crate::run_resource_overrides::RunResourceOverrides::absent(),
+        crate::run_resource_overrides::RunResourceOverrides::from_cli(None, Some(u64::MAX)),
         false,
         None,
         None,

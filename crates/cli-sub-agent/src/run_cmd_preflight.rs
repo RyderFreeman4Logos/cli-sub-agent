@@ -143,26 +143,29 @@ pub(crate) fn validate_run_host_memory_after_slot_acquisition(
         projected_spawn_mb,
     )
     .context("Failed to build host-memory admission")?;
-    resource_guard
-        .check_availability_with_admission(tool_name, Some(admission))
-        .map_err(|err| {
-            let guidance = crate::no_provider_launch::host_memory_guidance_from_error(
-                Some("run"),
-                tool_name,
-                project_config,
-                resource_overrides,
-                &err,
-            );
-            if let Some(guidance) = guidance {
-                err.context(format!(
-                    "writer host-memory retry guidance before session creation:\n- {}",
-                    guidance.join("\n- ")
-                ))
-            } else {
-                err
-            }
-        })
-        .with_context(|| format!("run preflight for writer tool '{tool_name}'"))
+    if !crate::resource_admission::skip_host_memory_admission_for_test() {
+        resource_guard
+            .check_availability_with_admission(tool_name, Some(admission))
+            .map_err(|err| {
+                let guidance = crate::no_provider_launch::host_memory_guidance_from_error(
+                    Some("run"),
+                    tool_name,
+                    project_config,
+                    resource_overrides,
+                    &err,
+                );
+                if let Some(guidance) = guidance {
+                    err.context(format!(
+                        "writer host-memory retry guidance before session creation:\n- {}",
+                        guidance.join("\n- ")
+                    ))
+                } else {
+                    err
+                }
+            })
+            .with_context(|| format!("run preflight for writer tool '{tool_name}'"))?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

@@ -22,6 +22,23 @@ const RECENT_ACTIVE_FALLBACK_PROJECTION_MB: u64 = 4096;
 const RECENT_ACTIVE_FALLBACK_WINDOW_SECS: i64 = 15 * 60;
 const PRE_SPAWN_ADMISSION_MODE: &str = "admission";
 const PRE_SPAWN_MEMORY_ADMITTED_FILE: &str = ".pre-spawn-memory-admitted.toml";
+#[cfg(debug_assertions)]
+pub(crate) const TEST_SKIP_HOST_MEMORY_ADMISSION_ENV: &str = "CSA_TEST_SKIP_HOST_MEMORY_ADMISSION";
+
+/// Integration fixtures that propagate a deliberately oversized parent contract
+/// can opt out of host-memory admission in debug binaries. Release builds never
+/// honor this test hook, so normal production admission semantics are unchanged.
+pub(crate) fn skip_host_memory_admission_for_test() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(TEST_SKIP_HOST_MEMORY_ADMISSION_ENV).is_ok_and(|value| value == "1")
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ActiveSessionMemory {
