@@ -36,7 +36,7 @@ test_static_nextest_profile_contract() {
       --config .config/nextest.toml
   )"
   count="$(grep -c . <<<"$selector_output" || true)"
-  assert_eq static-profile-exact-live-tuples 4 "$count"
+  assert_eq static-profile-exact-live-tuples 5 "$count"
   python3 scripts/hooks/quality-gates-live-partition.py test-selector-fixtures \
     --config .config/nextest.toml
   echo 'PASS static-nextest-profile'
@@ -243,9 +243,9 @@ test_live_cardinality_contract() {
   local matches="$1" expected_code="$2" code fault fixture capture
   receipt_contract_set_case "live-cardinality-${matches}"
   case "$matches" in
-    3) fault=live-3 ;;
-    4) fault=none ;;
-    5) fault=live-5 ;;
+    4) fault=live-4 ;;
+    5) fault=none ;;
+    6) fault=live-6 ;;
     *) echo "invalid synthetic match count: $matches" >&2; return 2 ;;
   esac
   fixture="$test_root/live-selector-and-legs"
@@ -475,9 +475,9 @@ case "$scenario" in
     test_static_gate_invocation_contract
     test_live_selector_and_leg_contract
     test_live_preflight_and_leg_order_contract
-    test_live_cardinality_contract 3 1
-    test_live_cardinality_contract 4 0
-    test_live_cardinality_contract 5 1
+    test_live_cardinality_contract 4 1
+    test_live_cardinality_contract 5 0
+    test_live_cardinality_contract 6 1
     receipt_contract_set_case receipt-reuse-with-hard-gates
     run_contract
     ;;
