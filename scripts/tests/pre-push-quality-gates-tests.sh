@@ -309,8 +309,12 @@ require_source_contract() {
   cat >"$contract_suite" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' \
-  'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' \
-  'UNSAFE secret=top-secret path=/tmp/private-contract.log'
+  'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125'
+for _ in {1..300}; do
+  printf '%s\n' \
+    'UNSAFE secret=top-secret path=/tmp/private-contract.log padding=0123456789abcdef0123456789abcdef0123456789abcdef'
+done
+printf '\0'
 exit 7
 EOF
   chmod +x "$contract_suite"
@@ -319,10 +323,16 @@ EOF
   code=$?
   set -e
   assert_eq source-contract-diagnostic-exit 7 "$code"
-  assert_contains source-contract-safe-generic-diagnostic \
-    'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' "$output"
+  assert_eq source-contract-diagnostic-output-exact \
+    $'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125\nFAIL contract-suite-contract-diagnostic-suite.sh expected=exit-0 actual=exit-7' \
+    "$output"
+  assert_eq source-contract-diagnostic-line-bound 2 "$(wc -l <<<"$output")"
   assert_not_matches source-contract-unsafe-diagnostic-redacted \
     'top-secret|/tmp/private-contract\.log' "$output"
+  assert_not_matches source-contract-diagnostic-capture-path \
+    'quality-gate-contract\.' "$output"
+  assert_not_matches source-contract-diagnostic-binary-notice \
+    'Binary file .* matches' "$output"
   set +e
   output="$(
     run_quality_gate_contract_suites() { printf 'suite-ran\n'; }

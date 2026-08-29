@@ -13,8 +13,7 @@ run_contract_suite() {
   fi
   if [ "$code" -ne 0 ]; then
     diagnostic="$(
-      tail -c 16384 "$capture" \
-        | grep -E "$diagnostic_pattern" \
+      LC_ALL=C grep -aE -- "$diagnostic_pattern" "$capture" \
         | tail -20 || true
     )"
     if [ -n "$diagnostic" ]; then
@@ -43,7 +42,7 @@ run_contract_suite() {
 
 run_quality_gate_contract_suites() {
   # Exact ratchet: 46 core + 1 intentional-local + 8 hostile + 19 isolation + 8
-  # pre-push + 2 dev2merge runtime contracts = 84 independently named PASS cases.
+  # pre-push + 3 dev2merge runtime contracts = 85 independently named PASS cases.
   run_contract_suite scripts/tests/quality-gate-receipt-tests.sh 46
   run_contract_suite scripts/tests/quality-gate-receipt-intentional-local-tests.sh 1
   run_contract_suite scripts/tests/quality-gate-receipt-hostile-tests.sh 8
