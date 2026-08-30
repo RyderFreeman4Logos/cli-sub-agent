@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,11 @@ pub(crate) const PLAN_PIPELINE_SOURCE_DIRECT: &str = "direct-plan-run";
 pub(crate) const PLAN_PIPELINE_SOURCE_CLI_ALIAS: &str = "cli-alias";
 const ACTIVE_PLAN_JOURNAL_WARNING: &str = "dev2merge: journal is actively in use by another plan run; use --resume to continue or wait for it to complete";
 
-static ACTIVE_PLAN_JOURNAL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, PlanJournalFileLock>>> =
+static ACTIVE_PLAN_JOURNAL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, ActivePlanJournalLock>>> =
+    OnceLock::new();
+
+#[cfg(test)]
+static MANUAL_COMPLETION_RESUME_TEST_HOOK: OnceLock<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
     OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +119,61 @@ struct PlanJournalFileLock {
     file: File,
 }
 
+struct ActivePlanJournalLock {
+    _lock: PlanJournalFileLock,
+    identity: Arc<()>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ManualCompletionJournalLockGuard {
+    path: PathBuf,
+    identity: Arc<()>,
+}
+
+#[cfg(test)]
+pub(crate) struct ManualCompletionResumeTestHookGuard;
+
+#[cfg(test)]
+fn manual_completion_resume_test_hook() -> &'static Mutex<Option<Arc<dyn Fn() + Send + Sync>>> {
+    MANUAL_COMPLETION_RESUME_TEST_HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(crate) fn install_manual_completion_resume_test_hook(
+    hook: impl Fn() + Send + Sync + 'static,
+) -> ManualCompletionResumeTestHookGuard {
+    let mut installed = manual_completion_resume_test_hook()
+        .lock()
+        .expect("manual completion test hook mutex should not be poisoned");
+    assert!(
+        installed.replace(Arc::new(hook)).is_none(),
+        "only one manual completion test hook may be installed"
+    );
+    ManualCompletionResumeTestHookGuard
+}
+
+#[cfg(test)]
+impl Drop for ManualCompletionResumeTestHookGuard {
+    fn drop(&mut self) {
+        manual_completion_resume_test_hook()
+            .lock()
+            .expect("manual completion test hook mutex should not be poisoned")
+            .take();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn run_manual_completion_resume_test_hook() {
+    let hook = manual_completion_resume_test_hook()
+        .lock()
+        .expect("manual completion test hook mutex should not be poisoned")
+        .as_ref()
+        .cloned();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 impl Drop for PlanJournalFileLock {
     fn drop(&mut self) {
         // SAFETY: `self.file` owns a valid fd for the locked journal file.
@@ -124,7 +183,21 @@ impl Drop for PlanJournalFileLock {
     }
 }
 
-fn active_plan_journal_locks() -> &'static Mutex<HashMap<PathBuf, PlanJournalFileLock>> {
+impl Drop for ManualCompletionJournalLockGuard {
+    fn drop(&mut self) {
+        let Ok(mut locks) = active_plan_journal_locks().lock() else {
+            return;
+        };
+        let owns_entry = locks
+            .get(&self.path)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.identity, &self.identity));
+        if owns_entry {
+            locks.remove(&self.path);
+        }
+    }
+}
+
+fn active_plan_journal_locks() -> &'static Mutex<HashMap<PathBuf, ActivePlanJournalLock>> {
     ACTIVE_PLAN_JOURNAL_LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -139,8 +212,38 @@ fn ensure_active_plan_journal_lock(path: &Path) -> Result<()> {
 
     let lock = try_acquire_plan_journal_file_lock(path, true)?
         .ok_or_else(|| anyhow::anyhow!(ACTIVE_PLAN_JOURNAL_WARNING))?;
-    locks.insert(lock_path, lock);
+    locks.insert(
+        lock_path,
+        ActivePlanJournalLock {
+            _lock: lock,
+            identity: Arc::new(()),
+        },
+    );
     Ok(())
+}
+
+fn retain_active_plan_journal_lock(
+    path: &Path,
+    lock: PlanJournalFileLock,
+) -> Result<ManualCompletionJournalLockGuard> {
+    let mut locks = active_plan_journal_locks()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("plan journal lock registry is poisoned"))?;
+    if locks.contains_key(path) {
+        bail!(ACTIVE_PLAN_JOURNAL_WARNING);
+    }
+    let identity = Arc::new(());
+    locks.insert(
+        path.to_path_buf(),
+        ActivePlanJournalLock {
+            _lock: lock,
+            identity: Arc::clone(&identity),
+        },
+    );
+    Ok(ManualCompletionJournalLockGuard {
+        path: path.to_path_buf(),
+        identity,
+    })
 }
 
 fn release_active_plan_journal_lock(path: &Path) -> Result<()> {
@@ -248,8 +351,8 @@ pub(crate) fn complete_pending_manual_step(
     workflow_path: &Path,
     journal_path: &Path,
     step_id: usize,
-) -> Result<()> {
-    let _completion_lock = match try_acquire_plan_journal_file_lock(journal_path, false)? {
+) -> Result<ManualCompletionJournalLockGuard> {
+    let completion_lock = match try_acquire_plan_journal_file_lock(journal_path, false)? {
         Some(lock) => lock,
         None => {
             warn!(
@@ -321,7 +424,8 @@ pub(crate) fn complete_pending_manual_step(
     journal.completed_steps.dedup();
     journal.status = "manual-completed".to_string();
     journal.last_error = None;
-    persist_plan_journal(journal_path, &journal)
+    persist_plan_journal(journal_path, &journal)?;
+    retain_active_plan_journal_lock(journal_path, completion_lock)
 }
 
 pub(crate) fn detect_repo_fingerprint(project_root: &Path) -> RepoFingerprint {

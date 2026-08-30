@@ -1,7 +1,9 @@
 use super::*;
 use crate::test_env_lock::{TEST_ENV_LOCK, isolate_user_config};
 use std::collections::HashMap;
-use std::sync::{Arc, Barrier};
+use std::os::fd::AsRawFd;
+use std::process::Command;
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
 fn manual_handoff_plan() -> ExecutionPlan {
@@ -216,6 +218,216 @@ async fn handle_plan_run_complete_manual_step_continues_after_pending_handoff() 
     assert_eq!(completed_journal.status, "completed");
     assert!(completed_journal.completed_steps.contains(&1));
     assert!(completed_journal.completed_steps.contains(&2));
+}
+
+#[tokio::test]
+async fn handle_plan_run_deterministic_concurrent_completion_retains_resume_owner() {
+    struct GateState {
+        owner_paused: bool,
+        loser_done: bool,
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
+    let workflow_path = write_manual_handoff_append_workflow(tmp.path());
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let gate = Arc::new((
+        Mutex::new(GateState {
+            owner_paused: false,
+            loser_done: false,
+        }),
+        Condvar::new(),
+    ));
+    let hook_gate = Arc::clone(&gate);
+    let _hook_guard =
+        crate::plan_cmd_journal::install_manual_completion_resume_test_hook(move || {
+            let (lock, wake) = &*hook_gate;
+            let mut state = lock.lock().unwrap();
+            state.owner_paused = true;
+            wake.notify_all();
+            while !state.loser_done {
+                state = wake.wait(state).unwrap();
+            }
+        });
+
+    let mut owner_args = plan_run_args(tmp.path(), &workflow_path);
+    owner_args.file = None;
+    owner_args.resume = Some(journal_path.display().to_string());
+    owner_args.complete_manual_step = Some(1);
+    let owner = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_plan_run(owner_args))
+    });
+
+    {
+        let (lock, wake) = &*gate;
+        let mut state = lock.lock().unwrap();
+        while !state.owner_paused {
+            state = wake.wait(state).unwrap();
+        }
+    }
+
+    let mut loser_args = plan_run_args(tmp.path(), &workflow_path);
+    loser_args.file = None;
+    loser_args.resume = Some(journal_path.display().to_string());
+    loser_args.complete_manual_step = Some(1);
+    let loser_gate = Arc::clone(&gate);
+    let loser = std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_plan_run(loser_args));
+        let (lock, wake) = &*loser_gate;
+        let mut state = lock.lock().unwrap();
+        state.loser_done = true;
+        wake.notify_all();
+        result
+    });
+
+    let owner_result = owner.join().expect("owner thread should not panic");
+    let loser_result = loser.join().expect("loser thread should not panic");
+    assert!(
+        owner_result.is_ok(),
+        "the caller that completed the manual step must resume successfully: {owner_result:?}"
+    );
+    let loser_error = loser_result.expect_err("the concurrent loser must not resume the plan");
+    assert_eq!(
+        loser_error.to_string(),
+        "dev2merge: journal is actively in use by another plan run; use --resume to continue or wait for it to complete"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("continued.txt")).unwrap(),
+        "continued\n"
+    );
+    let completed_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(completed_journal.status, "completed");
+    let mut completed_steps = completed_journal.completed_steps;
+    completed_steps.sort_unstable();
+    assert_eq!(completed_steps, vec![1, 2]);
+    let released_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&journal_path)
+        .unwrap();
+    // SAFETY: `released_lock` owns a valid fd and this is a non-blocking
+    // exclusive probe that must succeed once the run has completed.
+    assert_eq!(
+        unsafe { libc::flock(released_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+}
+
+#[test]
+fn manual_completion_journal_lock_probe() {
+    let Some(path) = std::env::var_os("CSA_MANUAL_COMPLETION_LOCK_PROBE") else {
+        return;
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    // SAFETY: `file` owns a valid fd and this is a non-blocking lock probe.
+    assert_eq!(
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "separate process could not acquire the released journal lock"
+    );
+}
+
+#[tokio::test]
+async fn handle_plan_run_post_retention_error_releases_journal_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().await;
+    let _user_config_env = isolate_user_config(tmp.path());
+    let workflow_path = write_manual_handoff_append_workflow(tmp.path());
+
+    handle_plan_run(plan_run_args(tmp.path(), &workflow_path))
+        .await
+        .expect("initial run should pause at manual handoff");
+
+    let journal_path = plan_journal_path(tmp.path(), "manual-handoff");
+    let backup_path = tmp.path().join("manual-handoff.journal.backup");
+    let hook_journal_path = journal_path.clone();
+    let hook_backup_path = backup_path.clone();
+    let _hook_guard =
+        crate::plan_cmd_journal::install_manual_completion_resume_test_hook(move || {
+            std::fs::rename(&hook_journal_path, &hook_backup_path).unwrap();
+            std::fs::create_dir(&hook_journal_path).unwrap();
+        });
+
+    let mut completion_args = plan_run_args(tmp.path(), &workflow_path);
+    completion_args.file = None;
+    completion_args.resume = Some(journal_path.display().to_string());
+    completion_args.complete_manual_step = Some(1);
+    let error = handle_plan_run(completion_args)
+        .await
+        .expect_err("the injected post-retention journal read failure must surface");
+    assert!(
+        error.to_string().contains("Failed to read plan journal"),
+        "unexpected post-retention failure: {error:#}"
+    );
+    drop(_hook_guard);
+
+    std::fs::remove_dir(&journal_path).unwrap();
+    std::fs::rename(&backup_path, &journal_path).unwrap();
+
+    let same_process_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&journal_path)
+        .unwrap();
+    // SAFETY: `same_process_lock` owns a valid fd and this is a non-blocking
+    // exclusive probe for the guard's same-process cleanup.
+    assert_eq!(
+        unsafe { libc::flock(same_process_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB,) },
+        0,
+        "same-process acquisition remained blocked after the error path"
+    );
+    drop(same_process_lock);
+
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("plan_cmd::tests_manual_handoff::manual_completion_journal_lock_probe")
+        .arg("--nocapture")
+        .env("CSA_MANUAL_COMPLETION_LOCK_PROBE", &journal_path)
+        .output()
+        .unwrap();
+    let child_stdout = String::from_utf8_lossy(&child.stdout);
+    let child_stderr = String::from_utf8_lossy(&child.stderr);
+    assert!(
+        child.status.success()
+            && child_stdout.contains("manual_completion_journal_lock_probe ... ok"),
+        "separate-process lock probe failed: stdout={child_stdout:?} stderr={child_stderr:?}"
+    );
+
+    let mut resume_args = plan_run_args(tmp.path(), &workflow_path);
+    resume_args.file = None;
+    resume_args.resume = Some(journal_path.display().to_string());
+    handle_plan_run(resume_args)
+        .await
+        .expect("resume after the post-retention error should succeed");
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("continued.txt")).unwrap(),
+        "continued\n"
+    );
+    let completed_journal: PlanRunJournal =
+        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    assert_eq!(completed_journal.status, "completed");
+    let mut completed_steps = completed_journal.completed_steps;
+    completed_steps.sort_unstable();
+    assert_eq!(completed_steps, vec![1, 2]);
 }
 
 #[tokio::test]
