@@ -19,6 +19,10 @@ EXPECTED_LIVE = frozenset(
             "skill_run_preserves_plan_parent_resource_snapshot_for_nested_child",
         ),
         (
+            "cli-sub-agent::skill_resource_inheritance",
+            "skill_resource_inner_child_forced_panic_emits_diagnostic",
+        ),
+        (
             "cli-sub-agent::bin/csa",
             "pipeline::clean_room_integration_tests::clean_room_executes_admitted_fake_and_leaves_only_minimal_session_artifacts",
         ),
@@ -73,8 +77,8 @@ def load_selector(config_path: Path) -> frozenset[tuple[str, str]]:
         raise ContractError("static selector must be one canonical not (...) complement")
     body = selector[5:-1]
     raw_clauses = body.split(" | ")
-    if len(raw_clauses) != 4:
-        raise ContractError(f"static selector must contain exactly 4 clauses, got {len(raw_clauses)}")
+    if len(raw_clauses) != 5:
+        raise ContractError(f"static selector must contain exactly 5 clauses, got {len(raw_clauses)}")
     tuples: list[tuple[str, str]] = []
     for raw_clause in raw_clauses:
         match = CLAUSE.fullmatch(raw_clause)
@@ -103,8 +107,8 @@ def test_selector_fixtures(args: argparse.Namespace) -> None:
     )
     unknown = "(binary_id(=unknown) & test(=unknown::test))"
     selector_cases = {
-        "three": "not (" + " | ".join(clauses[:3]) + ")",
-        "five": "not (" + " | ".join([*clauses, clauses[0]]) + ")",
+        "four": "not (" + " | ".join(clauses[:4]) + ")",
+        "six": "not (" + " | ".join([*clauses, clauses[0]]) + ")",
         "old-false-live": "not (" + " | ".join([old_false_live, *clauses[1:]]) + ")",
         "duplicate": "not (" + " | ".join([clauses[0], clauses[0], *clauses[2:]]) + ")",
         "unknown": "not (" + " | ".join([unknown, *clauses[1:]]) + ")",
@@ -158,9 +162,9 @@ def emit_fixture_inventory(args: argparse.Namespace) -> None:
         is_live = (binary_id, test_name) in live
         is_static = (binary_id, test_name) in static
         status = "matches" if mode == "all" or (mode == "live" and is_live) or (mode == "static" and is_static) else "mismatch"
-        if args.fault == "live-3" and mode == "live" and (binary_id, test_name) == live[0]:
+        if args.fault == "live-4" and mode == "live" and (binary_id, test_name) == live[0]:
             status = "mismatch"
-        if args.fault == "live-5" and mode == "live" and is_static:
+        if args.fault == "live-6" and mode == "live" and is_static:
             status = "matches"
         if args.fault == "overlap" and mode == "static" and (binary_id, test_name) == live[0]:
             status = "matches"
@@ -242,9 +246,9 @@ def validate_inventories(args: argparse.Namespace) -> None:
     union = static_inventory.matches | live_inventory.matches
     if union != all_inventory.matches:
         raise ContractError(f"{args.leg} Static/Live union differs from All")
-    if live_inventory.matches != expected or len(live_inventory.matches) != 4:
+    if live_inventory.matches != expected or len(live_inventory.matches) != 5:
         raise ContractError(
-            f"{args.leg} Live identities differ from canonical four: {sorted(live_inventory.matches)}"
+            f"{args.leg} Live identities differ from canonical five: {sorted(live_inventory.matches)}"
         )
     args.identities_out.write_text(
         "".join(f"{binary_id}\t{test_name}\n" for binary_id, test_name in sorted(live_inventory.matches)),

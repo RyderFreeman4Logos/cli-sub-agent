@@ -1,13 +1,24 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 #[path = "../src/test_bounded_command.rs"]
+#[expect(
+    dead_code,
+    reason = "status_with_timeout is unused; this integration test captures output"
+)]
 mod test_bounded_command;
 
 const SKILL_RUN_TIMEOUT: Duration = Duration::from_secs(30);
 const SKILL_RUN_TERMINATION_GRACE: Duration = Duration::from_secs(1);
 const GIT_FIXTURE_TIMEOUT: Duration = Duration::from_secs(10);
+const INNER_DIAGNOSTIC_SENTINEL: &str = "CSA_INNER_DIAGNOSTIC_SENTINEL_3084";
+const INNER_DIAGNOSTIC_HELPER_TEST: &str =
+    "skill_resource_inner_child_forced_panic_emits_diagnostic";
+const INNER_DIAGNOSTIC_SECRET: &str = "fixture-secret-value-3084";
+const INNER_DIAGNOSTIC_MAX_BYTES: usize = 16 * 1024;
+const INNER_DIAGNOSTIC_TRUNCATION_MARKER: &str =
+    "[stderr tail truncated; showing the final bounded bytes]";
 
 fn csa_cmd(home: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
@@ -112,11 +123,41 @@ fn run_fixture_git(project: &Path, args: &[&str]) {
         .env("GIT_COMMITTER_NAME", "test")
         .env("GIT_COMMITTER_EMAIL", "test@test.com");
     let output = test_bounded_command::output_with_timeout(command, GIT_FIXTURE_TIMEOUT);
+    let diagnostic = bounded_redacted_stderr_tail(&output.stderr);
     assert!(
         output.status.success(),
-        "fixture git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "fixture git {args:?} failed with {}: {diagnostic}",
+        output.status
     );
+}
+
+#[cfg(unix)]
+fn run_current_test_binary<F>(test_name: &str, timeout: Duration, configure: F) -> Output
+where
+    F: FnOnce(&mut Command),
+{
+    let mut command = Command::new(std::env::current_exe().expect("current test binary"));
+    command.args(["--exact", test_name, "--nocapture"]);
+    configure(&mut command);
+    test_bounded_command::output_with_timeout(command, timeout)
+}
+
+fn bounded_redacted_stderr_tail(stderr: &[u8]) -> String {
+    let redacted = csa_session::redact_text_content(&String::from_utf8_lossy(stderr));
+    if redacted.len() <= INNER_DIAGNOSTIC_MAX_BYTES {
+        return redacted;
+    }
+
+    let marker_len = INNER_DIAGNOSTIC_TRUNCATION_MARKER.len() + 1;
+    let tail_budget = INNER_DIAGNOSTIC_MAX_BYTES.saturating_sub(marker_len);
+    let mut start = redacted.len().saturating_sub(tail_budget);
+    while start < redacted.len() && !redacted.is_char_boundary(start) {
+        start += 1;
+    }
+    format!(
+        "{INNER_DIAGNOSTIC_TRUNCATION_MARKER}\n{}",
+        &redacted[start..]
+    )
 }
 
 #[cfg(unix)]
@@ -148,15 +189,11 @@ fn skill_resource_git_fixture_ignores_hostile_ambient_config() {
     std::fs::write(ambient.path().join("git/config"), config_contents)
         .expect("write hostile XDG Git config");
 
-    let status = test_bounded_command::status_with_timeout(
-        {
-            let mut command = Command::new(std::env::current_exe().expect("current test binary"));
+    let output = run_current_test_binary(
+        "skill_run_preserves_plan_parent_resource_snapshot_for_nested_child",
+        Duration::from_secs(45),
+        |command| {
             command
-                .args([
-                    "--exact",
-                    "skill_run_preserves_plan_parent_resource_snapshot_for_nested_child",
-                    "--nocapture",
-                ])
                 .env("HOME", ambient.path())
                 .env("XDG_CONFIG_HOME", ambient.path())
                 .env("GIT_CONFIG", &config)
@@ -167,14 +204,14 @@ fn skill_resource_git_fixture_ignores_hostile_ambient_config() {
                 .env("GIT_CONFIG_VALUE_0", &hooks)
                 .env("GIT_TEMPLATE_DIR", ambient.path())
                 .env("HOSTILE_GIT_MARKER", &marker);
-            command
         },
-        Duration::from_secs(45),
     );
 
+    let diagnostic = bounded_redacted_stderr_tail(&output.stderr);
     assert!(
-        status.success(),
-        "fixture failed under hostile ambient Git state with {status}"
+        output.status.success(),
+        "fixture failed under hostile ambient Git state with {}: {diagnostic}",
+        output.status
     );
     let source = include_str!("skill_resource_inheritance.rs");
     let unbounded_status = [".sta", "tus()"].concat();
@@ -190,6 +227,65 @@ fn skill_resource_git_fixture_ignores_hostile_ambient_config() {
     assert!(
         source.contains(&bounded_call),
         "fixture Git setup must use the existing bounded subprocess helper"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_resource_inner_child_forced_panic_emits_diagnostic() {
+    if std::env::var_os("CSA_TEST_FORCE_INNER_CHILD_DIAGNOSTIC").is_none() {
+        return;
+    }
+
+    eprintln!("{}", "x".repeat(INNER_DIAGNOSTIC_MAX_BYTES + 256));
+    panic!("{INNER_DIAGNOSTIC_SENTINEL}; password={INNER_DIAGNOSTIC_SECRET}");
+}
+
+#[cfg(unix)]
+#[test]
+fn skill_resource_inner_child_diagnostic_boundary_preserves_redacted_stderr() {
+    let nextest_config: toml::Value = toml::from_str(include_str!("../../../.config/nextest.toml"))
+        .expect("tracked nextest config must parse");
+    let static_default_filter = nextest_config
+        .get("profile")
+        .and_then(|profile| profile.get("static"))
+        .and_then(|static_profile| static_profile.get("default-filter"))
+        .and_then(toml::Value::as_str)
+        .expect("static nextest profile must define default-filter");
+    assert!(
+        static_default_filter.contains(INNER_DIAGNOSTIC_HELPER_TEST),
+        "static nextest config must exclude the helper-only diagnostic test"
+    );
+
+    let output = run_current_test_binary(
+        INNER_DIAGNOSTIC_HELPER_TEST,
+        Duration::from_secs(45),
+        |command| {
+            command.env("CSA_TEST_FORCE_INNER_CHILD_DIAGNOSTIC", "1");
+        },
+    );
+    let diagnostic = bounded_redacted_stderr_tail(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(101),
+        "inner child exited unexpectedly"
+    );
+    assert!(
+        diagnostic.contains(INNER_DIAGNOSTIC_SENTINEL),
+        "inner child sentinel was lost at the outer boundary"
+    );
+    assert!(
+        !diagnostic.contains(INNER_DIAGNOSTIC_SECRET),
+        "inner child diagnostic was not redacted"
+    );
+    assert!(
+        diagnostic.len() <= INNER_DIAGNOSTIC_MAX_BYTES,
+        "outer diagnostic exceeded its byte bound"
+    );
+    assert!(
+        diagnostic.contains(INNER_DIAGNOSTIC_TRUNCATION_MARKER),
+        "outer diagnostic did not state that stderr was truncated"
     );
 }
 

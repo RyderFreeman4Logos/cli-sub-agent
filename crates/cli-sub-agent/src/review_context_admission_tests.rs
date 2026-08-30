@@ -2,6 +2,7 @@ use crate::cli::{Cli, Commands, validate_review_args};
 use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
 use clap::Parser;
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
+use std::cell::RefCell;
 #[cfg(unix)]
 use std::ffi::CString;
 #[cfg(unix)]
@@ -13,6 +14,52 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 use super::*;
+
+thread_local! {
+    static EXTERNAL_SNAPSHOT_TEST_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+}
+
+struct ExternalSnapshotTestHookGuard;
+
+fn install_external_snapshot_test_hook(
+    hook: impl FnOnce() + 'static,
+) -> ExternalSnapshotTestHookGuard {
+    EXTERNAL_SNAPSHOT_TEST_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+    ExternalSnapshotTestHookGuard
+}
+
+impl Drop for ExternalSnapshotTestHookGuard {
+    fn drop(&mut self) {
+        EXTERNAL_SNAPSHOT_TEST_HOOK.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
+pub(super) fn run_external_snapshot_test_hook() {
+    let hook = EXTERNAL_SNAPSHOT_TEST_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+pub(crate) fn resolve_review_context(
+    requested_context: Option<&str>,
+    project_root: &Path,
+    allow_auto_discovery: bool,
+) -> anyhow::Result<Option<ResolvedReviewContext>> {
+    match requested_context {
+        Some(path) => {
+            resolve_explicit_review_context(Path::new(path), project_root, "--context", &[])
+                .map(Some)
+        }
+        None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
+        None => Ok(None),
+    }
+}
 
 fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
     SpecDocument {
@@ -331,4 +378,31 @@ fn resolve_review_context_accepts_dot_relative_explicit_paths() {
     let parent = resolve_review_context(Some("../TODO.md"), project.path(), false)
         .expect_err("parent traversal must stay rejected");
     assert!(format!("{parent:#}").contains("must be a file beneath"));
+}
+
+#[test]
+fn external_regular_file_replacement_is_fail_closed() {
+    let project = tempdir().unwrap();
+    let external = tempdir().unwrap();
+    let context_path = external.path().join("context.md");
+    let replacement_path = external.path().join("replacement.md");
+    std::fs::write(&context_path, "authorized context marker").unwrap();
+    std::fs::write(&replacement_path, "replacement context marker").unwrap();
+
+    let original = context_path.clone();
+    let replacement = replacement_path.clone();
+    let _hook = install_external_snapshot_test_hook(move || {
+        std::fs::rename(&replacement, &original).unwrap();
+    });
+    let context_arg = context_path.to_str().unwrap();
+    let args = parse_review_args(
+        project.path(),
+        &["--context", context_arg, "--extra-readable", context_arg],
+    );
+
+    let context = resolve_review_context_for_args(&args, project.path(), false, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(context.snapshot(), "authorized context marker");
+    assert!(!context.snapshot().contains("replacement context marker"));
 }

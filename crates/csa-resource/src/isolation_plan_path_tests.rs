@@ -121,6 +121,77 @@ fn test_resolve_writable_accepts_config_path_outside_default_roots() {
 
 #[cfg(unix)]
 #[test]
+fn readable_path_intermediate_component_replacement_cannot_escape_authorized_walk() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let authorized_dir = fixture.path().join("authorized");
+    let intermediate = authorized_dir.join("dir");
+    let context = intermediate.join("context.md");
+    let external = tempfile::tempdir().expect("external tempdir");
+    let external_context = external.path().join("context.md");
+    std::fs::create_dir_all(&intermediate).expect("create authorized directory");
+    std::fs::write(&context, "authorized marker").expect("write authorized context");
+    std::fs::write(&external_context, "unauthorized marker").expect("write external context");
+    let resolved = context
+        .canonicalize()
+        .expect("canonicalize authorized context");
+
+    let parked = authorized_dir.join("dir-parked");
+    std::fs::rename(&intermediate, &parked).expect("park authorized intermediate");
+    symlink(external.path(), &intermediate).expect("replace intermediate with symlink");
+
+    let error = ReadablePath::try_pinned(context, resolved)
+        .expect_err("intermediate replacement must fail closed before pinning");
+    assert!(
+        error.raw_os_error().is_some(),
+        "intermediate replacement should retain actionable OS error provenance"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn validate_readable_paths_accepts_unix_socket_without_read_opening() {
+    use std::os::unix::net::UnixListener;
+
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let socket = fixture.path().join("review.sock");
+    let _listener = UnixListener::bind(&socket).expect("bind Unix socket");
+
+    let readable = validate_readable_paths(std::slice::from_ref(&socket), fixture.path())
+        .expect("Unix socket should remain a path-bound readable source");
+    assert_eq!(readable.len(), 1);
+    assert_eq!(readable[0].bind_source(), socket.canonicalize().unwrap());
+    assert!(
+        readable[0].open_pinned_regular_file().is_err(),
+        "non-regular readable sources must not expose a regular-file snapshot"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn validate_readable_paths_accepts_fifo_without_read_opening() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let fifo = fixture.path().join("review.fifo");
+    let fifo_name = CString::new(fifo.as_os_str().as_bytes()).expect("NUL-free FIFO path");
+    // SAFETY: `fifo_name` is NUL-free and remains alive for the call.
+    assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+
+    let readable = validate_readable_paths(std::slice::from_ref(&fifo), fixture.path())
+        .expect("FIFO should remain a path-bound readable source");
+    assert_eq!(readable.len(), 1);
+    assert_eq!(readable[0].bind_source(), fifo.canonicalize().unwrap());
+    assert!(
+        readable[0].open_pinned_regular_file().is_err(),
+        "FIFO must not be retained as a regular-file snapshot"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn test_validate_readable_paths_allows_ssd_mirror_of_home_and_project() {
     use std::os::unix::fs::symlink;
 

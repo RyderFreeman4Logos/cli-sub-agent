@@ -293,16 +293,21 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<PlanRunOutcome>
         return Ok(PlanRunOutcome::default());
     }
 
-    if let Some(step_id) = complete_manual_step {
+    let _manual_completion_lock = if let Some(step_id) = complete_manual_step {
         if !explicit_resume {
             bail!("--complete-manual-step requires --resume");
         }
-        complete_pending_manual_step(&plan, &workflow_path, &journal_path, step_id)?;
+        let guard = complete_pending_manual_step(&plan, &workflow_path, &journal_path, step_id)?;
+        #[cfg(test)]
+        crate::plan_cmd_journal::run_manual_completion_resume_test_hook();
         eprintln!(
             "csa plan: marked manual step {step_id} complete in journal {}",
             journal_path.display()
         );
-    }
+        Some(guard)
+    } else {
+        None
+    };
 
     let completion_snapshot =
         plan_cmd_completion::PlanCompletionSnapshot::capture(&plan.name, &project_root);
