@@ -9,8 +9,8 @@ Usage: build-exact-head-binaries.sh --repo <path> --head <commit> --output-dir <
 Build csa and weave from a git-archive snapshot of one commit. The build runs
 with an isolated Cargo home/target directory and a whitelist environment so
 live-checkout ignored files, dotenv values, Cargo wrappers, and Rust flags
-cannot affect the produced binaries. The output directory must resolve to
-<repo>/target/exact-head/<head-commit>.
+cannot affect the produced binaries. The output directory must lexically
+normalize to <repo>/target/exact-head/<head-commit>.
 EOF
 }
 
@@ -60,11 +60,33 @@ case "${output_dir}" in
   /*) ;;
   *) output_dir="${repo}/${output_dir}" ;;
 esac
-output_root="$(realpath -m -- "${repo}/target/exact-head")"
-output_dir="$(realpath -m -- "${output_dir}")"
+lexical_path() {
+  realpath -ms -- "$1"
+}
+
+target_root="${repo}/target"
+if [ -L "${target_root}" ]; then
+  target_link="$(readlink -- "${target_root}")"
+  case "${target_link}" in
+    /*) target_root="${target_link}" ;;
+    *) target_root="${repo}/${target_link}" ;;
+  esac
+fi
+output_root="$(lexical_path "${target_root}/exact-head")"
+checkout_output_root="$(lexical_path "${repo}/target/exact-head")"
+output_dir="$(lexical_path "${output_dir}")"
+case "${output_dir}" in
+  "${checkout_output_root}"/*)
+    output_dir="${output_root}${output_dir#"${checkout_output_root}"}"
+    ;;
+esac
 expected_output_dir="${output_root}/${head}"
 if [ "${output_dir}" != "${expected_output_dir}" ]; then
-  echo "ERROR: --output-dir must resolve to the exact commit output path ${expected_output_dir}." >&2
+  echo "ERROR: --output-dir must normalize to the exact commit output path ${expected_output_dir}." >&2
+  exit 2
+fi
+if [ -L "${output_root}" ]; then
+  echo "ERROR: exact-build output root must not be a symbolic link: ${output_root}." >&2
   exit 2
 fi
 

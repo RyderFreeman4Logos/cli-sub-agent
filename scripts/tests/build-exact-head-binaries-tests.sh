@@ -110,7 +110,13 @@ env -u RUSTC_WRAPPER \
 git -C "${fixture}" add .
 git -C "${fixture}" commit -qm "fixture"
 head="$(git -C "${fixture}" rev-parse HEAD)"
-output="${fixture}/target/exact-head/${head}"
+target_backing="${tmp}/target-backing"
+lexical_target="${tmp}/lexical-target"
+mkdir -p "${target_backing}"
+ln -s "${target_backing}" "${lexical_target}"
+ln -s "${lexical_target}" "${fixture}/target"
+output="${lexical_target}/exact-head/${head}"
+requested_output="${fixture}/target/exact-head/${head}"
 
 rename_source="${tmp}/rename-source"
 rename_destination="${tmp}/rename-destination"
@@ -136,8 +142,22 @@ rmdir "${rename_destination}"
 rm -rf "${rename_destination}"
 
 victim="${tmp}/victim"
-mkdir -p "${victim}" "${fixture}/target/exact-head"
+mkdir -p "${victim}"
 printf 'keep\n' >"${victim}/sentinel"
+ln -s "${victim}" "${fixture}/target/exact-head"
+if "${builder}" \
+  --repo "${fixture}" \
+  --head "${head}" \
+  --output-dir "${requested_output}" \
+  >"${tmp}/symlinked-root.stdout" 2>"${tmp}/symlinked-root.stderr"; then
+  echo "ERROR: accepted symlinked exact-build output root" >&2
+  exit 1
+fi
+grep -q 'exact-build output root must not be a symbolic link' \
+  "${tmp}/symlinked-root.stderr"
+[ "$(cat "${victim}/sentinel")" = "keep" ]
+rm "${fixture}/target/exact-head"
+mkdir -p "${fixture}/target/exact-head"
 ln -s "${victim}" "${fixture}/target/exact-head/escape"
 for dangerous_output in \
   "${HOME}" \
@@ -154,7 +174,7 @@ for dangerous_output in \
     echo "ERROR: accepted dangerous exact-build output path: ${dangerous_output}" >&2
     exit 1
   fi
-  grep -q 'must resolve to the exact commit output path' "${tmp}/dangerous-output.stderr"
+  grep -q 'must normalize to the exact commit output path' "${tmp}/dangerous-output.stderr"
   [ "$(cat "${victim}/sentinel")" = "keep" ]
 done
 
@@ -232,11 +252,22 @@ CARGO_ENCODED_RUSTFLAGS='--cfgcontaminated_encoded' \
 RUSTC_BOOTSTRAP=1 \
 CARGO_PROFILE_RELEASE_OPT_LEVEL=0 \
 CARGO_HOME="${fixture}/.cargo" \
-  "${builder}" --repo "${fixture}" --head "${head}" --output-dir "${output}"
+  "${builder}" \
+    --repo "${fixture}" \
+    --head "${head}" \
+    --output-dir "${requested_output}" \
+    >"${tmp}/lexical-output.stdout"
 
 [ "$(cat "${output}/SOURCE_COMMIT")" = "${head}" ]
 [ "$("${output}/csa")" = "exact archive binary: csa" ]
 [ "$("${output}/weave")" = "exact archive binary: weave" ]
+if ! grep -Fxq \
+  "Built exact-head binaries from ${head} at ${output}" \
+  "${tmp}/lexical-output.stdout"; then
+  echo "ERROR: exact builder did not preserve lexical target identity ${output}" >&2
+  cat "${tmp}/lexical-output.stdout" >&2
+  exit 1
+fi
 "${builder}" --repo "${fixture}" --head "${head}" --output-dir "${output}"
 [ "$(cat "${output}/SOURCE_COMMIT")" = "${head}" ]
 printf 'PASS: exact-head archive build rejects unsafe output paths, live checkout, and environment contamination\n'
