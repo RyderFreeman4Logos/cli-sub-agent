@@ -3,7 +3,7 @@ use crate::pipeline_post_exec::{PostExecContext, process_execution_result};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 
 #[tokio::test]
-async fn guard_only_sa_failure_is_sanitized_before_generic_session_persistence() {
+async fn selected_guard_summary_in_mixed_output_is_sanitized_before_persistence() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _sandbox = ScopedSessionSandbox::new(&temp).await;
     let project_root = temp.path();
@@ -51,7 +51,8 @@ async fn guard_only_sa_failure_is_sanitized_before_generic_session_persistence()
     };
     let guard = "</csa-caller-sa-guard>";
     let mut execution = csa_process::ExecutionResult {
-        output: guard.to_string(),
+        output: format!("wrapper control prelude\n<csa-caller-sa-guard>\n{guard}\n"),
+        stderr_output: "fixture codex startup rejected".to_string(),
         summary: guard.to_string(),
         exit_code: 1,
         model_completed: Some(false),
@@ -72,6 +73,7 @@ async fn guard_only_sa_failure_is_sanitized_before_generic_session_persistence()
     assert_eq!(execution.summary, persisted.summary);
     assert!(!persisted.summary.contains("csa-caller-sa-guard"));
     assert!(persisted.summary.contains("codex tool failure"));
+    assert!(persisted.summary.contains("fixture codex startup rejected"));
     assert!(persisted.summary.chars().count() <= 240);
 
     let wait = render_wait_result_summary(&session_dir, &session.meta_session_id, &persisted);

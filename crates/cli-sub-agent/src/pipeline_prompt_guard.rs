@@ -138,9 +138,10 @@ Decisions MUST be based on result.toml reports, not direct code inspection.
 pub(crate) fn caller_guard_failure_summary<'a>(
     tool: &str,
     output: &str,
+    selected_summary: &str,
     diagnostics: impl IntoIterator<Item = Option<&'a str>>,
 ) -> Option<String> {
-    if !is_caller_guard_only_output(output) {
+    if !is_caller_guard_only_output(output) && !is_caller_guard_only_output(selected_summary) {
         return None;
     }
 

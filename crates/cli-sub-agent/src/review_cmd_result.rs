@@ -212,6 +212,7 @@ fn caller_guard_failure_reason(result: &ReviewExecutionOutcome, tool: ToolName) 
     crate::pipeline::prompt_guard::caller_guard_failure_summary(
         tool.as_str(),
         &result.execution.execution.output,
+        &result.execution.execution.summary,
         [
             result.failure_reason.as_deref(),
             result.primary_failure.as_deref(),

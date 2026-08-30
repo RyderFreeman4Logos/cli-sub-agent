@@ -82,6 +82,7 @@ pub(crate) async fn process_execution_result(
         && let Some(summary) = crate::pipeline::prompt_guard::caller_guard_failure_summary(
             ctx.executor.tool_name(),
             &result.output,
+            &result.summary,
             [
                 Some(result.stderr_output.as_str()),
                 result.terminal_reason.as_deref(),
