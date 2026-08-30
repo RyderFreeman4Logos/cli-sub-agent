@@ -45,8 +45,6 @@ const REVIEW_UNAVAILABLE_FAILURE_PATTERNS: &[&str] = &[
     "invalid api key",
     "authentication required",
 ];
-const CALLER_SA_GUARD_OPEN: &str = "<csa-caller-sa-guard>";
-const CALLER_SA_GUARD_CLOSE: &str = "</csa-caller-sa-guard>";
 
 fn verdict_from_decision(decision: ReviewDecision) -> &'static str {
     match decision {
@@ -211,54 +209,17 @@ pub(super) fn resolve_single_review_result(
 }
 
 fn caller_guard_failure_reason(result: &ReviewExecutionOutcome, tool: ToolName) -> Option<String> {
-    let output = &result.execution.execution.output;
-    if !is_caller_guard_only_output(output) {
-        return None;
-    }
-
-    let diagnostic = [
-        result.failure_reason.as_deref(),
-        result.primary_failure.as_deref(),
-        Some(result.execution.execution.stderr_output.as_str()),
-        Some(result.execution.execution.summary.as_str()),
-        result.status_reason.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|text| !text.trim().is_empty() && !is_caller_guard_only_output(text))
-    .map(|text| truncate_single_line(text, 240))
-    .unwrap_or_else(|| "caller guard emitted without a review result".to_string());
-
-    Some(format!("{} tool failure: {diagnostic}", tool.as_str()))
-}
-
-fn is_caller_guard_only_output(output: &str) -> bool {
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    let full_guard = crate::pipeline::prompt_guard::SA_MODE_CALLER_GUARD.trim();
-    let mut remainder = trimmed;
-    let mut full_guard_count = 0;
-    while let Some(after_guard) = remainder.strip_prefix(full_guard) {
-        full_guard_count += 1;
-        remainder = after_guard.trim();
-    }
-    if full_guard_count > 0 {
-        return remainder.is_empty();
-    }
-
-    trimmed
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .all(is_caller_guard_line)
-}
-
-fn is_caller_guard_line(line: &str) -> bool {
-    matches!(line, CALLER_SA_GUARD_OPEN | CALLER_SA_GUARD_CLOSE)
-        || line.starts_with("<csa-caller-sa-guard:compact")
+    crate::pipeline::prompt_guard::caller_guard_failure_summary(
+        tool.as_str(),
+        &result.execution.execution.output,
+        [
+            result.failure_reason.as_deref(),
+            result.primary_failure.as_deref(),
+            Some(result.execution.execution.stderr_output.as_str()),
+            Some(result.execution.execution.summary.as_str()),
+            result.status_reason.as_deref(),
+        ],
+    )
 }
 
 pub(super) fn build_reviewer_outcome(
