@@ -143,6 +143,91 @@ fn review_context_outside_workspace_is_rejected_before_session_creation() {
 }
 
 #[test]
+fn extra_readable_external_context_is_admitted_and_consumed() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let context_path = outside_dir.path().join("context.md");
+    let marker = "external context marker 3139";
+    std::fs::write(&context_path, marker).unwrap();
+    let path = context_path.to_str().unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--no-daemon", "--context", path, "--extra-readable", path],
+    );
+
+    let context = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        None,
+    )
+    .unwrap()
+    .expect("explicitly readable external context should be admitted");
+    let prompt = super::super::build_review_instruction(
+        "uncommitted",
+        "review-only",
+        "auto",
+        crate::cli::ReviewMode::Standard,
+        Some(&context),
+    );
+
+    assert!(prompt.contains(marker), "{prompt}");
+}
+
+#[test]
+fn extra_readable_mismatched_external_context_is_rejected() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let context_path = outside_dir.path().join("context.md");
+    let readable_path = outside_dir.path().join("other.md");
+    std::fs::write(&context_path, "context").unwrap();
+    std::fs::write(&readable_path, "other").unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &[
+            "--no-daemon",
+            "--context",
+            context_path.to_str().unwrap(),
+            "--extra-readable",
+            readable_path.to_str().unwrap(),
+        ],
+    );
+
+    let error = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        None,
+    )
+    .expect_err("an external context must require an exact readable-path grant");
+
+    assert!(format!("{error:#}").contains("outside the project workspace"));
+}
+
+#[test]
+fn extra_readable_symlink_escape_is_rejected() {
+    let project_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let context_path = outside_dir.path().join("context.md");
+    std::os::unix::fs::symlink("/etc/passwd", &context_path).unwrap();
+    let path = context_path.to_str().unwrap();
+    let args = parse_review_args(
+        project_dir.path(),
+        &["--no-daemon", "--context", path, "--extra-readable", path],
+    );
+
+    let error = crate::review_context::resolve_review_context_for_args(
+        &args,
+        project_dir.path(),
+        false,
+        None,
+    )
+    .expect_err("readable-path authority must reject a symlink escape");
+
+    assert!(format!("{error:#}").contains("readable_paths validation failed"));
+}
+
+#[test]
 fn oversized_review_context_is_rejected_before_session_creation() {
     let project_dir = tempfile::tempdir().unwrap();
     let _sandbox = ScopedSessionSandbox::new_blocking(&project_dir);

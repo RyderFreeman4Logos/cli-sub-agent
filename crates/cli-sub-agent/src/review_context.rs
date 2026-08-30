@@ -74,21 +74,7 @@ impl ResolvedReviewContext {
 }
 
 #[cfg(test)]
-pub(crate) fn resolve_review_context(
-    requested_context: Option<&str>,
-    project_root: &Path,
-    allow_auto_discovery: bool,
-) -> Result<Option<ResolvedReviewContext>> {
-    match requested_context {
-        Some(path) => Ok(Some(resolve_explicit_review_context(
-            Path::new(path),
-            project_root,
-            "--context",
-        )?)),
-        None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
-        None => Ok(None),
-    }
-}
+pub(crate) use admission_tests::resolve_review_context;
 
 pub(crate) fn resolve_review_context_for_args(
     args: &crate::cli::ReviewArgs,
@@ -123,11 +109,10 @@ pub(crate) fn resolve_review_context_for_args(
         }
     }
     match explicit {
-        Some((path, label)) => Ok(Some(resolve_explicit_review_context(
-            path,
-            project_root,
-            label,
-        )?)),
+        Some((path, label)) => {
+            resolve_explicit_review_context(path, project_root, label, &args.extra_readable)
+                .map(Some)
+        }
         None if allow_auto_discovery => Ok(auto_discover_review_context(project_root)),
         None => Ok(None),
     }
@@ -137,8 +122,9 @@ fn resolve_explicit_review_context(
     path: &Path,
     project_root: &Path,
     label: &str,
+    extra_readable: &[PathBuf],
 ) -> Result<ResolvedReviewContext> {
-    let (path_ref, snapshot) = admit_review_context(path, project_root, label)?;
+    let (path_ref, snapshot) = admit_review_context(path, project_root, label, extra_readable)?;
 
     let kind = if has_extension(&path_ref, "md") {
         ResolvedReviewContextKind::TodoMarkdown
@@ -163,17 +149,33 @@ fn admit_review_context(
     path: &Path,
     project_root: &Path,
     label: &str,
+    extra_readable: &[PathBuf],
 ) -> Result<(PathBuf, String)> {
     let project_root = project_root
         .canonicalize()
         .with_context(|| format!("{label}: failed to resolve project root"))?;
     let relative = if path.is_absolute() {
-        path.strip_prefix(&project_root).map(Path::to_path_buf).map_err(|_| {
-            anyhow::anyhow!(
-                "{label}: '{}' is outside the project workspace; copy it into the project and retry",
-                path.display()
-            )
-        })?
+        match path.strip_prefix(&project_root) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => {
+                let readable = csa_resource::isolation_plan::validate_readable_paths(
+                    extra_readable,
+                    &project_root,
+                )?
+                .into_iter()
+                .find(|candidate| candidate.requested() == path)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{label}: '{}' is outside the project workspace; copy it into the project and retry",
+                        path.display()
+                    )
+                })?;
+                #[cfg(test)]
+                admission_tests::run_external_snapshot_test_hook();
+                let snapshot = read_pinned_readable_snapshot(&readable, path, label)?;
+                return Ok((path.to_path_buf(), snapshot));
+            }
+        }
     } else {
         path.to_path_buf()
     };
@@ -194,6 +196,17 @@ fn admit_review_context(
     let resolved = project_root.join(&relative);
     let snapshot = read_beneath_root_snapshot(&project_root, &components, &resolved, label)?;
     Ok((resolved, snapshot))
+}
+
+fn read_pinned_readable_snapshot(
+    readable: &csa_resource::isolation_plan::ReadablePath,
+    requested: &Path,
+    label: &str,
+) -> Result<String> {
+    let file = readable
+        .open_pinned_regular_file()
+        .with_context(|| format!("{label}: failed to read '{}'", requested.display()))?;
+    read_review_context_snapshot(file, requested, label)
 }
 
 fn read_beneath_root_snapshot(
@@ -227,6 +240,10 @@ fn read_beneath_root_snapshot(
     };
     let file = open_regular_file_at(directory.as_raw_fd(), name)
         .with_context(|| format!("{label}: failed to read '{}'", resolved.display()))?;
+    read_review_context_snapshot(file, resolved, label)
+}
+
+fn read_review_context_snapshot(file: File, resolved: &Path, label: &str) -> Result<String> {
     let mut bytes = Vec::new();
     file.take(REVIEW_CONTEXT_MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)

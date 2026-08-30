@@ -1,16 +1,39 @@
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::fs::{File, OpenOptions};
+use std::path::{Component, Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::sync::Arc;
 
 use crate::filesystem_sandbox::FilesystemCapability;
 
 use super::runtime_path;
 
 /// Validated readable bind: requested destination plus the source pinned at
-/// validation time so later symlink replacement cannot change the bind (#3102).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// validation time so later replacement cannot change the bind (#3102).
+#[derive(Debug, Clone)]
 pub struct ReadablePath {
     requested: PathBuf,
     bind_source: PathBuf,
+    #[cfg(unix)]
+    source_file: Option<Arc<File>>,
 }
+
+impl PartialEq for ReadablePath {
+    fn eq(&self, other: &Self) -> bool {
+        self.requested == other.requested && self.bind_source == other.bind_source
+    }
+}
+
+impl Eq for ReadablePath {}
 
 impl ReadablePath {
     /// Requested destination stored for the sandbox mount.
@@ -23,12 +46,192 @@ impl ReadablePath {
         &self.bind_source
     }
 
+    /// Clone the descriptor held since validation for a regular-file snapshot.
+    ///
+    /// The descriptor is opened with component-by-component `openat` walking
+    /// during validation and retained here, so later rename cannot redirect the
+    /// snapshot to a different file.
+    #[cfg(unix)]
+    pub fn open_pinned_regular_file(&self) -> std::io::Result<File> {
+        self.source_file
+            .as_ref()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "validated readable path is not a pinned regular file",
+                )
+            })?
+            .try_clone()
+    }
+
     pub(crate) fn pinned(requested: PathBuf, bind_source: PathBuf) -> Self {
+        #[cfg(unix)]
+        let source_file = open_pinned_source(&bind_source).ok().flatten();
+
         Self {
             requested,
             bind_source,
+            #[cfg(unix)]
+            source_file,
         }
     }
+
+    pub(crate) fn try_pinned(requested: PathBuf, bind_source: PathBuf) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let source_file = open_pinned_source(&bind_source)?;
+
+        Ok(Self {
+            requested,
+            bind_source,
+            #[cfg(unix)]
+            source_file,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> {
+    let mut components = bind_source.components();
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pinned readable source must be absolute",
+        ));
+    }
+
+    let components = components.collect::<Vec<_>>();
+    let Some((final_component, parent_components)) = components.split_last() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "root path cannot be pinned as a readable source",
+        ));
+    };
+
+    let mut parent = open_root_directory()?;
+    for component in parent_components {
+        let Component::Normal(name) = component else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "pinned readable source contains a non-normal path component",
+            ));
+        };
+        parent = open_directory_at(&parent, name)?;
+    }
+
+    let Component::Normal(name) = final_component else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pinned readable source contains a non-normal final component",
+        ));
+    };
+    let expected = stat_at(&parent, name)?;
+
+    // Non-regular paths remain path-bound for sandbox mounting. In particular,
+    // never read-open FIFOs, sockets, directories, or devices just to classify
+    // them.
+    if expected.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Ok(None);
+    }
+
+    let file = open_regular_at(&parent, name)?;
+    let mut actual = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: `file` is a live descriptor and `actual` points to writable
+    // storage for the kernel's stat result.
+    let result = unsafe { libc::fstat(file.as_raw_fd(), actual.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fstat initialized `actual` after returning success.
+    let actual = unsafe { actual.assume_init() };
+    if actual.st_dev != expected.st_dev || actual.st_ino != expected.st_ino {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "pinned readable file changed while being opened",
+        ));
+    }
+
+    Ok(Some(Arc::new(file)))
+}
+
+#[cfg(unix)]
+fn open_root_directory() -> std::io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open("/")
+}
+
+#[cfg(unix)]
+fn path_component(name: &std::ffi::OsStr) -> std::io::Result<CString> {
+    CString::new(name.as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pinned readable source contains a null byte",
+        )
+    })
+}
+
+#[cfg(unix)]
+fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+    let name = path_component(name)?;
+    // SAFETY: `parent` is a live directory descriptor and `name` is a valid
+    // NUL-terminated path component.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY
+                | libc::O_DIRECTORY
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
+                | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat> {
+    let name = path_component(name)?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: `parent` is a live directory descriptor; `name` is a valid path
+    // component; `stat` points to writable storage.
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fstatat initialized `stat` after returning success.
+    Ok(unsafe { stat.assume_init() })
+}
+
+#[cfg(unix)]
+fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+    let name = path_component(name)?;
+    // SAFETY: `parent` is a live directory descriptor and `name` is a valid
+    // NUL-terminated path component.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 impl From<PathBuf> for ReadablePath {

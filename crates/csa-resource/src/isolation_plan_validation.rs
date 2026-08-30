@@ -78,15 +78,18 @@ pub(super) fn validate_readable_paths_with_mirror_roots(
     project_root: &Path,
     mirror_roots: &[PathBuf],
 ) -> anyhow::Result<Vec<ReadablePath>> {
-    Ok(validate_sandbox_paths(
+    validate_sandbox_paths(
         paths,
         project_root,
         readable_path_validation_options(),
         mirror_roots,
     )?
     .into_iter()
-    .map(|path| ReadablePath::pinned(path.requested, path.resolved))
-    .collect())
+    .map(|path| {
+        ReadablePath::try_pinned(path.requested, path.resolved)
+            .with_context(|| "failed to pin validated readable path for race-free snapshots")
+    })
+    .collect::<anyhow::Result<Vec<_>>>()
 }
 
 fn readable_path_validation_options() -> PathValidationOptions<'static> {
