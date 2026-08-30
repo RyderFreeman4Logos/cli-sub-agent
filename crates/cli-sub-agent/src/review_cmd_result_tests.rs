@@ -4,7 +4,7 @@ use csa_core::env::{CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY};
 use csa_process::ExecutionResult;
 use std::{collections::HashMap, fs, path::Path};
 
-fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
+pub(super) fn outcome(output: &str, exit_code: i32) -> ReviewExecutionOutcome {
     ReviewExecutionOutcome {
         execution: SessionExecutionResult {
             execution: ExecutionResult {

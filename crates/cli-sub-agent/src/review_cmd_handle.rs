@@ -449,7 +449,12 @@ async fn handle_review_inner(
         );
         let effective_exit_code = persisted_verdict_exit_code.unwrap_or(effective_exit_code);
         if let Some(session_id) = result.persistable_session_id.as_deref() {
-            persist_review_result_exit_code(&project_root, session_id, effective_exit_code);
+            persist_review_result_exit_code(
+                &project_root,
+                session_id,
+                effective_exit_code,
+                resolved.caller_guard_failure.then_some(sanitized.as_str()),
+            );
             diff_size::persist_review_diff_size_headers(&project_root, session_id, diff.as_ref());
         }
         if verdict != CLEAN {

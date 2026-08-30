@@ -52,6 +52,7 @@ pub(in crate::review_cmd) fn persist_review_result_exit_code(
     project_root: &Path,
     session_id: &str,
     exit_code: i32,
+    caller_guard_summary: Option<&str>,
 ) {
     let mut result = match csa_session::load_result(project_root, session_id) {
         Ok(Some(result)) => result,
@@ -65,19 +66,67 @@ pub(in crate::review_cmd) fn persist_review_result_exit_code(
             return;
         }
     };
+    let summary = caller_guard_summary
+        .and_then(|summary| summary.lines().map(str::trim).find(|line| !line.is_empty()))
+        .map(|summary| summary.chars().take(200).collect::<String>());
     if result.exit_code == exit_code
         && result.status == csa_session::SessionResult::status_from_exit_code(exit_code)
+        && summary.is_none()
     {
         return;
     }
 
     result.exit_code = exit_code;
     result.status = csa_session::SessionResult::status_from_exit_code(exit_code);
+    if let Some(summary) = summary {
+        result.summary = summary;
+    }
     if let Err(error) = csa_session::save_result(project_root, session_id, &result) {
         warn!(
             session_id,
             error = %error,
             "Failed to persist review result.toml verdict exit-code alignment"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caller_guard_failure_replaces_persisted_guard_summary() {
+        let project = tempfile::tempdir().expect("temp project");
+        let session = csa_session::create_session(
+            project.path(),
+            Some("caller guard persistence"),
+            None,
+            Some("codex"),
+        )
+        .expect("create session");
+        let result = csa_session::SessionResult {
+            status: csa_session::SessionResult::status_from_exit_code(1),
+            exit_code: 1,
+            summary: "</csa-caller-sa-guard>".to_string(),
+            tool: "codex".to_string(),
+            ..Default::default()
+        };
+        csa_session::save_result(project.path(), &session.meta_session_id, &result)
+            .expect("save guard result");
+
+        persist_review_result_exit_code(
+            project.path(),
+            &session.meta_session_id,
+            1,
+            Some("Review unavailable: codex tool failure: executable not found\n"),
+        );
+
+        let persisted = csa_session::load_result(project.path(), &session.meta_session_id)
+            .expect("load result")
+            .expect("persisted result");
+        assert_eq!(
+            persisted.summary,
+            "Review unavailable: codex tool failure: executable not found"
         );
     }
 }
