@@ -265,7 +265,7 @@ test_live_cardinality_contract() {
 
 require_source_contract() {
   local summary quality_recipe pre_push_recipe static_source contract_source
-  local live_source lefthook_source count suite contract_suite output code
+  local live_source lefthook_source count suite contract_suite line_count_suite output code
   summary="$(just --no-dotenv --summary)"
   quality_recipe="$(just --no-dotenv --show quality-gates)"
   pre_push_recipe="$(just --no-dotenv --show pre-push)"
@@ -310,6 +310,9 @@ require_source_contract() {
 #!/usr/bin/env bash
 printf '%s\n' \
   'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125'
+printf 'FAIL oversized-matching-line expected=expected actual='
+printf '%20000s' '' | tr ' ' A
+printf '\n'
 for _ in {1..300}; do
   printf '%s\n' \
     'UNSAFE secret=top-secret path=/tmp/private-contract.log padding=0123456789abcdef0123456789abcdef0123456789abcdef'
@@ -323,16 +326,39 @@ EOF
   code=$?
   set -e
   assert_eq source-contract-diagnostic-exit 7 "$code"
-  assert_eq source-contract-diagnostic-output-exact \
-    $'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125\nFAIL contract-suite-contract-diagnostic-suite.sh expected=exit-0 actual=exit-7' \
-    "$output"
-  assert_eq source-contract-diagnostic-line-bound 2 "$(wc -l <<<"$output")"
+  diagnostic_bytes="$(printf '%s\n' "$output" | LC_ALL=C wc -c | tr -d '[:space:]')"
+  assert_num_lt source-contract-diagnostic-byte-bound 16385 "$diagnostic_bytes"
+  assert_contains source-contract-diagnostic-truncation-marker \
+    '...[diagnostic truncated]...' "$output"
+  assert_contains source-contract-diagnostic-safe-prefix \
+    'FAIL offline-toolchain-first-exit expected=exit-0 actual=exit-125' "$output"
+  assert_contains source-contract-diagnostic-status \
+    'FAIL contract-suite-contract-diagnostic-suite.sh expected=exit-0 actual=exit-7' "$output"
   assert_not_matches source-contract-unsafe-diagnostic-redacted \
     'top-secret|/tmp/private-contract\.log' "$output"
   assert_not_matches source-contract-diagnostic-capture-path \
     'quality-gate-contract\.' "$output"
   assert_not_matches source-contract-diagnostic-binary-notice \
     'Binary file .* matches' "$output"
+
+  line_count_suite="$test_root/contract-diagnostic-line-count-suite.sh"
+  cat >"$line_count_suite" <<'EOF'
+#!/usr/bin/env bash
+for index in {1..21}; do
+  printf 'FAIL contract-case suite=line-count case=case-%02d exit=9\n' "$index"
+done
+exit 9
+EOF
+  chmod +x "$line_count_suite"
+  set +e
+  output="$(run_contract_suite "$line_count_suite" 1 2>&1)"
+  code=$?
+  set -e
+  assert_eq source-contract-line-count-exit 9 "$code"
+  count="$(grep -Ec '^FAIL contract-case suite=line-count case=case-[0-9]+ exit=9$' <<<"$output" || true)"
+  assert_eq source-contract-max-matching-lines 20 "$count"
+  assert_not_matches source-contract-max-matching-lines-drops-oldest \
+    'case=case-01 ' "$output"
   set +e
   output="$(
     run_quality_gate_contract_suites() { printf 'suite-ran\n'; }
