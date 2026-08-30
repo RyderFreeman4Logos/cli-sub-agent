@@ -12,8 +12,59 @@ pub(super) struct TempGateIndex {
 type GateEnv = Option<HashMap<String, String>>;
 type GateEnvWithIndex = (GateEnv, Option<TempGateIndex>);
 
+pub(super) fn is_git_routing_env(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_CONFIG"
+            | "GIT_DIR"
+            | "GIT_WORK_TREE"
+            | "GIT_COMMON_DIR"
+            | "GIT_NAMESPACE"
+            | "GIT_CEILING_DIRECTORIES"
+            | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+            | "GIT_TEMPLATE_DIR"
+            | "GIT_INDEX_FILE"
+            | "GIT_OBJECT_DIRECTORY"
+            | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+    ) || name.starts_with("GIT_CONFIG_")
+}
+
+pub(super) fn strip_inherited_env(command: &mut tokio::process::Command) {
+    for var in csa_executor::CHILD_PROCESS_STRIPPED_ENV_VARS {
+        command.env_remove(var);
+    }
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CSA_") || is_git_routing_env(&key.to_string_lossy()) {
+            command.env_remove(key);
+        }
+    }
+}
+
+fn clear_git_routing_env(command: &mut std::process::Command) {
+    for (key, _) in std::env::vars_os() {
+        if is_git_routing_env(&key.to_string_lossy()) {
+            command.env_remove(key);
+        }
+    }
+}
+
+fn is_git_worktree(project_root: &Path) -> bool {
+    let mut command = std::process::Command::new("git");
+    clear_git_routing_env(&mut command);
+    command
+        .arg("-C")
+        .arg(project_root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
+        })
+}
+
 fn git_index_path(project_root: &Path) -> Result<PathBuf> {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    clear_git_routing_env(&mut command);
+    let output = command
         .arg("-C")
         .arg(project_root)
         .args(["rev-parse", "--git-path", "index"])
@@ -83,7 +134,9 @@ fn temp_index_contains_path(
     temp_index: &Path,
     changed_path: &str,
 ) -> Result<bool> {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    clear_git_routing_env(&mut command);
+    let output = command
         .arg("-C")
         .arg(project_root)
         .args(["ls-files", "--stage", "--"])
@@ -107,7 +160,9 @@ fn temp_index_contains_path(
 }
 
 fn stage_changed_path(project_root: &Path, temp_index: &Path, changed_path: &str) -> Result<()> {
-    let output = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    clear_git_routing_env(&mut command);
+    let output = command
         .arg("-C")
         .arg(project_root)
         .args(["add", "--all", "--"])
@@ -138,12 +193,13 @@ pub(super) fn post_exec_gate_env_with_temp_index(
     let Some(changed_paths) = changed_paths.filter(|paths| !paths.is_empty()) else {
         return Ok((extra_env, None));
     };
-    if !crate::run_cmd::is_git_worktree(project_root) {
+    if !is_git_worktree(project_root) {
         return Ok((extra_env, None));
     }
 
     let temp_index = build_temp_gate_index(project_root, changed_paths)?;
     let mut env = extra_env.unwrap_or_default();
+    env.retain(|name, _| !is_git_routing_env(name));
     env.insert(
         "GIT_INDEX_FILE".to_string(),
         temp_index.path.to_string_lossy().into_owned(),

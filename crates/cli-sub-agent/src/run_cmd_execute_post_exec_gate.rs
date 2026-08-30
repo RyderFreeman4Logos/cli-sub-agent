@@ -18,7 +18,7 @@ use crate::run_cmd_post_exec_gate_capture::{
 #[path = "run_cmd_execute_post_exec_gate_index.rs"]
 mod gate_index;
 
-use gate_index::post_exec_gate_env_with_temp_index;
+use gate_index::{post_exec_gate_env_with_temp_index, strip_inherited_env};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PostExecGateCommandOutcome {
@@ -286,17 +286,6 @@ fn classify_post_exec_gate_worktree(
     }
 }
 
-fn strip_inherited_csa_env(cmd: &mut Command) {
-    for var in csa_executor::CHILD_PROCESS_STRIPPED_ENV_VARS {
-        cmd.env_remove(var);
-    }
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("CSA_") {
-            cmd.env_remove(key);
-        }
-    }
-}
-
 pub(super) fn execute_post_exec_gate_command(
     command: &str,
     project_root: &Path,
@@ -311,15 +300,13 @@ pub(super) fn execute_post_exec_gate_command(
         cmd.arg("-c")
             .arg(&command)
             .current_dir(&project_root)
-            // Capture stdout/stderr so a failure can be surfaced structurally
-            // (#1726); the tee tasks below re-emit every chunk to the parent's
-            // stdout/stderr, so the raw transcript (`full.md`) is unchanged.
+            // Capture output for structured failure reporting (#1726).
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        strip_inherited_env(&mut cmd);
         if let Some(extra_env) = extra_env {
             cmd.envs(extra_env);
         }
-        strip_inherited_csa_env(&mut cmd);
 
         #[cfg(unix)]
         {
