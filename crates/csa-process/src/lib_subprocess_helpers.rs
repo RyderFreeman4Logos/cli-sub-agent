@@ -2,7 +2,13 @@ use anyhow::{Context, Result};
 use std::{process::ExitStatus, time::Duration};
 use tokio::process::Command;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicI32, Ordering};
+
 const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[cfg(test)]
+static FORCE_GROUP_CLEANUP_TIMEOUT_FOR: AtomicI32 = AtomicI32::new(0);
 
 #[derive(Debug)]
 pub enum ChildWaitState {
@@ -114,6 +120,11 @@ async fn wait_for_child_exit(child: &mut tokio::process::Child) -> Result<ExitSt
 
 #[cfg(target_os = "linux")]
 async fn wait_for_process_group_termination(process_group: i32) -> Result<()> {
+    #[cfg(test)]
+    if FORCE_GROUP_CLEANUP_TIMEOUT_FOR.swap(0, Ordering::SeqCst) == process_group {
+        anyhow::bail!("forced process-group cleanup timeout");
+    }
+
     let deadline = tokio::time::Instant::now() + CHILD_REAP_TIMEOUT;
     loop {
         match crate::process_activity::process_group_has_live_members(process_group) {
@@ -156,9 +167,17 @@ pub async fn terminate_child_process_group(
             #[cfg(target_os = "linux")]
             if let Err(group_error) = wait_for_process_group_termination(process_group).await {
                 return match wait_for_child_exit(child).await {
-                    Ok(_) => Err(group_error.context(format!(
-                        "child process was reaped but process group {process_group} cleanup failed"
-                    ))),
+                    Ok(status) => match crate::process_activity::process_group_has_live_members(
+                        process_group,
+                    ) {
+                        Ok(false) => Ok(status),
+                        Ok(true) => Err(group_error.context(format!(
+                            "child process was reaped but process group {process_group} cleanup failed"
+                        ))),
+                        Err(liveness_error) => Err(group_error.context(format!(
+                            "child process was reaped but process group {process_group} cleanup failed; final liveness check failed: {liveness_error:#}"
+                        ))),
+                    },
                     Err(child_error) => Err(group_error.context(format!(
                         "process group {process_group} cleanup failed and direct child reap also failed: {child_error:#}"
                     ))),
@@ -190,4 +209,44 @@ pub async fn check_tool_installed(executable: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reaped_child_and_gone_group_ignore_cleanup_timeout() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn child");
+        let process_group = i32::try_from(child.id().expect("child PID")).expect("pid_t range");
+        let observed_status = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match inspect_child_without_reaping(&mut child).expect("inspect child") {
+                    ChildWaitState::Running => tokio::task::yield_now().await,
+                    ChildWaitState::Exited(status) => break status,
+                }
+            }
+        })
+        .await
+        .expect("child exits before cleanup");
+        assert!(
+            observed_status.success(),
+            "expected the child to exit successfully"
+        );
+        FORCE_GROUP_CLEANUP_TIMEOUT_FOR.store(process_group, Ordering::SeqCst);
+
+        let status = terminate_child_process_group(&mut child, Duration::ZERO)
+            .await
+            .expect("a reaped child with no live group members is complete");
+        assert!(status.success(), "expected the child to exit successfully");
+        assert_eq!(
+            FORCE_GROUP_CLEANUP_TIMEOUT_FOR.load(Ordering::SeqCst),
+            0,
+            "cleanup-timeout injection must be consumed by the cleanup seam",
+        );
+    }
 }
