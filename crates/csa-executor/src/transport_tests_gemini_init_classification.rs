@@ -454,6 +454,66 @@ exit 1
     );
 }
 
+#[tokio::test]
+async fn test_gemini_isolates_poisoned_home_extensions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = GEMINI_INIT_ENV_LOCK.lock().await;
+    let poisoned_home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(
+        poisoned_home
+            .path()
+            .join(".gemini/extensions/gemini-cli-security"),
+    )
+    .unwrap();
+    let _home = GeminiInitScopedEnvVar::set(
+        "HOME",
+        poisoned_home.path().to_str().unwrap(),
+    );
+
+    let (temp, mut env, _) = setup_fake_gemini_environment(1);
+    let script_path = temp.path().join("gemini");
+    std::fs::write(
+        &script_path,
+        r#"#!/usr/bin/env bash
+runtime_home="${GEMINI_CLI_HOME:-$HOME/.gemini}"
+extension_dir="$runtime_home/.gemini/extensions/gemini-cli-security"
+if [ -d "$extension_dir" ]; then
+  printf 'spawn %s/mcp-server ENOENT\n' "$extension_dir" >&2
+  exit 1
+fi
+printf 'fake Gemini child exited before ACP handshake\n' >&2
+exit 1
+"#,
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&script_path, perms).unwrap();
+    env.insert(
+        "CSA_GEMINI_ALLOW_DEGRADED_MCP".to_string(),
+        "0".to_string(),
+    );
+
+    let error = AcpTransport::new("gemini-cli", None)
+        .execute_in(
+            "test poisoned home isolation",
+            temp.path(),
+            Some(&env),
+            None,
+            false,
+            StreamMode::BufferOnly,
+            30,
+            super::ResolvedTimeout(None),
+        )
+        .await
+        .expect_err("fake Gemini should fail before ACP handshake");
+    let error_text = format!("{error:#}");
+    assert!(error_text.contains("gemini_acp_init_handshake_timeout"));
+    assert!(error_text.contains("fake Gemini child exited before ACP handshake"));
+    assert!(!error_text.contains("gemini-cli-security/mcp-server ENOENT"));
+}
+
 fn write_fake_gemini_startup_script(script_path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
 
