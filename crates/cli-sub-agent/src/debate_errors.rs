@@ -7,6 +7,7 @@ pub(crate) const EMPTY_DEBATE_QUESTION_ERROR: &str = concat!(
     "debate question is empty (stdin is not available to the detached daemon - ",
     "pass a positional QUESTION, use --question-file QUESTION.md, or pair --context with a QUESTION)"
 );
+const CODEX_CONFIG_PARSE_ERROR_MARKER: &str = "Error loading config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DebateErrorKind {
@@ -22,6 +23,12 @@ pub(crate) fn classify_execution_outcome(
 ) -> DebateErrorKind {
     if has_persisted_pre_exec_failure(session_dir) {
         return DebateErrorKind::Deterministic("persisted pre-exec failure".to_string());
+    }
+
+    if is_codex_config_parse_failure(&execution.summary)
+        || is_codex_config_parse_failure(&execution.stderr_output)
+    {
+        return DebateErrorKind::Deterministic("Codex config.toml parse failure".to_string());
     }
 
     if ToolLiveness::is_alive(session_dir) {
@@ -84,9 +91,9 @@ pub(crate) fn classify_execution_outcome(
     DebateErrorKind::Deterministic(format!("exit code {}", execution.exit_code))
 }
 
-/// A pre-exec failure result is terminal evidence for this attempt. Its diagnostic
-/// lock may retain the launching test/process PID after release, so it must win
-/// over lock-based liveness and prevent an endless StillWorking retry.
+/// A persisted terminal failure is evidence for this attempt. Its diagnostic lock
+/// may retain the launching test/process PID after release, so it must win over
+/// lock-based liveness and prevent an endless StillWorking retry.
 fn has_persisted_pre_exec_failure(session_dir: &Path) -> bool {
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     let Ok(contents) = std::fs::read_to_string(result_path) else {
@@ -95,7 +102,13 @@ fn has_persisted_pre_exec_failure(session_dir: &Path) -> bool {
     let Ok(result) = toml::from_str::<csa_session::SessionResult>(&contents) else {
         return false;
     };
-    result.status == "failure" && result.summary.trim_start().starts_with("pre-exec:")
+    result.status == "failure"
+        && (result.summary.trim_start().starts_with("pre-exec:")
+            || is_codex_config_parse_failure(&result.summary))
+}
+
+pub(crate) fn is_codex_config_parse_failure(text: &str) -> bool {
+    text.contains(CODEX_CONFIG_PARSE_ERROR_MARKER)
 }
 
 pub(crate) fn classify_execution_error(
@@ -103,6 +116,10 @@ pub(crate) fn classify_execution_error(
     session_dir: Option<&Path>,
 ) -> DebateErrorKind {
     if session_dir.is_some_and(has_persisted_pre_exec_failure) {
+        return DebateErrorKind::Deterministic(error.to_string());
+    }
+
+    if is_codex_config_parse_failure(&error.to_string()) {
         return DebateErrorKind::Deterministic(error.to_string());
     }
 

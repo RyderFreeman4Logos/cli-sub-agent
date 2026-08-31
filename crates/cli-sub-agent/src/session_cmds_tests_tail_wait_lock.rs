@@ -328,6 +328,63 @@ fn handle_session_wait_rejects_duplicate_wait_before_entering_loop() {
 }
 
 #[test]
+fn handle_session_wait_terminalizes_codex_config_parse_failure_while_live() {
+    let td = tempdir().expect("tempdir");
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).expect("create state home");
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+    let session = create_session(
+        project,
+        Some("wait-codex-config-parse-failure"),
+        None,
+        Some("codex"),
+    )
+    .expect("create session");
+    let session_id = session.meta_session_id.clone();
+    let now = chrono::Utc::now();
+    save_result(
+        project,
+        &session_id,
+        &csa_session::SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "Error loading config.toml: /path/config.toml:21:1: duplicate key".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            ..Default::default()
+        },
+    )
+    .expect("save config parse failure result");
+
+    let mut emitted_completion = None;
+    let exit_code = handle_session_wait_with_hooks_at(
+        session_id,
+        Some(project.to_string_lossy().into_owned()),
+        WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming::default(),
+        },
+        now,
+        Some(true),
+        |_project_root, _current_session_id, _trigger| {
+            panic!("persisted config parse failure must not reconcile as live")
+        },
+        |_sid: &str, status: &str, code, _synthetic, _mirror_to_stdout| {
+            emitted_completion = Some((status.to_string(), code));
+        },
+    )
+    .expect("wait should return terminal config parse failure");
+
+    assert_eq!(exit_code, 1);
+    assert_eq!(emitted_completion, Some(("failure".to_string(), 1)));
+}
+
+#[test]
 fn handle_session_wait_continues_stale_session_with_live_worktree_lock() {
     let td = tempdir().expect("tempdir");
     let _env_lock = TEST_ENV_LOCK.blocking_lock();

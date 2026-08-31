@@ -336,15 +336,19 @@ pub(crate) fn handle_session_wait_with_emitters(
             }
         }
 
+        let completed_result = load_completed_daemon_result_with_fallback(
+            effective_root,
+            result_session_id,
+            result_session_dir,
+            result_uses_direct_session_dir,
+        )?;
         let completed_result = if session_live {
-            None
+            completed_result.filter(|result| {
+                result.status == "failure"
+                    && crate::debate_errors::is_codex_config_parse_failure(&result.summary)
+            })
         } else {
-            load_completed_daemon_result_with_fallback(
-                effective_root,
-                result_session_id,
-                result_session_dir,
-                result_uses_direct_session_dir,
-            )?
+            completed_result
         };
         if let Some(mut result) = completed_result {
             super::summary::reconcile_repaired_review_pass_result_status(

@@ -315,6 +315,10 @@ pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> Strin
         return truncate_line(last_non_empty_line(stdout), SUMMARY_MAX_CHARS);
     }
 
+    if let Some(summary) = codex_config_parse_summary(stderr) {
+        return summary;
+    }
+
     let stdout_line = last_non_empty_line(stdout);
     if !stdout_line.is_empty() {
         return truncate_line(stdout_line, SUMMARY_MAX_CHARS);
@@ -326,6 +330,22 @@ pub(super) fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> Strin
     }
 
     format!("exit code {exit_code}")
+}
+
+fn codex_config_parse_summary(stderr: &str) -> Option<String> {
+    let lines: Vec<_> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let start = lines
+        .iter()
+        .position(|line| line.contains("Error loading config.toml"))?;
+    let end = (start + 4).min(lines.len());
+    Some(truncate_line(
+        &lines[start..end].join(" "),
+        SUMMARY_MAX_CHARS,
+    ))
 }
 
 fn last_non_empty_line(output: &str) -> &str {

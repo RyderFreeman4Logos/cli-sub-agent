@@ -288,3 +288,24 @@ fn classify_exit_2_still_deterministic() {
         "exit 2 should remain deterministic, got: {classified:?}"
     );
 }
+
+#[test]
+fn classify_codex_config_parse_error_before_live_lock_as_deterministic() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks");
+    let lock_path = locks_dir.join("codex.lock");
+    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id())).expect("write");
+
+    let execution = ExecutionResult {
+        stderr_output: "Error loading config.toml:\n/path/config.toml:21:1: duplicate key".into(),
+        summary: "Error loading config.toml: /path/config.toml:21:1: duplicate key".into(),
+        exit_code: 1,
+        ..Default::default()
+    };
+    let classified = classify_execution_outcome(&execution, None, tmp.path());
+    assert!(
+        matches!(classified, DebateErrorKind::Deterministic(ref message) if message.contains("config.toml")),
+        "Codex config parse failure must not become StillWorking: {classified:?}"
+    );
+}
