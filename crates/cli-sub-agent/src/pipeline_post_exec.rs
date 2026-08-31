@@ -88,6 +88,17 @@ pub(crate) async fn process_execution_result(
                 result.terminal_reason.as_deref(),
             ],
         )
+        .or_else(|| {
+            crate::pipeline::prompt_guard::caller_guard_failure_summary(
+                ctx.executor.tool_name(),
+                &result.summary,
+                &result.output,
+                [
+                    Some(result.stderr_output.as_str()),
+                    result.terminal_reason.as_deref(),
+                ],
+            )
+        })
     {
         result.summary = summary;
     }

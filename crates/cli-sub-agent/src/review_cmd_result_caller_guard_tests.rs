@@ -67,3 +67,28 @@ fn literal_caller_guard_text_in_provider_output_remains_data() {
     assert_eq!(resolved.decision, ReviewDecision::Pass);
     assert!(resolved.sanitized.contains("</csa-caller-sa-guard>"));
 }
+
+#[test]
+fn substantive_review_output_overrides_guard_only_selected_summary() {
+    let output = "<!-- CSA:SECTION:summary -->\nPASS\n<!-- CSA:SECTION:summary:END -->\n\
+        <!-- CSA:SECTION:details -->\nNo blocking issues found.\n<!-- CSA:SECTION:details:END -->";
+    let mut result = outcome(output, 0);
+    result.execution.execution.summary = "</csa-caller-sa-guard>".to_string();
+
+    let resolved =
+        resolve_single_review_result(&result, ToolName::Codex, "uncommitted", Path::new("."));
+
+    assert_eq!(resolved.decision, ReviewDecision::Pass);
+    assert_eq!(resolved.verdict, CLEAN);
+    assert!(resolved.sanitized.contains("No blocking issues found."));
+    assert!(!resolved.caller_guard_failure);
+    assert!(
+        crate::pipeline::prompt_guard::caller_guard_failure_summary(
+            ToolName::Codex.as_str(),
+            output,
+            &result.execution.execution.summary,
+            [None],
+        )
+        .is_none()
+    );
+}
