@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -70,13 +70,38 @@ args = ["{}"]
     Ok(())
 }
 
-fn wait_for_socket(socket_path: &Path, timeout: Duration) -> Result<()> {
+fn wait_for_socket(
+    child: &mut Child,
+    socket_path: &Path,
+    stderr_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    let pid = child.id();
+    let child_exit_error = |status| {
+        let startup_stderr = fs::File::open(stderr_path)
+            .and_then(|file| {
+                let mut bytes = Vec::new();
+                file.take(16 * 1024).read_to_end(&mut bytes)?;
+                Ok(String::from_utf8_lossy(&bytes).into_owned())
+            })
+            .unwrap_or_else(|error| format!("<unable to read startup stderr: {error}>"));
+        anyhow::anyhow!(
+            "hub child {pid} exited before socket readiness with status {status}; startup stderr:\n{startup_stderr}"
+        )
+    };
+
     let start = Instant::now();
     while start.elapsed() < timeout {
-        if socket_path.exists() && std::os::unix::net::UnixStream::connect(socket_path).is_ok() {
+        if std::os::unix::net::UnixStream::connect(socket_path).is_ok() {
             return Ok(());
         }
+        if let Some(status) = child.try_wait()? {
+            return Err(child_exit_error(status));
+        }
         std::thread::sleep(Duration::from_millis(50));
+    }
+    if let Some(status) = child.try_wait()? {
+        return Err(child_exit_error(status));
     }
     bail!("timed out waiting for socket {}", socket_path.display())
 }
@@ -154,12 +179,9 @@ fn reserve_local_port() -> Result<u16> {
     Ok(port)
 }
 
-// macOS CI: hub spawns the mock MCP backend but sh/sed differences prevent
-// the backend from registering tools.  Hub itself is Linux-first (UDS + systemd),
-// so restrict the E2E test to Linux.  Unit tests still cover logic on all platforms.
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore)]
-fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget() -> Result<()> {
+fn hub_startup_failure_is_reported_before_socket_timeout() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     let config_home = home.join(".config");
@@ -170,7 +192,10 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
     let script_path = write_mock_mcp_script(temp.path())?;
     write_global_config(&config_home, &script_path)?;
 
-    let socket_path = runtime_dir.join("mcp-hub.sock");
+    let blocked_runtime = temp.path().join("blocked-runtime");
+    fs::write(&blocked_runtime, b"not a directory")?;
+    let socket_path = blocked_runtime.join("mcp-hub.sock");
+    let stderr_file = tempfile::NamedTempFile::new()?;
 
     let mut hub_command = Command::new(env!("CARGO_BIN_EXE_csa"));
     scrub_inherited_csa_env(&mut hub_command);
@@ -188,12 +213,93 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_file.reopen()?))
+        .spawn()
+        .context("spawn hub")?;
+    let hub_pid = hub.id();
+
+    let readiness_error = wait_for_socket(
+        &mut hub,
+        &socket_path,
+        stderr_file.path(),
+        Duration::from_secs(1),
+    )
+    .expect_err("invalid socket parent should fail readiness");
+    let status = hub.wait()?;
+    let startup_stderr = fs::read_to_string(stderr_file.path())?;
+
+    assert!(!status.success(), "hub unexpectedly succeeded: {status}");
+    assert!(!socket_path.exists(), "hub socket unexpectedly exists");
+    let readiness_error = readiness_error.to_string();
+    assert!(
+        readiness_error.contains("exited before socket readiness"),
+        "readiness error should report early child exit: {readiness_error}"
+    );
+    assert!(
+        readiness_error.contains(&hub_pid.to_string()),
+        "readiness error should report child PID: {readiness_error}"
+    );
+    assert!(
+        readiness_error.contains(&status.to_string()),
+        "readiness error should report child status: {readiness_error}"
+    );
+    assert!(
+        !startup_stderr.trim().is_empty(),
+        "hub stderr should be captured"
+    );
+    assert!(
+        readiness_error.contains(startup_stderr.trim()),
+        "readiness error should preserve startup stderr: {readiness_error}"
+    );
+    Ok(())
+}
+
+// macOS CI: hub spawns the mock MCP backend but sh/sed differences prevent
+// the backend from registering tools.  Hub itself is Linux-first (UDS + systemd),
+// so restrict the E2E test to Linux.  Unit tests still cover logic on all platforms.
+#[test]
+#[cfg_attr(not(target_os = "linux"), ignore)]
+fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    let config_home = home.join(".config");
+    let runtime_dir = temp.path().join("runtime");
+    fs::create_dir_all(&config_home)?;
+    fs::create_dir_all(&runtime_dir)?;
+
+    let script_path = write_mock_mcp_script(temp.path())?;
+    write_global_config(&config_home, &script_path)?;
+
+    let socket_path = runtime_dir.join("mcp-hub.sock");
+    let stderr_file = tempfile::NamedTempFile::new()?;
+
+    let mut hub_command = Command::new(env!("CARGO_BIN_EXE_csa"));
+    scrub_inherited_csa_env(&mut hub_command);
+    let mut hub = hub_command
+        .args([
+            "mcp-hub",
+            "serve",
+            "--foreground",
+            "--socket",
+            socket_path
+                .to_str()
+                .context("socket path should be valid UTF-8")?,
+        ])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(stderr_file.reopen()?))
         .spawn()
         .context("spawn hub")?;
 
     let test_result = (|| -> Result<()> {
-        wait_for_socket(&socket_path, Duration::from_secs(5))?;
+        wait_for_socket(
+            &mut hub,
+            &socket_path,
+            stderr_file.path(),
+            Duration::from_secs(5),
+        )?;
 
         // Retry tools/list until the hub has connected its MCP backend.
         // On macOS CI runners the hub socket is ready before backends register.
@@ -362,6 +468,7 @@ fn hub_http_streamable_transport_forwards_requests() -> Result<()> {
     write_global_config(&config_home, &script_path)?;
 
     let socket_path = runtime_dir.join("mcp-hub.sock");
+    let stderr_file = tempfile::NamedTempFile::new()?;
     let http_port = reserve_local_port()?;
 
     let mut hub_command = Command::new(env!("CARGO_BIN_EXE_csa"));
@@ -384,12 +491,17 @@ fn hub_http_streamable_transport_forwards_requests() -> Result<()> {
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_file.reopen()?))
         .spawn()
         .context("spawn hub")?;
 
     let test_result = (|| -> Result<()> {
-        wait_for_socket(&socket_path, Duration::from_secs(5))?;
+        wait_for_socket(
+            &mut hub,
+            &socket_path,
+            stderr_file.path(),
+            Duration::from_secs(5),
+        )?;
 
         let mcp_url = format!("http://127.0.0.1:{http_port}/mcp");
 

@@ -641,6 +641,9 @@ fn render_wait_output_log(raw: &[u8], truncated: bool) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "session_cmds_daemon_wait_guard_summary_tests.rs"]
+mod guard_summary_tests;
+#[cfg(test)]
 #[path = "session_cmds_daemon_wait_summary_2425.rs"]
 mod session_cmds_daemon_wait_summary_2425;
 #[cfg(test)]

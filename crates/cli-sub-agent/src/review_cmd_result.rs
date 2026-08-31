@@ -88,6 +88,7 @@ pub(super) struct SingleReviewResolution {
     pub effective_exit_code: i32,
     pub auth_prompt_failure: bool,
     pub failure_reason: Option<String>,
+    pub caller_guard_failure: bool,
 }
 
 pub(super) fn resolve_single_review_result(
@@ -101,6 +102,7 @@ pub(super) fn resolve_single_review_result(
     let forced_unavailable = matches!(result.forced_decision, Some(ReviewDecision::Unavailable));
     let terminal_tool_error = terminal_tool_error_reason(&result.execution.execution.output);
     let tool_unavailable_reason = tool_unavailable_failure_reason(result, tool);
+    let caller_guard_reason = caller_guard_failure_reason(result, tool);
     let opaque_total_exhaustion = opaque_total_exhaustion_message(
         result.primary_failure.as_deref(),
         result.failure_reason.as_deref(),
@@ -125,6 +127,8 @@ pub(super) fn resolve_single_review_result(
         )
     } else if let Some(reason) = tool_unavailable_reason.as_deref() {
         format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
+    } else if let Some(reason) = caller_guard_reason.as_deref() {
+        format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
     } else {
         sanitize_review_output(&result.execution.execution.output)
     };
@@ -132,6 +136,7 @@ pub(super) fn resolve_single_review_result(
         && !forced_unavailable
         && terminal_tool_error.is_none()
         && tool_unavailable_reason.is_none()
+        && caller_guard_reason.is_none()
         && is_review_output_empty(&result.execution.execution.output);
     let tool_diagnostic = if opaque_total_exhaustion.is_some() {
         None
@@ -161,7 +166,7 @@ pub(super) fn resolve_single_review_result(
         load_summary_fallback(project_root, &result.execution.meta_session_id).as_deref(),
     );
 
-    let decision = if terminal_tool_error.is_some() {
+    let decision = if caller_guard_reason.is_some() || terminal_tool_error.is_some() {
         ReviewDecision::Unavailable
     } else if reviewer_killed_before_completion(
         &result.execution.execution.output,
@@ -188,6 +193,7 @@ pub(super) fn resolve_single_review_result(
     let effective_exit_code = crate::verdict_exit_code::exit_code_from_review_decision(decision);
     let failure_reason = terminal_tool_error
         .clone()
+        .or_else(|| caller_guard_reason.clone())
         .or_else(|| result.failure_reason.clone());
 
     SingleReviewResolution {
@@ -198,7 +204,23 @@ pub(super) fn resolve_single_review_result(
         effective_exit_code,
         auth_prompt_failure,
         failure_reason,
+        caller_guard_failure: caller_guard_reason.is_some(),
     }
+}
+
+fn caller_guard_failure_reason(result: &ReviewExecutionOutcome, tool: ToolName) -> Option<String> {
+    crate::pipeline::prompt_guard::caller_guard_failure_summary(
+        tool.as_str(),
+        &result.execution.execution.output,
+        &result.execution.execution.summary,
+        [
+            result.failure_reason.as_deref(),
+            result.primary_failure.as_deref(),
+            Some(result.execution.execution.stderr_output.as_str()),
+            Some(result.execution.execution.summary.as_str()),
+            result.status_reason.as_deref(),
+        ],
+    )
 }
 
 pub(super) fn build_reviewer_outcome(
@@ -215,6 +237,7 @@ pub(super) fn build_reviewer_outcome(
     );
     let terminal_tool_error = terminal_tool_error_reason(&result.execution.output);
     let tool_unavailable_reason = tool_unavailable_failure_reason(session_result, reviewer_tool);
+    let caller_guard_reason = caller_guard_failure_reason(session_result, reviewer_tool);
     let opaque_total_exhaustion = opaque_total_exhaustion_message(
         session_result.primary_failure.as_deref(),
         session_result.failure_reason.as_deref(),
@@ -223,6 +246,7 @@ pub(super) fn build_reviewer_outcome(
         && !forced_unavailable
         && terminal_tool_error.is_none()
         && tool_unavailable_reason.is_none()
+        && caller_guard_reason.is_none()
         && is_review_output_empty(&result.execution.output);
     let diagnostic =
         detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
@@ -240,7 +264,7 @@ pub(super) fn build_reviewer_outcome(
         result.execution.exit_code,
         None,
     );
-    let decision = if terminal_tool_error.is_some() {
+    let decision = if caller_guard_reason.is_some() || terminal_tool_error.is_some() {
         ReviewDecision::Unavailable
     } else if reviewer_killed_before_completion(
         &result.execution.output,
@@ -292,6 +316,8 @@ pub(super) fn build_reviewer_outcome(
             )
         } else if let Some(reason) = tool_unavailable_reason.as_deref() {
             format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
+        } else if let Some(reason) = caller_guard_reason.as_deref() {
+            format!("{REVIEW_UNAVAILABLE_PREFIX}{reason}\n")
         } else {
             sanitize_review_output(&result.execution.output)
         },
@@ -302,6 +328,7 @@ pub(super) fn build_reviewer_outcome(
             diagnostic
                 .or_else(|| auth_prompt_failure.then(|| AUTH_PROMPT_DIAGNOSTIC.to_string()))
                 .or_else(|| terminal_tool_error.clone())
+                .or_else(|| caller_guard_reason.clone())
                 .or_else(|| tool_unavailable_reason.clone())
         },
     })
@@ -422,3 +449,7 @@ mod tests;
 #[cfg(test)]
 #[path = "review_cmd_result_memory_soft_limit_tests.rs"]
 mod memory_soft_limit_tests;
+
+#[cfg(test)]
+#[path = "review_cmd_result_caller_guard_tests.rs"]
+mod caller_guard_tests;

@@ -2,6 +2,9 @@ pub(crate) const PROMPT_GUARD_CALLER_INJECTION_ENV: &str = "CSA_EMIT_CALLER_GUAR
 pub(crate) const COMPACT_SA_GUARD_ENV: &str = "CSA_SAY_COMPACT";
 const SA_GUARD_TIER_ENV: &str = "CSA_SA_GUARD_TIER";
 const SA_GUARD_TOOL_ENV: &str = "CSA_SA_GUARD_TOOL";
+const CALLER_SA_GUARD_OPEN: &str = "<csa-caller-sa-guard>";
+const CALLER_SA_GUARD_CLOSE: &str = "</csa-caller-sa-guard>";
+const CALLER_GUARD_FAILURE_SUMMARY_MAX_CHARS: usize = 240;
 
 pub(super) fn should_emit_prompt_guard_to_caller(current_depth: u32) -> bool {
     // Prompt-guard reverse injection is only for the top-level caller.
@@ -131,6 +134,57 @@ ALLOWED:
 ALL implementation work MUST be delegated to CSA sub-agents.
 Decisions MUST be based on result.toml reports, not direct code inspection.
 </csa-caller-sa-guard>";
+
+pub(crate) fn caller_guard_failure_summary<'a>(
+    tool: &str,
+    output: &str,
+    _selected_summary: &str,
+    diagnostics: impl IntoIterator<Item = Option<&'a str>>,
+) -> Option<String> {
+    if !is_caller_guard_only_output(output) {
+        return None;
+    }
+
+    let detail = diagnostics
+        .into_iter()
+        .flatten()
+        .find(|text| !text.trim().is_empty() && !is_caller_guard_only_output(text))
+        .unwrap_or("caller guard emitted without a substantive result");
+    let summary = format!("{tool} tool failure: {}", detail.trim().replace('\n', " "));
+    Some(
+        summary
+            .chars()
+            .take(CALLER_GUARD_FAILURE_SUMMARY_MAX_CHARS)
+            .collect(),
+    )
+}
+
+fn is_caller_guard_only_output(output: &str) -> bool {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let full_guard = SA_MODE_CALLER_GUARD.trim();
+    let mut remainder = trimmed;
+    let mut full_guard_count = 0;
+    while let Some(after_guard) = remainder.strip_prefix(full_guard) {
+        full_guard_count += 1;
+        remainder = after_guard.trim();
+    }
+    if full_guard_count > 0 {
+        return remainder.is_empty();
+    }
+
+    trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .all(|line| {
+            matches!(line, CALLER_SA_GUARD_OPEN | CALLER_SA_GUARD_CLOSE)
+                || line.starts_with("<csa-caller-sa-guard:compact")
+        })
+}
 
 pub(crate) fn set_sa_mode_caller_guard_context(tier: Option<&str>, tool: Option<&str>) {
     set_optional_env(SA_GUARD_TIER_ENV, tier);

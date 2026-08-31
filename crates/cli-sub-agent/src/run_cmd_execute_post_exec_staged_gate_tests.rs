@@ -1,5 +1,6 @@
 use super::{
-    PostExecGateCommandOutcome, PostExecGateOutcome, maybe_run_post_exec_gate_with_runner,
+    PostExecGateCommandOutcome, PostExecGateOutcome, execute_post_exec_gate_command,
+    maybe_run_post_exec_gate_with_runner,
 };
 use crate::test_env_lock::ScopedEnvVarRestore;
 use crate::test_session_sandbox::ScopedSessionSandbox;
@@ -413,4 +414,43 @@ async fn post_exec_gate_tolerates_deleted_never_tracked_changed_paths() {
         "",
         "post-exec gate must not stage deleted never-tracked paths in the real index"
     );
+}
+
+#[tokio::test]
+async fn post_exec_gate_ignores_inherited_git_work_tree_routing() {
+    let project_dir = tempdir().unwrap();
+    let wrong_work_tree = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir).await;
+    init_clean_git_repo(project_dir.path());
+    init_clean_git_repo(wrong_work_tree.path());
+    std::fs::write(project_dir.path().join("tracked.txt"), "changed\n").unwrap();
+    let _work_tree = ScopedEnvVarRestore::set("GIT_WORK_TREE", wrong_work_tree.path());
+
+    let mut gate = PostExecGateConfig::default();
+    gate.command = "git diff --cached --name-only".to_string();
+    let config = project_config_with_gate(gate);
+    let changed_paths = vec!["tracked.txt".to_string()];
+    let outcome = maybe_run_post_exec_gate_with_runner(
+        project_dir.path(),
+        "Modify tracked.txt",
+        Some("01TESTPOSTEXECGATEGITROUTE0"),
+        Some(&config),
+        Some(&changed_paths),
+        None,
+        |command, cwd, timeout_seconds, extra_env| {
+            let cwd = cwd.to_path_buf();
+            let command = command.to_string();
+            Box::pin(async move {
+                let result =
+                    execute_post_exec_gate_command(&command, &cwd, timeout_seconds, extra_env)
+                        .await?;
+                assert_eq!(result.captured_output, "tracked.txt\n");
+                Ok(result)
+            })
+        },
+    )
+    .await
+    .expect("gate should pass");
+
+    assert_eq!(outcome, PostExecGateOutcome::Passed);
 }
