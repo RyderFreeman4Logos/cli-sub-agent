@@ -282,6 +282,8 @@ fn test_daemon_spawn_falls_back_to_direct_when_scope_spawn_fails() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let session_dir = tmp.path().join("session-fallback");
     let wrapper = write_wrapper_script(tmp.path(), "wrapper-fallback.sh");
+    let release_marker = tmp.path().join("daemon-release");
+    let _release_guard = ReleaseMarker(release_marker.clone());
 
     let missing_systemd_run = tmp.path().join("missing-systemd-run");
 
@@ -290,8 +292,18 @@ fn test_daemon_spawn_falls_back_to_direct_when_scope_spawn_fails() {
         session_dir: session_dir.clone(),
         csa_binary: wrapper,
         subcommand: "run".to_string(),
-        args: vec!["--".to_string(), "echo scope-fallback-ok".to_string()],
-        env: HashMap::new(),
+        // Keep the child alive through spawn_daemon's post-fallback waitid
+        // inspection. Unique-gate load made a bare `echo` exit before that
+        // check (`wait code 1 status 0`).
+        args: vec![
+            "--".to_string(),
+            "echo scope-fallback-ok; while [ ! -e \"$CSA_TEST_RELEASE_MARKER\" ]; do sleep 0.01; done"
+                .to_string(),
+        ],
+        env: HashMap::from([(
+            "CSA_TEST_RELEASE_MARKER".to_string(),
+            release_marker.to_string_lossy().into_owned(),
+        )]),
     };
 
     let result = spawn_daemon_with_systemd_run(config, &missing_systemd_run);
@@ -299,10 +311,13 @@ fn test_daemon_spawn_falls_back_to_direct_when_scope_spawn_fails() {
     let result = result.expect("spawn_daemon should succeed via direct fallback");
     assert!(result.pid > 0);
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let stdout_path = session_dir.join("stdout.log");
+    wait_for_spool_content(&stdout_path, "scope-fallback-ok");
+    std::fs::write(&release_marker, b"release\n").expect("release daemon readiness barrier");
+    wait_for_daemon_exit(&session_dir);
 
-    let contents = std::fs::read_to_string(session_dir.join("stdout.log"))
-        .expect("stdout.log must exist after daemon spawn");
+    let contents =
+        std::fs::read_to_string(stdout_path).expect("stdout.log must exist after daemon spawn");
     assert!(
         contents.contains("scope-fallback-ok"),
         "expected 'scope-fallback-ok' in stdout (direct fallback output), got: {contents:?}"
