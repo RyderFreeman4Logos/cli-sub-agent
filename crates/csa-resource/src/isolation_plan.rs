@@ -134,6 +134,8 @@ pub struct IsolationPlanBuilder {
     memory_monitor_interval_seconds: Option<u64>,
     user_daemon_ipc: bool,
     required_writable_dirs: Vec<codex_paths::RequiredWritableDir>,
+    execution_env: Option<HashMap<String, String>>,
+    preflight_error: Option<anyhow::Error>,
 }
 
 impl IsolationPlanBuilder {
@@ -157,6 +159,8 @@ impl IsolationPlanBuilder {
             memory_monitor_interval_seconds: None,
             user_daemon_ipc: false,
             required_writable_dirs: Vec::new(),
+            execution_env: None,
+            preflight_error: None,
         }
     }
 
@@ -191,6 +195,12 @@ impl IsolationPlanBuilder {
     /// filesystem `Required`.
     pub fn with_filesystem_enforcement(mut self, mode: EnforcementMode) -> Self {
         self.fs_enforcement_mode = Some(mode);
+        self
+    }
+
+    /// Set the effective child environment used to resolve tool runtime paths.
+    pub fn with_execution_env(mut self, execution_env: Option<&HashMap<String, String>>) -> Self {
+        self.execution_env = execution_env.cloned();
         self
     }
 
@@ -427,14 +437,17 @@ impl IsolationPlanBuilder {
                 &mut self.required_writable_dirs,
             );
 
-            if tool_name == "hermes" {
-                hermes_paths::add_hermes_runtime_paths(
+            if tool_name == "hermes"
+                && let Err(error) = hermes_paths::add_hermes_runtime_paths(
                     self.filesystem,
                     &home,
+                    self.execution_env.as_ref(),
                     &mut self.writable_paths,
                     &mut self.readable_paths,
                     &mut self.required_writable_dirs,
-                );
+                )
+            {
+                self.preflight_error = Some(error);
             }
 
             match tool_name {
@@ -461,6 +474,9 @@ impl IsolationPlanBuilder {
     /// Returns an error when filesystem enforcement is `Required` but the
     /// filesystem capability is `None`.
     pub fn build(mut self) -> anyhow::Result<IsolationPlan> {
+        if let Some(error) = self.preflight_error.take() {
+            return Err(error);
+        }
         // Filesystem enforcement: use dedicated override if set, otherwise
         // inherit from the resource enforcement mode.
         let fs_mode = self.fs_enforcement_mode.unwrap_or(self.enforcement_mode);

@@ -1,5 +1,6 @@
 #[cfg(unix)]
 use std::ffi::CString;
+use std::fs;
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
@@ -98,6 +99,12 @@ impl ReadablePath {
     }
 
     pub(super) fn try_pinned_readonly_overlay(path: PathBuf) -> std::io::Result<Self> {
+        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "read-only overlay cannot protect a symlink directory entry",
+            ));
+        }
         let bind_source = runtime_path::canonicalize_or_fallback(&path);
         let mut readable = Self::try_pinned(path, bind_source)?;
         readable.overrides_writable_mount = true;

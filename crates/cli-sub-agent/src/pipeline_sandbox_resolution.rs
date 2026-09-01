@@ -90,6 +90,7 @@ pub(super) fn resolve_sandbox_options_with_capability_source(
         let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
+            .with_execution_env(execution_env)
             .with_resource_limits(
                 Some(memory_max_mb),
                 defaults.memory_swap_max_mb,
@@ -300,6 +301,7 @@ pub(super) fn resolve_sandbox_options_with_capability_source(
         .with_filesystem_enforcement(fs_enforcement)
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
+        .with_execution_env(execution_env)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
         .with_readonly_project_root(effective_readonly)
         .with_project_root(project_root)

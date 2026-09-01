@@ -104,6 +104,83 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
 }
 
 #[test]
+fn test_tool_defaults_hermes_rejects_landlock_when_project_root_grants_parent() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let project = temp.path().join("project");
+    let hermes_home = project.join(".hermes");
+    std::fs::create_dir_all(&hermes_home).unwrap();
+    let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+    let error = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Landlock)
+        .with_tool_defaults("hermes", &project, &temp.path().join("session"))
+        .build()
+        .expect_err("Landlock must reject Hermes homes under writable parent grants");
+
+    assert!(error.to_string().contains("hermes sandbox preflight failed"));
+}
+
+#[test]
+fn test_tool_defaults_hermes_uses_execution_environment_home() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    let _hermes_home_env = ScopedEnvVar::unset("HERMES_HOME");
+    let configured_home = temp.path().join("configured-hermes-home");
+    std::fs::create_dir_all(&configured_home).unwrap();
+    let execution_env = std::collections::HashMap::from([(
+        "HERMES_HOME".to_string(),
+        configured_home.to_string_lossy().into_owned(),
+    )]);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_execution_env(Some(&execution_env))
+        .with_tool_defaults("hermes", &temp.path().join("project"), &temp.path().join("session"))
+        .build()
+        .expect("configured execution environment should build a Hermes plan");
+
+    assert!(plan.writable_paths.contains(&configured_home));
+    assert!(!plan.writable_paths.contains(&home.join(".hermes")));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_tool_defaults_hermes_rejects_symlinked_configuration_overlays() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-overlay-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+
+    for (name, target) in [("live", Some("config-target.yaml")), ("dangling", None)] {
+        let hermes_home = temp.path().join(name);
+        std::fs::create_dir_all(&hermes_home).unwrap();
+        let link = hermes_home.join("config.yaml");
+        if let Some(target) = target {
+            let target = hermes_home.join(target);
+            std::fs::write(&target, "model: test\n").unwrap();
+            symlink(&target, &link).unwrap();
+        } else {
+            symlink(hermes_home.join("missing.yaml"), &link).unwrap();
+        }
+        let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+        let error = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("hermes", &temp.path().join("project"), &temp.path().join("session"))
+            .build()
+            .expect_err("symlinked Hermes configuration overlays must fail preflight");
+        assert!(error.to_string().contains("hermes sandbox preflight failed"));
+    }
+}
+
+#[test]
 fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
