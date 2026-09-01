@@ -12,6 +12,8 @@ pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 mod claude_paths;
 #[path = "isolation_plan_codex.rs"]
 mod codex_paths;
+#[path = "isolation_plan_hermes.rs"]
+mod hermes_paths;
 #[path = "isolation_plan_readable.rs"]
 mod readable;
 #[path = "isolation_plan_runtime_path.rs"]
@@ -424,6 +426,16 @@ impl IsolationPlanBuilder {
                 &mut self.writable_paths,
                 &mut self.required_writable_dirs,
             );
+
+            if tool_name == "hermes" {
+                hermes_paths::add_hermes_runtime_paths(
+                    self.filesystem,
+                    &home,
+                    &mut self.writable_paths,
+                    &mut self.readable_paths,
+                    &mut self.required_writable_dirs,
+                );
+            }
 
             match tool_name {
                 "gemini-cli" => [".gemini", ".config/gemini-cli"]

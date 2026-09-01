@@ -23,13 +23,16 @@ use super::runtime_path;
 pub struct ReadablePath {
     requested: PathBuf,
     bind_source: PathBuf,
+    overrides_writable_mount: bool,
     #[cfg(unix)]
     source_file: Option<Arc<File>>,
 }
 
 impl PartialEq for ReadablePath {
     fn eq(&self, other: &Self) -> bool {
-        self.requested == other.requested && self.bind_source == other.bind_source
+        self.requested == other.requested
+            && self.bind_source == other.bind_source
+            && self.overrides_writable_mount == other.overrides_writable_mount
     }
 }
 
@@ -44,6 +47,10 @@ impl ReadablePath {
     /// Bind source pinned when the path was validated or first added.
     pub fn bind_source(&self) -> &Path {
         &self.bind_source
+    }
+
+    pub(crate) fn overrides_writable_mount(&self) -> bool {
+        self.overrides_writable_mount
     }
 
     /// Clone the descriptor held since validation for a regular-file snapshot.
@@ -71,6 +78,7 @@ impl ReadablePath {
         Self {
             requested,
             bind_source,
+            overrides_writable_mount: false,
             #[cfg(unix)]
             source_file,
         }
@@ -83,9 +91,17 @@ impl ReadablePath {
         Ok(Self {
             requested,
             bind_source,
+            overrides_writable_mount: false,
             #[cfg(unix)]
             source_file,
         })
+    }
+
+    pub(super) fn try_pinned_readonly_overlay(path: PathBuf) -> std::io::Result<Self> {
+        let bind_source = runtime_path::canonicalize_or_fallback(&path);
+        let mut readable = Self::try_pinned(path, bind_source)?;
+        readable.overrides_writable_mount = true;
+        Ok(readable)
     }
 }
 

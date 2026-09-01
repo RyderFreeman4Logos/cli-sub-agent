@@ -218,6 +218,9 @@ impl BwrapCommandBuilder {
         &self,
         readable_path: &crate::isolation_plan::ReadablePath,
     ) -> bool {
+        if readable_path.overrides_writable_mount() {
+            return false;
+        }
         let readable_dest = if fresh_writable_mount_root(readable_path.requested()).is_some() {
             readable_path.requested().to_path_buf()
         } else {

@@ -31,6 +31,79 @@ fn test_tool_defaults_codex_honors_tool_state_dirs_config() {
 }
 
 #[test]
+fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("active-hermes-profile");
+    let logs = hermes_home.join("logs");
+    let config = hermes_home.join("config.yaml");
+    let profiles = hermes_home.join("profiles");
+    let state_db = hermes_home.join("state.db");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(&config, "model: test\n").unwrap();
+    std::fs::write(&state_db, "").unwrap();
+    let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults("hermes", Path::new("/tmp/project"), Path::new("/tmp/session"))
+        .build()
+        .expect("Hermes runtime paths should produce a sandbox plan");
+
+    assert!(
+        plan.writable_paths.contains(&hermes_home),
+        "Hermes home must be writable so SQLite can manage state.db sidecars"
+    );
+    assert!(
+        plan.readable_paths.iter().any(|path| path == &config),
+        "Hermes config must be re-bound read-only"
+    );
+    assert!(
+        plan.readable_paths.iter().any(|path| path == &profiles),
+        "unrelated Hermes profiles must be re-bound read-only"
+    );
+    assert!(
+        plan.readable_paths
+            .iter()
+            .all(|path| path != &logs && path != &state_db),
+        "Hermes logs and state database must remain writable"
+    );
+
+    let command = crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+        .expect("Bubblewrap plan should produce a command");
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let hermes_home = hermes_home.to_string_lossy();
+    let config = config.to_string_lossy();
+    let writable_home = args
+        .windows(3)
+        .position(|window| window == ["--bind", hermes_home.as_ref(), hermes_home.as_ref()])
+        .expect("Hermes home must be mounted writable");
+    let readonly_config = args
+        .windows(3)
+        .position(|window| window == ["--ro-bind", config.as_ref(), config.as_ref()])
+        .expect("Hermes config must override the writable parent with a read-only mount");
+    assert!(
+        writable_home < readonly_config,
+        "read-only Hermes configuration mounts must follow the writable runtime parent"
+    );
+
+    let error = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Landlock)
+        .with_tool_defaults("hermes", Path::new("/tmp/project"), Path::new("/tmp/session"))
+        .build()
+        .expect_err("Landlock cannot safely grant Hermes SQLite parent-directory writes");
+    assert!(
+        error.to_string().contains("hermes sandbox preflight failed"),
+        "unsupported Hermes filesystem isolation must fail closed: {error:#}"
+    );
+}
+
+#[test]
 fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
