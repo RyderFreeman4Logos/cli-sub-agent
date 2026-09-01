@@ -118,6 +118,7 @@ impl AcpConnection {
         match result {
             Some(Ok(_response)) => Ok(()),
             Some(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::InitializationFailed(format!(
                     "{err}{}",
@@ -166,6 +167,7 @@ impl AcpConnection {
         match result {
             Some(Ok(response)) => Ok(response.session_id.0.to_string()),
             Some(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
@@ -209,6 +211,7 @@ impl AcpConnection {
         match result {
             Some(Ok(_response)) => Ok(session_id.to_string()),
             Some(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
@@ -430,6 +433,7 @@ impl AcpConnection {
                 metadata,
             }),
             PromptOutcome::Completed(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr_detail = format_stderr(&self.stderr());
                 Err(AcpError::PromptFailed(format!("{err}{stderr_detail}")))
             }
