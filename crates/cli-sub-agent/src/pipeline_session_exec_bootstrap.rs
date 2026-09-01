@@ -190,6 +190,23 @@ pub(super) async fn bootstrap_session(
         && std::env::var("CSA_DAEMON_SESSION_ID").ok().as_deref() == Some(wrapper_session_id)
         && wrapper_session_id != session.meta_session_id
     {
+        // The alias makes target artifacts visible to wrapper waiters, so the
+        // previous attempt's terminal result must be invalidated first.
+        let target_session_dir =
+            csa_session::get_session_dir(project_root, &session.meta_session_id)?;
+        let stale_result_path = target_session_dir.join(csa_session::result::RESULT_FILE_NAME);
+        match std::fs::remove_file(&stale_result_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to invalidate stale resume result before publishing alias: {}",
+                        stale_result_path.display()
+                    )
+                });
+            }
+        }
         csa_session::write_resume_target(
             project_root,
             wrapper_session_id,
@@ -285,12 +302,18 @@ fn inherited_parent_session_id_for_new_session(startup_env: &StartupSubtreeEnv) 
 
 #[cfg(test)]
 mod tests {
-    use super::inherited_parent_session_id_for_new_session;
+    use super::{bootstrap_session, inherited_parent_session_id_for_new_session};
+    use crate::pipeline::{ParentSessionSource, SessionCreationMode};
+    use crate::session_cmds_daemon::{
+        WaitBehavior, WaitLoopTiming, WaitReconciliationOutcome, handle_session_wait_with_hooks,
+    };
     use crate::startup_env::StartupSubtreeEnv;
     use crate::test_env_lock::{ScopedEnvVarRestore, TEST_ENV_LOCK};
+    use crate::test_session_sandbox::ScopedSessionSandbox;
     use csa_core::env::{
         CSA_PARENT_SESSION_ENV_KEY, CSA_SESSION_DIR_ENV_KEY, CSA_SESSION_ID_ENV_KEY,
     };
+    use csa_core::types::ToolName;
     use std::collections::HashMap;
 
     #[test]
@@ -351,6 +374,119 @@ mod tests {
         assert_eq!(
             inherited_parent_session_id_for_new_session(&startup_env),
             Some("01PARENT")
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_alias_does_not_expose_previous_attempt_config_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _sandbox = ScopedSessionSandbox::new(&temp).await;
+        let project = temp.path();
+        let target =
+            csa_session::create_session_fresh(project, Some("resume target"), None, Some("codex"))
+                .expect("create target");
+        let target_id = target.meta_session_id.clone();
+        let target_dir = csa_session::get_session_dir(project, &target_id).expect("target dir");
+        let previous_result = csa_session::SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "Error loading config.toml: previous attempt".to_string(),
+            tool: "codex".to_string(),
+            ..Default::default()
+        };
+        csa_session::save_result(project, &target_id, &previous_result)
+            .expect("save previous result");
+        let _diagnostic_lock =
+            csa_lock::acquire_lock(&target_dir, "codex", "previous attempt diagnostic")
+                .expect("acquire live diagnostic lock");
+
+        let wrapper =
+            csa_session::create_session_fresh(project, Some("resume wrapper"), None, Some("codex"))
+                .expect("create wrapper");
+        let wrapper_id = wrapper.meta_session_id;
+        // SAFETY: ScopedSessionSandbox owns TEST_ENV_LOCK for the test lifetime.
+        unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", &wrapper_id) };
+        let startup_env = StartupSubtreeEnv::from_values(HashMap::from([(
+            CSA_SESSION_ID_ENV_KEY,
+            wrapper_id.clone(),
+        )]));
+
+        bootstrap_session(
+            &ToolName::Codex,
+            "resume target",
+            Some(&target_id),
+            false,
+            None,
+            None,
+            project,
+            None,
+            None,
+            Some("run"),
+            None,
+            ParentSessionSource::ExplicitOrEnv,
+            SessionCreationMode::DaemonManaged,
+            &startup_env,
+        )
+        .await
+        .expect("bootstrap resumed target");
+        assert!(
+            !target_dir.join("result.toml").exists(),
+            "alias publication must invalidate the previous result first"
+        );
+        let mut completion = None;
+        let wait_behavior = WaitBehavior {
+            wait_timeout_secs: 0,
+            memory_warn_mb: None,
+            timing: WaitLoopTiming {
+                poll_interval: std::time::Duration::from_millis(1),
+                memory_sample_interval: std::time::Duration::from_secs(15),
+            },
+        };
+        let first_exit = handle_session_wait_with_hooks(
+            wrapper_id.clone(),
+            Some(project.to_string_lossy().into_owned()),
+            wait_behavior,
+            |_project_root, _current_session_id, _trigger| {
+                Ok(WaitReconciliationOutcome {
+                    result_became_available: false,
+                    synthetic: false,
+                })
+            },
+            |_sid: &str, status: &str, exit_code, _synthetic, _mirror_to_stdout| {
+                completion = Some((status.to_string(), exit_code));
+            },
+        )
+        .expect("wait before current result");
+        assert_eq!(first_exit, 0);
+        assert_eq!(completion, None, "wait must reject the previous result");
+
+        let current_result = csa_session::SessionResult {
+            summary: "Error loading config.toml: current attempt".to_string(),
+            ..previous_result
+        };
+        csa_session::save_result(project, &target_id, &current_result)
+            .expect("save current result");
+
+        let second_exit = handle_session_wait_with_hooks(
+            wrapper_id,
+            Some(project.to_string_lossy().into_owned()),
+            wait_behavior,
+            |_project_root, _current_session_id, _trigger| {
+                panic!("current config failure must not reconcile")
+            },
+            |_sid: &str, status: &str, exit_code, _synthetic, _mirror_to_stdout| {
+                completion = Some((status.to_string(), exit_code));
+            },
+        )
+        .expect("wait should accept the current attempt result");
+        assert_eq!(second_exit, 1);
+        assert_eq!(completion, Some(("failure".to_string(), 1)));
+        assert_eq!(
+            csa_session::load_result(project, &target_id)
+                .expect("load result")
+                .expect("current result")
+                .summary,
+            "Error loading config.toml: current attempt"
         );
     }
 }
