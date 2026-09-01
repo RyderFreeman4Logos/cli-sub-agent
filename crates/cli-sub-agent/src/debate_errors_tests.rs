@@ -303,9 +303,44 @@ fn classify_codex_config_parse_error_before_live_lock_as_deterministic() {
         exit_code: 1,
         ..Default::default()
     };
-    let classified = classify_execution_outcome(&execution, None, tmp.path());
+    let classified =
+        classify_execution_outcome_for_tool(&execution, None, tmp.path(), Some("codex"));
     assert!(
         matches!(classified, DebateErrorKind::Deterministic(ref message) if message.contains("config.toml")),
         "Codex config parse failure must not become StillWorking: {classified:?}"
+    );
+}
+
+#[test]
+fn classify_config_marker_from_non_codex_is_not_codex_terminal() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let execution = ExecutionResult {
+        stderr_output: "Error loading config.toml: duplicate key".into(),
+        summary: "Error loading config.toml: duplicate key".into(),
+        exit_code: 1,
+        ..Default::default()
+    };
+    let classified =
+        classify_execution_outcome_for_tool(&execution, None, tmp.path(), Some("claude"));
+    assert_eq!(
+        classified,
+        DebateErrorKind::Deterministic("argument error (exit code 1)".to_string())
+    );
+}
+
+#[test]
+fn classify_codex_config_marker_with_sigkill_exit_is_transient() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let execution = ExecutionResult {
+        stderr_output: "Error loading config.toml: duplicate key".into(),
+        summary: "Error loading config.toml: duplicate key".into(),
+        exit_code: 137,
+        ..Default::default()
+    };
+    let classified =
+        classify_execution_outcome_for_tool(&execution, None, tmp.path(), Some("codex"));
+    assert!(
+        matches!(classified, DebateErrorKind::Transient(_)),
+        "signal/OOM evidence must precede Codex marker: {classified:?}"
     );
 }

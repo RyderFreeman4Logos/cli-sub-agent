@@ -22,8 +22,9 @@ use super::target::resolve_wait_target;
 pub(crate) use super::types::WaitEmitters;
 use super::types::{WaitExecutionOptions, WaitReconciliationOutcome};
 use super::{
-    emit_wait_terminal_output, load_completed_daemon_result_with_fallback, refresh_result_for_wait,
-    suppress_pending_tier_failover_result, try_acquire_session_wait_lock_with_caller,
+    emit_wait_terminal_output, load_completed_daemon_result_with_fallback,
+    load_live_result_for_wait, refresh_result_for_wait, suppress_pending_tier_failover_result,
+    try_acquire_session_wait_lock_with_caller,
 };
 use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use crate::session_cmds_daemon::{
@@ -336,17 +337,20 @@ pub(crate) fn handle_session_wait_with_emitters(
             }
         }
 
-        let completed_result = load_completed_daemon_result_with_fallback(
-            effective_root,
-            result_session_id,
-            result_session_dir,
-            result_uses_direct_session_dir,
-        )?;
         let completed_result = if session_live {
-            completed_result.filter(|result| {
-                result.status == "failure"
-                    && crate::debate_errors::is_codex_config_parse_failure(&result.summary)
+            load_live_result_for_wait(result_session_dir)?.and_then(|result| {
+                suppress_pending_tier_failover_result(result_session_id, result_session_dir, result)
             })
+        } else {
+            load_completed_daemon_result_with_fallback(
+                effective_root,
+                result_session_id,
+                result_session_dir,
+                result_uses_direct_session_dir,
+            )?
+        };
+        let completed_result = if session_live {
+            completed_result.filter(crate::debate_errors::is_codex_config_parse_result)
         } else {
             completed_result
         };

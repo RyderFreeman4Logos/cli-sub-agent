@@ -47,7 +47,7 @@ pub(crate) use result_loader::expected_in_flight_turn_result_artifact_path_for_t
 #[cfg(test)]
 pub(crate) use result_loader::parse_output_result_artifact_for_test;
 use result_loader::{
-    load_completed_daemon_result_with_fallback, refresh_result_for_wait,
+    load_completed_daemon_result_with_fallback, load_live_result_for_wait, refresh_result_for_wait,
     suppress_pending_tier_failover_result,
 };
 #[cfg(test)]

@@ -342,8 +342,9 @@ fn codex_config_parse_summary(stderr: &str) -> Option<String> {
         .iter()
         .position(|line| line.contains("Error loading config.toml"))?;
     let end = (start + 4).min(lines.len());
+    let summary = lines[start..end].join(" ");
     Some(truncate_line(
-        &lines[start..end].join(" "),
+        &csa_session::redact_text_content(&summary),
         SUMMARY_MAX_CHARS,
     ))
 }

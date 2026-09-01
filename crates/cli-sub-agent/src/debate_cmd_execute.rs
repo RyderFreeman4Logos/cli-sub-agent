@@ -8,7 +8,9 @@ use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::debate_cmd_output::DebateOutputHeader;
-use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
+use crate::debate_errors::{
+    DebateErrorKind, classify_execution_error, classify_execution_outcome_for_tool,
+};
 use crate::run_resource_overrides::RunResourceOverrides;
 use crate::startup_env::StartupSubtreeEnv;
 use crate::tier_model_fallback::{self, TierAttemptFailure};
@@ -334,10 +336,11 @@ pub(crate) async fn execute_debate(request: DebateExecutionRequest<'_>) -> Resul
                 csa_session::get_session_dir(request.project_root, &executed.meta_session_id)?;
             let session_state =
                 csa_session::load_session(request.project_root, &executed.meta_session_id).ok();
-            match classify_execution_outcome(
+            match classify_execution_outcome_for_tool(
                 &executed.execution,
                 session_state.as_ref(),
                 &session_dir,
+                Some(attempt_tool.as_str()),
             ) {
                 DebateErrorKind::StillWorking => {
                     wait_for_still_working_backoff().await;
