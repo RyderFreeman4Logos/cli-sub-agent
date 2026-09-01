@@ -120,7 +120,8 @@ impl AcpConnection {
         match result {
             Some(Ok(_response)) => Ok(()),
             Some(Err(err)) => {
-                self.drain_stderr_tail().await;
+                self.kill().await?;
+                self.drain_stderr_until_closed().await;
                 let stderr = self.stderr();
                 Err(AcpError::InitializationFailed(format!(
                     "{err}{}",
@@ -522,6 +523,17 @@ impl AcpConnection {
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 }
             }))
+            .await;
+    }
+
+    /// Drives the local stderr reader after the owned child has closed its pipe.
+    async fn drain_stderr_until_closed(&self) {
+        self.local_set
+            .run_until(async {
+                while !self.stderr_closed.get() {
+                    tokio::task::yield_now().await;
+                }
+            })
             .await;
     }
 
