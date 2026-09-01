@@ -16,7 +16,7 @@ pub(crate) enum DebateErrorKind {
     StillWorking,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn classify_execution_outcome(
     execution: &ExecutionResult,
     session_state: Option<&MetaSessionState>,
@@ -151,27 +151,34 @@ pub(crate) fn classify_execution_error(
     session_dir: Option<&Path>,
 ) -> DebateErrorKind {
     if session_dir.is_some_and(has_persisted_pre_exec_failure) {
-        return DebateErrorKind::Deterministic(error.to_string());
+        return DebateErrorKind::Deterministic(csa_session::redact_text_content(
+            &error.to_string(),
+        ));
+    }
+
+    if session_dir.is_some_and(has_persisted_codex_config_parse_failure) {
+        return DebateErrorKind::Deterministic("Codex config.toml parse failure".to_string());
     }
 
     if session_dir.is_some_and(ToolLiveness::is_alive) {
         return DebateErrorKind::StillWorking;
     }
 
-    let message = error.to_string().to_ascii_lowercase();
+    let error_text = csa_session::redact_text_content(&error.to_string());
+    let message = error_text.to_ascii_lowercase();
     if message.contains("oom")
         || message.contains("signal")
         || message.contains("killed")
         || message.contains("temporarily unavailable")
     {
-        return DebateErrorKind::Transient(error.to_string());
+        return DebateErrorKind::Transient(error_text);
     }
 
     if message.contains("permission denied") {
         return DebateErrorKind::Deterministic("permission error".to_string());
     }
 
-    DebateErrorKind::Deterministic(error.to_string())
+    DebateErrorKind::Deterministic(error_text)
 }
 
 #[cfg(test)]

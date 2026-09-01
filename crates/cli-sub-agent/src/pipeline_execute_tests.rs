@@ -46,6 +46,87 @@ async fn cancelled_transport_cleanup_error_preserves_target_admission() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn acp_initialize_codex_config_error_is_terminal_and_redacted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let fake_codex = temp.path().join("codex-acp");
+    std::fs::write(
+        &fake_codex,
+        "#!/bin/sh\nprintf '%s\\n' 'Error loading config.toml: duplicate key' 'OPENAI_API_KEY=providerfixture12345' >&2\nexit 1\n",
+    )
+    .expect("write fake codex ACP");
+    let mut permissions = std::fs::metadata(&fake_codex)
+        .expect("fake codex metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_codex, permissions).expect("make fake codex executable");
+
+    let mut session = csa_session::MetaSessionState::default();
+    session.meta_session_id = ulid::Ulid::new().to_string();
+    session.project_path = temp.path().display().to_string();
+    session.task_context.task_type = Some("debate".to_string());
+    let executor = csa_executor::Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+        runtime_metadata: csa_executor::CodexRuntimeMetadata::from_transport(
+            csa_executor::CodexTransport::Acp,
+        ),
+    };
+    let path = std::env::var("PATH").unwrap_or_default();
+    let extra_env = std::collections::HashMap::from([(
+        "PATH".to_string(),
+        format!("{}:{path}", temp.path().display()),
+    )]);
+    let options = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 1)
+        .with_acp_init_timeout_seconds(2)
+        .with_acp_crash_max_attempts(1);
+
+    let error = execute_transport_with_signal(
+        &executor,
+        "prompt",
+        None,
+        &session,
+        Some(&extra_env),
+        options,
+        None,
+        temp.path(),
+        &mut None,
+        chrono::Utc::now(),
+        None,
+    )
+    .await
+    .expect_err("ACP initialize failure must return an error");
+
+    let session_dir = csa_session::manager::get_session_dir(temp.path(), &session.meta_session_id)
+        .expect("session directory");
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    let result_contents = std::fs::read_to_string(&result_path).expect("persisted result");
+    let result: csa_session::SessionResult = toml::from_str(&result_contents).expect("result TOML");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.tool, "codex");
+    assert_eq!(result.exit_code, 1);
+    assert!(result.summary.contains("Error loading config.toml"));
+    assert!(!result.summary.contains("providerfixture12345"));
+    assert!(result.summary.contains("[REDACTED]"));
+    let error_chain = format!("{error:#}");
+    assert!(!error_chain.contains("providerfixture12345"));
+    assert!(error_chain.contains("[REDACTED]"));
+
+    let lock_path = session_dir.join("locks/codex.lock");
+    std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("create locks");
+    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id()))
+        .expect("write live diagnostic lock");
+    assert_eq!(
+        crate::debate_errors::classify_execution_error(&error, Some(&session_dir)),
+        crate::debate_errors::DebateErrorKind::Deterministic(
+            "Codex config.toml parse failure".to_string()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn cancelled_transport_cleanup_timeout_preserves_admission_with_term_resistant_descendant() {
     let temp = tempfile::tempdir().expect("tempdir");
     let descendant_pid_file = temp.path().join("descendant.pid");
