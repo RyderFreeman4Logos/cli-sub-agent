@@ -101,18 +101,20 @@ fn spawn_test_child(shell_script: &str) -> Child {
     cmd.spawn().expect("spawn test child")
 }
 
+fn hanging_child() -> Child {
+    spawn_test_child("python3 -c 'import signal;signal.pause()'")
+}
+
 fn configure_test_child(cmd: &mut Command) {
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        // The test connection owns the child. Ensure an assertion panic cannot
-        // leave its direct child behind while the nextest worker stays alive.
+        // Keep panic cleanup from leaving a child for the nextest worker.
         .kill_on_drop(true);
 
     #[cfg(unix)]
     {
-        // AcpConnection::kill targets -PID, so fixtures must be process-group
-        // leaders for descendant cleanup to be meaningful.
+        // Kill targets -PID; make fixtures process-group leaders.
         cmd.process_group(0);
     }
 }
@@ -515,7 +517,7 @@ async fn initial_response_timeout_stays_alive_for_stderr_only() {
 #[tokio::test]
 async fn initial_response_timeout_fires_when_stderr_also_silent() {
     let connection = build_test_connection(
-        spawn_test_child("sleep 5"),
+        hanging_child(),
         Duration::from_secs(5),
         PromptBehavior::Silent,
     )
@@ -623,7 +625,7 @@ async fn initial_response_timeout_fires_while_child_process_tree_consumes_cpu() 
 #[tokio::test]
 async fn idle_timeout_still_fires_for_alive_child_with_no_cpu_progress() {
     let connection = build_test_connection(
-        spawn_test_child("sleep 5"),
+        hanging_child(),
         Duration::from_secs(5),
         PromptBehavior::Silent,
     )
@@ -658,7 +660,7 @@ async fn idle_timeout_still_fires_for_alive_child_with_no_cpu_progress() {
 #[tokio::test]
 async fn initial_response_timeout_fires_when_only_protocol_notifications() {
     let connection = build_test_connection(
-        spawn_test_child("sleep 5"),
+        hanging_child(),
         Duration::from_secs(5),
         PromptBehavior::ProtocolOnly,
     )
@@ -696,7 +698,7 @@ async fn initial_response_timeout_fires_when_only_protocol_notifications() {
 #[tokio::test]
 async fn initial_response_timeout_stays_alive_for_eligible_event_stream() {
     let connection = build_test_connection(
-        spawn_test_child("sleep 5"),
+        hanging_child(),
         Duration::from_millis(220),
         PromptBehavior::EligibleEventStream,
     )

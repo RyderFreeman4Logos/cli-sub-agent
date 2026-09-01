@@ -462,8 +462,7 @@ mod tests {
         };
         r#"
 trap '' TERM
-sh -c 'trap "" TERM; echo $$ > "__PID__"; : > "__READY__"; while :; do sleep 1; done' &
-while [ ! -e "__READY__" ]; do sleep 0.01; done
+python3 -c 'import signal;signal.signal(15,1);signal.pause()' & echo $! > "__PID__"; : > "__READY__"
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[ ]*\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -551,8 +550,7 @@ done
         let args = vec![
             "-c".to_string(),
             format!(
-                "trap '' TERM; sh -c 'trap \"\" TERM; echo $$ > \"{}\"; while :; do sleep 1; done' & while [ ! -s \"{}\" ]; do sleep 0.01; done; printf 'not-json\\n'; exec 1>&- 2>&-; while :; do sleep 1; done",
-                pid_file.display(),
+                "trap '' TERM; python3 -c 'import signal;signal.signal(15,1);signal.pause()' & echo $! > \"{}\"; printf 'not-json\\n'; exec 1>&- 2>&-; while IFS= read -r _; do :; done",
                 pid_file.display()
             ),
         ];
