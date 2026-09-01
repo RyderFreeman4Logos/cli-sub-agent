@@ -186,9 +186,16 @@ fn test_daemon_spawn_creates_spool_files() {
         )]),
     };
 
+    std::fs::create_dir_all(&session_dir).expect("create session dir");
+    std::fs::write(session_dir.join("result.toml"), "status = \"failure\"\n")
+        .expect("write stale result");
     let result = spawn_daemon(config).expect("spawn_daemon");
     assert_eq!(result.session_id, "01M0KCV46DMV3TMJ0CAPA4FXZT");
     assert!(result.pid > 0);
+    assert!(
+        !session_dir.join("result.toml").exists(),
+        "new daemon liveness must not expose a stale terminal result"
+    );
 
     let stdout_path = session_dir.join("stdout.log");
     let stderr_path = session_dir.join("stderr.log");

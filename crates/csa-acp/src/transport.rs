@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn acp_process_fixture(pid_file: &Path, ready_file: &Path, prompt_error: bool) -> String {
+    fn acp_process_fixture(pid_file: &Path, prompt_error: bool) -> String {
         let prompt_response = if prompt_error {
             r#"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"prompt failed"}}\n' "$id""#
         } else {
@@ -462,7 +462,8 @@ mod tests {
         };
         r#"
 trap '' TERM
-python3 -c 'import signal;signal.signal(15,1);signal.pause()' & echo $! > "__PID__"; : > "__READY__"
+python3 -c 'import os,signal;signal.signal(15,signal.SIG_IGN);open("__PID__","w").write(str(os.getpid()));signal.pause()' &
+while [ ! -s "__PID__" ]; do sleep .01; done
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":[ ]*\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -482,7 +483,6 @@ while IFS= read -r line; do
 done
 "#
         .replace("__PID__", &pid_file.display().to_string())
-        .replace("__READY__", &ready_file.display().to_string())
         .replace("__PROMPT_RESPONSE__", prompt_response)
     }
 
@@ -496,10 +496,9 @@ done
         ] {
             let temp = tempfile::tempdir().expect("tempdir");
             let pid_file = temp.path().join(format!("{name}.pid"));
-            let ready_file = temp.path().join(format!("{name}.ready"));
             let args = vec![
                 "-c".to_string(),
-                acp_process_fixture(&pid_file, &ready_file, prompt_error),
+                acp_process_fixture(&pid_file, prompt_error),
             ];
             let result = tokio::time::timeout(
                 Duration::from_secs(3),
@@ -550,8 +549,9 @@ done
         let args = vec![
             "-c".to_string(),
             format!(
-                "trap '' TERM; python3 -c 'import signal;signal.signal(15,1);signal.pause()' & echo $! > \"{}\"; printf 'not-json\\n'; exec 1>&- 2>&-; while IFS= read -r _; do :; done",
-                pid_file.display()
+                "trap '' TERM; python3 -c 'import os,signal;signal.signal(15,signal.SIG_IGN);open(\"{}\",\"w\").write(str(os.getpid()));signal.pause()' & while [ ! -s \"{}\" ]; do sleep .01; done; printf 'not-json\\n'; exec 1>&- 2>&-; while IFS= read -r _; do :; done",
+                pid_file.display(),
+                pid_file.display(),
             ),
         ];
         let result = tokio::time::timeout(
