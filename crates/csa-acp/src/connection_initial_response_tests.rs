@@ -380,6 +380,7 @@ async fn build_test_connection(
         last_meaningful_activity,
         tool_output_compactor: Rc::new(RefCell::new(None)),
         stderr_buf,
+        stderr_closed: Rc::new(std::cell::Cell::new(true)),
         default_working_dir: std::env::current_dir().expect("cwd"),
         options: AcpConnectionOptions {
             termination_grace_period: Duration::ZERO,

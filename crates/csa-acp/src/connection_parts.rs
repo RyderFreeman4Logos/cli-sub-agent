@@ -9,6 +9,7 @@ pub(crate) struct AcpConnectionParts {
     pub(crate) last_meaningful_activity: SharedActivity,
     pub(crate) tool_output_compactor: SharedToolOutputCompactor,
     pub(crate) stderr_buf: Rc<RefCell<String>>,
+    pub(crate) stderr_closed: Rc<std::cell::Cell<bool>>,
     pub(crate) default_working_dir: PathBuf,
     pub(crate) options: AcpConnectionOptions,
 }
