@@ -180,6 +180,111 @@ fn test_tool_defaults_hermes_rejects_symlinked_configuration_overlays() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_tool_defaults_hermes_rejects_unlistable_home_under_project_root() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let project = temp.path().join("project");
+    let hermes_home = project.join(".hermes");
+    std::fs::create_dir_all(&hermes_home).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+    let original_mode = {
+        let metadata = std::fs::metadata(&hermes_home).unwrap();
+        let original_mode = metadata.permissions().mode();
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o311);
+        std::fs::set_permissions(&hermes_home, permissions).unwrap();
+        original_mode
+    };
+
+    let result = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults("hermes", &project, &temp.path().join("session"))
+        .build();
+
+    let mut permissions = std::fs::metadata(&hermes_home).unwrap().permissions();
+    permissions.set_mode(original_mode);
+    std::fs::set_permissions(&hermes_home, permissions).unwrap();
+
+    let error = result.expect_err(
+        "unlistable Hermes home under a writable project_root must fail preflight",
+    );
+    assert!(
+        error.to_string().contains("hermes sandbox preflight failed"),
+        "unlistable overlay enumeration must fail closed: {error:#}"
+    );
+}
+
+#[test]
+fn test_tool_defaults_hermes_uses_execution_env_home_for_default_hermes_home() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (home, _env) = isolated_home(&temp);
+    let _hermes_home_env = ScopedEnvVar::unset("HERMES_HOME");
+    let custom_home = temp.path().join("custom-home");
+    std::fs::create_dir_all(&custom_home).unwrap();
+    let execution_env = std::collections::HashMap::from([(
+        "HOME".to_string(),
+        custom_home.to_string_lossy().into_owned(),
+    )]);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_execution_env(Some(&execution_env))
+        .with_tool_defaults(
+            "hermes",
+            &temp.path().join("project"),
+            &temp.path().join("session"),
+        )
+        .build()
+        .expect("child HOME should select the default Hermes home");
+
+    assert!(
+        plan.writable_paths.contains(&custom_home.join(".hermes")),
+        "Hermes home must follow execution_env HOME"
+    );
+    assert!(
+        !plan.writable_paths.contains(&home.join(".hermes")),
+        "ambient HOME must not win over execution_env HOME"
+    );
+}
+
+#[test]
+fn test_tool_defaults_hermes_plans_execution_env_home_without_ambient_home() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let _ambient_home = ScopedEnvVar::unset("HOME");
+    let configured = temp.path().join("configured-hermes-home");
+    std::fs::create_dir_all(&configured).unwrap();
+    let execution_env = std::collections::HashMap::from([(
+        "HERMES_HOME".to_string(),
+        configured.to_string_lossy().into_owned(),
+    )]);
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_execution_env(Some(&execution_env))
+        .with_tool_defaults(
+            "hermes",
+            &temp.path().join("project"),
+            &temp.path().join("session"),
+        )
+        .build()
+        .expect("execution_env HERMES_HOME must be planned without ambient HOME");
+
+    assert!(
+        plan.writable_paths.contains(&configured),
+        "Hermes planning must not depend on ambient HOME"
+    );
+}
+
 #[test]
 fn test_tool_defaults_codex_rejects_unwritable_codex_home() {
     let _guard = ENV_LOCK.lock().unwrap();

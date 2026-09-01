@@ -437,19 +437,6 @@ impl IsolationPlanBuilder {
                 &mut self.required_writable_dirs,
             );
 
-            if tool_name == "hermes"
-                && let Err(error) = hermes_paths::add_hermes_runtime_paths(
-                    self.filesystem,
-                    &home,
-                    self.execution_env.as_ref(),
-                    &mut self.writable_paths,
-                    &mut self.readable_paths,
-                    &mut self.required_writable_dirs,
-                )
-            {
-                self.preflight_error = Some(error);
-            }
-
             match tool_name {
                 "gemini-cli" => [".gemini", ".config/gemini-cli"]
                     .into_iter()
@@ -464,6 +451,19 @@ impl IsolationPlanBuilder {
                 }
                 _ => {}
             }
+        }
+
+        if tool_name == "hermes"
+            && let Err(error) = hermes_paths::add_hermes_runtime_paths(
+                self.filesystem,
+                home_dir().as_deref(),
+                self.execution_env.as_ref(),
+                &mut self.writable_paths,
+                &mut self.readable_paths,
+                &mut self.required_writable_dirs,
+            )
+        {
+            self.preflight_error = Some(error);
         }
     }
 

@@ -9,9 +9,26 @@ use crate::filesystem_sandbox::FilesystemCapability;
 use super::codex_paths::RequiredWritableDir;
 use super::{ReadablePath, add_dir_or_creatable_parent};
 
+fn nonempty_env<'a>(
+    execution_env: Option<&'a HashMap<String, String>>,
+    key: &str,
+) -> Option<&'a str> {
+    execution_env
+        .and_then(|env| env.get(key))
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn overlay_enumeration_error(hermes_home: &Path, error: std::io::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "hermes sandbox preflight failed: cannot enumerate Hermes configuration overlays in {}: {error}",
+        hermes_home.display()
+    )
+}
+
 pub(super) fn add_hermes_runtime_paths(
     filesystem: FilesystemCapability,
-    home: &Path,
+    home: Option<&Path>,
     execution_env: Option<&HashMap<String, String>>,
     writable_paths: &mut Vec<PathBuf>,
     readable_paths: &mut Vec<ReadablePath>,
@@ -23,15 +40,16 @@ pub(super) fn add_hermes_runtime_paths(
         );
     }
 
-    let (hermes_home, source) = match execution_env
-        .and_then(|env| env.get("HERMES_HOME"))
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => (PathBuf::from(value), "HERMES_HOME"),
-        None => match std::env::var_os("HERMES_HOME") {
-            Some(value) if !value.is_empty() => (PathBuf::from(value), "HERMES_HOME"),
-            _ => (home.join(".hermes"), "HOME/.hermes"),
-        },
+    let (hermes_home, source) = if let Some(value) = nonempty_env(execution_env, "HERMES_HOME") {
+        (PathBuf::from(value), "HERMES_HOME")
+    } else if let Some(value) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
+        (PathBuf::from(value), "HERMES_HOME")
+    } else if let Some(value) = nonempty_env(execution_env, "HOME") {
+        (PathBuf::from(value).join(".hermes"), "HOME/.hermes")
+    } else if let Some(home) = home {
+        (home.join(".hermes"), "HOME/.hermes")
+    } else {
+        return Ok(());
     };
     required_writable_dirs.push(RequiredWritableDir {
         path: hermes_home.clone(),
@@ -47,16 +65,11 @@ pub(super) fn add_hermes_runtime_paths(
         return Ok(());
     }
 
-    let Ok(entries) = fs::read_dir(&hermes_home) else {
-        writable_paths.retain(|path| path != &hermes_home);
-        return Ok(());
-    };
+    let entries = fs::read_dir(&hermes_home)
+        .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
     let mut protected = Vec::new();
     for entry in entries {
-        let Ok(entry) = entry else {
-            writable_paths.retain(|path| path != &hermes_home);
-            return Ok(());
-        };
+        let entry = entry.map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name == "logs" || name.starts_with("state.db") {
