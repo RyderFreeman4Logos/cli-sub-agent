@@ -54,6 +54,7 @@ tree-sitter-rust.workspace = true
 xurl-core.workspace = true
 
 [dev-dependencies]
+csa-executor = { workspace = true, features = ["codex-acp"] }
 proptest = "1"
 serial_test = "3.4"
 

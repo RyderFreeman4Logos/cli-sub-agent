@@ -517,6 +517,7 @@ impl AcpConnection {
             tool_output_compactor.clone(),
         );
         let stderr_buf = Rc::new(RefCell::new(String::new()));
+        let stderr_closed = Rc::new(std::cell::Cell::new(false));
 
         let connection = local_set
             .run_until(async {
@@ -538,6 +539,7 @@ impl AcpConnection {
                 });
 
                 let stderr_buf_clone = stderr_buf.clone();
+                let stderr_closed_clone = stderr_closed.clone();
                 let activity_clone = last_activity.clone();
                 let meaningful_activity_clone = last_meaningful_activity.clone();
                 tokio::task::spawn_local(async move {
@@ -559,6 +561,7 @@ impl AcpConnection {
                             }
                         }
                     }
+                    stderr_closed_clone.set(true);
                 });
 
                 conn
@@ -574,6 +577,7 @@ impl AcpConnection {
             last_meaningful_activity,
             tool_output_compactor,
             stderr_buf,
+            stderr_closed,
             default_working_dir: working_dir.to_path_buf(),
             options,
         }))

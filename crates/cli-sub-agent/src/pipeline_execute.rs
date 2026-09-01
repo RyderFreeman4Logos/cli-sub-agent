@@ -262,7 +262,7 @@ pub(crate) async fn execute_transport_with_signal(
                 .chain()
                 .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
                 .and_then(|ctx| ctx.0);
-            let error_summary = format!("transport: {e}");
+            let error_summary = csa_session::redact_text_content(&format!("transport: {e:#}"));
             // The anyhow error chain is the provider/transport error channel for
             // a failed turn (the agent's reviewed stdout is discarded on Err), so
             // it is the correct — and only — source for a permanent quota verdict
@@ -334,7 +334,10 @@ pub(crate) async fn execute_transport_with_signal(
             if let Some(cg) = cleanup_guard {
                 cg.defuse();
             }
-            Err(e).context("Failed to execute tool via transport")
+            Err(
+                anyhow::anyhow!(csa_session::redact_text_content(&format!("{e:#}")))
+                    .context("Failed to execute tool via transport"),
+            )
         }
     }
 }

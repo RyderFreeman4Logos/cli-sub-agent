@@ -71,6 +71,7 @@ pub struct AcpConnection {
     last_meaningful_activity: SharedActivity,
     tool_output_compactor: SharedToolOutputCompactor,
     stderr_buf: Rc<RefCell<String>>,
+    stderr_closed: Rc<std::cell::Cell<bool>>,
     default_working_dir: PathBuf,
     init_timeout: Duration,
     termination_grace_period: Duration,
@@ -95,6 +96,7 @@ impl AcpConnection {
             last_meaningful_activity: parts.last_meaningful_activity,
             tool_output_compactor: parts.tool_output_compactor,
             stderr_buf: parts.stderr_buf,
+            stderr_closed: parts.stderr_closed,
             default_working_dir: parts.default_working_dir,
             init_timeout: parts.options.init_timeout,
             termination_grace_period: parts.options.termination_grace_period,
@@ -118,6 +120,8 @@ impl AcpConnection {
         match result {
             Some(Ok(_response)) => Ok(()),
             Some(Err(err)) => {
+                self.kill().await?;
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::InitializationFailed(format!(
                     "{err}{}",
@@ -166,6 +170,7 @@ impl AcpConnection {
         match result {
             Some(Ok(response)) => Ok(response.session_id.0.to_string()),
             Some(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
@@ -209,6 +214,7 @@ impl AcpConnection {
         match result {
             Some(Ok(_response)) => Ok(session_id.to_string()),
             Some(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "{err}{}",
@@ -430,6 +436,7 @@ impl AcpConnection {
                 metadata,
             }),
             PromptOutcome::Completed(Err(err)) => {
+                self.drain_stderr_tail().await;
                 let stderr_detail = format_stderr(&self.stderr());
                 Err(AcpError::PromptFailed(format!("{err}{stderr_detail}")))
             }
@@ -509,8 +516,13 @@ impl AcpConnection {
     }
 
     async fn drain_stderr_tail(&self) {
-        self.local_set
-            .run_until(tokio::time::sleep(Duration::from_millis(10)))
+        let _ = self
+            .local_set
+            .run_until(tokio::time::timeout(Duration::from_millis(10), async {
+                while !self.stderr_closed.get() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }))
             .await;
     }
 

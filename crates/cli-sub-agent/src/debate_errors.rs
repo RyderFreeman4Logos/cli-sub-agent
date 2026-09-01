@@ -7,6 +7,7 @@ pub(crate) const EMPTY_DEBATE_QUESTION_ERROR: &str = concat!(
     "debate question is empty (stdin is not available to the detached daemon - ",
     "pass a positional QUESTION, use --question-file QUESTION.md, or pair --context with a QUESTION)"
 );
+const CODEX_CONFIG_PARSE_ERROR_MARKER: &str = "Error loading config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DebateErrorKind {
@@ -15,27 +16,39 @@ pub(crate) enum DebateErrorKind {
     StillWorking,
 }
 
+#[cfg(test)]
 pub(crate) fn classify_execution_outcome(
     execution: &ExecutionResult,
     session_state: Option<&MetaSessionState>,
     session_dir: &Path,
 ) -> DebateErrorKind {
-    if has_persisted_pre_exec_failure(session_dir) {
-        return DebateErrorKind::Deterministic("persisted pre-exec failure".to_string());
-    }
+    classify_execution_outcome_for_tool(execution, session_state, session_dir, None)
+}
 
-    if ToolLiveness::is_alive(session_dir) {
-        return DebateErrorKind::StillWorking;
-    }
-
+pub(crate) fn classify_execution_outcome_for_tool(
+    execution: &ExecutionResult,
+    session_state: Option<&MetaSessionState>,
+    session_dir: &Path,
+    tool: Option<&str>,
+) -> DebateErrorKind {
     let termination_reason = session_state.and_then(|s| s.termination_reason.as_deref());
     let sandbox_memory_limit = session_state
         .and_then(|s| s.sandbox_info.as_ref())
         .and_then(|s| s.memory_max_mb);
+    let codex_config_parse_failure =
+        is_codex_config_parse_failure_for_tool(tool, execution.exit_code, &execution.summary)
+            || is_codex_config_parse_failure_for_tool(
+                tool,
+                execution.exit_code,
+                &execution.stderr_output,
+            );
 
     if execution.exit_code == 137 {
         if matches!(termination_reason, Some("sigkill" | "sigterm"))
             || sandbox_memory_limit.is_some()
+            || (tool.is_some_and(|tool| tool.eq_ignore_ascii_case("codex"))
+                && (is_codex_config_parse_failure(&execution.summary)
+                    || is_codex_config_parse_failure(&execution.stderr_output)))
         {
             return DebateErrorKind::Transient(format!(
                 "exit 137 (termination_reason={termination_reason:?}, sandbox_memory_max_mb={sandbox_memory_limit:?})"
@@ -53,23 +66,24 @@ pub(crate) fn classify_execution_outcome(
         ));
     }
 
-    // Catch-all: valid signal-based exit codes (128+signal) are transient.
-    // Valid Unix signals: 1-31 (standard) + 32-64 (real-time), so exit
-    // codes 129-192.  128 (signal 0) and 193+ (signal > 64) are not real
-    // signal exits — treat those as deterministic.
-    // CSA only sends SIGTERM(15) and SIGKILL(9); other signals come from
-    // external sources (systemd scope cleanup, kernel OOM, etc.).
     if execution.exit_code >= 129 && execution.exit_code <= 192 {
         let signal_num = execution.exit_code - 128;
-        tracing::warn!(
-            exit_code = execution.exit_code,
-            signal = signal_num,
-            "process killed by unexpected signal; classifying as transient"
-        );
         return DebateErrorKind::Transient(format!(
             "process killed by signal {} (exit_code={})",
             signal_num, execution.exit_code,
         ));
+    }
+
+    if has_persisted_pre_exec_failure(session_dir) {
+        return DebateErrorKind::Deterministic("persisted pre-exec failure".to_string());
+    }
+
+    if has_persisted_codex_config_parse_failure(session_dir) || codex_config_parse_failure {
+        return DebateErrorKind::Deterministic("Codex config.toml parse failure".to_string());
+    }
+
+    if ToolLiveness::is_alive(session_dir) {
+        return DebateErrorKind::StillWorking;
     }
 
     let stderr_lower = execution.stderr_output.to_ascii_lowercase();
@@ -84,9 +98,9 @@ pub(crate) fn classify_execution_outcome(
     DebateErrorKind::Deterministic(format!("exit code {}", execution.exit_code))
 }
 
-/// A pre-exec failure result is terminal evidence for this attempt. Its diagnostic
-/// lock may retain the launching test/process PID after release, so it must win
-/// over lock-based liveness and prevent an endless StillWorking retry.
+/// A persisted terminal failure is evidence for this attempt. Its diagnostic lock
+/// may retain the launching test/process PID after release, so it must win over
+/// lock-based liveness and prevent an endless StillWorking retry.
 fn has_persisted_pre_exec_failure(session_dir: &Path) -> bool {
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     let Ok(contents) = std::fs::read_to_string(result_path) else {
@@ -98,32 +112,73 @@ fn has_persisted_pre_exec_failure(session_dir: &Path) -> bool {
     result.status == "failure" && result.summary.trim_start().starts_with("pre-exec:")
 }
 
+fn has_persisted_codex_config_parse_failure(session_dir: &Path) -> bool {
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    let Ok(contents) = std::fs::read_to_string(result_path) else {
+        return false;
+    };
+    let Ok(result) = toml::from_str::<csa_session::SessionResult>(&contents) else {
+        return false;
+    };
+    is_codex_config_parse_result(&result)
+}
+
+pub(crate) fn is_codex_config_parse_failure_for_tool(
+    tool: Option<&str>,
+    exit_code: i32,
+    text: &str,
+) -> bool {
+    exit_code == 1
+        && tool.is_some_and(|tool| tool.eq_ignore_ascii_case("codex"))
+        && is_codex_config_parse_failure(text)
+}
+
+pub(crate) fn is_codex_config_parse_result(result: &csa_session::SessionResult) -> bool {
+    result.status == "failure"
+        && is_codex_config_parse_failure_for_tool(
+            Some(result.tool.as_str()),
+            result.exit_code,
+            &result.summary,
+        )
+}
+
+pub(crate) fn is_codex_config_parse_failure(text: &str) -> bool {
+    text.contains(CODEX_CONFIG_PARSE_ERROR_MARKER)
+}
+
 pub(crate) fn classify_execution_error(
     error: &anyhow::Error,
     session_dir: Option<&Path>,
 ) -> DebateErrorKind {
     if session_dir.is_some_and(has_persisted_pre_exec_failure) {
-        return DebateErrorKind::Deterministic(error.to_string());
+        return DebateErrorKind::Deterministic(csa_session::redact_text_content(
+            &error.to_string(),
+        ));
+    }
+
+    if session_dir.is_some_and(has_persisted_codex_config_parse_failure) {
+        return DebateErrorKind::Deterministic("Codex config.toml parse failure".to_string());
     }
 
     if session_dir.is_some_and(ToolLiveness::is_alive) {
         return DebateErrorKind::StillWorking;
     }
 
-    let message = error.to_string().to_ascii_lowercase();
+    let error_text = csa_session::redact_text_content(&error.to_string());
+    let message = error_text.to_ascii_lowercase();
     if message.contains("oom")
         || message.contains("signal")
         || message.contains("killed")
         || message.contains("temporarily unavailable")
     {
-        return DebateErrorKind::Transient(error.to_string());
+        return DebateErrorKind::Transient(error_text);
     }
 
     if message.contains("permission denied") {
         return DebateErrorKind::Deterministic("permission error".to_string());
     }
 
-    DebateErrorKind::Deterministic(error.to_string())
+    DebateErrorKind::Deterministic(error_text)
 }
 
 #[cfg(test)]

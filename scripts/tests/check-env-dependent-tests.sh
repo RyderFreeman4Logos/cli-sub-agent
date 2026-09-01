@@ -3,12 +3,18 @@ set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 CHECKER="${ROOT_DIR}/scripts/hooks/check-env-dependent-tests.sh"
-TMP_ROOT="$(mktemp -d)"
+if [[ -n "${CSA_SESSION_DIR:-}" ]]; then
+    fixture_root="${CSA_SESSION_DIR}/git-fixtures"
+    mkdir -p "${fixture_root}"
+    TMP_ROOT="$(mktemp -d "${fixture_root}/check-env-dependent-tests.XXXXXX")"
+else
+    TMP_ROOT="$(mktemp -d)"
+fi
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 repo_dir="${TMP_ROOT}/fixture"
 mkdir -p "${repo_dir}/crates/demo/src" "${repo_dir}/crates/demo/tests"
-git init -q "${repo_dir}"
+(cd "${repo_dir}" && git init -q)
 
 cat >"${repo_dir}/crates/demo/src/lib.rs" <<'RS'
 fn production_only() {

@@ -23,6 +23,7 @@ use cleanup::{
 use cleanup::{observe_before_final_group_signal_for_test, stop_systemd_scope_with_timeout};
 
 const DAEMON_INDEPENDENT_SCOPE_ENV: &str = "CSA_DAEMON_INDEPENDENT_SCOPE";
+const DAEMON_RESULT_FILE: &str = "result.toml";
 
 /// Configuration for spawning a daemonized child process.
 pub struct DaemonSpawnConfig {
@@ -291,6 +292,11 @@ where
     }
 
     let mut cmd = build_daemon_command_with_systemd_run(&config, &spawn_mode, systemd_run);
+
+    // A resumed daemon supersedes any prior attempt. Remove its terminal
+    // result before publishing the new daemon PID, so wait cannot consume a
+    // stale result while this process is live.
+    remove_file_if_exists(&config.session_dir.join(DAEMON_RESULT_FILE))?;
 
     cmd.stdin(Stdio::null());
     cmd.stdout(stdout_file);

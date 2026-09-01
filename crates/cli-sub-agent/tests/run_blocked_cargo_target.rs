@@ -306,7 +306,9 @@ fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
     let release_path = identity_dir.path().join("release");
     let mut command = Command::new("sh");
     let script = format!(
-        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; start_time=$(awk '{{print $22}}' \"/proc/$descendant/stat\"); printf '%s %s\\n' \"$descendant\" \"$start_time\" > \"{}\"; printf '%s %s\\n' \"$descendant\" \"$start_time\"; while [ ! -e \"{}\" ]; do sleep 0.01; done; exit 0",
+        // Keep publication to shell builtins: an extra `awk` child can miss
+        // this test's bounded handshake when the full suite is scheduling.
+        "sleep 300 </dev/null >/dev/null 2>&1 & descendant=$!; printf '%s\\n' \"$descendant\" > \"{}\"; printf '%s\\n' \"$descendant\"; while [ ! -e \"{}\" ]; do sleep 0.01; done; exit 0",
         identity_path.display(),
         release_path.display(),
     );
@@ -325,23 +327,19 @@ fn output_reaps_descendants_after_direct_child_exits_and_pipes_drain() {
                 return String::from("descendant identity has not been published");
             };
             let identity = identity_output.split_whitespace().collect::<Vec<_>>();
-            if identity.len() != 2 {
+            if identity.len() != 1 {
                 return format!("invalid descendant identity contents: {identity_output:?}");
             }
             let Ok(pid) = identity[0].parse::<u32>() else {
                 return format!("invalid descendant PID: {:?}", identity[0]);
             };
-            let Ok(start_time) = identity[1].parse::<u64>() else {
-                return format!("invalid descendant start time: {:?}", identity[1]);
-            };
-            if let Some(captured) = ProcessIdentity::capture_with_start_time(pid, start_time) {
+            if let Some(captured) = ProcessIdentity::capture(pid) {
+                let start_time = captured.start_time;
                 descendant = Some(captured);
                 std::fs::write(&release_path, "released").expect("release direct child");
                 return format!("captured descendant identity pid={pid} start_time={start_time}");
             }
-            format!(
-                "published descendant identity pid={pid} start_time={start_time} no longer matches"
-            )
+            format!("published descendant PID {pid} no longer matches")
         },
     );
     let descendant =

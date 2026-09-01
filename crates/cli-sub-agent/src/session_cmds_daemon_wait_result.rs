@@ -23,6 +23,28 @@ pub(super) fn suppress_pending_tier_failover_result(
     }
 }
 
+/// Read the current result without invoking refresh-and-repair, which may rewrite
+/// an artifact while the live daemon is still publishing it.
+pub(crate) fn load_live_result_for_wait(
+    session_dir: &Path,
+) -> Result<Option<csa_session::SessionResult>> {
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    let Ok(contents) = fs::read_to_string(&result_path) else {
+        return Ok(None);
+    };
+    match toml::from_str(&contents) {
+        Ok(result) => Ok(Some(result)),
+        Err(err) => {
+            tracing::debug!(
+                path = %result_path.display(),
+                error = %err,
+                "Ignoring incomplete live result artifact"
+            );
+            Ok(None)
+        }
+    }
+}
+
 fn load_completed_daemon_result(
     project_root: &Path,
     session_id: &str,
@@ -369,4 +391,32 @@ pub(super) fn load_completed_daemon_result_with_fallback(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_result_loader_does_not_rewrite_interleaved_result() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let result_path = temp.path().join(csa_session::result::RESULT_FILE_NAME);
+        let result = csa_session::SessionResult {
+            status: "failure".to_string(),
+            exit_code: 1,
+            summary: "Error loading config.toml: duplicate key".to_string(),
+            tool: "codex".to_string(),
+            ..Default::default()
+        };
+        let before = toml::to_string_pretty(&result).expect("serialize result");
+        std::fs::write(&result_path, &before).expect("write result");
+
+        let loaded = load_live_result_for_wait(temp.path())
+            .expect("load live result")
+            .expect("result");
+        let after = std::fs::read_to_string(&result_path).expect("read result");
+
+        assert_eq!(loaded.summary, result.summary);
+        assert_eq!(after, before);
+    }
 }
