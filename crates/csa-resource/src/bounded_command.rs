@@ -76,23 +76,24 @@ pub fn output_with_timeout(
             return Err(output_limit_error(max_output_bytes));
         }
 
-        match child.try_wait() {
-            Ok(Some(status)) => {
+        match child_exited_without_reaping(&mut child) {
+            Ok(true) => {
                 terminate_process_group(&mut child);
+                let status = child.wait();
                 let (stdout, stderr) = join_readers(stdout_reader, stderr_reader)?;
                 if output_exceeded.load(Ordering::Acquire) {
                     return Err(output_limit_error(max_output_bytes));
                 }
                 return Ok(Output {
-                    status,
+                    status: status?,
                     stdout,
                     stderr,
                 });
             }
-            Ok(None) if Instant::now() < deadline => {
+            Ok(false) if Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(None) => {
+            Ok(false) => {
                 terminate_process_group(&mut child);
                 let status = child.wait();
                 let _ = join_readers(stdout_reader, stderr_reader);
@@ -240,10 +241,65 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
+#[cfg(unix)]
+fn waitid_direct_child_without_reaping(pid: libc::pid_t) -> io::Result<libc::siginfo_t> {
+    loop {
+        // SAFETY: zero is the documented no-state-change sentinel for waitid.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pid is our spawned child; WNOWAIT leaves it unreaped so the
+        // process-group identity stays reserved until we terminate then reap.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        return Ok(info);
+    }
+}
+
+fn child_exited_without_reaping(child: &mut Child) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        let info = waitid_direct_child_without_reaping(child.id() as libc::pid_t)?;
+        // SAFETY: waitid initialized info; si_pid == 0 means no state change.
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(child.try_wait()?.is_some())
+    }
+}
+
+#[cfg(all(unix, test))]
+thread_local! {
+    static GROUP_TERMINATED_WHILE_UNREAPED: AtomicBool = const { AtomicBool::new(false) };
+}
+
+#[cfg(all(unix, test))]
+fn direct_child_is_unreaped(pid: libc::pid_t) -> bool {
+    waitid_direct_child_without_reaping(pid).is_ok()
+}
+
 fn terminate_process_group(child: &mut Child) {
     #[cfg(unix)]
     {
         let pid = child.id() as libc::pid_t;
+        #[cfg(test)]
+        {
+            GROUP_TERMINATED_WHILE_UNREAPED.with(|flag| {
+                flag.store(direct_child_is_unreaped(pid), Ordering::Relaxed);
+            });
+        }
         // SAFETY: pid is the direct child placed in its own process group.
         unsafe {
             let _ = libc::kill(-pid, libc::SIGTERM);
@@ -270,6 +326,29 @@ fn output_limit_error(max_output_bytes: usize) -> io::Error {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[cfg(unix)]
+    fn reset_group_terminated_while_unreaped() {
+        GROUP_TERMINATED_WHILE_UNREAPED.with(|flag| flag.store(false, Ordering::Relaxed));
+    }
+
+    #[cfg(unix)]
+    fn assert_group_terminated_while_unreaped() {
+        assert!(
+            GROUP_TERMINATED_WHILE_UNREAPED.with(|flag| flag.load(Ordering::Relaxed)),
+            "process-group termination must run while the direct child is still unreaped"
+        );
+    }
+
+    #[cfg(unix)]
+    fn child_without_descendants_command() -> Command {
+        let mut command = Command::new("/bin/true");
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null());
+        command
+    }
 
     #[cfg(unix)]
     fn pipe_holding_descendant_command() -> Command {
@@ -299,7 +378,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn output_with_timeout_terminates_group_while_child_without_descendants_is_unreaped() {
+        reset_group_terminated_while_unreaped();
+        let timeout = Duration::from_secs(5);
+        let started = Instant::now();
+        let output = assert_returns_within_deadline(
+            timeout,
+            output_with_timeout(
+                child_without_descendants_command(),
+                timeout,
+                MAX_OUTPUT_BYTES,
+            ),
+            started,
+        );
+        assert!(output.status.success());
+        assert_group_terminated_while_unreaped();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn output_with_timeout_pipe_holding_descendant_returns_within_deadline() {
+        reset_group_terminated_while_unreaped();
         let timeout = Duration::from_secs(5);
         let started = Instant::now();
         let output = assert_returns_within_deadline(
@@ -308,11 +407,13 @@ mod tests {
             started,
         );
         assert!(output.status.success());
+        assert_group_terminated_while_unreaped();
     }
 
     #[cfg(unix)]
     #[test]
     fn status_with_timeout_pipe_holding_descendant_returns_within_deadline() {
+        reset_group_terminated_while_unreaped();
         let timeout = Duration::from_secs(5);
         let started = Instant::now();
         let status = assert_returns_within_deadline(
@@ -321,5 +422,6 @@ mod tests {
             started,
         );
         assert!(status.success());
+        assert_group_terminated_while_unreaped();
     }
 }
