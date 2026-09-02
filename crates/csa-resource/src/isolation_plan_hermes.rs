@@ -20,6 +20,52 @@ const SQLITE_SIDECARS: [&str; 4] = [
 ];
 const RUNTIME_BACKING: &str = ".csa-runtime";
 
+fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
+    let Some(profile) = hermes_profile.filter(|value| !value.trim().is_empty()) else {
+        return vec![root.join("state.db")];
+    };
+    let profile = profile.trim();
+    vec![
+        root.join(profile).join("state.db"),
+        root.join("profiles").join(profile).join("state.db"),
+        root.join(format!("state.{profile}.db")),
+    ]
+}
+
+/// Resolve the Hermes `state.db` used by sandbox start/restore, `xurl threads`, and `recall`.
+///
+/// The authoritative location is `$HERMES_HOME/.csa-runtime/` (plus profile candidates).
+/// Legacy `$HERMES_HOME/` paths are discovered when the runtime copy is absent.
+/// Callers must not delete the legacy database.
+pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>) -> PathBuf {
+    if hermes_home.is_file() {
+        return hermes_home.to_path_buf();
+    }
+    let runtime_home = hermes_home.join(RUNTIME_BACKING);
+    let mut candidates = state_db_candidates(&runtime_home, hermes_profile);
+    let authoritative = candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(|| runtime_home.join("state.db"));
+    candidates.extend(state_db_candidates(hermes_home, hermes_profile));
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or(authoritative)
+}
+
+fn seed_runtime_sqlite_sidecars(hermes_home: &Path, runtime_home: &Path) -> anyhow::Result<()> {
+    for name in SQLITE_SIDECARS {
+        let src = hermes_home.join(name);
+        let dest = runtime_home.join(name);
+        if dest.exists() || !src.exists() {
+            continue;
+        }
+        fs::copy(&src, &dest).map_err(|error| runtime_backing_error(&dest, error))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static AFTER_HERMES_HOME_PINNED: Cell<Option<fn(&Path)>> =
@@ -163,6 +209,7 @@ pub(super) fn add_hermes_runtime_paths(
             readable::reject_symlink_leaf_at(&runtime_home_fd, name.as_ref())
                 .map_err(|error| runtime_leaf_error(&hermes_home.join(name), error))?;
         }
+        seed_runtime_sqlite_sidecars(&real_home, &real_home.join(RUNTIME_BACKING))?;
         let names = readable::directory_entry_names(&home_fd)
             .inspect_err(|_| rollback(writable_paths, readable_paths))
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;

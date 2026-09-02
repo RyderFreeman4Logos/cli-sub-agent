@@ -6,6 +6,9 @@ mod db;
 mod render;
 
 #[cfg(test)]
+#[path = "xurl_hermes/shared_state_db_3148_tests.rs"]
+mod shared_state_db_3148_tests;
+#[cfg(test)]
 #[path = "xurl_hermes/tests.rs"]
 mod tests;
 

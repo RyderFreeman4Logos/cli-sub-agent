@@ -22,6 +22,7 @@ mod runtime_path;
 mod rust_env;
 #[path = "isolation_plan_validation.rs"]
 mod validation;
+pub use hermes_paths::resolve_hermes_state_db;
 pub use readable::ReadablePath;
 #[cfg(test)]
 use runtime_path::is_xdg_runtime_child_path;
