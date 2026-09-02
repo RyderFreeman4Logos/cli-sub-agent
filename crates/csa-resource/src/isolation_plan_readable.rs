@@ -384,6 +384,7 @@ fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<Fil
 #[cfg(unix)]
 fn errno_location() -> *mut libc::c_int {
     #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: libc exposes the calling thread's live errno slot.
     return unsafe { libc::__errno_location() };
     #[cfg(any(
         target_os = "macos",
@@ -393,6 +394,7 @@ fn errno_location() -> *mut libc::c_int {
         target_os = "netbsd",
         target_os = "dragonfly"
     ))]
+    // SAFETY: libc exposes the calling thread's live errno slot.
     return unsafe { libc::__error() };
 }
 
@@ -481,6 +483,7 @@ pub(super) fn create_unlinked_overlay_leaf_at(
         let file = match open_directory_at(parent, std::ffi::OsStr::from_bytes(name.to_bytes())) {
             Ok(file) => file,
             Err(error) => {
+                // SAFETY: parent is live and name identifies the placeholder created above.
                 unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
                 return Err(error);
             }
@@ -556,7 +559,26 @@ pub(super) fn open_or_create_writable_dir_at(
             return Err(error);
         }
     }
-    open_directory_at(parent, name)
+    let directory = open_directory_at(parent, name)?;
+    use std::os::unix::fs::PermissionsExt;
+    if directory.metadata()?.permissions().mode() & 0o222 == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "directory has no write permission bits",
+        ));
+    }
+    for attempt in 0..16 {
+        let probe = format!(".csa-write-probe-{}-{attempt}", std::process::id());
+        match create_unlinked_overlay_leaf_at(&directory, probe.as_ref(), false) {
+            Ok(_) => return Ok(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique write probe",
+    ))
 }
 
 impl From<PathBuf> for ReadablePath {

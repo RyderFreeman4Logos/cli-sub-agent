@@ -61,6 +61,13 @@ fn runtime_leaf_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
     )
 }
 
+fn runtime_backing_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "hermes sandbox preflight failed: runtime backing path {} is not writable: {error}",
+        leaf.display()
+    )
+}
+
 pub(super) fn add_hermes_runtime_paths(
     filesystem: FilesystemCapability,
     home: Option<&Path>,
@@ -134,10 +141,10 @@ pub(super) fn add_hermes_runtime_paths(
         run_after_hermes_home_pinned(&hermes_home);
         readable::reject_symlink_leaf_at(&home_fd, RUNTIME_BACKING.as_ref())
             .map_err(|error| runtime_leaf_error(&hermes_home.join(RUNTIME_BACKING), error))?;
+        let runtime_home = real_home.join(RUNTIME_BACKING);
         let runtime_home_fd =
             readable::open_or_create_writable_dir_at(&home_fd, RUNTIME_BACKING.as_ref())
-                .map_err(overlay_protection_error)?;
-        let runtime_home = real_home.join(RUNTIME_BACKING);
+                .map_err(|error| runtime_backing_error(&runtime_home, error))?;
         writable_paths.push(hermes_home.clone());
         readable_paths.push(ReadablePath::pinned_writable_from(
             hermes_home.clone(),

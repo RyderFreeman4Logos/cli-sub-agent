@@ -4,9 +4,9 @@ use super::*;
 use crate::sandbox::ResourceCapability;
 use std::path::Path;
 
-#[allow(dead_code)]
 #[path = "../../cli-sub-agent/src/test_bounded_command.rs"]
 mod test_bounded_command;
+use test_bounded_command::{output_with_timeout, status_with_timeout};
 
 fn overlay_bind_plan(overlay: ReadablePath) -> IsolationPlan {
     IsolationPlan {
@@ -53,8 +53,7 @@ fn assert_overlay_bind_fd_survives_exec(plan: &IsolationPlan, fd: i32, expected:
     crate::bwrap::inherit_sandbox_bind_fds(&mut probe, plan);
     probe.env_clear();
     probe.env("PATH", "/usr/bin:/bin");
-    let output =
-        test_bounded_command::output_with_timeout(probe, std::time::Duration::from_secs(5));
+    let output = output_with_timeout(probe, std::time::Duration::from_secs(5));
     assert!(
         output.status.success(),
         "overlay --ro-bind-fd {fd} must survive exec without nested bwrap; stderr={}",
@@ -86,7 +85,7 @@ fn overlay_fd_exec_probe_timeout_cleans_up_process_group() {
     probe.env_clear();
     probe.env("PATH", "/usr/bin:/bin");
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        test_bounded_command::output_with_timeout(probe, std::time::Duration::from_millis(200));
+        status_with_timeout(probe, std::time::Duration::from_millis(200));
     }));
     assert!(
         panicked.is_err(),

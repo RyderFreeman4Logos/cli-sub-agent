@@ -267,3 +267,32 @@ fn sqlite_journal_is_not_an_independent_file_mountpoint() {
         "Hermes home must bind a dedicated runtime backing, not the host home"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn tier4_hermes_rejects_readonly_existing_runtime_backing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-runtime-write-probe-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::create_dir(hermes_home.join("profiles")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    let runtime = hermes_home.join(".csa-runtime");
+    std::fs::create_dir(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = hermes_plan(&hermes_home);
+
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = result.expect_err("read-only .csa-runtime must fail Hermes preflight");
+    assert!(
+        error.to_string().contains("not writable"),
+        "runtime backing failure must identify writability: {error:#}"
+    );
+}
