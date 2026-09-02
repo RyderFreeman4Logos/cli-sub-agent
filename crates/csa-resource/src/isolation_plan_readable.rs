@@ -118,6 +118,21 @@ impl ReadablePath {
     }
 
     #[cfg(unix)]
+    pub(super) fn pinned_readonly_overlay(
+        requested: PathBuf,
+        bind_source: PathBuf,
+        file: File,
+    ) -> Self {
+        Self {
+            requested,
+            bind_source,
+            overrides_writable_mount: true,
+            writable_bind: false,
+            source_file: Some(Arc::new(file)),
+        }
+    }
+
+    #[cfg(unix)]
     pub(super) fn pinned_writable(requested: PathBuf, file: File) -> Self {
         Self {
             requested: requested.clone(),
@@ -357,6 +372,76 @@ fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<Fil
 }
 
 #[cfg(unix)]
+pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi::OsString>> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dup = dir.try_clone()?;
+    let raw = dup.into_raw_fd();
+    // SAFETY: fdopendir takes ownership of `raw`.
+    let dirp = unsafe { libc::fdopendir(raw) };
+    if dirp.is_null() {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: fdopendir failed, so this function still owns `raw`.
+        unsafe {
+            libc::close(raw);
+        }
+        return Err(error);
+    }
+    let mut names = Vec::new();
+    loop {
+        // SAFETY: `dirp` is a live DIR* owned by this function.
+        let entry = unsafe { libc::readdir(dirp) };
+        if entry.is_null() {
+            break;
+        }
+        // SAFETY: readdir returned a dirent with a NUL-terminated d_name.
+        let c_name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let name = OsStr::from_bytes(c_name.to_bytes());
+        if name == "." || name == ".." {
+            continue;
+        }
+        names.push(name.to_os_string());
+    }
+    // SAFETY: closedir releases the DIR* and the duplicated descriptor.
+    unsafe {
+        libc::closedir(dirp);
+    }
+    Ok(names)
+}
+
+#[cfg(unix)]
+pub(super) fn open_overlay_leaf_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+    let stat = stat_at(parent, name)?;
+    match stat.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a symlink directory entry",
+        )),
+        libc::S_IFDIR => open_directory_at(parent, name),
+        libc::S_IFREG => open_regular_at(parent, name),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a non-file overlay leaf",
+        )),
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn reject_symlink_leaf_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<()> {
+    match stat_at(parent, name) {
+        Ok(stat) if stat.st_mode & libc::S_IFMT == libc::S_IFLNK => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is a symlink",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
 pub(super) fn open_or_create_writable_dir_at(
     parent: &File,
     name: &std::ffi::OsStr,
@@ -372,29 +457,6 @@ pub(super) fn open_or_create_writable_dir_at(
         }
     }
     open_directory_at(parent, name)
-}
-
-#[cfg(unix)]
-pub(super) fn open_or_create_writable_file_at(
-    parent: &File,
-    name: &std::ffi::OsStr,
-) -> std::io::Result<File> {
-    let c_name = path_component(name)?;
-    // SAFETY: `parent` is a live directory descriptor and `c_name` is a valid
-    // NUL-terminated path component. O_NOFOLLOW refuses a raced symlink.
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            c_name.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
-    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 impl From<PathBuf> for ReadablePath {

@@ -34,12 +34,12 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
         "Hermes logs must remain writable"
     );
     assert!(
-        plan.writable_paths.contains(&state_db),
-        "Hermes state database must remain writable"
+        plan.writable_paths.contains(&hermes_home),
+        "Hermes home must be one pinned writable directory so SQLite can unlink journals"
     );
     assert!(
-        !plan.writable_paths.contains(&hermes_home),
-        "Hermes home itself must not stay a whole-directory writable bind"
+        !plan.writable_paths.contains(&state_db),
+        "Hermes state database must not be an independent file mountpoint"
     );
     assert!(
         plan.readable_paths.iter().any(|path| path == &config),
@@ -66,6 +66,13 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
     let hermes_home = hermes_home.to_string_lossy();
     let logs = logs.to_string_lossy();
     let config = config.to_string_lossy();
+    let writable_home = args
+        .windows(3)
+        .position(|window| {
+            matches!(window[0].as_str(), "--bind" | "--bind-fd")
+                && window[2] == hermes_home.as_ref()
+        })
+        .expect("Hermes home must be mounted writable");
     let writable_logs = args
         .windows(3)
         .position(|window| {
@@ -76,13 +83,9 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
         .windows(3)
         .position(|window| window[0] == "--ro-bind-fd" && window[2] == config.as_ref())
         .expect("Hermes config must override the writable parent with a read-only mount");
-    let readonly_home = args
-        .windows(3)
-        .position(|window| window[0] == "--ro-bind-fd" && window[2] == hermes_home.as_ref())
-        .expect("Hermes home must be re-bound read-only so absent names stay uncreatable");
     assert!(
-        readonly_home < writable_logs,
-        "writable Hermes logs must follow the read-only home overlay"
+        writable_home < writable_logs,
+        "writable Hermes logs must follow the writable home directory"
     );
     assert!(
         readonly_config != writable_logs,
@@ -154,7 +157,7 @@ fn test_tool_defaults_hermes_uses_execution_environment_home() {
         .expect("configured execution environment should build a Hermes plan");
 
     assert!(plan.writable_paths.contains(&configured_home.join("logs")));
-    assert!(!plan.writable_paths.contains(&configured_home));
+    assert!(plan.writable_paths.contains(&configured_home));
     assert!(!plan.writable_paths.contains(&home.join(".hermes")));
 }
 
@@ -272,8 +275,8 @@ fn test_tool_defaults_hermes_uses_execution_env_home_for_default_hermes_home() {
         "Hermes logs must follow execution_env HOME"
     );
     assert!(
-        !plan.writable_paths.contains(&custom_home.join(".hermes")),
-        "Hermes home itself must not stay a whole-directory writable bind"
+        plan.writable_paths.contains(&custom_home.join(".hermes")),
+        "Hermes home must be one pinned writable directory"
     );
     assert!(
         !plan.writable_paths.contains(&home.join(".hermes")),
@@ -310,8 +313,8 @@ fn test_tool_defaults_hermes_plans_execution_env_home_without_ambient_home() {
         "Hermes planning must not depend on ambient HOME"
     );
     assert!(
-        !plan.writable_paths.contains(&configured),
-        "Hermes home itself must not stay a whole-directory writable bind"
+        plan.writable_paths.contains(&configured),
+        "Hermes home must be one pinned writable directory"
     );
 }
 

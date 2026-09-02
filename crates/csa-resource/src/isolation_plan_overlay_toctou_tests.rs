@@ -224,7 +224,14 @@ fn test_tool_defaults_hermes_does_not_leave_absent_config_writable() {
         .expect("fresh Hermes home must still produce a sandbox plan");
 
     assert!(
-        !hermes_name_is_sandbox_writable(&plan, &config),
-        "absent Hermes config.yaml must not remain creatable under the writable home bind"
+        hermes_name_is_sandbox_writable(&plan, &hermes_home.join("state.db-journal")),
+        "SQLite journal must be creatable in the pinned writable home"
+    );
+    assert!(
+        !plan
+            .readable_paths
+            .iter()
+            .any(|path| path.requested() == config.as_path()),
+        "absent Hermes config.yaml must not be overlaid from a replacement path"
     );
 }

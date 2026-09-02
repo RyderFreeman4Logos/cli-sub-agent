@@ -1,5 +1,7 @@
 //! Hermes runtime writable paths with read-only profile/config overlays.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,14 +19,25 @@ const SQLITE_SIDECARS: [&str; 4] = [
     "state.db-journal",
 ];
 
-fn nonempty_env<'a>(
-    execution_env: Option<&'a HashMap<String, String>>,
-    key: &str,
-) -> Option<&'a str> {
+#[cfg(test)]
+thread_local! {
+    pub(crate) static AFTER_HERMES_HOME_PINNED: Cell<Option<fn(&Path)>> =
+        const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn run_after_hermes_home_pinned(hermes_home: &Path) {
+    AFTER_HERMES_HOME_PINNED.with(|hook| {
+        if let Some(inject) = hook.get() {
+            inject(hermes_home);
+        }
+    });
+}
+
+fn child_env<'a>(execution_env: Option<&'a HashMap<String, String>>, key: &str) -> Option<&'a str> {
     execution_env
         .and_then(|env| env.get(key))
         .map(String::as_str)
-        .filter(|value| !value.is_empty())
 }
 
 fn overlay_enumeration_error(hermes_home: &Path, error: std::io::Error) -> anyhow::Error {
@@ -61,11 +74,11 @@ pub(super) fn add_hermes_runtime_paths(
         );
     }
 
-    let (hermes_home, source) = if let Some(value) = nonempty_env(execution_env, "HERMES_HOME") {
+    let (hermes_home, source) = if let Some(value) = child_env(execution_env, "HERMES_HOME") {
         (PathBuf::from(value), "HERMES_HOME")
     } else if let Some(value) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
         (PathBuf::from(value), "HERMES_HOME")
-    } else if let Some(value) = nonempty_env(execution_env, "HOME") {
+    } else if let Some(value) = child_env(execution_env, "HOME") {
         (PathBuf::from(value).join(".hermes"), "HOME/.hermes")
     } else if let Some(home) = home {
         (home.join(".hermes"), "HOME/.hermes")
@@ -116,49 +129,49 @@ pub(super) fn add_hermes_runtime_paths(
                 "Hermes home is not a pinned directory",
             ))
         })?;
+        #[cfg(test)]
+        run_after_hermes_home_pinned(&hermes_home);
+        let home_writable_fd = home_fd.try_clone().map_err(overlay_protection_error)?;
+        writable_paths.push(hermes_home.clone());
+        readable_paths.push(ReadablePath::pinned_writable(
+            hermes_home.clone(),
+            home_writable_fd,
+        ));
         let logs_fd = readable::open_or_create_writable_dir_at(&home_fd, "logs".as_ref())
             .map_err(|error| runtime_leaf_error(&logs, error))?;
         writable_paths.push(logs.clone());
         readable_paths.push(ReadablePath::pinned_writable(logs, logs_fd));
         for name in SQLITE_SIDECARS {
-            let sidecar = hermes_home.join(name);
-            let sidecar_fd = readable::open_or_create_writable_file_at(&home_fd, name.as_ref())
-                .map_err(|error| runtime_leaf_error(&sidecar, error))?;
-            writable_paths.push(sidecar.clone());
-            readable_paths.push(ReadablePath::pinned_writable(sidecar, sidecar_fd));
+            readable::reject_symlink_leaf_at(&home_fd, name.as_ref())
+                .map_err(|error| runtime_leaf_error(&hermes_home.join(name), error))?;
         }
+        let names = readable::directory_entry_names(&home_fd)
+            .inspect_err(|_| rollback(writable_paths, readable_paths))
+            .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+        let mut protected = Vec::new();
+        for name in names {
+            let name_lossy = name.to_string_lossy();
+            if name_lossy == "logs" || name_lossy.starts_with("state.db") {
+                continue;
+            }
+            let file = readable::open_overlay_leaf_at(&home_fd, &name).map_err(|error| {
+                rollback(writable_paths, readable_paths);
+                overlay_protection_error(error)
+            })?;
+            protected.push(ReadablePath::pinned_readonly_overlay(
+                hermes_home.join(&name),
+                real_home.join(&name),
+                file,
+            ));
+        }
+        readable_paths.extend(protected);
     }
     #[cfg(not(unix))]
     {
+        let _ = home_overlay;
         anyhow::bail!(
             "hermes sandbox preflight failed: pinning writable Hermes runtime leaves requires unix"
         );
     }
-
-    let entries = fs::read_dir(&real_home)
-        .inspect_err(|_| rollback(writable_paths, readable_paths))
-        .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
-    let mut protected = vec![home_overlay];
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            rollback(writable_paths, readable_paths);
-            overlay_enumeration_error(&hermes_home, error)
-        })?;
-        let name = entry.file_name();
-        let name_lossy = name.to_string_lossy();
-        if name_lossy == "logs" || name_lossy.starts_with("state.db") {
-            continue;
-        }
-        let overlay = ReadablePath::try_pinned_readonly_overlay_from(
-            hermes_home.join(&name),
-            real_home.join(&name),
-        )
-        .map_err(|error| {
-            rollback(writable_paths, readable_paths);
-            overlay_protection_error(error)
-        })?;
-        protected.push(overlay);
-    }
-    readable_paths.extend(protected);
     Ok(())
 }

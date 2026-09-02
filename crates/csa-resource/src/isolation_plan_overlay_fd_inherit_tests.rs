@@ -4,6 +4,10 @@ use super::*;
 use crate::sandbox::ResourceCapability;
 use std::path::Path;
 
+#[allow(dead_code)]
+#[path = "../../cli-sub-agent/src/test_bounded_command.rs"]
+mod test_bounded_command;
+
 fn overlay_bind_plan(overlay: ReadablePath) -> IsolationPlan {
     IsolationPlan {
         resource: ResourceCapability::None,
@@ -49,15 +53,45 @@ fn assert_overlay_bind_fd_survives_exec(plan: &IsolationPlan, fd: i32, expected:
     crate::bwrap::inherit_sandbox_bind_fds(&mut probe, plan);
     probe.env_clear();
     probe.env("PATH", "/usr/bin:/bin");
-    let output = probe
-        .output()
-        .expect("non-unshare overlay fd probe must spawn");
+    let output =
+        test_bounded_command::output_with_timeout(probe, std::time::Duration::from_secs(5));
     assert!(
         output.status.success(),
         "overlay --ro-bind-fd {fd} must survive exec without nested bwrap; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, expected);
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+#[test]
+fn overlay_fd_exec_probe_uses_bounded_subprocess_helper() {
+    let source = include_str!("isolation_plan_overlay_fd_inherit_tests.rs");
+    let unbounded = [".out", "put()"].concat();
+    assert!(
+        !source.contains(&unbounded),
+        "overlay FD exec probe must not use unbounded Command output"
+    );
+    assert!(
+        source.contains("output_with_timeout"),
+        "overlay FD exec probe must use the repository bounded subprocess helper"
+    );
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+#[test]
+fn overlay_fd_exec_probe_timeout_cleans_up_process_group() {
+    let mut probe = std::process::Command::new("/bin/sleep");
+    probe.arg("30");
+    probe.env_clear();
+    probe.env("PATH", "/usr/bin:/bin");
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        test_bounded_command::output_with_timeout(probe, std::time::Duration::from_millis(200));
+    }));
+    assert!(
+        panicked.is_err(),
+        "bounded overlay FD probe must time out instead of hanging"
+    );
 }
 
 #[cfg(all(unix, target_os = "linux"))]
