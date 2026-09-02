@@ -71,6 +71,7 @@ fn has_bwrap_bind_fd_options() -> bool {
             command
         },
         std::time::Duration::from_secs(5),
+        crate::bounded_command::MAX_OUTPUT_BYTES,
     )
     .is_ok_and(|output| {
         output.status.success()

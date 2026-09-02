@@ -14,7 +14,12 @@ pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 ///
 /// The command runs in its own process group. A timeout or output overflow
 /// terminates that group, reaps the direct child, and joins both drainers.
-pub fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Output> {
+/// Production probes should pass [`MAX_OUTPUT_BYTES`].
+pub fn output_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> io::Result<Output> {
     configure_process_group(&mut command);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
@@ -28,8 +33,12 @@ pub fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Resul
         .ok_or_else(|| io::Error::other("bounded command stderr pipe unavailable"))?;
     let total = Arc::new(AtomicUsize::new(0));
     let output_exceeded = Arc::new(AtomicBool::new(false));
-    let stdout_reader = match spawn_reader(stdout, Arc::clone(&total), Arc::clone(&output_exceeded))
-    {
+    let stdout_reader = match spawn_reader(
+        stdout,
+        Arc::clone(&total),
+        Arc::clone(&output_exceeded),
+        max_output_bytes,
+    ) {
         Ok(reader) => reader,
         Err(error) => {
             terminate_process_group(&mut child);
@@ -37,7 +46,12 @@ pub fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Resul
             return Err(error);
         }
     };
-    let stderr_reader = match spawn_reader(stderr, total, Arc::clone(&output_exceeded)) {
+    let stderr_reader = match spawn_reader(
+        stderr,
+        total,
+        Arc::clone(&output_exceeded),
+        max_output_bytes,
+    ) {
         Ok(reader) => reader,
         Err(error) => {
             terminate_process_group(&mut child);
@@ -54,14 +68,14 @@ pub fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Resul
             let status = child.wait();
             let _ = join_readers(stdout_reader, stderr_reader);
             status?;
-            return Err(output_limit_error());
+            return Err(output_limit_error(max_output_bytes));
         }
 
         match child.try_wait() {
             Ok(Some(status)) => {
                 let (stdout, stderr) = join_readers(stdout_reader, stderr_reader)?;
                 if output_exceeded.load(Ordering::Acquire) {
-                    return Err(output_limit_error());
+                    return Err(output_limit_error(max_output_bytes));
                 }
                 return Ok(Output {
                     status,
@@ -94,13 +108,14 @@ pub fn output_with_timeout(mut command: Command, timeout: Duration) -> io::Resul
 
 /// Run a command with the same bounds when only its exit status is needed.
 pub fn status_with_timeout(command: Command, timeout: Duration) -> io::Result<ExitStatus> {
-    output_with_timeout(command, timeout).map(|output| output.status)
+    output_with_timeout(command, timeout, MAX_OUTPUT_BYTES).map(|output| output.status)
 }
 
 fn spawn_reader<R: Read + Send + 'static>(
     mut reader: R,
     total: Arc<AtomicUsize>,
     output_exceeded: Arc<AtomicBool>,
+    max_output_bytes: usize,
 ) -> io::Result<JoinHandle<io::Result<Vec<u8>>>> {
     thread::Builder::new().spawn(move || {
         let mut output = Vec::new();
@@ -111,7 +126,7 @@ fn spawn_reader<R: Read + Send + 'static>(
                 return Ok(output);
             }
             let start = total.fetch_add(read, Ordering::Relaxed);
-            let remaining = MAX_OUTPUT_BYTES.saturating_sub(start);
+            let remaining = max_output_bytes.saturating_sub(start);
             output.extend_from_slice(&buffer[..read.min(remaining)]);
             if read > remaining {
                 output_exceeded.store(true, Ordering::Release);
@@ -174,8 +189,8 @@ fn terminate_process_group(child: &mut Child) {
     }
 }
 
-fn output_limit_error() -> io::Error {
+fn output_limit_error(max_output_bytes: usize) -> io::Error {
     io::Error::other(format!(
-        "bounded command output limit of {MAX_OUTPUT_BYTES} bytes exceeded"
+        "bounded command output limit of {max_output_bytes} bytes exceeded"
     ))
 }

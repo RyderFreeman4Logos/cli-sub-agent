@@ -51,8 +51,12 @@ fn assert_overlay_bind_fd_survives_exec(plan: &IsolationPlan, fd: i32, expected:
     crate::bwrap::inherit_sandbox_bind_fds(&mut probe, plan);
     probe.env_clear();
     probe.env("PATH", "/usr/bin:/bin");
-    let output = output_with_timeout(probe, std::time::Duration::from_secs(5))
-        .expect("overlay FD exec probe must complete within its bound");
+    let output = output_with_timeout(
+        probe,
+        std::time::Duration::from_secs(5),
+        crate::bounded_command::MAX_OUTPUT_BYTES,
+    )
+    .expect("overlay FD exec probe must complete within its bound");
     assert!(
         output.status.success(),
         "overlay --ro-bind-fd {fd} must survive exec without nested bwrap; stderr={}",
