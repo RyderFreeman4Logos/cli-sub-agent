@@ -64,15 +64,19 @@ fn has_bwrap() -> bool {
 /// Check that bwrap supports the descriptor-backed bind options emitted by
 /// [`crate::bwrap::BwrapCommandBuilder`].
 fn has_bwrap_bind_fd_options() -> bool {
-    Command::new("bwrap")
-        .arg("--help")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("--ro-bind-fd")
-                && String::from_utf8_lossy(&output.stdout).contains("--bind-fd")
-        })
+    crate::bounded_command::output_with_timeout(
+        {
+            let mut command = Command::new("bwrap");
+            command.arg("--help").stdin(std::process::Stdio::null());
+            command
+        },
+        std::time::Duration::from_secs(5),
+    )
+    .is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("--ro-bind-fd")
+            && String::from_utf8_lossy(&output.stdout).contains("--bind-fd")
+    })
 }
 
 /// Check whether unprivileged user namespaces are functional.
@@ -246,5 +250,36 @@ mod tests {
                 "missing sysctl should not be treated as restricted"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn endless_bwrap_help_probe_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = PATH_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let bwrap = temp.path().join("bwrap");
+        std::fs::write(
+            &bwrap,
+            "#!/bin/sh\nwhile :; do printf endless-output; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH");
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            old_path.as_deref().unwrap_or_default().to_string_lossy()
+        );
+        let _path = PathGuard(old_path);
+        // SAFETY: PATH_LOCK serializes PATH mutation in this test module.
+        unsafe { std::env::set_var("PATH", path) };
+
+        assert_ne!(
+            probe_capability(),
+            FilesystemCapability::Bwrap,
+            "endless bwrap --help output must fail closed"
+        );
     }
 }
