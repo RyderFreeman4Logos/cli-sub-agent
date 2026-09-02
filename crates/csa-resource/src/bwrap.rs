@@ -109,6 +109,13 @@ impl BwrapCommandBuilder {
         // Read-only readable paths. Writable grants already imply readability;
         // adding an overlapping read-only bind afterward would downgrade the
         // writable mount.
+        #[cfg(unix)]
+        let overlay_files: Vec<std::sync::Arc<std::fs::File>> = self
+            .readable_paths
+            .iter()
+            .filter(|path| path.overrides_writable_mount())
+            .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
+            .collect();
         for path in &self.readable_paths {
             if self.is_covered_by_writable_path(path) {
                 continue;
@@ -116,7 +123,6 @@ impl BwrapCommandBuilder {
             // Use the bind source pinned at validation/add time. Re-resolving
             // here would reopen the #3102 TOCTOU after a symlink replacement.
             let resolved = path.bind_source();
-            let s = resolved.to_string_lossy();
             assert!(
                 path.requested() != tmp_prefix,
                 "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
@@ -139,7 +145,23 @@ impl BwrapCommandBuilder {
             {
                 cmd.args(["--dir", &parent.to_string_lossy()]);
             }
-            cmd.args(["--ro-bind", &s, &dest_path.to_string_lossy()]);
+            #[cfg(unix)]
+            if path.overrides_writable_mount()
+                && let Some(file) = path.pinned_source_file()
+            {
+                use std::os::fd::AsRawFd;
+                cmd.args([
+                    "--ro-bind-fd",
+                    &file.as_raw_fd().to_string(),
+                    &dest_path.to_string_lossy(),
+                ]);
+                continue;
+            }
+            cmd.args([
+                "--ro-bind",
+                &resolved.to_string_lossy(),
+                &dest_path.to_string_lossy(),
+            ]);
         }
 
         for path in &self.writable_paths {
@@ -184,6 +206,24 @@ impl BwrapCommandBuilder {
         cmd.arg("--");
         cmd.arg(&self.tool_binary);
         cmd.args(&self.tool_args);
+
+        #[cfg(unix)]
+        if !overlay_files.is_empty() {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+            // SAFETY: the closure only clears FD_CLOEXEC on descriptors this
+            // command already holds so bwrap can inherit `--ro-bind-fd` sources.
+            unsafe {
+                cmd.pre_exec(move || {
+                    for file in &overlay_files {
+                        if libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
 
         cmd
     }

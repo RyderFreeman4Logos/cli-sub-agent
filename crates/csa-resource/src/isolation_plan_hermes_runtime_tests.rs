@@ -1,7 +1,7 @@
 //! Hermes sandbox runtime overlay regressions (#3148).
 
 use super::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
@@ -71,11 +71,11 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
         .expect("Hermes logs must be mounted writable");
     let readonly_config = args
         .windows(3)
-        .position(|window| window[0] == "--ro-bind" && window[2] == config.as_ref())
+        .position(|window| window[0] == "--ro-bind-fd" && window[2] == config.as_ref())
         .expect("Hermes config must override the writable parent with a read-only mount");
     let readonly_home = args
         .windows(3)
-        .position(|window| window[0] == "--ro-bind" && window[2] == hermes_home.as_ref())
+        .position(|window| window[0] == "--ro-bind-fd" && window[2] == hermes_home.as_ref())
         .expect("Hermes home must be re-bound read-only so absent names stay uncreatable");
     assert!(
         readonly_home < writable_logs,
@@ -310,4 +310,180 @@ fn test_tool_defaults_hermes_plans_execution_env_home_without_ambient_home() {
         !plan.writable_paths.contains(&configured),
         "Hermes home itself must not stay a whole-directory writable bind"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_tool_defaults_hermes_rejects_runtime_logs_symlink_outside_home() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-logs-symlink-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    let outside = temp.path().join("outside-secret");
+    std::fs::create_dir_all(&hermes_home).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("id_rsa"), "secret\n").unwrap();
+    symlink(&outside, hermes_home.join("logs")).unwrap();
+    let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+    let result = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_tool_defaults(
+            "hermes",
+            Path::new("/tmp/project"),
+            Path::new("/tmp/session"),
+        )
+        .build();
+
+    if let Ok(plan) = &result {
+        if let Some(command) = crate::from_isolation_plan(plan, "/usr/bin/tool", &[]) {
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let outside = outside.to_string_lossy();
+            assert!(
+                !args
+                    .windows(3)
+                    .any(|window| window[0] == "--bind" && window[1] == outside.as_ref()),
+                "logs symlink must not emit an outside writable bind; args: {args:?}"
+            );
+        }
+    }
+    let error = result.expect_err("logs symlink outside Hermes home must fail preflight");
+    assert!(
+        error
+            .to_string()
+            .contains("hermes sandbox preflight failed"),
+        "runtime leaf symlink must fail closed: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_tool_defaults_hermes_rejects_dangling_sqlite_sidecar_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-sqlite-symlink-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+
+    for name in [
+        "state.db",
+        "state.db-wal",
+        "state.db-shm",
+        "state.db-journal",
+    ] {
+        let hermes_home = temp.path().join(name);
+        std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+        let outside = temp.path().join(format!("{name}-outside"));
+        assert!(
+            !outside.exists(),
+            "dangling sqlite target must start absent"
+        );
+        symlink(&outside, hermes_home.join(name)).unwrap();
+        let _hermes_home_env = ScopedEnvVar::set("HERMES_HOME", &hermes_home);
+
+        let result = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults(
+                "hermes",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/session"),
+            )
+            .build();
+
+        assert!(
+            !outside.exists(),
+            "dangling sqlite sidecar symlink must not create {name} target"
+        );
+        let error = result.expect_err("dangling sqlite sidecar symlink must fail preflight");
+        assert!(
+            error
+                .to_string()
+                .contains("hermes sandbox preflight failed"),
+            "dangling sqlite sidecar must fail closed: {error:#}"
+        );
+    }
+}
+
+#[test]
+fn test_tool_defaults_hermes_rejects_relative_environment_paths() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let rel = format!(
+        "csa-hermes-rel-{}",
+        temp.path()
+            .file_name()
+            .expect("tempdir name")
+            .to_string_lossy()
+    );
+    struct RemoveRel(PathBuf);
+    impl Drop for RemoveRel {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveRel(PathBuf::from(&rel));
+    std::fs::create_dir_all(Path::new(&rel).join("logs")).unwrap();
+    std::fs::create_dir_all(Path::new(&rel).join(".hermes/logs")).unwrap();
+
+    for (label, set_ambient_hermes_home, execution_env) in [
+        (
+            "execution-env HERMES_HOME",
+            false,
+            Some(std::collections::HashMap::from([(
+                "HERMES_HOME".to_string(),
+                rel.clone(),
+            )])),
+        ),
+        ("ambient HERMES_HOME", true, None),
+        (
+            "execution-env HOME",
+            false,
+            Some(std::collections::HashMap::from([(
+                "HOME".to_string(),
+                rel.clone(),
+            )])),
+        ),
+    ] {
+        let _ambient = if set_ambient_hermes_home {
+            ScopedEnvVar::set("HERMES_HOME", &rel)
+        } else {
+            ScopedEnvVar::unset("HERMES_HOME")
+        };
+
+        let built = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_execution_env(execution_env.as_ref())
+            .with_tool_defaults(
+                "hermes",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/session"),
+            )
+            .build();
+
+        let message = match built {
+            Err(error) => error.to_string(),
+            Ok(plan) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            })) {
+                Ok(_) => "produced a sandbox command".to_string(),
+                Err(_) => "panicked at bwrap absolute-path assertion".to_string(),
+            },
+        };
+        assert!(
+            message.contains("hermes sandbox preflight failed"),
+            "relative {label} must fail preflight, got {message}"
+        );
+    }
 }

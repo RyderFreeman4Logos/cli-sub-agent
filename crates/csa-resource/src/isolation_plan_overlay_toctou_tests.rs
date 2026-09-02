@@ -1,21 +1,48 @@
 //! Replacement-interleaving regressions for read-only overlay pinning (#3148).
 
 use super::*;
+use crate::sandbox::ResourceCapability;
 use std::path::Path;
 
-struct OverlayMetadataRaceGuard;
-
-impl OverlayMetadataRaceGuard {
-    fn arm(inject: fn(&Path)) -> Self {
-        super::super::readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(Some(inject)));
-        Self
+fn overlay_bind_plan(overlay: ReadablePath) -> IsolationPlan {
+    IsolationPlan {
+        resource: ResourceCapability::None,
+        filesystem: FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        readable_paths: vec![overlay],
+        env_overrides: std::collections::HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
+        user_daemon_ipc: false,
     }
 }
 
-impl Drop for OverlayMetadataRaceGuard {
-    fn drop(&mut self) {
-        super::super::readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(None));
-    }
+fn command_args(command: &std::process::Command) -> Vec<String> {
+    command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn assert_overlay_bind_uses_pinned_identity(args: &[String], dest: &Path, forbidden_source: &Path) {
+    let dest = dest.to_string_lossy();
+    let forbidden = forbidden_source.to_string_lossy();
+    assert!(
+        args.windows(3)
+            .any(|window| window[0] == "--ro-bind-fd" && window[2] == dest.as_ref()),
+        "bind after replacement must use pinned fd identity; args: {args:?}"
+    );
+    assert!(
+        !args.windows(3).any(|window| window[0] == "--ro-bind"
+            && (window[1] == dest.as_ref() || window[1] == forbidden.as_ref())),
+        "bind after replacement must not re-resolve the replaced path; args: {args:?}"
+    );
 }
 
 fn replace_leaf_with_sibling_symlink(path: &Path) {
@@ -60,10 +87,15 @@ fn try_pinned_readonly_overlay_fails_closed_when_leaf_replaced_with_symlink() {
     let config = temp.path().join("config.yaml");
     std::fs::write(&config, "model: test\n").expect("write regular overlay leaf");
 
-    let _race = OverlayMetadataRaceGuard::arm(replace_leaf_with_sibling_symlink);
-    let error = ReadablePath::try_pinned_readonly_overlay(config)
-        .expect_err("replacement interleaving must fail closed before pin");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let overlay = ReadablePath::try_pinned_readonly_overlay(config.clone())
+        .expect("regular overlay leaf must pin before replacement");
+    replace_leaf_with_sibling_symlink(&config);
+    let raced_target = config.with_file_name("overlay-toctou-target");
+    let args = command_args(
+        &crate::from_isolation_plan(&overlay_bind_plan(overlay), "/usr/bin/tool", &[])
+            .expect("pinned overlay must still produce a bwrap command"),
+    );
+    assert_overlay_bind_uses_pinned_identity(&args, &config, &raced_target);
 }
 
 #[cfg(unix)]
@@ -76,15 +108,14 @@ fn hermes_preflight_fails_closed_when_overlay_leaf_replaced_with_symlink() {
         .expect("tempdir outside /tmp overlay");
     let hermes_home = temp.path().join("home");
     std::fs::create_dir_all(&hermes_home).expect("create Hermes home");
-    std::fs::write(hermes_home.join("config.yaml"), "model: test\n")
-        .expect("write regular Hermes config");
+    let config = hermes_home.join("config.yaml");
+    std::fs::write(&config, "model: test\n").expect("write regular Hermes config");
     let execution_env = std::collections::HashMap::from([(
         "HERMES_HOME".to_string(),
         hermes_home.to_string_lossy().into_owned(),
     )]);
 
-    let _race = OverlayMetadataRaceGuard::arm(replace_leaf_with_sibling_symlink);
-    let error = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
         .with_filesystem_capability(FilesystemCapability::Bwrap)
         .with_execution_env(Some(&execution_env))
         .with_tool_defaults(
@@ -93,13 +124,14 @@ fn hermes_preflight_fails_closed_when_overlay_leaf_replaced_with_symlink() {
             Path::new("/tmp/session"),
         )
         .build()
-        .expect_err("raced Hermes overlay must fail preflight");
-    assert!(
-        error
-            .to_string()
-            .contains("hermes sandbox preflight failed"),
-        "raced overlay must fail closed: {error:#}"
+        .expect("Hermes overlay must pin before replacement");
+    replace_leaf_with_sibling_symlink(&config);
+    let raced_target = config.with_file_name("overlay-toctou-target");
+    let args = command_args(
+        &crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("pinned Hermes overlay must still produce a bwrap command"),
     );
+    assert_overlay_bind_uses_pinned_identity(&args, &config, &raced_target);
 }
 
 #[cfg(unix)]
@@ -113,10 +145,15 @@ fn try_pinned_readonly_overlay_fails_closed_when_directory_replaced_with_symlink
     let profiles = temp.path().join("profiles");
     std::fs::create_dir(&profiles).expect("write overlay directory leaf");
 
-    let _race = OverlayMetadataRaceGuard::arm(replace_directory_leaf_with_sibling_symlink);
-    let error = ReadablePath::try_pinned_readonly_overlay(profiles)
-        .expect_err("directory replacement interleaving must fail closed before pin");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let overlay = ReadablePath::try_pinned_readonly_overlay(profiles.clone())
+        .expect("overlay directory must pin before replacement");
+    replace_directory_leaf_with_sibling_symlink(&profiles);
+    let raced_target = profiles.with_file_name("overlay-toctou-dir-target");
+    let args = command_args(
+        &crate::from_isolation_plan(&overlay_bind_plan(overlay), "/usr/bin/tool", &[])
+            .expect("pinned overlay directory must still produce a bwrap command"),
+    );
+    assert_overlay_bind_uses_pinned_identity(&args, &profiles, &raced_target);
 }
 
 #[cfg(unix)]

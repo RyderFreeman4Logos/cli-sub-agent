@@ -39,6 +39,18 @@ fn overlay_protection_error(error: std::io::Error) -> anyhow::Error {
     )
 }
 
+fn reject_runtime_leaf_symlink(hermes_home: &Path, leaf: &Path) -> anyhow::Result<()> {
+    match fs::symlink_metadata(leaf) {
+        Ok(metadata) if metadata.file_type().is_symlink() => anyhow::bail!(
+            "hermes sandbox preflight failed: runtime path {} is a symlink",
+            leaf.display()
+        ),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(overlay_enumeration_error(hermes_home, error)),
+    }
+}
+
 pub(super) fn add_hermes_runtime_paths(
     filesystem: FilesystemCapability,
     home: Option<&Path>,
@@ -64,6 +76,9 @@ pub(super) fn add_hermes_runtime_paths(
     } else {
         return Ok(());
     };
+    if !hermes_home.is_absolute() {
+        anyhow::bail!("hermes sandbox preflight failed: {source} must be an absolute path");
+    }
     let logs = hermes_home.join("logs");
     required_writable_dirs.push(RequiredWritableDir {
         path: logs.clone(),
@@ -78,6 +93,7 @@ pub(super) fn add_hermes_runtime_paths(
     }
 
     let writable_start = writable_paths.len();
+    reject_runtime_leaf_symlink(&hermes_home, &logs)?;
     if !add_dir_or_creatable_parent(writable_paths, &logs) {
         return Ok(());
     }
@@ -86,6 +102,7 @@ pub(super) fn add_hermes_runtime_paths(
         .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
     for name in SQLITE_SIDECARS {
         let sidecar = hermes_home.join(name);
+        reject_runtime_leaf_symlink(&hermes_home, &sidecar)?;
         if !sidecar.exists() {
             fs::write(&sidecar, b"")
                 .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;

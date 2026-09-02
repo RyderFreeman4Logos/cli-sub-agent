@@ -58,6 +58,12 @@ impl ReadablePath {
         self.overrides_writable_mount
     }
 
+    /// Clone the file or directory descriptor pinned during overlay validation.
+    #[cfg(unix)]
+    pub(crate) fn pinned_source_file(&self) -> Option<Arc<File>> {
+        self.source_file.clone()
+    }
+
     /// Clone the descriptor held since validation for a regular-file snapshot.
     ///
     /// The descriptor is opened with component-by-component `openat` walking
@@ -210,6 +216,12 @@ fn pin_readable_source(
         ));
     }
 
+    if expected.st_mode & libc::S_IFMT == libc::S_IFDIR && reject_symlink {
+        let file = open_directory_at(&parent, name)?;
+        confirm_opened_identity(&file, &expected)?;
+        return Ok(Some(Arc::new(file)));
+    }
+
     // Non-regular paths remain path-bound for sandbox mounting. In particular,
     // never read-open FIFOs, sockets, directories, or devices just to classify
     // them.
@@ -218,6 +230,12 @@ fn pin_readable_source(
     }
 
     let file = open_regular_at(&parent, name)?;
+    confirm_opened_identity(&file, &expected)?;
+    Ok(Some(Arc::new(file)))
+}
+
+#[cfg(unix)]
+fn confirm_opened_identity(file: &File, expected: &libc::stat) -> std::io::Result<()> {
     let mut actual = std::mem::MaybeUninit::<libc::stat>::zeroed();
     // SAFETY: `file` is a live descriptor and `actual` points to writable
     // storage for the kernel's stat result.
@@ -233,8 +251,7 @@ fn pin_readable_source(
             "pinned readable file changed while being opened",
         ));
     }
-
-    Ok(Some(Arc::new(file)))
+    Ok(())
 }
 
 #[cfg(unix)]
