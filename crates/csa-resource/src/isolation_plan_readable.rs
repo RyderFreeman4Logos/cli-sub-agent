@@ -23,6 +23,14 @@ use crate::sandbox::ResourceCapability;
 
 use super::runtime_path;
 
+#[cfg(unix)]
+#[path = "isolation_plan_readable_atomic.rs"]
+mod atomic;
+#[cfg(all(test, unix))]
+pub(crate) use atomic::FAIL_ATOMIC_COPY;
+#[cfg(unix)]
+pub(super) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at, remove_file_at};
+
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).
 #[derive(Debug, Clone)]
@@ -319,7 +327,7 @@ fn path_component(name: &std::ffi::OsStr) -> std::io::Result<CString> {
 }
 
 #[cfg(unix)]
-fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+pub(super) fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
     let name = path_component(name)?;
     // SAFETY: `parent` is a live directory descriptor and `name` is a valid
     // NUL-terminated path component.
@@ -342,7 +350,7 @@ fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<F
 }
 
 #[cfg(unix)]
-fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat> {
+pub(super) fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat> {
     let name = path_component(name)?;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
     // SAFETY: `parent` is a live directory descriptor; `name` is a valid path
@@ -363,7 +371,7 @@ fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat>
 }
 
 #[cfg(unix)]
-fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+pub(super) fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
     let name = path_component(name)?;
     // SAFETY: `parent` is a live directory descriptor and `name` is a valid
     // NUL-terminated path component.

@@ -119,6 +119,21 @@ impl Drop for ReaddirErrorAfter {
     }
 }
 
+struct AtomicCopyFailure;
+
+impl AtomicCopyFailure {
+    fn set() -> Self {
+        super::super::readable::FAIL_ATOMIC_COPY.with(|failure| failure.set(true));
+        Self
+    }
+}
+
+impl Drop for AtomicCopyFailure {
+    fn drop(&mut self) {
+        super::super::readable::FAIL_ATOMIC_COPY.with(|failure| failure.set(false));
+    }
+}
+
 fn replace_pinned_home_with_injected_directory(hermes_home: &Path) {
     let parent = hermes_home.parent().expect("Hermes home parent");
     let relocated = parent.join("hermes-home-original");
@@ -270,6 +285,58 @@ fn sqlite_journal_is_not_an_independent_file_mountpoint() {
 
 #[cfg(unix)]
 #[test]
+fn legacy_profile_state_databases_migrate_to_runtime_for_all_supported_layouts() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-profile-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("profiles").join("nested")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("direct")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    let layouts = [
+        (
+            "direct",
+            hermes_home.join("direct/state.db"),
+            b"direct-db".as_slice(),
+        ),
+        (
+            "nested",
+            hermes_home.join("profiles/nested/state.db"),
+            b"nested-db".as_slice(),
+        ),
+        (
+            "flat",
+            hermes_home.join("state.flat.db"),
+            b"flat-db".as_slice(),
+        ),
+    ];
+    for (_, path, contents) in &layouts {
+        std::fs::write(path, contents).unwrap();
+    }
+
+    hermes_plan(&hermes_home).expect("Hermes plan must migrate legacy profiles");
+
+    let runtime = hermes_home.join(".csa-runtime");
+    for (profile, legacy, contents) in &layouts {
+        let resolved = crate::isolation_plan::resolve_hermes_state_db(&hermes_home, Some(profile));
+        let runtime_db = match *profile {
+            "direct" => runtime.join("direct/state.db"),
+            "nested" => runtime.join("profiles/nested/state.db"),
+            "flat" => runtime.join("state.flat.db"),
+            _ => unreachable!(),
+        };
+        assert_eq!(resolved, runtime_db, "{profile} must resolve to runtime DB");
+        assert_eq!(std::fs::read(&runtime_db).unwrap(), *contents);
+        assert_eq!(std::fs::read(legacy).unwrap(), *contents);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn tier4_hermes_rejects_readonly_existing_runtime_backing() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -294,5 +361,80 @@ fn tier4_hermes_rejects_readonly_existing_runtime_backing() {
     assert!(
         error.to_string().contains("not writable"),
         "runtime backing failure must identify writability: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_migration_is_fd_pinned_and_atomic_on_copy_failure() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-atomic-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("profiles").join("nested")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    std::fs::write(hermes_home.join("state.db"), b"legacy-db").unwrap();
+    std::fs::write(hermes_home.join("state.db-wal"), b"legacy-wal").unwrap();
+    std::fs::write(hermes_home.join("state.db-shm"), b"legacy-shm").unwrap();
+    std::fs::write(hermes_home.join("state.db-journal"), b"legacy-journal").unwrap();
+
+    let _failure = AtomicCopyFailure::set();
+    let error = hermes_plan(&hermes_home).expect_err("injected copy failure must fail closed");
+    assert!(error.to_string().contains("not writable"));
+    assert!(!hermes_home.join(".csa-runtime/state.db").exists());
+    assert!(!hermes_home.join(".csa-runtime/state.db-wal").exists());
+    assert_eq!(
+        std::fs::read(hermes_home.join("state.db")).unwrap(),
+        b"legacy-db"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-coherent-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    for (suffix, contents) in [
+        ("", b"legacy-db".as_slice()),
+        ("-wal", b"legacy-wal".as_slice()),
+        ("-shm", b"legacy-shm".as_slice()),
+        ("-journal", b"legacy-journal".as_slice()),
+    ] {
+        std::fs::write(hermes_home.join(format!("state.db{suffix}")), contents).unwrap();
+    }
+    let runtime = hermes_home.join(".csa-runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::write(runtime.join("state.db-wal"), b"stale-wal").unwrap();
+    std::fs::write(runtime.join("state.db-shm"), b"stale-shm").unwrap();
+    std::fs::write(runtime.join("state.db-journal"), b"stale-journal").unwrap();
+
+    let _replacement = AfterHermesHomePinned::set(replace_pinned_home_with_injected_directory);
+    hermes_plan(&hermes_home).expect("pinned legacy generation must survive pathname replacement");
+    let relocated = temp.path().join("hermes-home-original/.csa-runtime");
+    for (suffix, contents) in [
+        ("", b"legacy-db".as_slice()),
+        ("-wal", b"legacy-wal".as_slice()),
+        ("-shm", b"legacy-shm".as_slice()),
+        ("-journal", b"legacy-journal".as_slice()),
+    ] {
+        assert_eq!(
+            std::fs::read(relocated.join(format!("state.db{suffix}"))).unwrap(),
+            contents
+        );
+    }
+    assert_eq!(
+        std::fs::read(temp.path().join("hermes-home-original/state.db")).unwrap(),
+        b"legacy-db"
     );
 }

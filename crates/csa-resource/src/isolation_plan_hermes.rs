@@ -3,7 +3,10 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+#[cfg(unix)]
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::filesystem_sandbox::FilesystemCapability;
@@ -54,15 +57,247 @@ pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>)
         .unwrap_or(authoritative)
 }
 
-fn seed_runtime_sqlite_sidecars(hermes_home: &Path, runtime_home: &Path) -> anyhow::Result<()> {
-    for name in SQLITE_SIDECARS {
-        let src = hermes_home.join(name);
-        let dest = runtime_home.join(name);
-        if dest.exists() || !src.exists() {
+#[cfg(unix)]
+fn sqlite_generation_names(base: &OsStr) -> Vec<OsString> {
+    let mut names = Vec::with_capacity(SQLITE_SIDECARS.len());
+    names.push(base.to_os_string());
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut name = base.to_os_string();
+        name.push(suffix);
+        names.push(name);
+    }
+    names
+}
+
+#[cfg(unix)]
+fn is_regular(stat: &libc::stat) -> bool {
+    stat.st_mode & libc::S_IFMT == libc::S_IFREG
+}
+
+#[cfg(unix)]
+fn remove_if_present(parent: &File, name: &OsStr) -> anyhow::Result<()> {
+    match readable::stat_at(parent, name) {
+        Ok(stat) if is_regular(&stat) => readable::remove_file_at(parent, name)?,
+        Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn runtime_generation_present(parent: &File, base: &OsStr) -> anyhow::Result<bool> {
+    let names = sqlite_generation_names(base);
+    let database_present = match readable::stat_at(parent, &names[0]) {
+        Ok(stat) if is_regular(&stat) => true,
+        Ok(_) => anyhow::bail!("SQLite state database is not a regular file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    for name in names.iter().skip(1) {
+        match readable::stat_at(parent, name) {
+            Ok(stat) if is_regular(&stat) => {
+                if !database_present {
+                    readable::remove_file_at(parent, name)?;
+                }
+            }
+            Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(database_present)
+}
+
+#[cfg(unix)]
+fn cleanup_runtime_generation(parent: &File, base: &OsStr) {
+    for name in sqlite_generation_names(base) {
+        let _ = remove_if_present(parent, &name);
+    }
+}
+
+#[cfg(unix)]
+fn migrate_sqlite_generation(
+    source_parent: &File,
+    destination_parent: &File,
+    base: &OsStr,
+    source_database: File,
+    destination_path: &Path,
+) -> anyhow::Result<()> {
+    let names = sqlite_generation_names(base);
+    let mut source_members = vec![(names[0].clone(), source_database)];
+    for name in names.iter().skip(1) {
+        if let Some(file) = readable::open_pinned_regular_at(source_parent, name)? {
+            source_members.push((name.clone(), file));
+        }
+    }
+    if runtime_generation_present(destination_parent, base)? {
+        return Ok(());
+    }
+    let result = (|| {
+        for (name, source) in source_members.iter().skip(1) {
+            readable::copy_pinned_file_atomic(source, destination_parent, name)?;
+        }
+        readable::copy_pinned_file_atomic(&source_members[0].1, destination_parent, &names[0])?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        cleanup_runtime_generation(destination_parent, base);
+        return Err(runtime_backing_error(destination_path, error));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn migrate_profile_directory(
+    source_parent: &File,
+    destination_parent: &File,
+    name: &OsStr,
+    destination_path: &Path,
+) -> anyhow::Result<()> {
+    let source_profile = match readable::open_directory_at(source_parent, name) {
+        Ok(directory) => directory,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::NotADirectory
+                    | std::io::ErrorKind::InvalidInput
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Some(database) = readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?
+    else {
+        return Ok(());
+    };
+    let destination_profile = readable::open_or_create_writable_dir_at(destination_parent, name)
+        .map_err(|error| runtime_backing_error(destination_path, error))?;
+    migrate_sqlite_generation(
+        &source_profile,
+        &destination_profile,
+        OsStr::new("state.db"),
+        database,
+        destination_path,
+    )
+}
+
+#[cfg(unix)]
+fn migrate_legacy_sqlite(
+    home_fd: &File,
+    runtime_home_fd: &File,
+    names: &[OsString],
+    hermes_home: &Path,
+) -> anyhow::Result<()> {
+    if let Some(database) = readable::open_pinned_regular_at(home_fd, OsStr::new("state.db"))? {
+        migrate_sqlite_generation(
+            home_fd,
+            runtime_home_fd,
+            OsStr::new("state.db"),
+            database,
+            &hermes_home.join(RUNTIME_BACKING).join("state.db"),
+        )?;
+    }
+    for name in names {
+        if name == OsStr::new(RUNTIME_BACKING) {
             continue;
         }
-        fs::copy(&src, &dest).map_err(|error| runtime_backing_error(&dest, error))?;
+        if name.to_string_lossy().starts_with("state.") && name.to_string_lossy().ends_with(".db") {
+            let Some(database) = readable::open_pinned_regular_at(home_fd, name)? else {
+                continue;
+            };
+            migrate_sqlite_generation(
+                home_fd,
+                runtime_home_fd,
+                name,
+                database,
+                &hermes_home.join(RUNTIME_BACKING).join(name),
+            )?;
+        }
+        migrate_profile_directory(
+            home_fd,
+            runtime_home_fd,
+            name,
+            &hermes_home.join(RUNTIME_BACKING).join(name),
+        )?;
     }
+    let profiles = match readable::open_directory_at(home_fd, OsStr::new("profiles")) {
+        Ok(directory) => directory,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::NotADirectory
+                    | std::io::ErrorKind::InvalidInput
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let profile_names = readable::directory_entry_names(&profiles)
+        .map_err(|error| overlay_enumeration_error(&hermes_home.join("profiles"), error))?;
+    let mut destination_profiles = None;
+    for name in profile_names {
+        let source_profile = match readable::open_directory_at(&profiles, &name) {
+            Ok(directory) => directory,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::NotADirectory
+                        | std::io::ErrorKind::InvalidInput
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let Some(database) =
+            readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?
+        else {
+            continue;
+        };
+        if destination_profiles.is_none() {
+            destination_profiles = Some(
+                readable::open_or_create_writable_dir_at(runtime_home_fd, OsStr::new("profiles"))
+                    .map_err(|error| {
+                        runtime_backing_error(&hermes_home.join(RUNTIME_BACKING), error)
+                    }),
+            );
+        }
+        let destination_profiles = match destination_profiles.as_ref() {
+            Some(Ok(directory)) => directory,
+            Some(Err(error)) => return Err(anyhow::anyhow!("{error}")),
+            None => unreachable!("destination profiles is initialized above"),
+        };
+        let destination_path = hermes_home
+            .join(RUNTIME_BACKING)
+            .join("profiles")
+            .join(&name);
+        let destination_profile =
+            readable::open_or_create_writable_dir_at(destination_profiles, &name)
+                .map_err(|error| runtime_backing_error(&destination_path, error))?;
+        migrate_sqlite_generation(
+            &source_profile,
+            &destination_profile,
+            OsStr::new("state.db"),
+            database,
+            &destination_path.join("state.db"),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn migrate_legacy_sqlite(
+    _home_fd: &(),
+    _runtime_home_fd: &(),
+    _names: &[OsString],
+    _hermes_home: &Path,
+) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -209,10 +444,10 @@ pub(super) fn add_hermes_runtime_paths(
             readable::reject_symlink_leaf_at(&runtime_home_fd, name.as_ref())
                 .map_err(|error| runtime_leaf_error(&hermes_home.join(name), error))?;
         }
-        seed_runtime_sqlite_sidecars(&real_home, &real_home.join(RUNTIME_BACKING))?;
         let names = readable::directory_entry_names(&home_fd)
             .inspect_err(|_| rollback(writable_paths, readable_paths))
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+        migrate_legacy_sqlite(&home_fd, &runtime_home_fd, &names, &hermes_home)?;
         let mut protected = Vec::new();
         for name in &names {
             let name_lossy = name.to_string_lossy();

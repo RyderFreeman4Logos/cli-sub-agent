@@ -47,15 +47,19 @@ fn sandbox_start_restore_threads_and_recall_share_physical_state_db_including_pr
 
     let hermes_home = temp.path().join("hermes");
     std::fs::create_dir_all(hermes_home.join("logs")).expect("create Hermes logs");
+    std::fs::create_dir_all(hermes_home.join("work")).expect("create legacy profile");
     std::fs::write(hermes_home.join("config.yaml"), "model: test\n").expect("write config");
     std::fs::write(hermes_home.join("state.db"), b"legacy-root").expect("write legacy root db");
+    std::fs::write(hermes_home.join("work/state.db"), b"legacy-profile")
+        .expect("write legacy profile db");
 
     let start = hermes_plan(&hermes_home);
     let start_runtime = sandbox_runtime_home(&start, &hermes_home);
     let profile_db = start_runtime.join("work").join("state.db");
-    std::fs::create_dir_all(profile_db.parent().expect("profile db parent"))
-        .expect("create sandbox profile dir");
-    std::fs::write(&profile_db, b"sandbox-profile-session").expect("sandbox writes profile db");
+    assert_eq!(
+        std::fs::read(&profile_db).expect("migrate legacy profile db"),
+        b"legacy-profile"
+    );
 
     let restore = hermes_plan(&hermes_home);
     let restore_runtime = sandbox_runtime_home(&restore, &hermes_home);
@@ -85,5 +89,9 @@ fn sandbox_start_restore_threads_and_recall_share_physical_state_db_including_pr
     assert!(
         hermes_home.join("state.db").is_file(),
         "legacy state.db must remain"
+    );
+    assert_eq!(
+        std::fs::read(hermes_home.join("work/state.db")).unwrap(),
+        b"legacy-profile"
     );
 }
