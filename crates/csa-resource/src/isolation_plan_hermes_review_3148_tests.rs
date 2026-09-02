@@ -104,6 +104,21 @@ impl Drop for AfterHermesHomePinned {
     }
 }
 
+struct ReaddirErrorAfter;
+
+impl ReaddirErrorAfter {
+    fn set(entries: usize) -> Self {
+        super::super::readable::READDIR_ERROR_AFTER.with(|after| after.set(Some(entries)));
+        Self
+    }
+}
+
+impl Drop for ReaddirErrorAfter {
+    fn drop(&mut self) {
+        super::super::readable::READDIR_ERROR_AFTER.with(|after| after.set(None));
+    }
+}
+
 fn replace_pinned_home_with_injected_directory(hermes_home: &Path) {
     let parent = hermes_home.parent().expect("Hermes home parent");
     let relocated = parent.join("hermes-home-original");
@@ -188,6 +203,30 @@ fn hermes_config_enumeration_uses_pinned_home_fd_not_pathname() {
 
 #[cfg(unix)]
 #[test]
+fn hermes_config_enumeration_fails_closed_on_midstream_readdir_error() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-home-readdir-error-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    let _fault = ReaddirErrorAfter::set(2);
+
+    let error = hermes_plan(&hermes_home)
+        .expect_err("mid-stream readdir error must not produce a partial Hermes plan");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot enumerate Hermes configuration overlays"),
+        "readdir error must propagate through overlay_enumeration_error: {error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn sqlite_journal_is_not_an_independent_file_mountpoint() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::Builder::new()
@@ -216,5 +255,15 @@ fn sqlite_journal_is_not_an_independent_file_mountpoint() {
     assert!(
         plan.writable_paths.contains(&hermes_home),
         "SQLite journal unlink needs one pinned writable Hermes home directory"
+    );
+    let writable_home = plan
+        .readable_paths
+        .iter()
+        .find(|path| path.writable_bind() && path.requested() == hermes_home)
+        .expect("Hermes home must use a pinned writable bind");
+    assert_eq!(
+        writable_home.bind_source(),
+        hermes_home.join(".csa-runtime"),
+        "Hermes home must bind a dedicated runtime backing, not the host home"
     );
 }

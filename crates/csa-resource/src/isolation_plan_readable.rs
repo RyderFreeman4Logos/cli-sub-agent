@@ -134,9 +134,18 @@ impl ReadablePath {
 
     #[cfg(unix)]
     pub(super) fn pinned_writable(requested: PathBuf, file: File) -> Self {
+        Self::pinned_writable_from(requested.clone(), requested, file)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn pinned_writable_from(
+        requested: PathBuf,
+        bind_source: PathBuf,
+        file: File,
+    ) -> Self {
         Self {
-            requested: requested.clone(),
-            bind_source: requested,
+            requested,
+            bind_source,
             overrides_writable_mount: false,
             writable_bind: true,
             source_file: Some(Arc::new(file)),
@@ -177,6 +186,7 @@ impl ReadablePath {
 thread_local! {
     pub(super) static AFTER_READONLY_OVERLAY_METADATA: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
+    pub(super) static READDIR_ERROR_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -372,6 +382,45 @@ fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<Fil
 }
 
 #[cfg(unix)]
+fn errno_location() -> *mut libc::c_int {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    return unsafe { libc::__errno_location() };
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    return unsafe { libc::__error() };
+}
+
+#[cfg(unix)]
+fn set_errno(value: libc::c_int) {
+    // SAFETY: libc exposes the calling thread's writable errno slot.
+    unsafe { *errno_location() = value };
+}
+
+#[cfg(unix)]
+fn read_directory_entry(dirp: *mut libc::DIR) -> *mut libc::dirent {
+    #[cfg(test)]
+    if READDIR_ERROR_AFTER.with(|after| match after.get() {
+        Some(0) => true,
+        Some(remaining) => {
+            after.set(Some(remaining - 1));
+            false
+        }
+        None => false,
+    }) {
+        set_errno(libc::EIO);
+        return std::ptr::null_mut();
+    }
+    // SAFETY: callers provide a live DIR* and consume the entry before the next call.
+    unsafe { libc::readdir(dirp) }
+}
+
+#[cfg(unix)]
 pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi::OsString>> {
     use std::ffi::{CStr, OsStr};
     use std::os::fd::IntoRawFd;
@@ -390,11 +439,16 @@ pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi:
         return Err(error);
     }
     let mut names = Vec::new();
-    loop {
-        // SAFETY: `dirp` is a live DIR* owned by this function.
-        let entry = unsafe { libc::readdir(dirp) };
+    let result = loop {
+        set_errno(0);
+        let entry = read_directory_entry(dirp);
         if entry.is_null() {
-            break;
+            let error = std::io::Error::last_os_error();
+            break if error.raw_os_error() == Some(0) {
+                Ok(names)
+            } else {
+                Err(error)
+            };
         }
         // SAFETY: readdir returned a dirent with a NUL-terminated d_name.
         let c_name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
@@ -403,12 +457,58 @@ pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi:
             continue;
         }
         names.push(name.to_os_string());
-    }
+    };
     // SAFETY: closedir releases the DIR* and the duplicated descriptor.
-    unsafe {
-        libc::closedir(dirp);
+    let closed = unsafe { libc::closedir(dirp) };
+    if closed != 0 && result.is_ok() {
+        return Err(std::io::Error::last_os_error());
     }
-    Ok(names)
+    result
+}
+
+#[cfg(unix)]
+pub(super) fn create_unlinked_overlay_leaf_at(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> std::io::Result<File> {
+    let name = path_component(name)?;
+    if directory {
+        // SAFETY: parent is live and name is a unique, validated component.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let file = match open_directory_at(parent, std::ffi::OsStr::from_bytes(name.to_bytes())) {
+            Ok(file) => file,
+            Err(error) => {
+                unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+                return Err(error);
+            }
+        };
+        // SAFETY: remove the private placeholder name while retaining its open fd.
+        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(file);
+    }
+    // SAFETY: parent is live; O_EXCL prevents aliasing an attacker-controlled leaf.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is uniquely owned; unlink removes the alternate writable pathname.
+    let file = unsafe { File::from_raw_fd(fd) };
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(file)
 }
 
 #[cfg(unix)]

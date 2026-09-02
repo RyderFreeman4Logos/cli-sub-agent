@@ -18,6 +18,7 @@ const SQLITE_SIDECARS: [&str; 4] = [
     "state.db-shm",
     "state.db-journal",
 ];
+const RUNTIME_BACKING: &str = ".csa-runtime";
 
 #[cfg(test)]
 thread_local! {
@@ -131,11 +132,19 @@ pub(super) fn add_hermes_runtime_paths(
         })?;
         #[cfg(test)]
         run_after_hermes_home_pinned(&hermes_home);
-        let home_writable_fd = home_fd.try_clone().map_err(overlay_protection_error)?;
+        readable::reject_symlink_leaf_at(&home_fd, RUNTIME_BACKING.as_ref())
+            .map_err(|error| runtime_leaf_error(&hermes_home.join(RUNTIME_BACKING), error))?;
+        let runtime_home_fd =
+            readable::open_or_create_writable_dir_at(&home_fd, RUNTIME_BACKING.as_ref())
+                .map_err(overlay_protection_error)?;
+        let runtime_home = real_home.join(RUNTIME_BACKING);
         writable_paths.push(hermes_home.clone());
-        readable_paths.push(ReadablePath::pinned_writable(
+        readable_paths.push(ReadablePath::pinned_writable_from(
             hermes_home.clone(),
-            home_writable_fd,
+            runtime_home,
+            runtime_home_fd
+                .try_clone()
+                .map_err(overlay_protection_error)?,
         ));
         let logs_fd = readable::open_or_create_writable_dir_at(&home_fd, "logs".as_ref())
             .map_err(|error| runtime_leaf_error(&logs, error))?;
@@ -144,23 +153,45 @@ pub(super) fn add_hermes_runtime_paths(
         for name in SQLITE_SIDECARS {
             readable::reject_symlink_leaf_at(&home_fd, name.as_ref())
                 .map_err(|error| runtime_leaf_error(&hermes_home.join(name), error))?;
+            readable::reject_symlink_leaf_at(&runtime_home_fd, name.as_ref())
+                .map_err(|error| runtime_leaf_error(&hermes_home.join(name), error))?;
         }
         let names = readable::directory_entry_names(&home_fd)
             .inspect_err(|_| rollback(writable_paths, readable_paths))
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
         let mut protected = Vec::new();
-        for name in names {
+        for name in &names {
             let name_lossy = name.to_string_lossy();
-            if name_lossy == "logs" || name_lossy.starts_with("state.db") {
+            if name_lossy == "logs"
+                || name_lossy == RUNTIME_BACKING
+                || name_lossy.starts_with("state.db")
+            {
                 continue;
             }
-            let file = readable::open_overlay_leaf_at(&home_fd, &name).map_err(|error| {
+            let file = readable::open_overlay_leaf_at(&home_fd, name).map_err(|error| {
                 rollback(writable_paths, readable_paths);
                 overlay_protection_error(error)
             })?;
             protected.push(ReadablePath::pinned_readonly_overlay(
-                hermes_home.join(&name),
-                real_home.join(&name),
+                hermes_home.join(name),
+                real_home.join(name),
+                file,
+            ));
+        }
+        for (name, directory) in [("config.yaml", false), ("profiles", true)] {
+            if names.iter().any(|candidate| candidate == name) {
+                continue;
+            }
+            let placeholder_name = format!(".csa-absent-{name}-{}", std::process::id());
+            let file = readable::create_unlinked_overlay_leaf_at(
+                &runtime_home_fd,
+                placeholder_name.as_ref(),
+                directory,
+            )
+            .map_err(overlay_protection_error)?;
+            protected.push(ReadablePath::pinned_readonly_overlay(
+                hermes_home.join(name),
+                PathBuf::from("<unlinked>"),
                 file,
             ));
         }

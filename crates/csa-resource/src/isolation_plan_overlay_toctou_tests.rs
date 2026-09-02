@@ -228,10 +228,11 @@ fn test_tool_defaults_hermes_does_not_leave_absent_config_writable() {
         "SQLite journal must be creatable in the pinned writable home"
     );
     assert!(
-        !plan
-            .readable_paths
-            .iter()
-            .any(|path| path.requested() == config.as_path()),
-        "absent Hermes config.yaml must not be overlaid from a replacement path"
+        !hermes_name_is_sandbox_writable(&plan, &config),
+        "absent Hermes config.yaml must not be writable on the host"
+    );
+    assert!(
+        !hermes_name_is_sandbox_writable(&plan, &hermes_home.join("profiles")),
+        "absent Hermes profiles must not be writable on the host"
     );
 }
