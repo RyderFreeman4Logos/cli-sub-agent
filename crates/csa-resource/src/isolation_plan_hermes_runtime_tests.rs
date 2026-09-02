@@ -1,7 +1,7 @@
 //! Hermes sandbox runtime overlay regressions (#3148).
 
 use super::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[test]
 fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
@@ -427,15 +427,6 @@ fn test_tool_defaults_hermes_rejects_relative_environment_paths() {
             .expect("tempdir name")
             .to_string_lossy()
     );
-    struct RemoveRel(PathBuf);
-    impl Drop for RemoveRel {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let _cleanup = RemoveRel(PathBuf::from(&rel));
-    std::fs::create_dir_all(Path::new(&rel).join("logs")).unwrap();
-    std::fs::create_dir_all(Path::new(&rel).join(".hermes/logs")).unwrap();
 
     for (label, set_ambient_hermes_home, execution_env) in [
         (
@@ -486,4 +477,8 @@ fn test_tool_defaults_hermes_rejects_relative_environment_paths() {
             "relative {label} must fail preflight, got {message}"
         );
     }
+    assert!(
+        !Path::new(&rel).exists(),
+        "relative env coverage must not write CWD-relative fixtures"
+    );
 }
