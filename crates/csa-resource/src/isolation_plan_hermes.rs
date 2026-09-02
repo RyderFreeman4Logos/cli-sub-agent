@@ -9,6 +9,13 @@ use crate::filesystem_sandbox::FilesystemCapability;
 use super::codex_paths::RequiredWritableDir;
 use super::{ReadablePath, add_dir_or_creatable_parent};
 
+const SQLITE_SIDECARS: [&str; 4] = [
+    "state.db",
+    "state.db-wal",
+    "state.db-shm",
+    "state.db-journal",
+];
+
 fn nonempty_env<'a>(
     execution_env: Option<&'a HashMap<String, String>>,
     key: &str,
@@ -23,6 +30,12 @@ fn overlay_enumeration_error(hermes_home: &Path, error: std::io::Error) -> anyho
     anyhow::anyhow!(
         "hermes sandbox preflight failed: cannot enumerate Hermes configuration overlays in {}: {error}",
         hermes_home.display()
+    )
+}
+
+fn overlay_protection_error(error: std::io::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "hermes sandbox preflight failed: cannot protect Hermes configuration overlay: {error}"
     )
 }
 
@@ -51,36 +64,62 @@ pub(super) fn add_hermes_runtime_paths(
     } else {
         return Ok(());
     };
+    let logs = hermes_home.join("logs");
     required_writable_dirs.push(RequiredWritableDir {
-        path: hermes_home.clone(),
+        path: logs.clone(),
         source: source.to_string(),
         purpose: "Hermes logs and SQLite state database",
         config_hint: "HERMES_HOME",
         tool_label: "hermes",
     });
 
-    if filesystem != FilesystemCapability::Bwrap
-        || !add_dir_or_creatable_parent(writable_paths, &hermes_home)
-    {
+    if filesystem != FilesystemCapability::Bwrap {
         return Ok(());
     }
 
-    let entries = fs::read_dir(&hermes_home)
+    let writable_start = writable_paths.len();
+    if !add_dir_or_creatable_parent(writable_paths, &logs) {
+        return Ok(());
+    }
+
+    let real_home = fs::canonicalize(&hermes_home)
         .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
-    let mut protected = Vec::new();
+    for name in SQLITE_SIDECARS {
+        let sidecar = hermes_home.join(name);
+        if !sidecar.exists() {
+            fs::write(&sidecar, b"")
+                .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+        }
+        writable_paths.push(sidecar);
+    }
+
+    let home_overlay =
+        ReadablePath::try_pinned_readonly_overlay_from(hermes_home.clone(), real_home.clone())
+            .inspect_err(|_| writable_paths.truncate(writable_start))
+            .map_err(overlay_protection_error)?;
+    let entries = fs::read_dir(&real_home)
+        .inspect_err(|_| writable_paths.truncate(writable_start))
+        .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+    let mut protected = vec![home_overlay];
     for entry in entries {
-        let entry = entry.map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+        let entry = entry.map_err(|error| {
+            writable_paths.truncate(writable_start);
+            overlay_enumeration_error(&hermes_home, error)
+        })?;
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == "logs" || name.starts_with("state.db") {
+        let name_lossy = name.to_string_lossy();
+        if name_lossy == "logs" || name_lossy.starts_with("state.db") {
             continue;
         }
-        let path = entry.path();
-        let path = ReadablePath::try_pinned_readonly_overlay(path).map_err(|error| {
-            writable_paths.retain(|candidate| candidate != &hermes_home);
-            anyhow::anyhow!("hermes sandbox preflight failed: cannot protect Hermes configuration overlay: {error}")
+        let overlay = ReadablePath::try_pinned_readonly_overlay_from(
+            hermes_home.join(&name),
+            real_home.join(&name),
+        )
+        .map_err(|error| {
+            writable_paths.truncate(writable_start);
+            overlay_protection_error(error)
         })?;
-        protected.push(path);
+        protected.push(overlay);
     }
     readable_paths.extend(protected);
     Ok(())

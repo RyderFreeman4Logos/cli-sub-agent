@@ -1,6 +1,8 @@
 use super::*;
 use std::ffi::OsString;
 
+#[path = "isolation_plan_hermes_runtime_tests.rs"]
+mod hermes_runtime_tests;
 #[path = "isolation_plan_overlay_toctou_tests.rs"]
 mod overlay_toctou_tests;
 

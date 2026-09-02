@@ -97,46 +97,12 @@ impl BwrapCommandBuilder {
         // Bind after the fresh virtual filesystems. A writable path below a
         // replaced mount must keep its logical destination; otherwise its
         // canonical destination is hidden once the mount is installed.
+        // Runtime writes nested under a later read-only overlay (Hermes logs /
+        // SQLite sidecars) must follow that overlay or the overlay hides them.
         let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
-            let resolved = resolve_for_bind(path);
-            let s = resolved.to_string_lossy();
-            let fresh_mount_root = fresh_writable_mount_root(path);
-            // Elsewhere, bind at the resolved destination: bwrap cannot
-            // create a mount target by walking a state-path symlink into an
-            // autofs-backed CSA session-state root.
-            let dest_path = if fresh_mount_root.is_some() {
-                path.as_path()
-            } else {
-                resolved.as_path()
-            };
-            let dest = dest_path.to_string_lossy();
-            if let Some(mount_root) = fresh_mount_root {
-                let mount_root = Path::new(mount_root);
-                if path == mount_root {
-                    cmd.args(["--bind", &s, &dest]);
-                    continue;
-                }
-                if let Some(parent) = path.parent()
-                    && parent != mount_root
-                {
-                    let p = parent.to_string_lossy();
-                    cmd.args(["--dir", &p]);
-                }
-                if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
-                    cmd.args(["--dir", &dest]);
-                }
-                cmd.args(["--bind", &s, &dest]);
-            } else {
-                // Ensure the resolved destination parent exists inside the
-                // sandbox. Creating the logical parent can fail when it is a
-                // symlink into an autofs-backed CSA session-state root.
-                if let Some(parent) = dest_path.parent()
-                    && parent != Path::new("/")
-                {
-                    cmd.args(["--dir", &parent.to_string_lossy()]);
-                }
-                cmd.args(["--bind", &s, &dest]);
+            if !self.writable_nested_under_readonly_overlay(path) {
+                Self::bind_writable_path(&mut cmd, path);
             }
         }
 
@@ -174,6 +140,12 @@ impl BwrapCommandBuilder {
                 cmd.args(["--dir", &parent.to_string_lossy()]);
             }
             cmd.args(["--ro-bind", &s, &dest_path.to_string_lossy()]);
+        }
+
+        for path in &self.writable_paths {
+            if self.writable_nested_under_readonly_overlay(path) {
+                Self::bind_writable_path(&mut cmd, path);
+            }
         }
 
         // Extra read-only bind mounts.  When the dest path differs from src
@@ -232,6 +204,56 @@ impl BwrapCommandBuilder {
             let writable_dest = effective_mount_destination(writable_path);
             readable_dest == writable_dest || readable_dest.starts_with(&writable_dest)
         })
+    }
+
+    fn writable_nested_under_readonly_overlay(&self, path: &Path) -> bool {
+        self.readable_paths.iter().any(|readable| {
+            readable.overrides_writable_mount()
+                && path != readable.requested()
+                && path.starts_with(readable.requested())
+        })
+    }
+
+    fn bind_writable_path(cmd: &mut Command, path: &Path) {
+        let resolved = resolve_for_bind(path);
+        let s = resolved.to_string_lossy();
+        let fresh_mount_root = fresh_writable_mount_root(path);
+        // Elsewhere, bind at the resolved destination: bwrap cannot
+        // create a mount target by walking a state-path symlink into an
+        // autofs-backed CSA session-state root.
+        let dest_path = if fresh_mount_root.is_some() {
+            path
+        } else {
+            resolved.as_path()
+        };
+        let dest = dest_path.to_string_lossy();
+        if let Some(mount_root) = fresh_mount_root {
+            let mount_root = Path::new(mount_root);
+            if path == mount_root {
+                cmd.args(["--bind", &s, &dest]);
+                return;
+            }
+            if let Some(parent) = path.parent()
+                && parent != mount_root
+            {
+                let p = parent.to_string_lossy();
+                cmd.args(["--dir", &p]);
+            }
+            if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
+                cmd.args(["--dir", &dest]);
+            }
+            cmd.args(["--bind", &s, &dest]);
+        } else if let Some(parent) = dest_path.parent()
+            && parent != Path::new("/")
+        {
+            // Ensure the resolved destination parent exists inside the
+            // sandbox. Creating the logical parent can fail when it is a
+            // symlink into an autofs-backed CSA session-state root.
+            cmd.args(["--dir", &parent.to_string_lossy()]);
+            cmd.args(["--bind", &s, &dest]);
+        } else {
+            cmd.args(["--bind", &s, &dest]);
+        }
     }
 
     fn sandbox_home(&self, host_home: Option<&Path>) -> Option<PathBuf> {

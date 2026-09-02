@@ -102,14 +102,19 @@ impl ReadablePath {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn try_pinned_readonly_overlay(path: PathBuf) -> std::io::Result<Self> {
-        #[cfg(test)]
-        run_after_readonly_overlay_metadata(&path);
+        Self::try_pinned_readonly_overlay_from(path.clone(), path)
+    }
 
+    pub(super) fn try_pinned_readonly_overlay_from(
+        requested: PathBuf,
+        bind_source: PathBuf,
+    ) -> std::io::Result<Self> {
         #[cfg(unix)]
-        let source_file = open_pinned_overlay_source(&path)?;
+        let source_file = open_pinned_overlay_source(&bind_source)?;
         #[cfg(not(unix))]
-        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        if fs::symlink_metadata(&bind_source)?.file_type().is_symlink() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "read-only overlay cannot protect a symlink directory entry",
@@ -117,8 +122,8 @@ impl ReadablePath {
         }
 
         Ok(Self {
-            requested: path.clone(),
-            bind_source: path,
+            requested,
+            bind_source,
             overrides_writable_mount: true,
             #[cfg(unix)]
             source_file,
@@ -189,7 +194,14 @@ fn pin_readable_source(
             "pinned readable source contains a non-normal final component",
         ));
     };
-    let expected = stat_at(&parent, name)?;
+    let mut expected = stat_at(&parent, name)?;
+    #[cfg(test)]
+    if reject_symlink {
+        run_after_readonly_overlay_metadata(bind_source);
+    }
+    if reject_symlink {
+        expected = stat_at(&parent, name)?;
+    }
 
     if reject_symlink && expected.st_mode & libc::S_IFMT == libc::S_IFLNK {
         return Err(std::io::Error::new(
