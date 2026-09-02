@@ -8,6 +8,8 @@ use std::fs;
 #[cfg(unix)]
 use std::fs::File;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use crate::filesystem_sandbox::FilesystemCapability;
 
@@ -22,6 +24,11 @@ const SQLITE_SIDECARS: [&str; 4] = [
     "state.db-journal",
 ];
 const RUNTIME_BACKING: &str = ".csa-runtime";
+
+#[cfg(unix)]
+// ponytail: process-wide lock; per-generation locks only matter if migrations
+// become a measurable parallelism bottleneck.
+static SQLITE_GENERATION_LOCK: Mutex<()> = Mutex::new(());
 
 fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
     let Some(profile) = hermes_profile.filter(|value| !value.trim().is_empty()) else {
@@ -75,17 +82,6 @@ fn is_regular(stat: &libc::stat) -> bool {
 }
 
 #[cfg(unix)]
-fn remove_if_present(parent: &File, name: &OsStr) -> anyhow::Result<()> {
-    match readable::stat_at(parent, name) {
-        Ok(stat) if is_regular(&stat) => readable::remove_file_at(parent, name)?,
-        Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
 fn runtime_generation_present(parent: &File, base: &OsStr) -> anyhow::Result<bool> {
     let names = sqlite_generation_names(base);
     let database_present = match readable::stat_at(parent, &names[0]) {
@@ -110,14 +106,7 @@ fn runtime_generation_present(parent: &File, base: &OsStr) -> anyhow::Result<boo
 }
 
 #[cfg(unix)]
-fn cleanup_runtime_generation(parent: &File, base: &OsStr) {
-    for name in sqlite_generation_names(base) {
-        let _ = remove_if_present(parent, &name);
-    }
-}
-
-#[cfg(unix)]
-fn migrate_sqlite_generation(
+pub(super) fn migrate_sqlite_generation(
     source_parent: &File,
     destination_parent: &File,
     base: &OsStr,
@@ -131,20 +120,18 @@ fn migrate_sqlite_generation(
             source_members.push((name.clone(), file));
         }
     }
+    let _generation_lock = SQLITE_GENERATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("SQLite generation migration lock is poisoned"))?;
     if runtime_generation_present(destination_parent, base)? {
         return Ok(());
     }
-    let result = (|| {
-        for (name, source) in source_members.iter().skip(1) {
-            readable::copy_pinned_file_atomic(source, destination_parent, name)?;
-        }
-        readable::copy_pinned_file_atomic(&source_members[0].1, destination_parent, &names[0])?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        cleanup_runtime_generation(destination_parent, base);
-        return Err(runtime_backing_error(destination_path, error));
+    for (name, source) in source_members.iter().skip(1) {
+        readable::copy_pinned_file_atomic(source, destination_parent, name)
+            .map_err(|error| runtime_backing_error(destination_path, error))?;
     }
+    readable::copy_pinned_file_atomic(&source_members[0].1, destination_parent, &names[0])
+        .map_err(|error| runtime_backing_error(destination_path, error))?;
     Ok(())
 }
 
@@ -154,7 +141,7 @@ fn migrate_profile_directory(
     destination_parent: &File,
     name: &OsStr,
     destination_path: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<File>> {
     let source_profile = match readable::open_directory_at(source_parent, name) {
         Ok(directory) => directory,
         Err(error)
@@ -165,13 +152,13 @@ fn migrate_profile_directory(
                     | std::io::ErrorKind::InvalidInput
             ) =>
         {
-            return Ok(());
+            return Ok(None);
         }
         Err(error) => return Err(error.into()),
     };
     let Some(database) = readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let destination_profile = readable::open_or_create_writable_dir_at(destination_parent, name)
         .map_err(|error| runtime_backing_error(destination_path, error))?;
@@ -181,7 +168,8 @@ fn migrate_profile_directory(
         OsStr::new("state.db"),
         database,
         destination_path,
-    )
+    )?;
+    Ok(Some(destination_profile))
 }
 
 #[cfg(unix)]
@@ -190,7 +178,8 @@ fn migrate_legacy_sqlite(
     runtime_home_fd: &File,
     names: &[OsString],
     hermes_home: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<(PathBuf, PathBuf, File)>> {
+    let mut writable_profiles = Vec::new();
     if let Some(database) = readable::open_pinned_regular_at(home_fd, OsStr::new("state.db"))? {
         migrate_sqlite_generation(
             home_fd,
@@ -216,12 +205,18 @@ fn migrate_legacy_sqlite(
                 &hermes_home.join(RUNTIME_BACKING).join(name),
             )?;
         }
-        migrate_profile_directory(
+        if let Some(destination_profile) = migrate_profile_directory(
             home_fd,
             runtime_home_fd,
             name,
             &hermes_home.join(RUNTIME_BACKING).join(name),
-        )?;
+        )? {
+            writable_profiles.push((
+                hermes_home.join(name),
+                hermes_home.join(RUNTIME_BACKING).join(name),
+                destination_profile,
+            ));
+        }
     }
     let profiles = match readable::open_directory_at(home_fd, OsStr::new("profiles")) {
         Ok(directory) => directory,
@@ -233,7 +228,7 @@ fn migrate_legacy_sqlite(
                     | std::io::ErrorKind::InvalidInput
             ) =>
         {
-            return Ok(());
+            return Ok(writable_profiles);
         }
         Err(error) => return Err(error.into()),
     };
@@ -287,8 +282,13 @@ fn migrate_legacy_sqlite(
             database,
             &destination_path.join("state.db"),
         )?;
+        writable_profiles.push((
+            hermes_home.join("profiles").join(&name),
+            destination_path,
+            destination_profile,
+        ));
     }
-    Ok(())
+    Ok(writable_profiles)
 }
 
 #[cfg(not(unix))]
@@ -377,6 +377,9 @@ pub(super) fn add_hermes_runtime_paths(
     if !hermes_home.is_absolute() {
         anyhow::bail!("hermes sandbox preflight failed: {source} must be an absolute path");
     }
+    if hermes_home == Path::new("/tmp") {
+        anyhow::bail!("hermes sandbox preflight failed: {source} must not be /tmp itself");
+    }
     let logs = hermes_home.join("logs");
     required_writable_dirs.push(RequiredWritableDir {
         path: logs.clone(),
@@ -447,13 +450,35 @@ pub(super) fn add_hermes_runtime_paths(
         let names = readable::directory_entry_names(&home_fd)
             .inspect_err(|_| rollback(writable_paths, readable_paths))
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
-        migrate_legacy_sqlite(&home_fd, &runtime_home_fd, &names, &hermes_home)?;
+        let migrated_profiles =
+            migrate_legacy_sqlite(&home_fd, &runtime_home_fd, &names, &hermes_home)?;
+        for (requested, bind_source, file) in migrated_profiles {
+            writable_paths.push(requested.clone());
+            readable_paths.push(ReadablePath::pinned_writable_from(
+                requested,
+                bind_source,
+                file,
+            ));
+        }
+        let flat_profile_bases: Vec<OsString> = names
+            .iter()
+            .filter(|name| {
+                let name = name.to_string_lossy();
+                name.strip_prefix("state.")
+                    .is_some_and(|profile| profile.ends_with(".db"))
+            })
+            .cloned()
+            .collect();
         let mut protected = Vec::new();
         for name in &names {
             let name_lossy = name.to_string_lossy();
+            let is_flat_profile_generation = flat_profile_bases.iter().any(|base| {
+                name == base || name_lossy.starts_with(&format!("{}-", base.to_string_lossy()))
+            });
             if name_lossy == "logs"
                 || name_lossy == RUNTIME_BACKING
                 || name_lossy.starts_with("state.db")
+                || is_flat_profile_generation
             {
                 continue;
             }

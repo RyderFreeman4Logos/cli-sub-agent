@@ -168,6 +168,42 @@ fn command_args(plan: &IsolationPlan) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
+#[test]
+fn hermes_tmp_home_fails_preflight_without_panic_or_filesystem_side_effects() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let runtime = Path::new("/tmp/.csa-runtime");
+    let runtime_existed = runtime.exists();
+    let execution_env =
+        std::collections::HashMap::from([("HERMES_HOME".to_string(), "/tmp".to_string())]);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_execution_env(Some(&execution_env))
+            .with_tool_defaults(
+                "hermes",
+                Path::new("/tmp/project"),
+                Path::new("/tmp/session"),
+            )
+            .build()
+    }));
+
+    let plan_result = result.expect("HERMES_HOME=/tmp must not panic");
+    let error = plan_result.expect_err("HERMES_HOME=/tmp must fail preflight");
+    assert!(
+        error
+            .to_string()
+            .contains("hermes sandbox preflight failed"),
+        "unsafe Hermes home must fail with a preflight error: {error:#}"
+    );
+    assert_eq!(
+        runtime.exists(),
+        runtime_existed,
+        "rejecting HERMES_HOME=/tmp must not create or remove runtime state"
+    );
+}
+
 fn is_independent_bind(args: &[String], path: &Path) -> bool {
     let dest = path.to_string_lossy();
     args.windows(3).any(|window| {
@@ -337,6 +373,70 @@ fn legacy_profile_state_databases_migrate_to_runtime_for_all_supported_layouts()
 
 #[cfg(unix)]
 #[test]
+fn migrated_profile_databases_remain_writable_through_bwrap_overlays() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-profile-bwrap-write-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("direct")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("profiles/nested")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    std::fs::write(hermes_home.join("direct/state.db"), b"direct-db\n").unwrap();
+    std::fs::write(hermes_home.join("profiles/nested/state.db"), b"nested-db\n").unwrap();
+    std::fs::write(hermes_home.join("state.flat.db"), b"flat-db\n").unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+
+    let execution_env = std::collections::HashMap::from([(
+        "HERMES_HOME".to_string(),
+        hermes_home.to_string_lossy().into_owned(),
+    )]);
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Bwrap)
+        .with_execution_env(Some(&execution_env))
+        .with_tool_defaults("hermes", &project, Path::new("/tmp/session"))
+        .build()
+        .expect("Hermes plan must migrate profile databases");
+    let mut command = crate::from_isolation_plan(
+        &plan,
+        "/bin/sh",
+        &[
+            "-c".to_string(),
+            format!(
+                "printf 'write\\n' >> '{}/direct/state.db'; printf 'write\\n' >> '{}/profiles/nested/state.db'; printf 'write\\n' >> '{}/state.flat.db'",
+                hermes_home.display(),
+                hermes_home.display(),
+                hermes_home.display(),
+            ),
+        ],
+    )
+    .expect("Hermes plan must produce a bwrap command");
+    let status = command.status().expect("bwrap command must start");
+    assert!(
+        status.success(),
+        "bwrap profile write must succeed: {status}"
+    );
+
+    let runtime = hermes_home.join(".csa-runtime");
+    for (profile, path) in [
+        ("direct", runtime.join("direct/state.db")),
+        ("nested", runtime.join("profiles/nested/state.db")),
+        ("flat", runtime.join("state.flat.db")),
+    ] {
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            contents.ends_with("write\n"),
+            "bwrap write for {profile} must reach runtime DB {path:?}: {contents:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn tier4_hermes_rejects_readonly_existing_runtime_backing() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -391,6 +491,62 @@ fn sqlite_migration_is_fd_pinned_and_atomic_on_copy_failure() {
         std::fs::read(hermes_home.join("state.db")).unwrap(),
         b"legacy-db"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_sqlite_migrations_preserve_one_complete_generation() {
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-concurrent-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let source = temp.path().join("legacy");
+    let destination = temp.path().join("runtime");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    for (suffix, contents) in [
+        ("", b"database".as_slice()),
+        ("-wal", b"wal".as_slice()),
+        ("-shm", b"shm".as_slice()),
+        ("-journal", b"journal".as_slice()),
+    ] {
+        std::fs::write(source.join(format!("state.db{suffix}")), contents).unwrap();
+    }
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let source_parent = std::fs::File::open(&source).unwrap();
+        let destination_parent = std::fs::File::open(&destination).unwrap();
+        let source_database = std::fs::File::open(source.join("state.db")).unwrap();
+        let destination_path = destination.join("state.db");
+        let barrier = std::sync::Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            super::super::hermes_paths::migrate_sqlite_generation(
+                &source_parent,
+                &destination_parent,
+                std::ffi::OsStr::new("state.db"),
+                source_database,
+                &destination_path,
+            )
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    for (suffix, contents) in [
+        ("", b"database".as_slice()),
+        ("-wal", b"wal".as_slice()),
+        ("-shm", b"shm".as_slice()),
+        ("-journal", b"journal".as_slice()),
+    ] {
+        assert_eq!(
+            std::fs::read(destination.join(format!("state.db{suffix}"))).unwrap(),
+            contents,
+            "published SQLite generation must remain complete"
+        );
+    }
 }
 
 #[cfg(unix)]

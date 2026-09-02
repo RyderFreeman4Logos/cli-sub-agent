@@ -248,9 +248,7 @@ impl BwrapCommandBuilder {
 
     fn writable_nested_under_readonly_overlay(&self, path: &Path) -> bool {
         self.readable_paths.iter().any(|readable| {
-            readable.overrides_writable_mount()
-                && path != readable.requested()
-                && path.starts_with(readable.requested())
+            readable.overrides_writable_mount() && path.starts_with(readable.requested())
         })
     }
 
