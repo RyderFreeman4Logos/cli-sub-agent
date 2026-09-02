@@ -49,7 +49,8 @@ exit 1
             .env("CSA_REAL_GIT", "/usr/bin/git")
             .env("CSA_FS_SANDBOXED", "1")
             .env("CSA_SESSION_DIR", &self.session_dir)
-            .env("HOOK_COUNT", &self.hook_count);
+            .env("HOOK_COUNT", &self.hook_count)
+            .env_remove("CSA_GIT_GUARD_HOOK_HELPERS");
         command
     }
 
@@ -69,6 +70,39 @@ exit 1
             .and_then(|value| value.trim().parse().ok())
             .unwrap_or(0)
     }
+}
+
+#[test]
+fn sandbox_commit_fixture_ignores_ambient_hook_helper_state() {
+    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let ambient_temp = tempfile::tempdir().unwrap();
+    let ambient_helper = ambient_temp.path().join("neighbor-hook-helper");
+    write_executable(&ambient_helper, "#!/bin/sh\necho ambient\n");
+    let original = std::env::var_os("CSA_GIT_GUARD_HOOK_HELPERS");
+    // SAFETY: the test holds ENV_LOCK while changing process environment.
+    unsafe {
+        std::env::set_var("CSA_GIT_GUARD_HOOK_HELPERS", &ambient_helper);
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fixture = SandboxCommitFixture::new();
+        assert!(!fixture.run().status.success());
+        assert_eq!(fixture.hook_count(), 1);
+        write_executable(&ambient_helper, "#!/bin/sh\necho changed ambient\n");
+        assert!(!fixture.run().status.success());
+        assert_eq!(
+            fixture.hook_count(),
+            1,
+            "ambient helper state must not change this fixture's retry identity"
+        );
+    }));
+    // SAFETY: restoration is protected by the same ENV_LOCK.
+    unsafe {
+        match original {
+            Some(value) => std::env::set_var("CSA_GIT_GUARD_HOOK_HELPERS", value),
+            None => std::env::remove_var("CSA_GIT_GUARD_HOOK_HELPERS"),
+        }
+    }
+    result.unwrap();
 }
 
 #[test]
@@ -108,6 +142,7 @@ exit 1
             .env("CSA_SESSION_DIR", &session_dir)
             .env("HOOK_COUNT", &hook_count)
             .env("HOOK_HELPER", &hook_helper)
+            .env_remove("CSA_GIT_GUARD_HOOK_HELPERS")
             .output_with_timeout()
             .expect("run guarded commit")
     };

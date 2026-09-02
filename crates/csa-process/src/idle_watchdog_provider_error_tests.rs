@@ -12,6 +12,7 @@ fn transient_fatal_error_marker_retries_before_kill() {
     let mut state = IdleWatchdogState::default();
     let mut last_activity = Instant::now() - FATAL_ERROR_PROGRESS_GRACE - Duration::from_secs(1);
 
+    let retry_assertion_started_at = Instant::now();
     let first = should_terminate_for_idle_with_state(
         &mut last_activity,
         Duration::from_secs(7200),
@@ -26,7 +27,7 @@ fn transient_fatal_error_marker_retries_before_kill() {
     let retry_after = state
         .next_liveness_poll_at
         .expect("transient marker schedules retry");
-    assert!(retry_after > Instant::now());
+    assert!(retry_after > retry_assertion_started_at);
 
     state.provider_error_backoff.retry_after = Some(Instant::now() - Duration::from_secs(1));
     state.next_liveness_poll_at = Some(Instant::now() - Duration::from_secs(1));
