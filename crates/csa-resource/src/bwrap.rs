@@ -160,7 +160,9 @@ impl BwrapCommandBuilder {
             // create its parents explicitly. Elsewhere bind at the resolved
             // destination: creating the logical parent can fail when it is a
             // symlink into an autofs-backed CSA session-state root (#3075).
-            let dest_path = if fresh_writable_mount_root(path.requested()).is_some() {
+            let dest_path = if path.overrides_writable_mount()
+                || fresh_writable_mount_root(path.requested()).is_some()
+            {
                 path.requested()
             } else {
                 resolved

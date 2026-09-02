@@ -1,9 +1,13 @@
 #[cfg(unix)]
 use std::ffi::CString;
+#[cfg(not(unix))]
 use std::fs;
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
+
+#[cfg(test)]
+use std::cell::Cell;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -99,21 +103,59 @@ impl ReadablePath {
     }
 
     pub(super) fn try_pinned_readonly_overlay(path: PathBuf) -> std::io::Result<Self> {
+        #[cfg(test)]
+        run_after_readonly_overlay_metadata(&path);
+
+        #[cfg(unix)]
+        let source_file = open_pinned_overlay_source(&path)?;
+        #[cfg(not(unix))]
         if fs::symlink_metadata(&path)?.file_type().is_symlink() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "read-only overlay cannot protect a symlink directory entry",
             ));
         }
-        let bind_source = runtime_path::canonicalize_or_fallback(&path);
-        let mut readable = Self::try_pinned(path, bind_source)?;
-        readable.overrides_writable_mount = true;
-        Ok(readable)
+
+        Ok(Self {
+            requested: path.clone(),
+            bind_source: path,
+            overrides_writable_mount: true,
+            #[cfg(unix)]
+            source_file,
+        })
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static AFTER_READONLY_OVERLAY_METADATA: Cell<Option<fn(&Path)>> =
+        const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn run_after_readonly_overlay_metadata(path: &Path) {
+    AFTER_READONLY_OVERLAY_METADATA.with(|hook| {
+        if let Some(inject) = hook.get() {
+            inject(path);
+        }
+    });
 }
 
 #[cfg(unix)]
 fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> {
+    pin_readable_source(bind_source, false)
+}
+
+#[cfg(unix)]
+fn open_pinned_overlay_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> {
+    pin_readable_source(bind_source, true)
+}
+
+#[cfg(unix)]
+fn pin_readable_source(
+    bind_source: &Path,
+    reject_symlink: bool,
+) -> std::io::Result<Option<Arc<File>>> {
     let mut components = bind_source.components();
     if !matches!(components.next(), Some(Component::RootDir)) {
         return Err(std::io::Error::new(
@@ -148,6 +190,13 @@ fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> 
         ));
     };
     let expected = stat_at(&parent, name)?;
+
+    if reject_symlink && expected.st_mode & libc::S_IFMT == libc::S_IFLNK {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a symlink directory entry",
+        ));
+    }
 
     // Non-regular paths remain path-bound for sandbox mounting. In particular,
     // never read-open FIFOs, sockets, directories, or devices just to classify

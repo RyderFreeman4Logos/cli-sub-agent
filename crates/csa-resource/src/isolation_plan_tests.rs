@@ -1,6 +1,9 @@
 use super::*;
 use std::ffi::OsString;
 
+#[path = "isolation_plan_overlay_toctou_tests.rs"]
+mod overlay_toctou_tests;
+
 struct ScopedEnvVar {
     key: &'static str,
     previous: Option<OsString>,
