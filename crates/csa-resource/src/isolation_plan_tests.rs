@@ -3,6 +3,10 @@ use std::ffi::OsString;
 
 #[path = "isolation_plan_hermes_runtime_tests.rs"]
 mod hermes_runtime_tests;
+#[path = "isolation_plan_hermes_runtime_toctou_tests.rs"]
+mod hermes_runtime_toctou_tests;
+#[path = "isolation_plan_overlay_fd_inherit_tests.rs"]
+mod overlay_fd_inherit_tests;
 #[path = "isolation_plan_overlay_toctou_tests.rs"]
 mod overlay_toctou_tests;
 

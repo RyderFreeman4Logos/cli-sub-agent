@@ -52,6 +52,7 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
     assert!(
         plan.readable_paths
             .iter()
+            .filter(|path| !path.writable_bind())
             .all(|path| path != &logs && path != &state_db),
         "Hermes logs and state database must remain writable"
     );
@@ -67,7 +68,9 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
     let config = config.to_string_lossy();
     let writable_logs = args
         .windows(3)
-        .position(|window| window[0] == "--bind" && window[2] == logs.as_ref())
+        .position(|window| {
+            matches!(window[0].as_str(), "--bind" | "--bind-fd") && window[2] == logs.as_ref()
+        })
         .expect("Hermes logs must be mounted writable");
     let readonly_config = args
         .windows(3)

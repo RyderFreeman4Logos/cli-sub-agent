@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 
 use crate::filesystem_sandbox::FilesystemCapability;
 
+use super::ReadablePath;
 use super::codex_paths::RequiredWritableDir;
-use super::{ReadablePath, add_dir_or_creatable_parent};
+use super::readable;
 
 const SQLITE_SIDECARS: [&str; 4] = [
     "state.db",
@@ -39,16 +40,11 @@ fn overlay_protection_error(error: std::io::Error) -> anyhow::Error {
     )
 }
 
-fn reject_runtime_leaf_symlink(hermes_home: &Path, leaf: &Path) -> anyhow::Result<()> {
-    match fs::symlink_metadata(leaf) {
-        Ok(metadata) if metadata.file_type().is_symlink() => anyhow::bail!(
-            "hermes sandbox preflight failed: runtime path {} is a symlink",
-            leaf.display()
-        ),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(overlay_enumeration_error(hermes_home, error)),
-    }
+fn runtime_leaf_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "hermes sandbox preflight failed: runtime path {} is a symlink: {error}",
+        leaf.display()
+    )
 }
 
 pub(super) fn add_hermes_runtime_paths(
@@ -93,34 +89,59 @@ pub(super) fn add_hermes_runtime_paths(
     }
 
     let writable_start = writable_paths.len();
-    reject_runtime_leaf_symlink(&hermes_home, &logs)?;
-    if !add_dir_or_creatable_parent(writable_paths, &logs) {
-        return Ok(());
-    }
+    let readable_start = readable_paths.len();
+    let rollback = |writable_paths: &mut Vec<PathBuf>, readable_paths: &mut Vec<ReadablePath>| {
+        writable_paths.truncate(writable_start);
+        readable_paths.truncate(readable_start);
+    };
 
-    let real_home = fs::canonicalize(&hermes_home)
-        .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
-    for name in SQLITE_SIDECARS {
-        let sidecar = hermes_home.join(name);
-        reject_runtime_leaf_symlink(&hermes_home, &sidecar)?;
-        if !sidecar.exists() {
-            fs::write(&sidecar, b"")
+    let real_home = match fs::canonicalize(&hermes_home) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(&hermes_home)
                 .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
+            fs::canonicalize(&hermes_home)
+                .map_err(|error| overlay_enumeration_error(&hermes_home, error))?
         }
-        writable_paths.push(sidecar);
-    }
-
+        Err(error) => return Err(overlay_enumeration_error(&hermes_home, error)),
+    };
     let home_overlay =
         ReadablePath::try_pinned_readonly_overlay_from(hermes_home.clone(), real_home.clone())
-            .inspect_err(|_| writable_paths.truncate(writable_start))
             .map_err(overlay_protection_error)?;
+
+    #[cfg(unix)]
+    {
+        let home_fd = home_overlay.pinned_source_file().ok_or_else(|| {
+            overlay_protection_error(std::io::Error::other(
+                "Hermes home is not a pinned directory",
+            ))
+        })?;
+        let logs_fd = readable::open_or_create_writable_dir_at(&home_fd, "logs".as_ref())
+            .map_err(|error| runtime_leaf_error(&logs, error))?;
+        writable_paths.push(logs.clone());
+        readable_paths.push(ReadablePath::pinned_writable(logs, logs_fd));
+        for name in SQLITE_SIDECARS {
+            let sidecar = hermes_home.join(name);
+            let sidecar_fd = readable::open_or_create_writable_file_at(&home_fd, name.as_ref())
+                .map_err(|error| runtime_leaf_error(&sidecar, error))?;
+            writable_paths.push(sidecar.clone());
+            readable_paths.push(ReadablePath::pinned_writable(sidecar, sidecar_fd));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!(
+            "hermes sandbox preflight failed: pinning writable Hermes runtime leaves requires unix"
+        );
+    }
+
     let entries = fs::read_dir(&real_home)
-        .inspect_err(|_| writable_paths.truncate(writable_start))
+        .inspect_err(|_| rollback(writable_paths, readable_paths))
         .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
     let mut protected = vec![home_overlay];
     for entry in entries {
         let entry = entry.map_err(|error| {
-            writable_paths.truncate(writable_start);
+            rollback(writable_paths, readable_paths);
             overlay_enumeration_error(&hermes_home, error)
         })?;
         let name = entry.file_name();
@@ -133,7 +154,7 @@ pub(super) fn add_hermes_runtime_paths(
             real_home.join(&name),
         )
         .map_err(|error| {
-            writable_paths.truncate(writable_start);
+            rollback(writable_paths, readable_paths);
             overlay_protection_error(error)
         })?;
         protected.push(overlay);

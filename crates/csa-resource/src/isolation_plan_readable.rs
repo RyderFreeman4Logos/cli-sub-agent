@@ -19,6 +19,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 
 use crate::filesystem_sandbox::FilesystemCapability;
+use crate::sandbox::ResourceCapability;
 
 use super::runtime_path;
 
@@ -29,6 +30,7 @@ pub struct ReadablePath {
     requested: PathBuf,
     bind_source: PathBuf,
     overrides_writable_mount: bool,
+    writable_bind: bool,
     #[cfg(unix)]
     source_file: Option<Arc<File>>,
 }
@@ -38,6 +40,7 @@ impl PartialEq for ReadablePath {
         self.requested == other.requested
             && self.bind_source == other.bind_source
             && self.overrides_writable_mount == other.overrides_writable_mount
+            && self.writable_bind == other.writable_bind
     }
 }
 
@@ -56,6 +59,10 @@ impl ReadablePath {
 
     pub(crate) fn overrides_writable_mount(&self) -> bool {
         self.overrides_writable_mount
+    }
+
+    pub(crate) fn writable_bind(&self) -> bool {
+        self.writable_bind
     }
 
     /// Clone the file or directory descriptor pinned during overlay validation.
@@ -90,6 +97,7 @@ impl ReadablePath {
             requested,
             bind_source,
             overrides_writable_mount: false,
+            writable_bind: false,
             #[cfg(unix)]
             source_file,
         }
@@ -103,9 +111,21 @@ impl ReadablePath {
             requested,
             bind_source,
             overrides_writable_mount: false,
+            writable_bind: false,
             #[cfg(unix)]
             source_file,
         })
+    }
+
+    #[cfg(unix)]
+    pub(super) fn pinned_writable(requested: PathBuf, file: File) -> Self {
+        Self {
+            requested: requested.clone(),
+            bind_source: requested,
+            overrides_writable_mount: false,
+            writable_bind: true,
+            source_file: Some(Arc::new(file)),
+        }
     }
 
     #[cfg(test)]
@@ -131,6 +151,7 @@ impl ReadablePath {
             requested,
             bind_source,
             overrides_writable_mount: true,
+            writable_bind: false,
             #[cfg(unix)]
             source_file,
         })
@@ -335,6 +356,47 @@ fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<Fil
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+#[cfg(unix)]
+pub(super) fn open_or_create_writable_dir_at(
+    parent: &File,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<File> {
+    let c_name = path_component(name)?;
+    // SAFETY: `parent` is a live directory descriptor and `c_name` is a valid
+    // NUL-terminated path component.
+    let mkdir = unsafe { libc::mkdirat(parent.as_raw_fd(), c_name.as_ptr(), 0o700) };
+    if mkdir != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EEXIST) {
+            return Err(error);
+        }
+    }
+    open_directory_at(parent, name)
+}
+
+#[cfg(unix)]
+pub(super) fn open_or_create_writable_file_at(
+    parent: &File,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<File> {
+    let c_name = path_component(name)?;
+    // SAFETY: `parent` is a live directory descriptor and `c_name` is a valid
+    // NUL-terminated path component. O_NOFOLLOW refuses a raced symlink.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
 impl From<PathBuf> for ReadablePath {
     fn from(requested: PathBuf) -> Self {
         let bind_source = runtime_path::canonicalize_or_fallback(&requested);
@@ -426,4 +488,36 @@ fn path_already_exposed(
         || writable_paths
             .iter()
             .any(|candidate| path.starts_with(candidate))
+}
+
+pub(super) fn downgrade_incompatible_cgroup_filesystem(
+    resource: &mut ResourceCapability,
+    filesystem: FilesystemCapability,
+    readable_paths: &[ReadablePath],
+    degraded_reasons: &mut Vec<String>,
+) {
+    if *resource != ResourceCapability::CgroupV2 {
+        return;
+    }
+    if filesystem == FilesystemCapability::Landlock {
+        *resource = ResourceCapability::Setrlimit;
+        degraded_reasons.push(
+            "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
+        );
+        return;
+    }
+    #[cfg(unix)]
+    if filesystem == FilesystemCapability::Bwrap
+        && readable_paths.iter().any(|path| {
+            (path.overrides_writable_mount() || path.writable_bind())
+                && path.pinned_source_file().is_some()
+        })
+    {
+        *resource = ResourceCapability::Setrlimit;
+        degraded_reasons.push(
+            "bwrap bind-fd cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = readable_paths;
 }

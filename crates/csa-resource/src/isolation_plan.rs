@@ -513,19 +513,12 @@ impl IsolationPlanBuilder {
             }
         }
 
-        // Landlock operates in the calling thread via pre_exec. That makes it
-        // incompatible with CgroupV2's `systemd-run --scope` wrapper: applying
-        // Landlock there would sandbox the wrapper itself and break its D-Bus
-        // connection to the user manager. Prefer Setrlimit so the actual tool
-        // process still receives filesystem isolation.
-        if self.resource == ResourceCapability::CgroupV2
-            && self.filesystem == FilesystemCapability::Landlock
-        {
-            self.resource = ResourceCapability::Setrlimit;
-            self.degraded_reasons.push(
-                "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
-            );
-        }
+        readable::downgrade_incompatible_cgroup_filesystem(
+            &mut self.resource,
+            self.filesystem,
+            &self.readable_paths,
+            &mut self.degraded_reasons,
+        );
 
         if self.filesystem != FilesystemCapability::None
             && !self.readonly_project_root

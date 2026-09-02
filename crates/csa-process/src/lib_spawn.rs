@@ -481,6 +481,11 @@ async fn spawn_with_cgroup(
             "invalid isolation plan: Landlock cannot be combined with CgroupV2; degrade to Setrlimit before spawning"
         ));
     }
+    if csa_resource::bwrap::sandbox_bind_fd_count(plan) > 0 {
+        return Err(anyhow::anyhow!(
+            "bwrap bind-fd cannot pass through systemd-run; overlay --ro-bind-fd would be dropped"
+        ));
+    }
 
     let cgroup_config = csa_resource::cgroup::SandboxConfig {
         memory_max_mb: plan.memory_max_mb.unwrap_or(4096),

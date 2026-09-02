@@ -33,6 +33,19 @@ fn append_stderr_tail(stderr_buf: &mut String, chunk: &str) {
     trim_tail_buffer(stderr_buf);
 }
 
+fn inherit_plan_bind_fds(cmd: &mut Command, plan: &IsolationPlan) -> AcpResult<()> {
+    #[cfg(unix)]
+    {
+        csa_resource::bwrap::try_inherit_sandbox_bind_fds(cmd.as_std_mut(), plan)
+            .map_err(|error| AcpError::ConfigError(error.to_string()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (cmd, plan);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AcpConnectionOptions {
     /// Timeout for ACP initialization/session setup operations.
@@ -277,6 +290,7 @@ impl AcpConnection {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
                 cmd.kill_on_drop(true);
+                inherit_plan_bind_fds(&mut cmd, plan)?;
 
                 // SAFETY: setsid() is async-signal-safe and runs before exec in child.
                 #[cfg(unix)]
@@ -340,6 +354,7 @@ impl AcpConnection {
                         });
                     }
                 }
+                inherit_plan_bind_fds(&mut cmd, plan)?;
 
                 let has_landlock = matches!(plan.filesystem, FilesystemCapability::Landlock);
                 let conn =
@@ -387,6 +402,7 @@ impl AcpConnection {
                             });
                         }
                     }
+                    inherit_plan_bind_fds(&mut cmd, plan)?;
 
                     let conn =
                         Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
