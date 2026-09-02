@@ -29,6 +29,37 @@ fn reconstruct_like_acp(command: &std::process::Command) -> std::process::Comman
     reconstructed
 }
 
+fn overlay_ro_bind_fd(args: &[String], dest: &Path) -> i32 {
+    let dest = dest.to_string_lossy();
+    args.windows(3)
+        .find(|window| window[0] == "--ro-bind-fd" && window[2] == dest.as_ref())
+        .and_then(|window| window[1].parse().ok())
+        .unwrap_or_else(|| panic!("overlay must use --ro-bind-fd; args: {args:?}"))
+}
+
+/// Prove `--ro-bind-fd N` stays open across exec without nested bwrap unshare.
+#[cfg(all(unix, target_os = "linux"))]
+fn assert_overlay_bind_fd_survives_exec(plan: &IsolationPlan, fd: i32, expected: &[u8]) {
+    assert!(
+        Path::new(&format!("/proc/self/fd/{fd}")).exists(),
+        "overlay --ro-bind-fd {fd} must stay open after reconstruction"
+    );
+    let mut probe = std::process::Command::new("/bin/cat");
+    probe.arg(format!("/proc/self/fd/{fd}"));
+    crate::bwrap::inherit_sandbox_bind_fds(&mut probe, plan);
+    probe.env_clear();
+    probe.env("PATH", "/usr/bin:/bin");
+    let output = probe
+        .output()
+        .expect("non-unshare overlay fd probe must spawn");
+    assert!(
+        output.status.success(),
+        "overlay --ro-bind-fd {fd} must survive exec without nested bwrap; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, expected);
+}
+
 #[cfg(all(unix, target_os = "linux"))]
 #[test]
 fn acp_style_reconstruction_keeps_overlay_ro_bind_fd_usable() {
@@ -48,26 +79,12 @@ fn acp_style_reconstruction_keeps_overlay_ro_bind_fd_usable() {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    assert!(
-        args.windows(3)
-            .any(|window| window[0] == "--ro-bind-fd" && window[2] == dest.to_string_lossy()),
-        "overlay must use --ro-bind-fd; args: {args:?}"
-    );
+    let fd = overlay_ro_bind_fd(&args, &dest);
 
     let mut reconstructed = reconstruct_like_acp(&built);
     drop(built);
     crate::bwrap::inherit_sandbox_bind_fds(&mut reconstructed, &plan);
-    reconstructed.env_clear();
-    reconstructed.env("PATH", "/usr/bin:/bin");
-    let output = reconstructed
-        .output()
-        .expect("reconstructed bwrap command must spawn");
-    assert!(
-        output.status.success(),
-        "ACP argv reconstruction must keep overlay --ro-bind-fd usable; stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"pinned-overlay\n");
+    assert_overlay_bind_fd_survives_exec(&plan, fd, b"pinned-overlay\n");
 }
 
 #[cfg(all(unix, target_os = "linux"))]
@@ -87,6 +104,11 @@ fn cgroup_style_reconstruction_fail_closed_or_keeps_overlay_ro_bind_fd() {
 
     let built = crate::from_isolation_plan(&plan, "/bin/cat", &[dest.to_string_lossy().into()])
         .expect("pinned overlay must produce a bwrap command");
+    let args: Vec<String> = built
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let fd = overlay_ro_bind_fd(&args, &dest);
     let mut reconstructed = std::process::Command::new("systemd-run");
     reconstructed.arg("--user");
     reconstructed.arg("--scope");
@@ -97,17 +119,7 @@ fn cgroup_style_reconstruction_fail_closed_or_keeps_overlay_ro_bind_fd() {
 
     match crate::bwrap::try_inherit_sandbox_bind_fds(&mut reconstructed, &plan) {
         Ok(()) => {
-            reconstructed.env_clear();
-            reconstructed.env("PATH", "/usr/bin:/bin");
-            let output = reconstructed
-                .output()
-                .expect("cgroup reconstruction with inherited FDs must spawn");
-            assert!(
-                output.status.success(),
-                "cgroup reconstruction must keep overlay --ro-bind-fd usable; stderr={}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert_eq!(output.stdout, b"pinned-overlay\n");
+            assert_overlay_bind_fd_survives_exec(&plan, fd, b"pinned-overlay\n");
         }
         Err(error) => {
             let message = error.to_string();
