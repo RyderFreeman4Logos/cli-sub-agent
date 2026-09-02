@@ -388,49 +388,86 @@ fn migrated_profile_databases_remain_writable_through_bwrap_overlays() {
     std::fs::write(hermes_home.join("direct/state.db"), b"direct-db\n").unwrap();
     std::fs::write(hermes_home.join("profiles/nested/state.db"), b"nested-db\n").unwrap();
     std::fs::write(hermes_home.join("state.flat.db"), b"flat-db\n").unwrap();
-    let project = temp.path().join("project");
-    std::fs::create_dir(&project).unwrap();
 
-    let execution_env = std::collections::HashMap::from([(
-        "HERMES_HOME".to_string(),
-        hermes_home.to_string_lossy().into_owned(),
-    )]);
-    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-        .with_filesystem_capability(FilesystemCapability::Bwrap)
-        .with_execution_env(Some(&execution_env))
-        .with_tool_defaults("hermes", &project, Path::new("/tmp/session"))
-        .build()
-        .expect("Hermes plan must migrate profile databases");
-    let mut command = crate::from_isolation_plan(
-        &plan,
-        "/bin/sh",
-        &[
-            "-c".to_string(),
-            format!(
-                "printf 'write\\n' >> '{}/direct/state.db'; printf 'write\\n' >> '{}/profiles/nested/state.db'; printf 'write\\n' >> '{}/state.flat.db'",
-                hermes_home.display(),
-                hermes_home.display(),
-                hermes_home.display(),
-            ),
-        ],
-    )
-    .expect("Hermes plan must produce a bwrap command");
-    let status = command.status().expect("bwrap command must start");
-    assert!(
-        status.success(),
-        "bwrap profile write must succeed: {status}"
-    );
-
+    let plan = hermes_plan(&hermes_home).expect("Hermes plan must migrate profile databases");
+    let args = command_args(&plan);
     let runtime = hermes_home.join(".csa-runtime");
-    for (profile, path) in [
-        ("direct", runtime.join("direct/state.db")),
-        ("nested", runtime.join("profiles/nested/state.db")),
-        ("flat", runtime.join("state.flat.db")),
-    ] {
-        let contents = std::fs::read_to_string(&path).unwrap();
+    let layouts = [
+        (
+            "direct",
+            hermes_home.join("direct/state.db"),
+            runtime.join("direct/state.db"),
+            b"direct-db\n".as_slice(),
+        ),
+        (
+            "nested",
+            hermes_home.join("profiles/nested/state.db"),
+            runtime.join("profiles/nested/state.db"),
+            b"nested-db\n".as_slice(),
+        ),
+        (
+            "flat",
+            hermes_home.join("state.flat.db"),
+            runtime.join("state.flat.db"),
+            b"flat-db\n".as_slice(),
+        ),
+    ];
+
+    for (profile, legacy_db, runtime_db, contents) in &layouts {
+        assert_eq!(
+            crate::isolation_plan::resolve_hermes_state_db(&hermes_home, Some(profile)),
+            *runtime_db,
+            "{profile} must resolve to the migrated DB used by xurl and recall"
+        );
+        assert_eq!(std::fs::read(runtime_db).unwrap(), *contents);
+        assert_eq!(std::fs::read(legacy_db).unwrap(), *contents);
+
+        let requested_dir = legacy_db.parent().unwrap();
+        let writable = plan
+            .readable_paths
+            .iter()
+            .find(|path| path.writable_bind() && path.requested() == requested_dir)
+            .expect("migrated profile must have a pinned writable bind");
+        assert_eq!(
+            writable.bind_source(),
+            runtime_db.parent().unwrap(),
+            "{profile} writes must bind the migrated runtime directory"
+        );
+        let writable_pos = args
+            .windows(3)
+            .position(|window| {
+                window[0] == "--bind-fd" && window[2] == requested_dir.to_string_lossy().as_ref()
+            })
+            .expect("migrated profile must have a pinned writable bind");
+        if requested_dir == hermes_home {
+            assert_eq!(profile, &"flat");
+            assert_eq!(writable.bind_source(), &runtime);
+            assert!(
+                args.windows(3).any(|window| {
+                    window[0] == "--bind-fd" && window[2] == hermes_home.to_string_lossy().as_ref()
+                }),
+                "flat profile must be covered by the pinned writable Hermes home bind: {args:?}"
+            );
+            continue;
+        }
+        let overlay = plan
+            .readable_paths
+            .iter()
+            .filter(|path| {
+                path.overrides_writable_mount() && requested_dir.starts_with(path.requested())
+            })
+            .max_by_key(|path| path.requested().components().count())
+            .expect("migrated profile must remain under a read-only overlay");
+        let overlay_pos = args
+            .windows(3)
+            .position(|window| {
+                window[0] == "--ro-bind-fd"
+                    && window[2] == overlay.requested().to_string_lossy().as_ref()
+            })
+            .expect("profile overlay must use its pinned read-only bind");
         assert!(
-            contents.ends_with("write\n"),
-            "bwrap write for {profile} must reach runtime DB {path:?}: {contents:?}"
+            overlay_pos < writable_pos,
+            "writable {profile} bind must follow its parent overlay: {args:?}"
         );
     }
 }
