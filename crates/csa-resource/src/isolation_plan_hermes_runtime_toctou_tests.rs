@@ -144,3 +144,54 @@ fn hermes_home_replaced_with_symlink_after_plan_does_not_bind_outside() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn sqlite_migration_rejects_source_leaf_replacement_after_fd_pin() {
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-pinned-source-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let source = temp.path().join("legacy");
+    let destination = temp.path().join("runtime");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    let original_path = source.join("state.db");
+    let original = rusqlite::Connection::open(&original_path).unwrap();
+    original
+        .execute_batch(
+            "CREATE TABLE values_table (value TEXT NOT NULL);\n             INSERT INTO values_table (value) VALUES ('original');",
+        )
+        .unwrap();
+    drop(original);
+
+    let source_parent = std::fs::File::open(&source).unwrap();
+    let destination_parent = std::fs::File::open(&destination).unwrap();
+    let source_database = std::fs::File::open(&original_path).unwrap();
+    std::fs::rename(&original_path, source.join("state.db.pinned")).unwrap();
+    let replacement = rusqlite::Connection::open(&original_path).unwrap();
+    replacement
+        .execute_batch(
+            "CREATE TABLE values_table (value TEXT NOT NULL);\n             INSERT INTO values_table (value) VALUES ('replacement');",
+        )
+        .unwrap();
+    drop(replacement);
+
+    let result = super::super::hermes_paths::migrate_sqlite_generation(
+        &source_parent,
+        &destination_parent,
+        std::ffi::OsStr::new("state.db"),
+        source_database,
+        &destination.join("state.db"),
+    );
+
+    let error = result.expect_err("source replacement after pinning must fail closed");
+    assert!(
+        error.to_string().contains("pinned source database"),
+        "error must identify the pinned source mismatch: {error:#}"
+    );
+    assert!(
+        !destination.join("state.db").exists(),
+        "a replacement source must not be copied into the runtime"
+    );
+}

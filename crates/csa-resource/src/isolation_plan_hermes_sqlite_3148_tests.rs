@@ -106,6 +106,51 @@ fn sqlite_migration_publishes_one_standalone_backup() {
 
 #[cfg(unix)]
 #[test]
+fn sqlite_migration_cleans_orphaned_sidecar_generation() {
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-orphaned-sidecar-migration-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let source = temp.path().join("legacy");
+    let destination = temp.path().join("runtime");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    let source_connection = live_sqlite_database(&source.join("state.db"), "new");
+    let _old_connection = live_sqlite_database(&destination.join("state.db"), "old");
+    assert!(destination.join("state.db-wal").exists());
+    std::fs::remove_file(destination.join("state.db")).unwrap();
+
+    super::super::super::hermes_paths::migrate_sqlite_generation(
+        &std::fs::File::open(&source).unwrap(),
+        &std::fs::File::open(&destination).unwrap(),
+        std::ffi::OsStr::new("state.db"),
+        std::fs::File::open(source.join("state.db")).unwrap(),
+        &destination.join("state.db"),
+    )
+    .unwrap();
+    drop(source_connection);
+
+    for suffix in ["-wal", "-shm", "-journal"] {
+        assert!(
+            !destination.join(format!("state.db{suffix}")).exists(),
+            "orphaned sidecar {suffix} must not survive beside the new database"
+        );
+    }
+    let migrated = rusqlite::Connection::open(destination.join("state.db")).unwrap();
+    assert_eq!(
+        migrated
+            .query_row(
+                "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "new"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn sqlite_migration_is_owned_across_processes() {
     if let (Some(root), Some(value)) = (
         std::env::var_os("CSA_SQLITE_CHILD_ROOT"),

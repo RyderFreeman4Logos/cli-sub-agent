@@ -108,6 +108,11 @@ fn sqlite_snapshot(
             source_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )?;
+        let current_source = readable::open_pinned_regular_at(source_parent, base)?
+            .ok_or_else(|| anyhow::anyhow!("pinned source database disappeared during snapshot"))?;
+        if !readable::same_file(&current_source, source_database)? {
+            anyhow::bail!("pinned source database changed during snapshot");
+        }
         let mut destination = Connection::open_with_flags(
             snapshot_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
@@ -118,8 +123,6 @@ fn sqlite_snapshot(
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
-        // Keep the already-pinned source descriptor part of the operation.
-        let _ = source_database.as_raw_fd();
         Ok::<(), anyhow::Error>(())
     })();
     if result.is_err() {
@@ -216,7 +219,11 @@ fn runtime_generation_present(parent: &File, base: &OsStr) -> anyhow::Result<boo
     };
     for name in names.iter().skip(1) {
         match readable::stat_at(parent, name) {
-            Ok(stat) if is_regular(&stat) => {}
+            Ok(stat) if is_regular(&stat) => {
+                if !database_present {
+                    readable::remove_file_at(parent, name)?;
+                }
+            }
             Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),

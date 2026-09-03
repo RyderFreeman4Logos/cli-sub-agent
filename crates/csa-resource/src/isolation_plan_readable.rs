@@ -14,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(unix)]
 use std::sync::Arc;
 
@@ -286,6 +286,13 @@ fn pin_readable_source(
     let file = open_regular_at(&parent, name)?;
     confirm_opened_identity(&file, &expected)?;
     Ok(Some(Arc::new(file)))
+}
+
+#[cfg(unix)]
+pub(super) fn same_file(left: &File, right: &File) -> std::io::Result<bool> {
+    let left = left.metadata()?;
+    let right = right.metadata()?;
+    Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
 }
 
 #[cfg(unix)]
