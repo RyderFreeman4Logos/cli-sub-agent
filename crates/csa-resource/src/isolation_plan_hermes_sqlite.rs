@@ -18,7 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(unix)]
-use rusqlite::{Connection, OpenFlags, backup::Backup};
+use rusqlite::{
+    Connection, OpenFlags,
+    backup::{Backup, StepResult},
+};
 
 use super::readable;
 use super::runtime_backing_error;
@@ -105,6 +108,11 @@ fn sqlite_snapshot(
     }
     // SAFETY: fd is the uniquely owned descriptor returned by openat.
     let snapshot_file = unsafe { File::from_raw_fd(fd) };
+    let unlink_name = || {
+        // Private CSA staging is not Hermes-writable; drop the name on every exit.
+        // SAFETY: staging is live and name_c is the exclusive snapshot component.
+        let _ = unsafe { libc::unlinkat(staging.as_raw_fd(), name_c.as_ptr(), 0) };
+    };
     let result = (|| {
         #[cfg(test)]
         if readable::FAIL_ATOMIC_COPY.with(Cell::get) {
@@ -116,6 +124,7 @@ fn sqlite_snapshot(
             source_path.clone(),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )?;
+        source.busy_timeout(Duration::ZERO)?;
         #[cfg(test)]
         run_after_sqlite_source_opened(&source_path);
         let current_source = readable::open_pinned_regular_at(source_parent, base)?
@@ -127,31 +136,33 @@ fn sqlite_snapshot(
             snapshot_path.clone(),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
         )?;
+        destination.busy_timeout(Duration::ZERO)?;
         destination.execute_batch("PRAGMA journal_mode=OFF;")?;
         let backup = Backup::new(&source, &mut destination)?;
-        backup.run_to_completion(100, Duration::from_millis(1), None)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!("timed out while snapshotting SQLite generation");
+            }
+            match backup.step(100)? {
+                StepResult::Done => break,
+                StepResult::More => {}
+                StepResult::Busy | StepResult::Locked => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                _ => anyhow::bail!("unexpected SQLite backup step result"),
+            }
+        }
         drop(backup);
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
         #[cfg(test)]
         run_after_sqlite_snapshot_created(&snapshot_path);
-        let current = readable::open_pinned_regular_at(&staging, &name)?
-            .ok_or_else(|| anyhow::anyhow!("pinned snapshot disappeared"))?;
-        if !readable::same_file(&current, &snapshot_file)? {
-            anyhow::bail!("pinned snapshot changed during snapshot");
-        }
         Ok::<(), anyhow::Error>(())
     })();
-    if result.is_ok() {
-        // Private CSA staging is not Hermes-writable; unlink the name while retaining the fd.
-        // SAFETY: staging is live and name_c is the exclusive snapshot component.
-        let _ = unsafe { libc::unlinkat(staging.as_raw_fd(), name_c.as_ptr(), 0) };
-    }
-    match result {
-        Ok(()) => Ok(snapshot_file),
-        Err(error) => Err(error),
-    }
+    unlink_name();
+    result.map(|()| snapshot_file)
 }
 
 #[cfg(test)]
@@ -191,7 +202,7 @@ pub fn migrate_sqlite_generation(
     let _generation_lock = acquire_sqlite_generation_lock(coordination_parent)
         .map_err(|error| runtime_backing_error(destination_path, error))?;
     if let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? {
-        if sqlite_header_is_valid(&database)? {
+        if sqlite_generation_is_usable(&database)? {
             return Ok(());
         }
         anyhow::bail!("SQLite destination is not a usable SQLite generation");
@@ -207,9 +218,8 @@ pub fn migrate_sqlite_generation(
         }
         let mut name = base.to_os_string();
         name.push(suffix);
-        if let Some(sidecar) = readable::open_pinned_regular_at(destination_parent, &name)? {
-            readable::remove_file_if_same(destination_parent, &name, &sidecar)
-                .map_err(|error| runtime_backing_error(destination_path, error))?;
+        if readable::open_pinned_regular_at(destination_parent, &name)?.is_some() {
+            anyhow::bail!("incomplete SQLite generation");
         }
     }
     if destination_has_usable_sqlite(destination_parent, base)? {
@@ -236,7 +246,7 @@ fn destination_has_usable_sqlite(
     let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? else {
         return Ok(false);
     };
-    if sqlite_header_is_valid(&database)? {
+    if sqlite_generation_is_usable(&database)? {
         return Ok(true);
     }
     anyhow::bail!("SQLite destination is not a usable SQLite generation");
@@ -253,6 +263,24 @@ fn sqlite_header_is_valid(file: &File) -> std::io::Result<bool> {
 }
 
 #[cfg(unix)]
+fn sqlite_generation_is_usable(file: &File) -> std::io::Result<bool> {
+    if !sqlite_header_is_valid(file)? {
+        return Ok(false);
+    }
+    let path = sqlite_pinned_path(file);
+    let Ok(connection) = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        return Ok(false);
+    };
+    match connection.query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0)) {
+        Ok(pages) => Ok(pages >= 1),
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(unix)]
 fn validate_usable_sqlite_generation(
     destination_parent: &File,
     base: &std::ffi::OsStr,
@@ -260,7 +288,7 @@ fn validate_usable_sqlite_generation(
     let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? else {
         anyhow::bail!("SQLite publication winner disappeared or is not regular");
     };
-    if !sqlite_header_is_valid(&database)? {
+    if !sqlite_generation_is_usable(&database)? {
         anyhow::bail!("SQLite publication winner is not a usable SQLite generation");
     }
     Ok(())

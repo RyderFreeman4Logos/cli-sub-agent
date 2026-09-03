@@ -41,7 +41,7 @@ pub(crate) fn open_pinned_regular_at(
     Ok(Some(file))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 pub(crate) fn remove_file_if_same(
     parent: &File,
     name: &std::ffi::OsStr,
@@ -73,7 +73,7 @@ pub(crate) fn remove_file_if_same(
     remove_file_at(parent, name)
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn remove_file_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<()> {
     let name = super::path_component(name)?;
     // SAFETY: parent is a live directory descriptor and name is one component.

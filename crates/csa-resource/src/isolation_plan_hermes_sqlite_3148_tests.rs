@@ -465,11 +465,7 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
     std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
     let source_connection = live_sqlite_database(&hermes_home.join("state.db"), "legacy");
     assert!(hermes_home.join("state.db-wal").exists());
-    let runtime = hermes_home.join(".csa-runtime");
-    std::fs::create_dir_all(&runtime).unwrap();
-    std::fs::write(runtime.join("state.db-wal"), b"stale-wal").unwrap();
-    std::fs::write(runtime.join("state.db-shm"), b"stale-shm").unwrap();
-    std::fs::write(runtime.join("state.db-journal"), b"stale-journal").unwrap();
+    std::fs::create_dir_all(hermes_home.join(".csa-runtime")).unwrap();
 
     let _replacement = AfterHermesHomePinned::set(replace_pinned_home_with_injected_directory);
     hermes_plan(&hermes_home).expect("pinned legacy generation must survive pathname replacement");
@@ -502,6 +498,8 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
     );
 }
 
+#[path = "isolation_plan_hermes_sqlite_3148_class_tests.rs"]
+mod sqlite_3148_class_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_generation_tests.rs"]
 mod sqlite_3148_generation_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_overlay_tests.rs"]

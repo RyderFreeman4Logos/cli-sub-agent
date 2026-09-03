@@ -29,10 +29,10 @@ mod atomic;
 #[cfg(all(test, unix))]
 pub(crate) use atomic::{
     AFTER_ATOMIC_COPY_IDENTITY, AFTER_ATOMIC_COPY_WRITTEN, AFTER_REMOVE_FILE_IDENTITY,
-    FAIL_ATOMIC_COPY,
+    FAIL_ATOMIC_COPY, remove_file_if_same,
 };
 #[cfg(unix)]
-pub(crate) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at, remove_file_if_same};
+pub(crate) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at};
 
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).

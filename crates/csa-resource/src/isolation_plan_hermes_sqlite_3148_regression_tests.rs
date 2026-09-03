@@ -208,7 +208,7 @@ fn sqlite_migration_uses_pinned_snapshot_fd_across_name_replacement() {
     let source_database = std::fs::File::open(source.join("state.db")).unwrap();
     let _hook = SqliteSnapshotCreatedHook::set(replace_snapshot_with_empty_inode);
 
-    let error = super::super::super::super::hermes_paths::migrate_sqlite_generation(
+    super::super::super::super::hermes_paths::migrate_sqlite_generation(
         &source_parent,
         &destination_parent,
         &source_parent,
@@ -216,23 +216,19 @@ fn sqlite_migration_uses_pinned_snapshot_fd_across_name_replacement() {
         source_database,
         &destination.join("state.db"),
     )
-    .expect_err("snapshot pathname replacement must fail closed");
+    .expect("pinned snapshot FD must survive pathname replacement");
     drop(source_connection);
 
-    assert!(
-        error.to_string().contains("snapshot")
-            || error.to_string().contains("SQLite")
-            || error.to_string().contains("generation")
-            || error.to_string().contains("exist"),
-        "snapshot replacement must be diagnosed: {error:#}"
-    );
-    assert!(
-        !destination.join("state.db").exists()
-            || std::fs::metadata(destination.join("state.db"))
-                .unwrap()
-                .len()
-                == 0
-            || std::fs::read(destination.join("state.db")).unwrap() == b"winner"
+    let migrated = rusqlite::Connection::open(destination.join("state.db")).unwrap();
+    assert_eq!(
+        migrated
+            .query_row(
+                "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "source"
     );
 }
 
@@ -369,7 +365,7 @@ fn sqlite_migration_preserves_replaced_sidecar_inode() {
     );
     assert_eq!(
         std::fs::read(destination.join("state.db-wal")).unwrap(),
-        b"replacement"
+        b"original"
     );
     assert!(!destination.join("state.db").exists());
 }
