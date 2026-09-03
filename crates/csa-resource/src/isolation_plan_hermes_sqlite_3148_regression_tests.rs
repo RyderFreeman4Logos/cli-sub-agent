@@ -6,11 +6,11 @@ use std::path::Path;
 use std::time::Duration;
 
 #[cfg(unix)]
-struct SqliteSourceOpenedHook;
+pub(super) struct SqliteSourceOpenedHook;
 
 #[cfg(unix)]
 impl SqliteSourceOpenedHook {
-    fn set(inject: fn(&Path)) -> Self {
+    pub(super) fn set(inject: fn(&Path)) -> Self {
         super::super::super::super::hermes_paths::AFTER_SQLITE_SOURCE_OPENED
             .with(|hook| hook.set(Some(inject)));
         Self
@@ -26,11 +26,11 @@ impl Drop for SqliteSourceOpenedHook {
 }
 
 #[cfg(unix)]
-struct SqliteSnapshotCreatedHook;
+pub(super) struct SqliteSnapshotCreatedHook;
 
 #[cfg(unix)]
 impl SqliteSnapshotCreatedHook {
-    fn set(inject: fn(&Path)) -> Self {
+    pub(super) fn set(inject: fn(&Path)) -> Self {
         super::super::super::super::hermes_paths::AFTER_SQLITE_SNAPSHOT_CREATED
             .with(|hook| hook.set(Some(inject)));
         Self

@@ -1,10 +1,11 @@
-//! Class-sweep regressions for CSA-R3148-005/006/008/009.
+//! Class-sweep regressions for CSA-R3148-005/006/008/009/010/011.
 //!
-//! These tests must compile against the pre-fix tree and fail for the missing
-//! behavior: magic-only headers, pathname sidecar unlink, unbounded backup,
-//! and named snapshot leftovers.
+//! These tests cover invalid SQLite generations, pathname sidecar unlink,
+//! bounded backup, and unnamed snapshot lifetime.
 
 use super::*;
+use std::io::{Seek, SeekFrom, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -61,6 +62,45 @@ fn staging_snapshot_names(root: &Path) -> Vec<PathBuf> {
     names
 }
 
+fn corrupt_sqlite_btree(path: &Path) {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA page_size=4096;
+             CREATE TABLE corrupt_table (value TEXT NOT NULL);
+             INSERT INTO corrupt_table (value) VALUES ('corrupt');",
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(std::fs::metadata(path).unwrap().len(), 8192);
+    let mut database = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    database.seek(SeekFrom::Start(4096)).unwrap();
+    database.write_all(&[0]).unwrap();
+    database.sync_all().unwrap();
+    let connection = rusqlite::Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2,
+        "fixture must pass the old page-count-only check"
+    );
+}
+
+fn make_snapshot_directory_read_only(snapshot_path: &Path) {
+    let target = std::fs::read_link(snapshot_path).unwrap();
+    std::fs::set_permissions(
+        target.parent().unwrap(),
+        std::fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
+}
+
+fn mark_snapshot_source_opened(source_path: &Path) {
+    let source = std::fs::read_link(source_path).unwrap();
+    std::fs::write(source.parent().unwrap().join("backup-entered"), []).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn sqlite_migration_rejects_magic_only_sqlite_header_for_all_layouts() {
@@ -103,6 +143,34 @@ fn sqlite_migration_preserves_valid_legacy_sqlite_for_all_layouts() {
                 .unwrap(),
             label,
             "{label} must keep a usable legacy generation"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_migration_rejects_corrupt_btree_for_all_layouts() {
+    for (label, dest_rel, base) in LAYOUTS {
+        let (_temp, source, destination) = layout_dirs(&format!("schema-{label}"), dest_rel);
+        drop(live_sqlite_database(&source.join(base), label));
+        corrupt_sqlite_btree(&destination.join(base));
+
+        let error = migrate_generation(&source, &destination, base).expect_err(label);
+        assert!(
+            error.to_string().contains("SQLite") || error.to_string().contains("generation"),
+            "{label} must reject a corrupt SQLite B-tree: {error:#}"
+        );
+        let legacy = rusqlite::Connection::open(source.join(base)).unwrap();
+        assert_eq!(
+            legacy
+                .query_row(
+                    "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            label,
+            "{label} must preserve the valid legacy database"
         );
     }
 }
@@ -236,4 +304,84 @@ fn sqlite_snapshot_failure_leaves_staging_empty_for_all_layouts() {
         }
         assert!(!destination.join(base).exists(), "{label} must not publish");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_snapshot_unlink_failure_leaves_no_named_snapshot() {
+    let (_temp, source, destination) = layout_dirs("unlink-failure", "runtime");
+    drop(live_sqlite_database(&source.join("state.db"), "source"));
+    let _hook = super::sqlite_3148_regression_tests::SqliteSnapshotCreatedHook::set(
+        make_snapshot_directory_read_only,
+    );
+
+    let result = migrate_generation(&source, &destination, "state.db");
+    let staging = source.join(".csa-sqlite-staging");
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    result.unwrap();
+    assert!(
+        staging_snapshot_names(&source).is_empty(),
+        "an unlink failure must not leave a named snapshot"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
+    if let Some(root) = std::env::var_os("CSA_SQLITE_SNAPSHOT_DEATH_ROOT") {
+        let root = PathBuf::from(root);
+        let source = root.join("legacy");
+        let destination = root.join("runtime");
+        let _hook = super::sqlite_3148_regression_tests::SqliteSourceOpenedHook::set(
+            mark_snapshot_source_opened,
+        );
+        migrate_generation(&source, &destination, "state.db").unwrap();
+        return;
+    }
+
+    let (temp, source, _destination) = layout_dirs("process-death", "runtime");
+    let holder = rusqlite::Connection::open(source.join("state.db")).unwrap();
+    holder
+        .execute_batch(
+            "PRAGMA journal_mode=DELETE;
+             CREATE TABLE values_table (value TEXT NOT NULL);
+             INSERT INTO values_table (value) VALUES ('locked');
+             BEGIN EXCLUSIVE;",
+        )
+        .unwrap();
+    let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(test_name)
+        .arg("--nocapture")
+        .env("CSA_SQLITE_SNAPSHOT_DEATH_ROOT", temp.path())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let source_opened = source.join("backup-entered").exists();
+        let snapshot_open = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .any(|path| path.to_string_lossy().contains(".csa-sqlite-staging/"));
+        if source_opened && snapshot_open {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "child must enter backup with the snapshot FD open"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(holder);
+
+    assert!(
+        staging_snapshot_names(&source).is_empty(),
+        "process death must not leave a named snapshot"
+    );
 }

@@ -9,11 +9,7 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -25,9 +21,6 @@ use rusqlite::{
 
 use super::readable;
 use super::runtime_backing_error;
-
-#[cfg(unix)]
-static SQLITE_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(unix)]
 const SQLITE_STAGING_DIR: &str = ".csa-sqlite-staging";
@@ -87,19 +80,13 @@ fn sqlite_snapshot(
         staging_root,
         std::ffi::OsStr::new(SQLITE_STAGING_DIR),
     )?;
-    let sequence = SQLITE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let name = std::ffi::OsString::from(format!(
-        ".csa-sqlite-snapshot-{}-{sequence}",
-        std::process::id()
-    ));
-    let name_c = std::ffi::CString::new(name.as_os_str().as_bytes())
-        .expect("fixed temporary SQLite name has no NUL");
-    // SAFETY: staging is live and the temporary name is a component.
+    let current_directory = b".\0";
+    // SAFETY: staging is live and O_TMPFILE creates an unnamed inode in it.
     let fd = unsafe {
         libc::openat(
             staging.as_raw_fd(),
-            name_c.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            current_directory.as_ptr().cast(),
+            libc::O_RDWR | libc::O_TMPFILE | libc::O_CLOEXEC,
             0o600,
         )
     };
@@ -108,18 +95,12 @@ fn sqlite_snapshot(
     }
     // SAFETY: fd is the uniquely owned descriptor returned by openat.
     let snapshot_file = unsafe { File::from_raw_fd(fd) };
-    let unlink_name = || {
-        // Private CSA staging is not Hermes-writable; drop the name on every exit.
-        // SAFETY: staging is live and name_c is the exclusive snapshot component.
-        let _ = unsafe { libc::unlinkat(staging.as_raw_fd(), name_c.as_ptr(), 0) };
-    };
     let result = (|| {
         #[cfg(test)]
         if readable::FAIL_ATOMIC_COPY.with(Cell::get) {
             anyhow::bail!("injected atomic SQLite copy failure");
         }
         let source_path = sqlite_pinned_path(source_database);
-        let snapshot_path = sqlite_pinned_path(&snapshot_file);
         let source = Connection::open_with_flags(
             source_path.clone(),
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
@@ -132,10 +113,7 @@ fn sqlite_snapshot(
         if !readable::same_file(&current_source, source_database)? {
             anyhow::bail!("pinned source database changed during snapshot");
         }
-        let mut destination = Connection::open_with_flags(
-            snapshot_path.clone(),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
-        )?;
+        let mut destination = Connection::open_in_memory()?;
         destination.busy_timeout(Duration::ZERO)?;
         destination.execute_batch("PRAGMA journal_mode=OFF;")?;
         let backup = Backup::new(&source, &mut destination)?;
@@ -154,14 +132,21 @@ fn sqlite_snapshot(
             }
         }
         drop(backup);
+        let snapshot = destination.serialize("main")?;
+        {
+            use std::io::Write;
+            let mut output = snapshot_file.try_clone()?;
+            output.write_all(&snapshot)?;
+            output.sync_all()?;
+        }
+        drop(snapshot);
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
         #[cfg(test)]
-        run_after_sqlite_snapshot_created(&snapshot_path);
+        run_after_sqlite_snapshot_created(&sqlite_pinned_path(&snapshot_file));
         Ok::<(), anyhow::Error>(())
     })();
-    unlink_name();
     result.map(|()| snapshot_file)
 }
 
@@ -274,8 +259,13 @@ fn sqlite_generation_is_usable(file: &File) -> std::io::Result<bool> {
     ) else {
         return Ok(false);
     };
-    match connection.query_row("PRAGMA page_count", [], |row| row.get::<_, i64>(0)) {
-        Ok(pages) => Ok(pages >= 1),
+    if connection.busy_timeout(Duration::ZERO).is_err() {
+        return Ok(false);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    connection.progress_handler(1_000, Some(move || std::time::Instant::now() >= deadline));
+    match connection.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0)) {
+        Ok(result) => Ok(result == "ok"),
         Err(_) => Ok(false),
     }
 }
