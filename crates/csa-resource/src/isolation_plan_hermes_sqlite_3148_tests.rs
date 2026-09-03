@@ -72,6 +72,7 @@ fn sqlite_migration_publishes_one_standalone_backup() {
     super::super::super::hermes_paths::migrate_sqlite_generation(
         &std::fs::File::open(&source).unwrap(),
         &std::fs::File::open(&destination).unwrap(),
+        &std::fs::File::open(&source).unwrap(),
         std::ffi::OsStr::new("state.db"),
         std::fs::File::open(source.join("state.db")).unwrap(),
         &destination.join("state.db"),
@@ -123,6 +124,7 @@ fn sqlite_migration_cleans_orphaned_sidecar_generation() {
     super::super::super::hermes_paths::migrate_sqlite_generation(
         &std::fs::File::open(&source).unwrap(),
         &std::fs::File::open(&destination).unwrap(),
+        &std::fs::File::open(&source).unwrap(),
         std::ffi::OsStr::new("state.db"),
         std::fs::File::open(source.join("state.db")).unwrap(),
         &destination.join("state.db"),
@@ -163,6 +165,7 @@ fn sqlite_migration_is_owned_across_processes() {
         let connection = live_sqlite_database(&source.join("state.db"), &value.to_string_lossy());
         super::super::super::hermes_paths::migrate_sqlite_generation(
             &std::fs::File::open(&source).unwrap(),
+            &std::fs::File::open(&destination).unwrap(),
             &std::fs::File::open(&destination).unwrap(),
             std::ffi::OsStr::new("state.db"),
             std::fs::File::open(source.join("state.db")).unwrap(),
@@ -514,6 +517,7 @@ fn concurrent_sqlite_migrations_preserve_one_complete_generation() {
             super::super::super::hermes_paths::migrate_sqlite_generation(
                 &source_parent,
                 &destination_parent,
+                &source_parent,
                 std::ffi::OsStr::new("state.db"),
                 source_database,
                 &destination_path,
@@ -593,3 +597,6 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
         true
     );
 }
+
+#[path = "isolation_plan_hermes_sqlite_3148_regression_tests.rs"]
+mod sqlite_3148_regression_tests;

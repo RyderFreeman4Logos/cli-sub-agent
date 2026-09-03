@@ -7,18 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 #[cfg(unix)]
 use std::fs::File;
-#[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(unix)]
-use std::time::Duration;
-
-#[cfg(unix)]
-use rusqlite::{Connection, OpenFlags, backup::Backup};
 
 use crate::filesystem_sandbox::FilesystemCapability;
 
@@ -35,127 +24,15 @@ const SQLITE_SIDECARS: [&str; 4] = [
 const RUNTIME_BACKING: &str = ".csa-runtime";
 
 #[cfg(unix)]
-static SQLITE_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[path = "isolation_plan_hermes_sqlite.rs"]
+mod hermes_sqlite;
 
+#[cfg(all(unix, test))]
+pub(crate) use hermes_sqlite::acquire_sqlite_generation_lock;
 #[cfg(unix)]
-fn acquire_sqlite_generation_lock(parent: &File) -> std::io::Result<File> {
-    let name = std::ffi::CString::new(".csa-sqlite-generation.lock").unwrap();
-    // SAFETY: parent is a live directory descriptor and name is one component.
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: fd is the uniquely owned descriptor returned by openat.
-    let lock = unsafe { File::from_raw_fd(fd) };
-    // SAFETY: lock is a live file descriptor and LOCK_EX intentionally blocks
-    // until the owner of this destination generation releases it.
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(lock)
-}
-
-#[cfg(unix)]
-fn sqlite_generation_path(parent: &File, name: &OsStr) -> PathBuf {
-    PathBuf::from("/proc/self/fd")
-        .join(parent.as_raw_fd().to_string())
-        .join(name)
-}
-
-#[cfg(unix)]
-fn sqlite_snapshot(
-    source_parent: &File,
-    destination_parent: &File,
-    base: &OsStr,
-    source_database: &File,
-) -> anyhow::Result<(File, OsString)> {
-    let sequence = SQLITE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let name = OsString::from(format!(
-        ".csa-sqlite-snapshot-{}-{sequence}",
-        std::process::id()
-    ));
-    let name_c = std::ffi::CString::new(name.as_os_str().as_bytes())
-        .expect("fixed temporary SQLite name has no NUL");
-    // SAFETY: destination_parent is live and the temporary name is a component.
-    let fd = unsafe {
-        libc::openat(
-            destination_parent.as_raw_fd(),
-            name_c.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // SAFETY: fd is the uniquely owned descriptor returned by openat.
-    let snapshot_file = unsafe { File::from_raw_fd(fd) };
-    let result = (|| {
-        #[cfg(test)]
-        if readable::FAIL_ATOMIC_COPY.with(Cell::get) {
-            anyhow::bail!("injected atomic SQLite copy failure");
-        }
-        let source_path = sqlite_generation_path(source_parent, base);
-        let snapshot_path = sqlite_generation_path(destination_parent, &name);
-        let source = Connection::open_with_flags(
-            source_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        let current_source = readable::open_pinned_regular_at(source_parent, base)?
-            .ok_or_else(|| anyhow::anyhow!("pinned source database disappeared during snapshot"))?;
-        if !readable::same_file(&current_source, source_database)? {
-            anyhow::bail!("pinned source database changed during snapshot");
-        }
-        let mut destination = Connection::open_with_flags(
-            snapshot_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        let backup = Backup::new(&source, &mut destination)?;
-        backup.run_to_completion(100, Duration::from_millis(1), None)?;
-        drop(backup);
-        drop(destination);
-        drop(source);
-        snapshot_file.sync_all()?;
-        Ok::<(), anyhow::Error>(())
-    })();
-    if result.is_err() {
-        // SAFETY: destination_parent is live; this name is owned by this call.
-        unsafe {
-            libc::unlinkat(destination_parent.as_raw_fd(), name_c.as_ptr(), 0);
-        }
-    }
-    result.map(|()| (snapshot_file, name))
-}
-
-#[cfg(test)]
-fn wait_for_sqlite_publication_barrier() -> anyhow::Result<()> {
-    let Some(directory) = std::env::var_os("CSA_SQLITE_PUBLICATION_BARRIER") else {
-        return Ok(());
-    };
-    let directory = PathBuf::from(directory);
-    fs::create_dir_all(&directory)?;
-    let marker = directory.join(format!("entered-{}", std::process::id()));
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(marker)?;
-    let release = directory.join("release");
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !release.exists() {
-        if std::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for SQLite publication barrier");
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    Ok(())
-}
+pub(super) use hermes_sqlite::migrate_sqlite_generation;
+#[cfg(all(unix, test))]
+pub(crate) use hermes_sqlite::{AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED};
 
 fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
     let Some(profile) = hermes_profile.filter(|value| !value.trim().is_empty()) else {
@@ -192,81 +69,10 @@ pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>)
 }
 
 #[cfg(unix)]
-fn sqlite_generation_names(base: &OsStr) -> Vec<OsString> {
-    let mut names = Vec::with_capacity(SQLITE_SIDECARS.len());
-    names.push(base.to_os_string());
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut name = base.to_os_string();
-        name.push(suffix);
-        names.push(name);
-    }
-    names
-}
-
-#[cfg(unix)]
-fn is_regular(stat: &libc::stat) -> bool {
-    stat.st_mode & libc::S_IFMT == libc::S_IFREG
-}
-
-#[cfg(unix)]
-fn runtime_generation_present(parent: &File, base: &OsStr) -> anyhow::Result<bool> {
-    let names = sqlite_generation_names(base);
-    let database_present = match readable::stat_at(parent, &names[0]) {
-        Ok(stat) if is_regular(&stat) => true,
-        Ok(_) => anyhow::bail!("SQLite state database is not a regular file"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
-    for name in names.iter().skip(1) {
-        match readable::stat_at(parent, name) {
-            Ok(stat) if is_regular(&stat) => {
-                if !database_present {
-                    readable::remove_file_at(parent, name)?;
-                }
-            }
-            Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(database_present)
-}
-
-#[cfg(unix)]
-pub(super) fn migrate_sqlite_generation(
-    source_parent: &File,
-    destination_parent: &File,
-    base: &OsStr,
-    source_database: File,
-    destination_path: &Path,
-) -> anyhow::Result<()> {
-    #[cfg(test)]
-    wait_for_sqlite_publication_barrier()?;
-    let _generation_lock = acquire_sqlite_generation_lock(destination_parent)
-        .map_err(|error| runtime_backing_error(destination_path, error))?;
-    if runtime_generation_present(destination_parent, base)? {
-        return Ok(());
-    }
-    let (snapshot, snapshot_name) =
-        sqlite_snapshot(source_parent, destination_parent, base, &source_database).map_err(
-            |error| {
-                runtime_backing_error(destination_path, std::io::Error::other(error.to_string()))
-            },
-        )?;
-    let result = match readable::copy_pinned_file_atomic(&snapshot, destination_parent, base) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(runtime_backing_error(destination_path, error)),
-    };
-    // This process created the snapshot name, so only it may unlink it.
-    let _ = readable::remove_file_at(destination_parent, &snapshot_name);
-    result
-}
-
-#[cfg(unix)]
 fn migrate_profile_directory(
     source_parent: &File,
     destination_parent: &File,
+    coordination_parent: &File,
     name: &OsStr,
     destination_path: &Path,
 ) -> anyhow::Result<Option<File>> {
@@ -293,6 +99,7 @@ fn migrate_profile_directory(
     migrate_sqlite_generation(
         &source_profile,
         &destination_profile,
+        coordination_parent,
         OsStr::new("state.db"),
         database,
         destination_path,
@@ -312,6 +119,7 @@ fn migrate_legacy_sqlite(
         migrate_sqlite_generation(
             home_fd,
             runtime_home_fd,
+            home_fd,
             OsStr::new("state.db"),
             database,
             &hermes_home.join(RUNTIME_BACKING).join("state.db"),
@@ -328,6 +136,7 @@ fn migrate_legacy_sqlite(
             migrate_sqlite_generation(
                 home_fd,
                 runtime_home_fd,
+                home_fd,
                 name,
                 database,
                 &hermes_home.join(RUNTIME_BACKING).join(name),
@@ -336,6 +145,7 @@ fn migrate_legacy_sqlite(
         if let Some(destination_profile) = migrate_profile_directory(
             home_fd,
             runtime_home_fd,
+            home_fd,
             name,
             &hermes_home.join(RUNTIME_BACKING).join(name),
         )? {
@@ -406,6 +216,7 @@ fn migrate_legacy_sqlite(
         migrate_sqlite_generation(
             &source_profile,
             &destination_profile,
+            home_fd,
             OsStr::new("state.db"),
             database,
             &destination_path.join("state.db"),

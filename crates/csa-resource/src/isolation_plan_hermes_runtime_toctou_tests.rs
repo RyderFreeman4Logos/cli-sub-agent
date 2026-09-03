@@ -180,6 +180,7 @@ fn sqlite_migration_rejects_source_leaf_replacement_after_fd_pin() {
     let result = super::super::hermes_paths::migrate_sqlite_generation(
         &source_parent,
         &destination_parent,
+        &source_parent,
         std::ffi::OsStr::new("state.db"),
         source_database,
         &destination.join("state.db"),
