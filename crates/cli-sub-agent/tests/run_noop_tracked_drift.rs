@@ -164,6 +164,8 @@ fn noop_writer_session_leaves_zero_tracked_lefthook_drift() {
         .current_dir(&project)
         .env("PATH", prepend_path(&ambient_bin))
         .args([
+            "--format",
+            "json",
             "run",
             "--no-daemon",
             "--sa-mode",
@@ -182,6 +184,11 @@ fn noop_writer_session_leaves_zero_tracked_lefthook_drift() {
         "writer provider must start before the no-op result: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("<csa-caller-sa-guard>"),
+        "writer result must be isolated from the caller SA guard: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(
         std::fs::read_to_string(project.join("lefthook.yml")).expect("read lefthook config"),
