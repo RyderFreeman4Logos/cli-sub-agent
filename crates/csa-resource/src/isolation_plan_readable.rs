@@ -27,9 +27,12 @@ use super::runtime_path;
 #[path = "isolation_plan_readable_atomic.rs"]
 mod atomic;
 #[cfg(all(test, unix))]
-pub(crate) use atomic::{AFTER_ATOMIC_COPY_WRITTEN, FAIL_ATOMIC_COPY};
+pub(crate) use atomic::{
+    AFTER_ATOMIC_COPY_IDENTITY, AFTER_ATOMIC_COPY_WRITTEN, AFTER_REMOVE_FILE_IDENTITY,
+    FAIL_ATOMIC_COPY,
+};
 #[cfg(unix)]
-pub(super) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at, remove_file_if_same};
+pub(crate) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at, remove_file_if_same};
 
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).

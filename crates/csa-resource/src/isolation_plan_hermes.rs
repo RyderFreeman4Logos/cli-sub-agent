@@ -33,7 +33,7 @@ pub(crate) use hermes_sqlite::acquire_sqlite_generation_lock;
 pub(super) use hermes_sqlite::migrate_sqlite_generation;
 #[cfg(all(unix, test))]
 pub(crate) use hermes_sqlite::{
-    AFTER_SQLITE_SIDECAR_OPENED, AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED,
+    AFTER_SQLITE_DESTINATION_OBSERVED, AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED,
 };
 
 fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
@@ -423,6 +423,7 @@ pub(super) fn add_hermes_runtime_paths(
             if name_lossy == "logs"
                 || name_lossy == RUNTIME_BACKING
                 || name_lossy == ".csa-sqlite-generation.lock"
+                || name_lossy == ".csa-sqlite-staging"
                 || name_lossy.starts_with("state.db")
                 || is_flat_profile_generation
             {

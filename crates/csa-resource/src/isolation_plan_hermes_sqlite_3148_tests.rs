@@ -117,8 +117,9 @@ fn sqlite_migration_cleans_orphaned_sidecar_generation() {
     std::fs::create_dir(&source).unwrap();
     std::fs::create_dir(&destination).unwrap();
     let source_connection = live_sqlite_database(&source.join("state.db"), "new");
-    let _old_connection = live_sqlite_database(&destination.join("state.db"), "old");
+    let old_connection = live_sqlite_database(&destination.join("state.db"), "old");
     assert!(destination.join("state.db-wal").exists());
+    drop(old_connection);
     std::fs::remove_file(destination.join("state.db")).unwrap();
 
     super::super::super::hermes_paths::migrate_sqlite_generation(
@@ -129,16 +130,22 @@ fn sqlite_migration_cleans_orphaned_sidecar_generation() {
         std::fs::File::open(source.join("state.db")).unwrap(),
         &destination.join("state.db"),
     )
-    .unwrap();
+    .expect("orphaned dest sidecars observed with an absent database are one generation");
     drop(source_connection);
 
     for suffix in ["-wal", "-shm", "-journal"] {
         assert!(
             !destination.join(format!("state.db{suffix}")).exists(),
-            "orphaned sidecar {suffix} must not survive beside the new database"
+            "orphaned sidecar state.db{suffix} must be cleaned"
         );
     }
     let migrated = rusqlite::Connection::open(destination.join("state.db")).unwrap();
+    assert_eq!(
+        migrated
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
     assert_eq!(
         migrated
             .query_row(
@@ -495,6 +502,8 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
     );
 }
 
+#[path = "isolation_plan_hermes_sqlite_3148_generation_tests.rs"]
+mod sqlite_3148_generation_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_overlay_tests.rs"]
 mod sqlite_3148_overlay_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_regression_tests.rs"]

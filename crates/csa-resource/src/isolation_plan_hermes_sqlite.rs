@@ -27,6 +27,9 @@ use super::runtime_backing_error;
 static SQLITE_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(unix)]
+const SQLITE_STAGING_DIR: &str = ".csa-sqlite-staging";
+
+#[cfg(unix)]
 pub fn acquire_sqlite_generation_lock(parent: &File) -> std::io::Result<File> {
     let name = std::ffi::CString::new(".csa-sqlite-generation.lock").unwrap();
     // SAFETY: parent is a live directory descriptor and name is one component.
@@ -73,10 +76,14 @@ fn sqlite_pinned_path(file: &File) -> PathBuf {
 #[cfg(unix)]
 fn sqlite_snapshot(
     source_parent: &File,
-    destination_parent: &File,
+    staging_root: &File,
     base: &std::ffi::OsStr,
     source_database: &File,
-) -> anyhow::Result<(File, std::ffi::OsString)> {
+) -> anyhow::Result<File> {
+    let staging = readable::open_or_create_writable_dir_at(
+        staging_root,
+        std::ffi::OsStr::new(SQLITE_STAGING_DIR),
+    )?;
     let sequence = SQLITE_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let name = std::ffi::OsString::from(format!(
         ".csa-sqlite-snapshot-{}-{sequence}",
@@ -84,10 +91,10 @@ fn sqlite_snapshot(
     ));
     let name_c = std::ffi::CString::new(name.as_os_str().as_bytes())
         .expect("fixed temporary SQLite name has no NUL");
-    // SAFETY: destination_parent is live and the temporary name is a component.
+    // SAFETY: staging is live and the temporary name is a component.
     let fd = unsafe {
         libc::openat(
-            destination_parent.as_raw_fd(),
+            staging.as_raw_fd(),
             name_c.as_ptr(),
             libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0o600,
@@ -116,25 +123,34 @@ fn sqlite_snapshot(
         if !readable::same_file(&current_source, source_database)? {
             anyhow::bail!("pinned source database changed during snapshot");
         }
-        #[cfg(test)]
-        run_after_sqlite_snapshot_created(&snapshot_path);
         let mut destination = Connection::open_with_flags(
-            snapshot_path,
+            snapshot_path.clone(),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
         )?;
+        destination.execute_batch("PRAGMA journal_mode=OFF;")?;
         let backup = Backup::new(&source, &mut destination)?;
         backup.run_to_completion(100, Duration::from_millis(1), None)?;
         drop(backup);
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
+        #[cfg(test)]
+        run_after_sqlite_snapshot_created(&snapshot_path);
+        let current = readable::open_pinned_regular_at(&staging, &name)?
+            .ok_or_else(|| anyhow::anyhow!("pinned snapshot disappeared"))?;
+        if !readable::same_file(&current, &snapshot_file)? {
+            anyhow::bail!("pinned snapshot changed during snapshot");
+        }
         Ok::<(), anyhow::Error>(())
     })();
-    let cleanup = readable::remove_file_if_same(destination_parent, &name, &snapshot_file);
-    match (result, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Ok(())) => Ok((snapshot_file, name)),
-        (Ok(()), Err(error)) => Err(error.into()),
+    if result.is_ok() {
+        // Private CSA staging is not Hermes-writable; unlink the name while retaining the fd.
+        // SAFETY: staging is live and name_c is the exclusive snapshot component.
+        let _ = unsafe { libc::unlinkat(staging.as_raw_fd(), name_c.as_ptr(), 0) };
+    }
+    match result {
+        Ok(()) => Ok(snapshot_file),
+        Err(error) => Err(error),
     }
 }
 
@@ -174,72 +190,78 @@ pub fn migrate_sqlite_generation(
     wait_for_sqlite_publication_barrier()?;
     let _generation_lock = acquire_sqlite_generation_lock(coordination_parent)
         .map_err(|error| runtime_backing_error(destination_path, error))?;
-    let names = [base.to_os_string()];
-    let database_present = match readable::stat_at(destination_parent, &names[0]) {
-        Ok(stat) if stat.st_mode & libc::S_IFMT == libc::S_IFREG => true,
-        Ok(_) => anyhow::bail!("SQLite state database is not a regular file"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error.into()),
-    };
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut name = base.to_os_string();
-        name.push(suffix);
-        match readable::stat_at(destination_parent, &name) {
-            Ok(stat) if stat.st_mode & libc::S_IFMT == libc::S_IFREG => {
-                if !database_present {
-                    let sidecar = readable::open_pinned_regular_at(destination_parent, &name)?
-                        .ok_or_else(|| anyhow::anyhow!("SQLite generation member disappeared"))?;
-                    #[cfg(test)]
-                    run_after_sqlite_sidecar_opened(destination_parent, &name);
-                    readable::remove_file_if_same(destination_parent, &name, &sidecar)?;
-                }
-            }
-            Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+    if let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? {
+        if sqlite_header_is_valid(&database)? {
+            return Ok(());
         }
+        anyhow::bail!("SQLite destination is not a usable SQLite generation");
     }
-    if database_present {
+    #[cfg(test)]
+    run_after_sqlite_destination_observed(destination_parent, base);
+    if destination_has_usable_sqlite(destination_parent, base)? {
         return Ok(());
     }
-    let (snapshot, snapshot_name) =
-        sqlite_snapshot(source_parent, destination_parent, base, &source_database).map_err(
-            |error| {
-                runtime_backing_error(destination_path, std::io::Error::other(error.to_string()))
-            },
-        )?;
-    let result = match readable::copy_pinned_file_atomic(&snapshot, destination_parent, base) {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if destination_has_usable_sqlite(destination_parent, base)? {
+            return Ok(());
+        }
+        let mut name = base.to_os_string();
+        name.push(suffix);
+        if let Some(sidecar) = readable::open_pinned_regular_at(destination_parent, &name)? {
+            readable::remove_file_if_same(destination_parent, &name, &sidecar)
+                .map_err(|error| runtime_backing_error(destination_path, error))?;
+        }
+    }
+    if destination_has_usable_sqlite(destination_parent, base)? {
+        return Ok(());
+    }
+    let snapshot = sqlite_snapshot(source_parent, coordination_parent, base, &source_database)
+        .map_err(|error| {
+            runtime_backing_error(destination_path, std::io::Error::other(error.to_string()))
+        })?;
+    match readable::copy_pinned_file_atomic(&snapshot, destination_parent, base) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            validate_sqlite_publication_winner(destination_parent, base)?;
-            Ok(())
+            validate_usable_sqlite_generation(destination_parent, base)
         }
         Err(error) => Err(runtime_backing_error(destination_path, error)),
-    };
-    let cleanup = readable::remove_file_if_same(destination_parent, &snapshot_name, &snapshot);
-    match (result, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-        (Ok(()), Err(error)) => Err(runtime_backing_error(destination_path, error)),
     }
 }
 
 #[cfg(unix)]
-fn validate_sqlite_publication_winner(
+fn destination_has_usable_sqlite(
+    destination_parent: &File,
+    base: &std::ffi::OsStr,
+) -> anyhow::Result<bool> {
+    let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? else {
+        return Ok(false);
+    };
+    if sqlite_header_is_valid(&database)? {
+        return Ok(true);
+    }
+    anyhow::bail!("SQLite destination is not a usable SQLite generation");
+}
+
+#[cfg(unix)]
+fn sqlite_header_is_valid(file: &File) -> std::io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = file.try_clone()?;
+    file.seek(SeekFrom::Start(0))?;
+    let mut header = [0u8; 16];
+    let n = file.read(&mut header)?;
+    Ok(n == 16 && header == *b"SQLite format 3\0")
+}
+
+#[cfg(unix)]
+fn validate_usable_sqlite_generation(
     destination_parent: &File,
     base: &std::ffi::OsStr,
 ) -> anyhow::Result<()> {
-    if readable::open_pinned_regular_at(destination_parent, base)?.is_none() {
+    let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? else {
         anyhow::bail!("SQLite publication winner disappeared or is not regular");
-    }
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let mut name = base.to_os_string();
-        name.push(suffix);
-        match readable::stat_at(destination_parent, &name) {
-            Ok(_) => anyhow::bail!("SQLite publication winner has sidecar {:?}", name),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+    };
+    if !sqlite_header_is_valid(&database)? {
+        anyhow::bail!("SQLite publication winner is not a usable SQLite generation");
     }
     Ok(())
 }
@@ -249,7 +271,7 @@ thread_local! {
         const { Cell::new(None) };
     pub(crate) static AFTER_SQLITE_SNAPSHOT_CREATED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
-    pub(crate) static AFTER_SQLITE_SIDECAR_OPENED: Cell<Option<fn(&Path)>> =
+    pub(crate) static AFTER_SQLITE_DESTINATION_OBSERVED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
 }
 
@@ -272,8 +294,8 @@ fn run_after_sqlite_snapshot_created(snapshot_path: &Path) {
 }
 
 #[cfg(test)]
-fn run_after_sqlite_sidecar_opened(parent: &File, name: &std::ffi::OsStr) {
-    AFTER_SQLITE_SIDECAR_OPENED.with(|hook| {
+fn run_after_sqlite_destination_observed(parent: &File, name: &std::ffi::OsStr) {
+    AFTER_SQLITE_DESTINATION_OBSERVED.with(|hook| {
         if let Some(inject) = hook.get() {
             let path = PathBuf::from("/proc/self/fd")
                 .join(parent.as_raw_fd().to_string())
