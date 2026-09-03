@@ -130,13 +130,12 @@ fn sqlite_snapshot(
         snapshot_file.sync_all()?;
         Ok::<(), anyhow::Error>(())
     })();
-    if result.is_err() {
-        // SAFETY: destination_parent is live; this name is owned by this call.
-        unsafe {
-            libc::unlinkat(destination_parent.as_raw_fd(), name_c.as_ptr(), 0);
-        }
+    let cleanup = readable::remove_file_if_same(destination_parent, &name, &snapshot_file);
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Ok(())) => Ok((snapshot_file, name)),
+        (Ok(()), Err(error)) => Err(error.into()),
     }
-    result.map(|()| (snapshot_file, name))
 }
 
 #[cfg(test)]
@@ -188,7 +187,11 @@ pub fn migrate_sqlite_generation(
         match readable::stat_at(destination_parent, &name) {
             Ok(stat) if stat.st_mode & libc::S_IFMT == libc::S_IFREG => {
                 if !database_present {
-                    readable::remove_file_at(destination_parent, &name)?;
+                    let sidecar = readable::open_pinned_regular_at(destination_parent, &name)?
+                        .ok_or_else(|| anyhow::anyhow!("SQLite generation member disappeared"))?;
+                    #[cfg(test)]
+                    run_after_sqlite_sidecar_opened(destination_parent, &name);
+                    readable::remove_file_if_same(destination_parent, &name, &sidecar)?;
                 }
             }
             Ok(_) => anyhow::bail!("SQLite generation member is not a regular file"),
@@ -207,19 +210,46 @@ pub fn migrate_sqlite_generation(
         )?;
     let result = match readable::copy_pinned_file_atomic(&snapshot, destination_parent, base) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            validate_sqlite_publication_winner(destination_parent, base)?;
+            Ok(())
+        }
         Err(error) => Err(runtime_backing_error(destination_path, error)),
     };
-    // This process created the snapshot name, so only it may unlink it.
-    let _ = readable::remove_file_at(destination_parent, &snapshot_name);
-    result
+    let cleanup = readable::remove_file_if_same(destination_parent, &snapshot_name, &snapshot);
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(error)) => Err(runtime_backing_error(destination_path, error)),
+    }
 }
 
+#[cfg(unix)]
+fn validate_sqlite_publication_winner(
+    destination_parent: &File,
+    base: &std::ffi::OsStr,
+) -> anyhow::Result<()> {
+    if readable::open_pinned_regular_at(destination_parent, base)?.is_none() {
+        anyhow::bail!("SQLite publication winner disappeared or is not regular");
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut name = base.to_os_string();
+        name.push(suffix);
+        match readable::stat_at(destination_parent, &name) {
+            Ok(_) => anyhow::bail!("SQLite publication winner has sidecar {:?}", name),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
 #[cfg(test)]
 thread_local! {
     pub(crate) static AFTER_SQLITE_SOURCE_OPENED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
     pub(crate) static AFTER_SQLITE_SNAPSHOT_CREATED: Cell<Option<fn(&Path)>> =
+        const { Cell::new(None) };
+    pub(crate) static AFTER_SQLITE_SIDECAR_OPENED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
 }
 
@@ -237,6 +267,18 @@ fn run_after_sqlite_snapshot_created(snapshot_path: &Path) {
     AFTER_SQLITE_SNAPSHOT_CREATED.with(|hook| {
         if let Some(inject) = hook.get() {
             inject(snapshot_path);
+        }
+    });
+}
+
+#[cfg(test)]
+fn run_after_sqlite_sidecar_opened(parent: &File, name: &std::ffi::OsStr) {
+    AFTER_SQLITE_SIDECAR_OPENED.with(|hook| {
+        if let Some(inject) = hook.get() {
+            let path = PathBuf::from("/proc/self/fd")
+                .join(parent.as_raw_fd().to_string())
+                .join(name);
+            inject(&path);
         }
     });
 }

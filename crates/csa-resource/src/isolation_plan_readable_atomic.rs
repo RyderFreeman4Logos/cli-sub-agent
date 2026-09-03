@@ -18,6 +18,8 @@ static ATOMIC_COPY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 thread_local! {
     pub(crate) static FAIL_ATOMIC_COPY: Cell<bool> = const { Cell::new(false) };
+    pub(crate) static AFTER_ATOMIC_COPY_WRITTEN: Cell<Option<fn(&std::path::Path)>> =
+        const { Cell::new(None) };
 }
 
 #[cfg(unix)]
@@ -51,6 +53,35 @@ pub(crate) fn remove_file_at(parent: &File, name: &std::ffi::OsStr) -> std::io::
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+#[cfg(unix)]
+pub(crate) fn remove_file_if_same(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    expected: &File,
+) -> std::io::Result<()> {
+    let Some(current) = open_pinned_regular_at(parent, name)? else {
+        return Ok(());
+    };
+    if !super::same_file(&current, expected)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "pinned temporary file changed before cleanup",
+        ));
+    }
+    remove_file_at(parent, name)
+}
+
+#[cfg(test)]
+fn run_after_atomic_copy_written(parent: &File, name: &CString) {
+    AFTER_ATOMIC_COPY_WRITTEN.with(|hook| {
+        if let Some(inject) = hook.get() {
+            let path = std::path::PathBuf::from("/proc/self/fd")
+                .join(parent.as_raw_fd().to_string())
+                .join(name.to_str().unwrap());
+            inject(&path);
+        }
+    });
 }
 
 #[cfg(unix)]
@@ -89,6 +120,24 @@ pub(crate) fn copy_pinned_file_atomic(
         source.seek(SeekFrom::Start(0))?;
         io::copy(&mut source, &mut destination)?;
         destination.sync_all()?;
+        #[cfg(test)]
+        run_after_atomic_copy_written(destination_parent, &temporary_name);
+        let current = open_pinned_regular_at(
+            destination_parent,
+            std::ffi::OsStr::new(temporary_name.to_str().unwrap()),
+        )?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Interrupted,
+                "temporary SQLite copy disappeared",
+            )
+        })?;
+        if !super::same_file(&current, &destination)? {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "temporary SQLite copy changed before publication",
+            ));
+        }
         // SAFETY: destination_parent is a live directory descriptor.
         if unsafe { libc::fsync(destination_parent.as_raw_fd()) } != 0 {
             return Err(std::io::Error::last_os_error());
@@ -132,10 +181,11 @@ pub(crate) fn copy_pinned_file_atomic(
         Ok(())
     })();
     if result.is_err() {
-        // SAFETY: destination_parent is live; cleanup is best effort for a private temp name.
-        unsafe {
-            libc::unlinkat(destination_parent.as_raw_fd(), temporary_name.as_ptr(), 0);
-        }
+        let _ = remove_file_if_same(
+            destination_parent,
+            std::ffi::OsStr::new(temporary_name.to_str().unwrap()),
+            &destination,
+        );
     }
     result
 }

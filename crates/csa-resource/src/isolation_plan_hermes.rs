@@ -32,7 +32,9 @@ pub(crate) use hermes_sqlite::acquire_sqlite_generation_lock;
 #[cfg(unix)]
 pub(super) use hermes_sqlite::migrate_sqlite_generation;
 #[cfg(all(unix, test))]
-pub(crate) use hermes_sqlite::{AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED};
+pub(crate) use hermes_sqlite::{
+    AFTER_SQLITE_SIDECAR_OPENED, AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED,
+};
 
 fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
     let Some(profile) = hermes_profile.filter(|value| !value.trim().is_empty()) else {
@@ -391,6 +393,10 @@ pub(super) fn add_hermes_runtime_paths(
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
         let migrated_profiles =
             migrate_legacy_sqlite(&home_fd, &runtime_home_fd, &names, &hermes_home)?;
+        let migrated_profile_requests: Vec<PathBuf> = migrated_profiles
+            .iter()
+            .map(|(requested, _, _)| requested.clone())
+            .collect();
         for (requested, bind_source, file) in migrated_profiles {
             writable_paths.push(requested.clone());
             readable_paths.push(ReadablePath::pinned_writable_from(
@@ -416,6 +422,7 @@ pub(super) fn add_hermes_runtime_paths(
             });
             if name_lossy == "logs"
                 || name_lossy == RUNTIME_BACKING
+                || name_lossy == ".csa-sqlite-generation.lock"
                 || name_lossy.starts_with("state.db")
                 || is_flat_profile_generation
             {
@@ -430,6 +437,28 @@ pub(super) fn add_hermes_runtime_paths(
                 real_home.join(name),
                 file,
             ));
+        }
+        for requested in migrated_profile_requests {
+            let relative = requested.strip_prefix(&hermes_home).map_err(|_| {
+                overlay_protection_error(std::io::Error::other(
+                    "migrated Hermes profile is outside Hermes home",
+                ))
+            })?;
+            let config = requested.join("config.yaml");
+            let config_source = real_home.join(relative).join("config.yaml");
+            if config_source.exists() {
+                let overlay =
+                    ReadablePath::try_pinned_readonly_overlay_from(config.clone(), config_source)
+                        .map_err(overlay_protection_error)?;
+                let file = overlay
+                    .open_pinned_regular_file()
+                    .map_err(overlay_protection_error)?;
+                protected.push(ReadablePath::pinned_readonly_overlay(
+                    config,
+                    real_home.join(relative).join("config.yaml"),
+                    file,
+                ));
+            }
         }
         for (name, directory) in [("config.yaml", false), ("profiles", true)] {
             if names.iter().any(|candidate| candidate == name) {

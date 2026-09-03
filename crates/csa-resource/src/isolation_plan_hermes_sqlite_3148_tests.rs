@@ -248,7 +248,8 @@ fn sqlite_journal_is_not_an_independent_file_mountpoint() {
     std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
     std::fs::write(hermes_home.join("state.db"), b"").unwrap();
 
-    let plan = hermes_plan(&hermes_home).expect("Hermes sqlite plan must build");
+    let _first_plan = hermes_plan(&hermes_home).expect("initial Hermes plan must build");
+    let plan = hermes_plan(&hermes_home).expect("Hermes plan must build on a later preflight");
     let args = command_args(&plan);
     for name in ["state.db-wal", "state.db-shm", "state.db-journal"] {
         let sidecar = hermes_home.join(name);
@@ -264,6 +265,18 @@ fn sqlite_journal_is_not_an_independent_file_mountpoint() {
     assert!(
         plan.writable_paths.contains(&hermes_home),
         "SQLite journal unlink needs one pinned writable Hermes home directory"
+    );
+    let lock = hermes_home.join(".csa-sqlite-generation.lock");
+    assert!(
+        !plan
+            .readable_paths
+            .iter()
+            .any(|path| path.requested() == lock),
+        "the generation lock must not become a Hermes read-only overlay"
+    );
+    assert!(
+        !is_independent_bind(&args, &lock),
+        "the generation lock must not be mounted into the sandbox: {args:?}"
     );
     let writable_home = plan
         .readable_paths
@@ -291,6 +304,12 @@ fn legacy_profile_state_databases_migrate_to_runtime_for_all_supported_layouts()
     std::fs::create_dir_all(hermes_home.join("profiles").join("nested")).unwrap();
     std::fs::create_dir_all(hermes_home.join("direct")).unwrap();
     std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+    std::fs::write(
+        hermes_home.join("profiles/nested/config.yaml"),
+        "nested: true\n",
+    )
+    .unwrap();
     let direct_connection = live_sqlite_database(&hermes_home.join("direct/state.db"), "direct");
     let nested_connection =
         live_sqlite_database(&hermes_home.join("profiles/nested/state.db"), "nested");
@@ -336,128 +355,6 @@ fn legacy_profile_state_databases_migrate_to_runtime_for_all_supported_layouts()
             *value
         );
         assert!(legacy.exists(), "legacy {profile} DB must remain in place");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn migrated_profile_databases_remain_writable_through_bwrap_overlays() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let temp = tempfile::Builder::new()
-        .prefix("hermes-profile-bwrap-write-")
-        .tempdir_in("/var/tmp")
-        .unwrap();
-    let (_home, _env) = isolated_home(&temp);
-    let hermes_home = temp.path().join("hermes-home");
-    std::fs::create_dir_all(hermes_home.join("direct")).unwrap();
-    std::fs::create_dir_all(hermes_home.join("profiles/nested")).unwrap();
-    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
-    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
-    let direct_connection = live_sqlite_database(&hermes_home.join("direct/state.db"), "direct");
-    let nested_connection =
-        live_sqlite_database(&hermes_home.join("profiles/nested/state.db"), "nested");
-    let flat_connection = live_sqlite_database(&hermes_home.join("state.flat.db"), "flat");
-
-    let plan = hermes_plan(&hermes_home).expect("Hermes plan must migrate profile databases");
-    drop((direct_connection, nested_connection, flat_connection));
-    let args = command_args(&plan);
-    let runtime = hermes_home.join(".csa-runtime");
-    let layouts = [
-        (
-            "direct",
-            hermes_home.join("direct/state.db"),
-            runtime.join("direct/state.db"),
-            "direct",
-        ),
-        (
-            "nested",
-            hermes_home.join("profiles/nested/state.db"),
-            runtime.join("profiles/nested/state.db"),
-            "nested",
-        ),
-        (
-            "flat",
-            hermes_home.join("state.flat.db"),
-            runtime.join("state.flat.db"),
-            "flat",
-        ),
-    ];
-
-    for (profile, legacy_db, runtime_db, value) in &layouts {
-        assert_eq!(
-            crate::isolation_plan::resolve_hermes_state_db(&hermes_home, Some(profile)),
-            *runtime_db,
-            "{profile} must resolve to the migrated DB used by xurl and recall"
-        );
-        let migrated = rusqlite::Connection::open(runtime_db).unwrap();
-        assert_eq!(
-            migrated
-                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
-                .unwrap(),
-            "ok"
-        );
-        assert_eq!(
-            migrated
-                .query_row(
-                    "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
-                    [],
-                    |row| { row.get::<_, String>(0) }
-                )
-                .unwrap(),
-            *value
-        );
-        assert!(
-            legacy_db.exists(),
-            "legacy {profile} DB must remain in place"
-        );
-
-        let requested_dir = legacy_db.parent().unwrap();
-        let writable = plan
-            .readable_paths
-            .iter()
-            .find(|path| path.writable_bind() && path.requested() == requested_dir)
-            .expect("migrated profile must have a pinned writable bind");
-        assert_eq!(
-            writable.bind_source(),
-            runtime_db.parent().unwrap(),
-            "{profile} writes must bind the migrated runtime directory"
-        );
-        let writable_pos = args
-            .windows(3)
-            .position(|window| {
-                window[0] == "--bind-fd" && window[2] == requested_dir.to_string_lossy().as_ref()
-            })
-            .expect("migrated profile must have a pinned writable bind");
-        if requested_dir == hermes_home {
-            assert_eq!(profile, &"flat");
-            assert_eq!(writable.bind_source(), &runtime);
-            assert!(
-                args.windows(3).any(|window| {
-                    window[0] == "--bind-fd" && window[2] == hermes_home.to_string_lossy().as_ref()
-                }),
-                "flat profile must be covered by the pinned writable Hermes home bind: {args:?}"
-            );
-            continue;
-        }
-        let overlay = plan
-            .readable_paths
-            .iter()
-            .filter(|path| {
-                path.overrides_writable_mount() && requested_dir.starts_with(path.requested())
-            })
-            .max_by_key(|path| path.requested().components().count())
-            .expect("migrated profile must remain under a read-only overlay");
-        let overlay_pos = args
-            .windows(3)
-            .position(|window| {
-                window[0] == "--ro-bind-fd"
-                    && window[2] == overlay.requested().to_string_lossy().as_ref()
-            })
-            .expect("profile overlay must use its pinned read-only bind");
-        assert!(
-            overlay_pos < writable_pos,
-            "writable {profile} bind must follow its parent overlay: {args:?}"
-        );
     }
 }
 
@@ -598,5 +495,7 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
     );
 }
 
+#[path = "isolation_plan_hermes_sqlite_3148_overlay_tests.rs"]
+mod sqlite_3148_overlay_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_regression_tests.rs"]
 mod sqlite_3148_regression_tests;
