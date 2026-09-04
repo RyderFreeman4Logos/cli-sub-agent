@@ -24,6 +24,30 @@ use super::runtime_backing_error;
 
 #[cfg(unix)]
 const SQLITE_STAGING_DIR: &str = ".csa-sqlite-staging";
+#[cfg(unix)]
+const SQLITE_SNAPSHOT_MAX_BYTES: u64 = 2 * 1024 * 1024;
+#[cfg(unix)]
+const SQLITE_SNAPSHOT_MAX_PAGES: u64 = 512;
+
+#[cfg(unix)]
+fn sqlite_file_page_count(file: &File) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = file.try_clone()?;
+    file.seek(SeekFrom::Start(16))?;
+    let mut encoded_page_size = [0; 2];
+    file.read_exact(&mut encoded_page_size)?;
+    let page_size = match u16::from_be_bytes(encoded_page_size) {
+        1 => 65_536,
+        512..=u16::MAX => u64::from(u16::from_be_bytes(encoded_page_size)),
+        _ => {
+            return Err(std::io::Error::other(
+                "SQLite source has an invalid page size",
+            ));
+        }
+    };
+    Ok(file.metadata()?.len().div_ceil(page_size))
+}
 
 #[cfg(unix)]
 pub fn acquire_sqlite_generation_lock(parent: &File) -> std::io::Result<File> {
@@ -113,7 +137,15 @@ fn sqlite_snapshot(
         if !readable::same_file(&current_source, source_database)? {
             anyhow::bail!("pinned source database changed during snapshot");
         }
-        let mut destination = Connection::open_in_memory()?;
+        if source_database.metadata()?.len() > SQLITE_SNAPSHOT_MAX_BYTES
+            || sqlite_file_page_count(source_database)? > SQLITE_SNAPSHOT_MAX_PAGES
+        {
+            anyhow::bail!("SQLite source exceeds snapshot ceiling");
+        }
+        let mut destination = Connection::open_with_flags(
+            sqlite_pinned_path(&snapshot_file),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+        )?;
         destination.busy_timeout(Duration::ZERO)?;
         destination.execute_batch("PRAGMA journal_mode=OFF;")?;
         let backup = Backup::new(&source, &mut destination)?;
@@ -132,14 +164,6 @@ fn sqlite_snapshot(
             }
         }
         drop(backup);
-        let snapshot = destination.serialize("main")?;
-        {
-            use std::io::Write;
-            let mut output = snapshot_file.try_clone()?;
-            output.write_all(&snapshot)?;
-            output.sync_all()?;
-        }
-        drop(snapshot);
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;

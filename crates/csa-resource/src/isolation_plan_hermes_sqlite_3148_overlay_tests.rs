@@ -148,3 +148,63 @@ fn migrated_profile_databases_remain_writable_through_bwrap_overlays() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn configured_profiles_without_state_db_have_writable_authoritative_runtime_paths() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-profile-initial-state-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("direct")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("profiles/nested")).unwrap();
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+    std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+    std::fs::write(
+        hermes_home.join("profiles/nested/config.yaml"),
+        "nested: true\n",
+    )
+    .unwrap();
+
+    let plan = hermes_plan(&hermes_home).expect("config-only profiles must plan");
+    for (profile, requested, runtime) in [
+        (
+            "direct",
+            hermes_home.join("direct"),
+            hermes_home.join(".csa-runtime/direct"),
+        ),
+        (
+            "nested",
+            hermes_home.join("profiles/nested"),
+            hermes_home.join(".csa-runtime/profiles/nested"),
+        ),
+    ] {
+        let state_db = runtime.join("state.db");
+        assert_eq!(
+            crate::isolation_plan::resolve_hermes_state_db(&hermes_home, Some(profile)),
+            state_db,
+            "{profile} xurl and recall must resolve the runtime initial state"
+        );
+        let writable = plan
+            .readable_paths
+            .iter()
+            .find(|path| path.writable_bind() && path.requested() == requested)
+            .expect("config-only profile must have a pinned writable runtime bind");
+        assert_eq!(writable.bind_source(), &runtime);
+        assert!(
+            plan.readable_paths.iter().any(|path| {
+                path.overrides_writable_mount() && path.requested() == requested.join("config.yaml")
+            }),
+            "{profile} config must remain read-only after the writable profile bind"
+        );
+        let database = rusqlite::Connection::open(&state_db)
+            .expect("authoritative runtime path must permit initial state.db creation");
+        database
+            .execute_batch("CREATE TABLE initial_state (value TEXT NOT NULL);")
+            .unwrap();
+    }
+}

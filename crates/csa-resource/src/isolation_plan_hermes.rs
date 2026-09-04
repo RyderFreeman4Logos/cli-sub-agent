@@ -63,10 +63,27 @@ pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>)
         .first()
         .cloned()
         .unwrap_or_else(|| runtime_home.join("state.db"));
+    let configured_nested_profile = hermes_profile
+        .filter(|profile| !profile.trim().is_empty())
+        .map(str::trim)
+        .filter(|profile| {
+            let runtime_direct = runtime_home.join(profile);
+            let legacy_direct = hermes_home.join(profile).join("config.yaml");
+            let runtime_nested = runtime_home.join("profiles").join(profile);
+            let legacy_nested = hermes_home
+                .join("profiles")
+                .join(profile)
+                .join("config.yaml");
+            (runtime_nested.is_dir() || legacy_nested.is_file())
+                && !runtime_direct.is_dir()
+                && !legacy_direct.is_file()
+        })
+        .map(|profile| runtime_home.join("profiles").join(profile).join("state.db"));
     candidates.extend(state_db_candidates(hermes_home, hermes_profile));
     candidates
         .into_iter()
         .find(|path| path.exists())
+        .or(configured_nested_profile)
         .unwrap_or(authoritative)
 }
 
@@ -92,20 +109,24 @@ fn migrate_profile_directory(
         }
         Err(error) => return Err(error.into()),
     };
-    let Some(database) = readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?
-    else {
+    let database = readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?;
+    if database.is_none()
+        && readable::open_pinned_regular_at(&source_profile, OsStr::new("config.yaml"))?.is_none()
+    {
         return Ok(None);
-    };
+    }
     let destination_profile = readable::open_or_create_writable_dir_at(destination_parent, name)
         .map_err(|error| runtime_backing_error(destination_path, error))?;
-    migrate_sqlite_generation(
-        &source_profile,
-        &destination_profile,
-        coordination_parent,
-        OsStr::new("state.db"),
-        database,
-        destination_path,
-    )?;
+    if let Some(database) = database {
+        migrate_sqlite_generation(
+            &source_profile,
+            &destination_profile,
+            coordination_parent,
+            OsStr::new("state.db"),
+            database,
+            destination_path,
+        )?;
+    }
     Ok(Some(destination_profile))
 }
 
@@ -190,11 +211,13 @@ fn migrate_legacy_sqlite(
             }
             Err(error) => return Err(error.into()),
         };
-        let Some(database) =
-            readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?
-        else {
+        let database = readable::open_pinned_regular_at(&source_profile, OsStr::new("state.db"))?;
+        if database.is_none()
+            && readable::open_pinned_regular_at(&source_profile, OsStr::new("config.yaml"))?
+                .is_none()
+        {
             continue;
-        };
+        }
         if destination_profiles.is_none() {
             destination_profiles = Some(
                 readable::open_or_create_writable_dir_at(runtime_home_fd, OsStr::new("profiles"))
@@ -215,14 +238,16 @@ fn migrate_legacy_sqlite(
         let destination_profile =
             readable::open_or_create_writable_dir_at(destination_profiles, &name)
                 .map_err(|error| runtime_backing_error(&destination_path, error))?;
-        migrate_sqlite_generation(
-            &source_profile,
-            &destination_profile,
-            home_fd,
-            OsStr::new("state.db"),
-            database,
-            &destination_path.join("state.db"),
-        )?;
+        if let Some(database) = database {
+            migrate_sqlite_generation(
+                &source_profile,
+                &destination_profile,
+                home_fd,
+                OsStr::new("state.db"),
+                database,
+                &destination_path.join("state.db"),
+            )?;
+        }
         writable_profiles.push((
             hermes_home.join("profiles").join(&name),
             destination_path,

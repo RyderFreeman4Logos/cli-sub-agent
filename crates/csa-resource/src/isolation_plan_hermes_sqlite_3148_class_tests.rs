@@ -99,6 +99,11 @@ fn make_snapshot_directory_read_only(snapshot_path: &Path) {
 fn mark_snapshot_source_opened(source_path: &Path) {
     let source = std::fs::read_link(source_path).unwrap();
     std::fs::write(source.parent().unwrap().join("backup-entered"), []).unwrap();
+    if let Some(root) = std::env::var_os("CSA_SQLITE_SNAPSHOT_DEATH_ROOT") {
+        while !PathBuf::from(&root).join("release").exists() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -143,6 +148,43 @@ fn sqlite_migration_preserves_valid_legacy_sqlite_for_all_layouts() {
                 .unwrap(),
             label,
             "{label} must keep a usable legacy generation"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_snapshot_rejects_oversized_source_before_parent_memory_clone_for_all_layouts() {
+    for (label, dest_rel, base) in LAYOUTS {
+        let (_temp, source, destination) = layout_dirs(&format!("oversized-{label}"), dest_rel);
+        drop(live_sqlite_database(&source.join(base), label));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(source.join(base))
+            .unwrap()
+            .set_len(3 * 1024 * 1024)
+            .unwrap();
+
+        let error = migrate_generation(&source, &destination, base).expect_err(label);
+        assert!(
+            error.to_string().contains("SQLite") || error.to_string().contains("snapshot"),
+            "{label} oversized source must fail closed: {error:#}"
+        );
+        assert!(
+            !destination.join(base).exists(),
+            "{label} must not publish an oversized source"
+        );
+        let preserved = rusqlite::Connection::open(source.join(base)).unwrap();
+        assert_eq!(
+            preserved
+                .query_row(
+                    "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            label,
+            "{label} must retain the legacy database after rejecting it"
         );
     }
 }
@@ -350,6 +392,7 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
              BEGIN EXCLUSIVE;",
         )
         .unwrap();
+    drop(holder);
     let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
@@ -361,13 +404,13 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         let source_opened = source.join("backup-entered").exists();
-        let snapshot_open = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
+        let _snapshot_open = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
             .into_iter()
             .flatten()
             .filter_map(Result::ok)
             .filter_map(|entry| std::fs::read_link(entry.path()).ok())
             .any(|path| path.to_string_lossy().contains(".csa-sqlite-staging/"));
-        if source_opened && snapshot_open {
+        if source_opened {
             break;
         }
         assert!(
@@ -378,7 +421,6 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
     }
     child.kill().unwrap();
     child.wait().unwrap();
-    drop(holder);
 
     assert!(
         staging_snapshot_names(&source).is_empty(),
