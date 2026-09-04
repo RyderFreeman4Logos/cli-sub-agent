@@ -25,6 +25,9 @@ const RUNTIME_BACKING: &str = ".csa-runtime";
 const RUNTIME_READY: &str = ".csa-runtime-ready";
 
 #[cfg(unix)]
+#[path = "isolation_plan_hermes_runtime_ready.rs"]
+mod hermes_runtime_ready;
+#[cfg(unix)]
 #[path = "isolation_plan_hermes_sqlite.rs"]
 mod hermes_sqlite;
 
@@ -332,55 +335,6 @@ fn runtime_backing_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
     )
 }
 
-#[cfg(unix)]
-fn activate_runtime_generation(
-    runtime_home_fd: &File,
-    database_paths: &[PathBuf],
-) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::fd::{AsRawFd, FromRawFd};
-
-    let name = std::ffi::CString::new(RUNTIME_READY).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "runtime activation marker name is invalid",
-        )
-    })?;
-    // SAFETY: `runtime_home_fd` is a live directory descriptor and `name` is one component.
-    let fd = unsafe {
-        libc::openat(
-            runtime_home_fd.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
-    let mut file = unsafe { File::from_raw_fd(fd) };
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    // SAFETY: `file` is live; `stat` is writable storage for fstat.
-    if unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: fstat initialized `stat` after returning success.
-    let stat = unsafe { stat.assume_init() };
-    if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "runtime activation marker is not a regular file",
-        ));
-    }
-    file.set_len(0)?;
-    for path in database_paths {
-        writeln!(file, "{}", path.display())?;
-    }
-    file.sync_all()?;
-    Ok(())
-}
-
 fn runtime_ready(marker: &Path) -> bool {
     std::fs::symlink_metadata(marker).is_ok_and(|meta| meta.file_type().is_file())
 }
@@ -422,7 +376,11 @@ pub(super) struct PendingRuntimeActivation {
 #[cfg(unix)]
 impl PendingRuntimeActivation {
     pub(super) fn publish(self) -> std::io::Result<()> {
-        activate_runtime_generation(&self.runtime_home_fd, &self.database_paths).map_err(|error| {
+        hermes_runtime_ready::activate_runtime_generation(
+            &self.runtime_home_fd,
+            &self.database_paths,
+        )
+        .map_err(|error| {
             std::io::Error::new(
                 error.kind(),
                 format!("{}: {error}", self.marker_path.display()),

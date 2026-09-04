@@ -176,3 +176,81 @@ fn resolver_rejects_symlinked_runtime_ready_marker() {
         "resolver must not follow a symlinked runtime-ready marker"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn runtime_ready_hardlink_does_not_truncate_runtime_database_for_all_layouts() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let layouts: [(&str, Option<&str>, &str); 4] = [
+        ("root", None, "state.db"),
+        ("flat", Some("flat"), "state.flat.db"),
+        ("direct", Some("direct"), "direct/state.db"),
+        ("nested", Some("nested"), "profiles/nested/state.db"),
+    ];
+    for (label, profile, legacy_rel) in layouts {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("hermes-ready-hardlink-{label}-"))
+            .tempdir_in("/var/tmp")
+            .unwrap();
+        let (_home, _env) = isolated_home(&temp);
+        let hermes_home = temp.path().join("hermes-home");
+        std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+        if let Some(parent) = hermes_home.join(legacy_rel).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+        if label == "direct" {
+            std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+        }
+        if label == "nested" {
+            std::fs::write(
+                hermes_home.join("profiles/nested/config.yaml"),
+                "nested: true\n",
+            )
+            .unwrap();
+        }
+        let source = live_sqlite_database(&hermes_home.join(legacy_rel), label);
+        hermes_plan(&hermes_home).expect(label);
+        drop(source);
+
+        let runtime_db = hermes_home.join(".csa-runtime").join(legacy_rel);
+        let marker = hermes_home.join(".csa-runtime").join(".csa-runtime-ready");
+        assert!(
+            runtime_db.is_file(),
+            "{label} runtime database must exist before the hard-link attack"
+        );
+        assert!(
+            marker.is_file(),
+            "{label} runtime-ready marker must exist before the hard-link attack"
+        );
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::hard_link(&runtime_db, &marker).unwrap();
+
+        hermes_plan(&hermes_home).expect(label);
+
+        let intact = rusqlite::Connection::open(&runtime_db).unwrap();
+        assert_eq!(
+            intact
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok",
+            "{label} runtime database must remain readable after marker republication"
+        );
+        assert_eq!(
+            intact
+                .query_row(
+                    "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            label,
+            "{label} runtime database contents must remain intact"
+        );
+        assert_eq!(
+            crate::isolation_plan::resolve_hermes_state_db(&hermes_home, profile),
+            runtime_db,
+            "{label} must keep the runtime database authoritative"
+        );
+    }
+}

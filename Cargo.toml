@@ -20,7 +20,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.1228"
+version = "0.1.1229"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -76,7 +76,7 @@ tar = { version = "0.4", default-features = false }
 
 # Utilities
 regex = "1.11"
-rusqlite = { version = "0.37", features = ["bundled", "hooks", "serialize"] }
+rusqlite = { version = "0.37", features = ["bundled", "hooks"] }
 sha2 = "0.10"
 glob = "0.3"
 ignore = "0.4"
