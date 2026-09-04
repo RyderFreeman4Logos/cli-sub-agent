@@ -88,22 +88,15 @@ fn corrupt_sqlite_btree(path: &Path) {
 }
 
 fn make_snapshot_directory_read_only(snapshot_path: &Path) {
-    let target = std::fs::read_link(snapshot_path).unwrap();
-    std::fs::set_permissions(
-        target.parent().unwrap(),
-        std::fs::Permissions::from_mode(0o500),
-    )
-    .unwrap();
+    let staging_fd = snapshot_path.parent().expect("named snapshot parent");
+    let staging = std::fs::read_link(staging_fd).unwrap_or_else(|_| staging_fd.to_path_buf());
+    std::fs::set_permissions(staging, std::fs::Permissions::from_mode(0o500)).unwrap();
 }
 
-fn mark_snapshot_source_opened(source_path: &Path) {
-    let source = std::fs::read_link(source_path).unwrap();
-    std::fs::write(source.parent().unwrap().join("backup-entered"), []).unwrap();
-    if let Some(root) = std::env::var_os("CSA_SQLITE_SNAPSHOT_DEATH_ROOT") {
-        while !PathBuf::from(&root).join("release").exists() {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
+fn mark_named_snapshot_created(_snapshot_path: &Path) {
+    let root =
+        PathBuf::from(std::env::var_os("CSA_SQLITE_SNAPSHOT_DEATH_ROOT").expect("death root"));
+    std::fs::write(root.join("named-created"), []).unwrap();
 }
 
 #[cfg(unix)]
@@ -351,21 +344,37 @@ fn sqlite_snapshot_failure_leaves_staging_empty_for_all_layouts() {
 #[cfg(unix)]
 #[test]
 fn sqlite_snapshot_unlink_failure_leaves_no_named_snapshot() {
-    let (_temp, source, destination) = layout_dirs("unlink-failure", "runtime");
-    drop(live_sqlite_database(&source.join("state.db"), "source"));
-    let _hook = super::sqlite_3148_regression_tests::SqliteSnapshotCreatedHook::set(
-        make_snapshot_directory_read_only,
-    );
+    for (label, dest_rel, base) in LAYOUTS {
+        let (_temp, source, destination) =
+            layout_dirs(&format!("unlink-failure-{label}"), dest_rel);
+        drop(live_sqlite_database(&source.join(base), "source"));
+        let _hook = super::sqlite_3148_regression_tests::SqliteNamedSnapshotCreatedHook::set(
+            make_snapshot_directory_read_only,
+        );
 
-    let result = migrate_generation(&source, &destination, "state.db");
-    let staging = source.join(".csa-sqlite-staging");
-    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = migrate_generation(&source, &destination, base);
+        let staging = source.join(".csa-sqlite-staging");
+        if staging.is_dir() {
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
 
-    result.unwrap();
-    assert!(
-        staging_snapshot_names(&source).is_empty(),
-        "an unlink failure must not leave a named snapshot"
-    );
+        let error = result.expect_err(label);
+        assert!(
+            error.to_string().contains("Permission denied")
+                || error.to_string().contains("not writable")
+                || error.to_string().contains("SQLite")
+                || error.to_string().contains("unlink"),
+            "{label} unlink failure must fail closed: {error:#}"
+        );
+        assert!(
+            !destination.join(base).exists(),
+            "{label} must not publish after unlink failure"
+        );
+        assert!(
+            staging_snapshot_names(&source).is_empty(),
+            "{label} unlink failure must not leave a named snapshot"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -375,55 +384,52 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
         let root = PathBuf::from(root);
         let source = root.join("legacy");
         let destination = root.join("runtime");
-        let _hook = super::sqlite_3148_regression_tests::SqliteSourceOpenedHook::set(
-            mark_snapshot_source_opened,
+        let base =
+            std::env::var("CSA_SQLITE_SNAPSHOT_DEATH_BASE").unwrap_or_else(|_| "state.db".into());
+        let _hook = super::sqlite_3148_regression_tests::SqliteNamedSnapshotCreatedHook::set(
+            mark_named_snapshot_created,
         );
-        migrate_generation(&source, &destination, "state.db").unwrap();
+        let _ = migrate_generation(&source, &destination, &base);
         return;
     }
 
-    let (temp, source, _destination) = layout_dirs("process-death", "runtime");
-    let holder = rusqlite::Connection::open(source.join("state.db")).unwrap();
-    holder
-        .execute_batch(
-            "PRAGMA journal_mode=DELETE;
-             CREATE TABLE values_table (value TEXT NOT NULL);
-             INSERT INTO values_table (value) VALUES ('locked');
-             BEGIN EXCLUSIVE;",
-        )
-        .unwrap();
-    drop(holder);
-    let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .arg("--exact")
-        .arg(test_name)
-        .arg("--nocapture")
-        .env("CSA_SQLITE_SNAPSHOT_DEATH_ROOT", temp.path())
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        let source_opened = source.join("backup-entered").exists();
-        let _snapshot_open = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
-            .any(|path| path.to_string_lossy().contains(".csa-sqlite-staging/"));
-        if source_opened {
-            break;
+    for (label, dest_rel, base) in LAYOUTS {
+        let (temp, source, _destination) = layout_dirs(&format!("process-death-{label}"), dest_rel);
+        drop(live_sqlite_database(&source.join(base), label));
+        let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env("CSA_SQLITE_SNAPSHOT_DEATH_ROOT", temp.path())
+            .env("CSA_SQLITE_SNAPSHOT_DEATH_BASE", base)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if temp.path().join("named-created").exists() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{label} child must pause after named snapshot creation"
+            );
+            std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "child must enter backup with the snapshot FD open"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    child.kill().unwrap();
-    child.wait().unwrap();
+        let unlink_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !staging_snapshot_names(&source).is_empty() {
+            assert!(
+                std::time::Instant::now() < unlink_deadline,
+                "{label} must unlink immediately after named SQLite open"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
 
-    assert!(
-        staging_snapshot_names(&source).is_empty(),
-        "process death must not leave a named snapshot"
-    );
+        assert!(
+            staging_snapshot_names(&source).is_empty(),
+            "{label} process death must not leave a named snapshot"
+        );
+    }
 }

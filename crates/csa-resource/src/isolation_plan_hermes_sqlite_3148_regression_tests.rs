@@ -46,6 +46,26 @@ impl Drop for SqliteSnapshotCreatedHook {
 }
 
 #[cfg(unix)]
+pub(super) struct SqliteNamedSnapshotCreatedHook;
+
+#[cfg(unix)]
+impl SqliteNamedSnapshotCreatedHook {
+    pub(super) fn set(inject: fn(&Path)) -> Self {
+        super::super::super::super::hermes_paths::AFTER_SQLITE_NAMED_SNAPSHOT_CREATED
+            .with(|hook| hook.set(Some(inject)));
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SqliteNamedSnapshotCreatedHook {
+    fn drop(&mut self) {
+        super::super::super::super::hermes_paths::AFTER_SQLITE_NAMED_SNAPSHOT_CREATED
+            .with(|hook| hook.set(None));
+    }
+}
+
+#[cfg(unix)]
 struct SqliteAtomicCopyWrittenHook;
 
 #[cfg(unix)]
@@ -106,6 +126,17 @@ fn replace_snapshot_with_empty_inode(snapshot_path: &Path) {
         std::fs::rename(&snapshot_path, parked).unwrap();
     }
     std::fs::write(&snapshot_path, []).unwrap();
+}
+
+fn replace_staging_directory_before_sqlite_open(snapshot_path: &Path) {
+    let staging_fd = snapshot_path.parent().expect("named snapshot parent");
+    let staging = std::fs::read_link(staging_fd).unwrap_or_else(|_| staging_fd.to_path_buf());
+    let parent = staging.parent().expect("staging parent");
+    let parked = parent.join(".csa-sqlite-staging-parked");
+    let replacement = parent.join(".csa-sqlite-staging-replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    std::fs::rename(&staging, parked).unwrap();
+    std::fs::rename(replacement, staging).unwrap();
 }
 
 fn create_destination_winner_with_sidecar(copy_path: &Path) {
@@ -230,6 +261,60 @@ fn sqlite_migration_uses_pinned_snapshot_fd_across_name_replacement() {
             .unwrap(),
         "source"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_migration_uses_pinned_snapshot_fd_across_staging_dir_replacement() {
+    for (label, dest_rel, base) in [
+        ("root", "runtime", "state.db"),
+        ("flat", "runtime", "state.flat.db"),
+        ("direct", "runtime/direct", "state.db"),
+        ("nested", "runtime/profiles/nested", "state.db"),
+    ] {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("hermes-sqlite-staging-replace-{label}-"))
+            .tempdir_in("/var/tmp")
+            .unwrap();
+        let source = temp.path().join("legacy");
+        let destination = temp.path().join(dest_rel);
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir_all(&destination).unwrap();
+        drop(live_sqlite_database(&source.join(base), label));
+        let _hook =
+            SqliteNamedSnapshotCreatedHook::set(replace_staging_directory_before_sqlite_open);
+
+        let result = super::super::super::super::hermes_paths::migrate_sqlite_generation(
+            &std::fs::File::open(&source).unwrap(),
+            &std::fs::File::open(&destination).unwrap(),
+            &std::fs::File::open(&source).unwrap(),
+            std::ffi::OsStr::new(base),
+            std::fs::File::open(source.join(base)).unwrap(),
+            &destination.join(base),
+        );
+        match result {
+            Ok(()) => {
+                let migrated = rusqlite::Connection::open(destination.join(base)).unwrap();
+                assert_eq!(
+                    migrated
+                        .query_row(
+                            "SELECT value FROM values_table ORDER BY rowid DESC LIMIT 1",
+                            [],
+                            |row| row.get::<_, String>(0)
+                        )
+                        .unwrap(),
+                    label,
+                    "{label} must publish source rows after staging-dir replacement"
+                );
+            }
+            Err(error) => {
+                assert!(
+                    !destination.join(base).exists(),
+                    "{label} must fail closed without publication: {error:#}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

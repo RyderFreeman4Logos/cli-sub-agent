@@ -98,8 +98,7 @@ fn sqlite_pinned_path(file: &File) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn create_named_sqlite_snapshot(staging: &File) -> anyhow::Result<(File, PathBuf, String)> {
-    let staging_path = std::fs::read_link(sqlite_pinned_path(staging))?;
+fn create_named_sqlite_snapshot(staging: &File) -> anyhow::Result<(File, String)> {
     for attempt in 0..16 {
         let name = format!(".csa-sqlite-snapshot-{}-{attempt}", std::process::id());
         let c_name = CString::new(name.clone())
@@ -122,9 +121,14 @@ fn create_named_sqlite_snapshot(staging: &File) -> anyhow::Result<(File, PathBuf
         }
         // SAFETY: fd is the uniquely owned descriptor returned by openat.
         let file = unsafe { File::from_raw_fd(fd) };
-        return Ok((file, staging_path.join(&name), name));
+        return Ok((file, name));
     }
     anyhow::bail!("could not allocate a unique SQLite snapshot name")
+}
+
+#[cfg(unix)]
+fn sqlite_dirfd_leaf_path(dir: &File, name: &str) -> PathBuf {
+    sqlite_pinned_path(dir).join(name)
 }
 
 #[cfg(unix)]
@@ -146,6 +150,8 @@ fn unlink_sqlite_snapshot_name(staging: &File, name: &str) -> std::io::Result<()
 
 #[cfg(unix)]
 fn unlink_sqlite_snapshot_leaf(staging: &File, name: &str) {
+    // SAFETY: staging is a live directory we created and opened writable.
+    let _ = unsafe { libc::fchmod(staging.as_raw_fd(), 0o700) };
     let _ = unlink_sqlite_snapshot_name(staging, name);
     for suffix in ["-wal", "-shm", "-journal"] {
         let _ = unlink_sqlite_snapshot_name(staging, &format!("{name}{suffix}"));
@@ -163,9 +169,12 @@ fn sqlite_snapshot(
         staging_root,
         std::ffi::OsStr::new(SQLITE_STAGING_DIR),
     )?;
-    let (snapshot_file, snapshot_path, snapshot_name) = create_named_sqlite_snapshot(&staging)?;
+    let (snapshot_file, snapshot_name) = create_named_sqlite_snapshot(&staging)?;
+    #[cfg(test)]
+    run_after_sqlite_named_snapshot_created(&staging, &snapshot_name);
     let result = (|| {
-        let mut destination = match Connection::open(&snapshot_path) {
+        let snapshot_open_path = sqlite_dirfd_leaf_path(&staging, &snapshot_name);
+        let mut destination = match Connection::open(&snapshot_open_path) {
             Ok(connection) => connection,
             Err(error) => {
                 unlink_sqlite_snapshot_leaf(&staging, &snapshot_name);
@@ -223,6 +232,9 @@ fn sqlite_snapshot(
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
+        if !sqlite_header_is_valid(&snapshot_file)? {
+            anyhow::bail!("SQLite snapshot inode is not the pinned snapshot");
+        }
         #[cfg(test)]
         run_after_sqlite_snapshot_created(&sqlite_pinned_path(&snapshot_file));
         Ok::<(), anyhow::Error>(())
@@ -372,6 +384,8 @@ thread_local! {
         const { Cell::new(None) };
     pub(crate) static AFTER_SQLITE_SNAPSHOT_CREATED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
+    pub(crate) static AFTER_SQLITE_NAMED_SNAPSHOT_CREATED: Cell<Option<fn(&Path)>> =
+        const { Cell::new(None) };
     pub(crate) static AFTER_SQLITE_DESTINATION_OBSERVED: Cell<Option<fn(&Path)>> =
         const { Cell::new(None) };
 }
@@ -390,6 +404,16 @@ fn run_after_sqlite_snapshot_created(snapshot_path: &Path) {
     AFTER_SQLITE_SNAPSHOT_CREATED.with(|hook| {
         if let Some(inject) = hook.get() {
             inject(snapshot_path);
+        }
+    });
+}
+
+#[cfg(test)]
+fn run_after_sqlite_named_snapshot_created(staging: &File, name: &str) {
+    AFTER_SQLITE_NAMED_SNAPSHOT_CREATED.with(|hook| {
+        if let Some(inject) = hook.get() {
+            let path = sqlite_pinned_path(staging).join(name);
+            inject(&path);
         }
     });
 }

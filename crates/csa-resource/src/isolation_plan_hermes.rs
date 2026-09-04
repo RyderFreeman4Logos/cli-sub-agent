@@ -33,7 +33,8 @@ pub(crate) use hermes_sqlite::acquire_sqlite_generation_lock;
 pub(super) use hermes_sqlite::migrate_sqlite_generation;
 #[cfg(all(unix, test))]
 pub(crate) use hermes_sqlite::{
-    AFTER_SQLITE_DESTINATION_OBSERVED, AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED,
+    AFTER_SQLITE_DESTINATION_OBSERVED, AFTER_SQLITE_NAMED_SNAPSHOT_CREATED,
+    AFTER_SQLITE_SNAPSHOT_CREATED, AFTER_SQLITE_SOURCE_OPENED,
 };
 
 fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf> {
