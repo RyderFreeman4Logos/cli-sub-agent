@@ -54,6 +54,23 @@ fn sqlite_file_page_count(file: &File) -> std::io::Result<u64> {
 }
 
 #[cfg(unix)]
+fn sqlite_logical_page_count(connection: &Connection) -> anyhow::Result<u64> {
+    let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    u64::try_from(pages).map_err(|_| anyhow::anyhow!("SQLite page count is negative"))
+}
+
+#[cfg(unix)]
+fn reject_logical_sqlite_generation(pages: impl TryInto<u64>, bytes: u64) -> anyhow::Result<()> {
+    let pages = pages
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("SQLite page count is negative"))?;
+    if pages > SQLITE_SNAPSHOT_MAX_PAGES || bytes > SQLITE_SNAPSHOT_MAX_BYTES {
+        anyhow::bail!("SQLite source exceeds snapshot ceiling");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 pub fn acquire_sqlite_generation_lock(parent: &File) -> std::io::Result<File> {
     let name = std::ffi::CString::new(".csa-sqlite-generation.lock").unwrap();
     // SAFETY: parent is a live directory descriptor and name is one component.
@@ -149,13 +166,24 @@ fn unlink_sqlite_snapshot_name(staging: &File, name: &str) -> std::io::Result<()
 }
 
 #[cfg(unix)]
-fn unlink_sqlite_snapshot_leaf(staging: &File, name: &str) {
+fn unlink_sqlite_snapshot_leaf(staging: &File, name: &str) -> std::io::Result<()> {
     // SAFETY: staging is a live directory we created and opened writable.
-    let _ = unsafe { libc::fchmod(staging.as_raw_fd(), 0o700) };
-    let _ = unlink_sqlite_snapshot_name(staging, name);
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let _ = unlink_sqlite_snapshot_name(staging, &format!("{name}{suffix}"));
+    if unsafe { libc::fchmod(staging.as_raw_fd(), 0o700) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
+    match unlink_sqlite_snapshot_name(staging, name) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        match unlink_sqlite_snapshot_name(staging, &format!("{name}{suffix}")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -169,6 +197,7 @@ fn sqlite_snapshot(
         staging_root,
         std::ffi::OsStr::new(SQLITE_STAGING_DIR),
     )?;
+    readable::recover_reserved_names_at(&staging)?;
     let (snapshot_file, snapshot_name) = create_named_sqlite_snapshot(&staging)?;
     #[cfg(test)]
     run_after_sqlite_named_snapshot_created(&staging, &snapshot_name);
@@ -177,7 +206,7 @@ fn sqlite_snapshot(
         let mut destination = match Connection::open(&snapshot_open_path) {
             Ok(connection) => connection,
             Err(error) => {
-                unlink_sqlite_snapshot_leaf(&staging, &snapshot_name);
+                unlink_sqlite_snapshot_leaf(&staging, &snapshot_name)?;
                 return Err(error.into());
             }
         };
@@ -208,13 +237,24 @@ fn sqlite_snapshot(
         if !readable::same_file(&current_source, source_database)? {
             anyhow::bail!("pinned source database changed during snapshot");
         }
-        if source_database.metadata()?.len() > SQLITE_SNAPSHOT_MAX_BYTES
-            || sqlite_file_page_count(source_database)? > SQLITE_SNAPSHOT_MAX_PAGES
-        {
-            anyhow::bail!("SQLite source exceeds snapshot ceiling");
-        }
+        reject_logical_sqlite_generation(
+            sqlite_logical_page_count(&source)?,
+            source_database.metadata()?.len(),
+        )?;
         let backup = Backup::new(&source, &mut destination)?;
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            if std::time::Instant::now() >= deadline {
+                anyhow::bail!("timed out while snapshotting SQLite generation");
+            }
+            match backup.step(0)? {
+                StepResult::Busy | StepResult::Locked => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                _ => break,
+            }
+        }
+        reject_logical_sqlite_generation(backup.progress().pagecount, 0)?;
         loop {
             if std::time::Instant::now() >= deadline {
                 anyhow::bail!("timed out while snapshotting SQLite generation");
@@ -232,6 +272,10 @@ fn sqlite_snapshot(
         drop(destination);
         drop(source);
         snapshot_file.sync_all()?;
+        reject_logical_sqlite_generation(
+            sqlite_file_page_count(&snapshot_file)?,
+            snapshot_file.metadata()?.len(),
+        )?;
         if !sqlite_header_is_valid(&snapshot_file)? {
             anyhow::bail!("SQLite snapshot inode is not the pinned snapshot");
         }
@@ -240,7 +284,7 @@ fn sqlite_snapshot(
         Ok::<(), anyhow::Error>(())
     })();
     if result.is_err() {
-        unlink_sqlite_snapshot_leaf(&staging, &snapshot_name);
+        unlink_sqlite_snapshot_leaf(&staging, &snapshot_name)?;
     }
     result.map(|()| snapshot_file)
 }
@@ -281,6 +325,8 @@ pub fn migrate_sqlite_generation(
     wait_for_sqlite_publication_barrier()?;
     let _generation_lock = acquire_sqlite_generation_lock(coordination_parent)
         .map_err(|error| runtime_backing_error(destination_path, error))?;
+    recover_sqlite_reserved_names(coordination_parent)
+        .map_err(|error| runtime_backing_error(destination_path, error))?;
     if let Some(database) = readable::open_pinned_regular_at(destination_parent, base)? {
         if sqlite_generation_is_usable(&database)? {
             return Ok(());
@@ -315,6 +361,19 @@ pub fn migrate_sqlite_generation(
             validate_usable_sqlite_generation(destination_parent, base)
         }
         Err(error) => Err(runtime_backing_error(destination_path, error)),
+    }
+}
+
+#[cfg(unix)]
+fn recover_sqlite_reserved_names(coordination_parent: &File) -> std::io::Result<()> {
+    readable::recover_reserved_names_at(coordination_parent)?;
+    match readable::open_directory_at(
+        coordination_parent,
+        std::ffi::OsStr::new(SQLITE_STAGING_DIR),
+    ) {
+        Ok(staging) => readable::recover_reserved_names_at(&staging),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 

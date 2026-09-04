@@ -97,6 +97,9 @@ fn mark_named_snapshot_created(_snapshot_path: &Path) {
     let root =
         PathBuf::from(std::env::var_os("CSA_SQLITE_SNAPSHOT_DEATH_ROOT").expect("death root"));
     std::fs::write(root.join("named-created"), []).unwrap();
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
 }
 
 #[cfg(unix)]
@@ -394,7 +397,7 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
     }
 
     for (label, dest_rel, base) in LAYOUTS {
-        let (temp, source, _destination) = layout_dirs(&format!("process-death-{label}"), dest_rel);
+        let (temp, source, destination) = layout_dirs(&format!("process-death-{label}"), dest_rel);
         drop(live_sqlite_database(&source.join(base), label));
         let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -416,20 +419,79 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
-        let unlink_deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while !staging_snapshot_names(&source).is_empty() {
-            assert!(
-                std::time::Instant::now() < unlink_deadline,
-                "{label} must unlink immediately after named SQLite open"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        let visible = staging_snapshot_names(&source);
+        assert!(
+            !visible.is_empty(),
+            "{label} reserved snapshot name must still be visible before kill: {visible:?}"
+        );
         child.kill().unwrap();
         child.wait().unwrap();
+        let leftover = staging_snapshot_names(&source);
+        assert!(
+            !leftover.is_empty(),
+            "{label} process death while the name is visible must leave the reserved snapshot"
+        );
 
+        migrate_generation(&source, &destination, base)
+            .unwrap_or_else(|error| panic!("{label} recovery preflight must succeed: {error:#}"));
         assert!(
             staging_snapshot_names(&source).is_empty(),
-            "{label} process death must not leave a named snapshot"
+            "{label} recovery must remove the reserved snapshot name"
         );
+        assert!(
+            source.join(base).exists(),
+            "{label} recovery must leave the source generation in place"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_snapshot_rejects_wal_logical_pages_over_ceiling_for_all_layouts() {
+    for (label, dest_rel, base) in LAYOUTS {
+        let (_temp, source, destination) = layout_dirs(&format!("wal-ceiling-{label}"), dest_rel);
+        let connection = rusqlite::Connection::open(source.join(base)).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA wal_autocheckpoint=0;
+                 CREATE TABLE values_table (value BLOB NOT NULL);",
+            )
+            .unwrap();
+        let payload = vec![0x5a; 4096];
+        loop {
+            let pages: i64 = connection
+                .query_row("PRAGMA page_count", [], |row| row.get(0))
+                .unwrap();
+            if pages > 512 {
+                break;
+            }
+            connection
+                .execute("INSERT INTO values_table (value) VALUES (?1)", [&payload])
+                .unwrap();
+        }
+        let main_len = std::fs::metadata(source.join(base)).unwrap().len();
+        assert!(
+            main_len < 2 * 1024 * 1024,
+            "{label} main file must stay under the physical ceiling: {main_len}"
+        );
+        let pages: i64 = connection
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap();
+        assert!(
+            pages > 512,
+            "{label} live WAL connection must exceed the logical page ceiling: {pages}"
+        );
+
+        let error = migrate_generation(&source, &destination, base).expect_err(label);
+        assert!(
+            error.to_string().contains("SQLite") || error.to_string().contains("snapshot"),
+            "{label} WAL-heavy logical generation must fail closed: {error:#}"
+        );
+        assert!(
+            !destination.join(base).exists(),
+            "{label} must not publish a WAL-heavy destination generation"
+        );
+        drop(connection);
     }
 }

@@ -1,6 +1,7 @@
 //! Overlay-after-writable regressions for migrated Hermes profile binds (#3148).
 
 use super::*;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 #[test]
@@ -207,4 +208,161 @@ fn configured_profiles_without_state_db_have_writable_authoritative_runtime_path
             .execute_batch("CREATE TABLE initial_state (value TEXT NOT NULL);")
             .unwrap();
     }
+}
+
+#[cfg(unix)]
+struct ReservedLeafCreatedHook;
+
+#[cfg(unix)]
+impl ReservedLeafCreatedHook {
+    fn set(inject: fn(&Path)) -> Self {
+        super::super::super::super::readable::AFTER_RESERVED_LEAF_CREATED
+            .with(|hook| hook.set(Some(inject)));
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReservedLeafCreatedHook {
+    fn drop(&mut self) {
+        super::super::super::super::readable::AFTER_RESERVED_LEAF_CREATED
+            .with(|hook| hook.set(None));
+    }
+}
+
+#[cfg(unix)]
+fn reserved_names(root: &Path, prefix: &str) -> Vec<PathBuf> {
+    let mut names = Vec::new();
+    let mut dirs = vec![
+        root.to_path_buf(),
+        root.join(".csa-runtime"),
+        root.join("logs"),
+    ];
+    dirs.extend(
+        std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir()),
+    );
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+            {
+                names.push(path);
+            }
+        }
+    }
+    names
+}
+
+#[cfg(unix)]
+fn mark_reserved_leaf_created(path: &Path) {
+    let prefix = std::env::var("CSA_RESERVED_NAME_DEATH_PREFIX").expect("reserved prefix");
+    let Some(name) = path.file_name() else {
+        return;
+    };
+    if !name.to_string_lossy().starts_with(&prefix) {
+        return;
+    }
+    let root = PathBuf::from(std::env::var_os("CSA_RESERVED_NAME_DEATH_ROOT").expect("death root"));
+    std::fs::write(root.join("named-created"), []).unwrap();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+}
+
+#[cfg(unix)]
+fn reserved_name_process_death_recovers(prefix: &str, setup: impl Fn(&Path)) {
+    if let Some(root) = std::env::var_os("CSA_RESERVED_NAME_DEATH_ROOT") {
+        let root = PathBuf::from(root);
+        let _hook = ReservedLeafCreatedHook::set(mark_reserved_leaf_created);
+        let _ = hermes_plan(&root.join("hermes-home"));
+        return;
+    }
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-reserved-death-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    setup(&hermes_home);
+    let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_overlay_tests::reserved_name_process_death_recovers_absent_config";
+    let test_name = match prefix {
+        ".csa-absent-config.yaml-" => test_name,
+        ".csa-absent-profiles-" => {
+            "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_overlay_tests::reserved_name_process_death_recovers_absent_profiles"
+        }
+        ".csa-write-probe-" => {
+            "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_overlay_tests::reserved_name_process_death_recovers_write_probe"
+        }
+        _ => panic!("unexpected reserved prefix {prefix}"),
+    };
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(test_name)
+        .arg("--nocapture")
+        .env("CSA_RESERVED_NAME_DEATH_ROOT", temp.path())
+        .env("CSA_RESERVED_NAME_DEATH_PREFIX", prefix)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if temp.path().join("named-created").exists() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{prefix} child must pause after reserved name creation"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let visible = reserved_names(&hermes_home, prefix);
+    assert!(
+        !visible.is_empty(),
+        "{prefix} reserved name must still be visible before kill: {visible:?}"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        !reserved_names(&hermes_home, prefix).is_empty(),
+        "{prefix} process death must leave the reserved name"
+    );
+    hermes_plan(&hermes_home)
+        .unwrap_or_else(|error| panic!("{prefix} recovery preflight must succeed: {error:#}"));
+    assert!(
+        reserved_names(&hermes_home, prefix).is_empty(),
+        "{prefix} recovery must remove the reserved name"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reserved_name_process_death_recovers_absent_config() {
+    reserved_name_process_death_recovers(".csa-absent-config.yaml-", |_| {});
+}
+
+#[cfg(unix)]
+#[test]
+fn reserved_name_process_death_recovers_absent_profiles() {
+    reserved_name_process_death_recovers(".csa-absent-profiles-", |_| {});
+}
+
+#[cfg(unix)]
+#[test]
+fn reserved_name_process_death_recovers_write_probe() {
+    reserved_name_process_death_recovers(".csa-write-probe-", |hermes_home| {
+        std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+        std::fs::create_dir(hermes_home.join("profiles")).unwrap();
+    });
 }

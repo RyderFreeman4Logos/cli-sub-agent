@@ -392,6 +392,8 @@ pub(super) fn add_hermes_runtime_paths(
         run_after_hermes_home_pinned(&hermes_home);
         readable::reject_symlink_leaf_at(&home_fd, RUNTIME_BACKING.as_ref())
             .map_err(|error| runtime_leaf_error(&hermes_home.join(RUNTIME_BACKING), error))?;
+        readable::recover_reserved_names_at(&home_fd)
+            .map_err(|error| runtime_backing_error(&hermes_home.join(RUNTIME_BACKING), error))?;
         let runtime_home = real_home.join(RUNTIME_BACKING);
         let runtime_home_fd =
             readable::open_or_create_writable_dir_at(&home_fd, RUNTIME_BACKING.as_ref())

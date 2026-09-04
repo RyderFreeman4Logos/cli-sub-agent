@@ -33,6 +33,15 @@ pub(crate) use atomic::{
 };
 #[cfg(unix)]
 pub(crate) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at};
+#[cfg(unix)]
+#[path = "isolation_plan_readable_recovery.rs"]
+mod recovery;
+#[cfg(all(test, unix))]
+pub(crate) use recovery::AFTER_RESERVED_LEAF_CREATED;
+#[cfg(unix)]
+pub(super) use recovery::recover_reserved_names_at;
+#[cfg(all(test, unix))]
+use recovery::run_after_reserved_leaf_created;
 
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).
@@ -447,6 +456,10 @@ pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi:
     use std::os::unix::ffi::OsStrExt;
 
     let dup = dir.try_clone()?;
+    // SAFETY: dup is a live directory descriptor; SEEK_SET 0 rewinds the shared offset.
+    if unsafe { libc::lseek(dup.as_raw_fd(), 0, libc::SEEK_SET) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     let raw = dup.into_raw_fd();
     // SAFETY: fdopendir takes ownership of `raw`.
     let dirp = unsafe { libc::fdopendir(raw) };
@@ -498,6 +511,8 @@ pub(super) fn create_unlinked_overlay_leaf_at(
         if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
+        #[cfg(test)]
+        run_after_reserved_leaf_created(parent, std::ffi::OsStr::from_bytes(name.to_bytes()));
         let file = match open_directory_at(parent, std::ffi::OsStr::from_bytes(name.to_bytes())) {
             Ok(file) => file,
             Err(error) => {
@@ -526,6 +541,8 @@ pub(super) fn create_unlinked_overlay_leaf_at(
     }
     // SAFETY: fd is uniquely owned; unlink removes the alternate writable pathname.
     let file = unsafe { File::from_raw_fd(fd) };
+    #[cfg(test)]
+    run_after_reserved_leaf_created(parent, std::ffi::OsStr::from_bytes(name.to_bytes()));
     if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -585,6 +602,7 @@ pub(super) fn open_or_create_writable_dir_at(
             "directory has no write permission bits",
         ));
     }
+    recover_reserved_names_at(&directory)?;
     for attempt in 0..16 {
         let probe = format!(".csa-write-probe-{}-{attempt}", std::process::id());
         match create_unlinked_overlay_leaf_at(&directory, probe.as_ref(), false) {
