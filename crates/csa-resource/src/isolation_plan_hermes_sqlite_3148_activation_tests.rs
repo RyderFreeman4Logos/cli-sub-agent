@@ -80,6 +80,85 @@ fn failed_builder_validation_does_not_activate_runtime_for_all_layouts() {
 
 #[cfg(unix)]
 #[test]
+fn runtime_ready_fifo_fails_closed_without_blocking_for_all_layouts() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::Duration;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let layouts: [(&str, &str); 4] = [
+        ("root", "state.db"),
+        ("flat", "state.flat.db"),
+        ("direct", "direct/state.db"),
+        ("nested", "profiles/nested/state.db"),
+    ];
+    for (label, legacy_rel) in layouts {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("hermes-ready-fifo-{label}-"))
+            .tempdir_in("/var/tmp")
+            .unwrap();
+        let (_home, _env) = isolated_home(&temp);
+        let hermes_home = temp.path().join("hermes-home");
+        std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+        if let Some(parent) = hermes_home.join(legacy_rel).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+        if label == "direct" {
+            std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+        }
+        if label == "nested" {
+            std::fs::write(
+                hermes_home.join("profiles/nested/config.yaml"),
+                "nested: true\n",
+            )
+            .unwrap();
+        }
+        let source = live_sqlite_database(&hermes_home.join(legacy_rel), label);
+        let runtime = hermes_home.join(".csa-runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let fifo = runtime.join(".csa-runtime-ready");
+        let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_name` is NUL-free and remains alive for mkfifo.
+        assert_eq!(
+            unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) },
+            0,
+            "{label}"
+        );
+
+        let project = temp.path().join("project");
+        let session = temp.path().join("session");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&session).unwrap();
+        let execution_env = std::collections::HashMap::from([(
+            "HERMES_HOME".to_string(),
+            hermes_home.to_string_lossy().into_owned(),
+        )]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let result = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+                .with_filesystem_capability(FilesystemCapability::Bwrap)
+                .with_execution_env(Some(&execution_env))
+                .with_tool_defaults("hermes", &project, &session)
+                .build();
+            let _ = sender.send(result);
+        });
+        let result = match receiver.recv_timeout(Duration::from_millis(500)) {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = std::fs::File::open(&fifo);
+                let _ = handle.join();
+                panic!("{label} runtime-ready FIFO must fail closed within 500 ms");
+            }
+        };
+        handle.join().unwrap();
+        drop(source);
+        result.expect_err(label);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn resolver_rejects_symlinked_runtime_ready_marker() {
     let temp = tempfile::Builder::new()
         .prefix("hermes-symlink-runtime-ready-")

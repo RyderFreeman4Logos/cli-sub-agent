@@ -351,7 +351,7 @@ fn activate_runtime_generation(
         libc::openat(
             runtime_home_fd.as_raw_fd(),
             name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             0o600,
         )
     };
@@ -360,6 +360,20 @@ fn activate_runtime_generation(
     }
     // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
     let mut file = unsafe { File::from_raw_fd(fd) };
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: `file` is live; `stat` is writable storage for fstat.
+    if unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fstat initialized `stat` after returning success.
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime activation marker is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
     for path in database_paths {
         writeln!(file, "{}", path.display())?;
     }
