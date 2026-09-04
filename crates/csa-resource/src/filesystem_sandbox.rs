@@ -121,15 +121,12 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[cfg(unix)]
     struct PathGuard(Option<std::ffi::OsString>);
 
     #[cfg(unix)]
     impl Drop for PathGuard {
         fn drop(&mut self) {
-            // SAFETY: PATH_LOCK serializes PATH mutation in this test module.
+            // SAFETY: crate ENV_LOCK serializes process-environment mutation.
             unsafe {
                 match &self.0 {
                     Some(path) => std::env::set_var("PATH", path),
@@ -144,7 +141,7 @@ mod tests {
     fn tier4_bwrap_without_bind_fd_options_is_not_capable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _lock = PATH_LOCK.lock().unwrap();
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let marker = temp.path().join("unshare-ran");
         let bwrap = temp.path().join("bwrap");
@@ -168,7 +165,7 @@ mod tests {
             old_path.as_deref().unwrap_or_default().to_string_lossy()
         );
         let _path = PathGuard(old_path);
-        // SAFETY: PATH_LOCK serializes PATH mutation in this test module.
+        // SAFETY: crate ENV_LOCK serializes process-environment mutation.
         unsafe { std::env::set_var("PATH", path) };
 
         assert_ne!(probe_capability(), FilesystemCapability::Bwrap);
@@ -180,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_detect_bwrap_available() {
-        let _lock = PATH_LOCK.lock().unwrap();
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // Integration-style: verify detection logic is consistent with
         // the individual probe functions on this host.
         let bwrap_ok = has_bwrap() && has_bwrap_bind_fd_options() && has_usable_user_namespaces();
@@ -202,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_detect_landlock_fallback() {
-        let _lock = PATH_LOCK.lock().unwrap();
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // When bwrap is not usable, Landlock should be the fallback if
         // the kernel supports it.
         let bwrap_ok = has_bwrap() && has_bwrap_bind_fd_options() && has_usable_user_namespaces();
@@ -226,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_capability_caching() {
-        let _lock = PATH_LOCK.lock().unwrap();
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         let first = detect_filesystem_capability();
         let second = detect_filesystem_capability();
         assert_eq!(first, second, "cached result must be stable across calls");
@@ -258,7 +255,7 @@ mod tests {
     fn endless_bwrap_help_probe_fails_closed() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _lock = PATH_LOCK.lock().unwrap();
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let bwrap = temp.path().join("bwrap");
         std::fs::write(
@@ -274,7 +271,7 @@ mod tests {
             old_path.as_deref().unwrap_or_default().to_string_lossy()
         );
         let _path = PathGuard(old_path);
-        // SAFETY: PATH_LOCK serializes PATH mutation in this test module.
+        // SAFETY: crate ENV_LOCK serializes process-environment mutation.
         unsafe { std::env::set_var("PATH", path) };
 
         assert_ne!(

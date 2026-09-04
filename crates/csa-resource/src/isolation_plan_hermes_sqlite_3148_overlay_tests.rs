@@ -152,6 +152,71 @@ fn migrated_profile_databases_remain_writable_through_bwrap_overlays() {
 
 #[cfg(unix)]
 #[test]
+fn failed_preflight_does_not_activate_partial_runtime_sqlite_for_all_layouts() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let layouts: [(&str, Option<&str>, &str); 4] = [
+        ("root", None, "state.db"),
+        ("flat", Some("flat"), "state.flat.db"),
+        ("direct", Some("direct"), "direct/state.db"),
+        ("nested", Some("nested"), "profiles/nested/state.db"),
+    ];
+    for (label, profile, legacy_rel) in layouts {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("hermes-partial-runtime-{label}-"))
+            .tempdir_in("/var/tmp")
+            .unwrap();
+        let (_home, _env) = isolated_home(&temp);
+        let hermes_home = temp.path().join("hermes-home");
+        std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+        if let Some(parent) = hermes_home.join(legacy_rel).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+        if label == "direct" {
+            std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+        }
+        if label == "nested" {
+            std::fs::write(
+                hermes_home.join("profiles/nested/config.yaml"),
+                "nested: true\n",
+            )
+            .unwrap();
+        }
+        let legacy_db = hermes_home.join(legacy_rel);
+        let source = live_sqlite_database(&legacy_db, label);
+        std::os::unix::fs::symlink("/etc/passwd", hermes_home.join("poison")).unwrap();
+
+        let error = hermes_plan(&hermes_home).expect_err(label);
+        drop(source);
+        assert!(
+            error
+                .to_string()
+                .contains("hermes sandbox preflight failed"),
+            "{label} late overlay failure must fail closed: {error:#}"
+        );
+
+        let resolved = crate::isolation_plan::resolve_hermes_state_db(&hermes_home, profile);
+        assert_eq!(
+            resolved, legacy_db,
+            "{label} must keep legacy authoritative after failed preflight"
+        );
+        let runtime_db = hermes_home.join(".csa-runtime").join(legacy_rel);
+        assert_ne!(
+            resolved, runtime_db,
+            "{label} must not activate a partial runtime generation"
+        );
+        assert!(
+            !hermes_home
+                .join(".csa-runtime")
+                .join(".csa-runtime-ready")
+                .is_file(),
+            "{label} must not publish a runtime activation marker after failed preflight"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn configured_profiles_without_state_db_have_writable_authoritative_runtime_paths() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::Builder::new()

@@ -22,6 +22,7 @@ const SQLITE_SIDECARS: [&str; 4] = [
     "state.db-journal",
 ];
 const RUNTIME_BACKING: &str = ".csa-runtime";
+const RUNTIME_READY: &str = ".csa-runtime-ready";
 
 #[cfg(unix)]
 #[path = "isolation_plan_hermes_sqlite.rs"]
@@ -51,19 +52,27 @@ fn state_db_candidates(root: &Path, hermes_profile: Option<&str>) -> Vec<PathBuf
 
 /// Resolve the Hermes `state.db` used by sandbox start/restore, `xurl threads`, and `recall`.
 ///
-/// The authoritative location is `$HERMES_HOME/.csa-runtime/` (plus profile candidates).
-/// Legacy `$HERMES_HOME/` paths are discovered when the runtime copy is absent.
-/// Callers must not delete the legacy database.
+/// The authoritative location is `$HERMES_HOME/.csa-runtime/` after a complete
+/// preflight (`.csa-runtime-ready` present). Incomplete generations fall back
+/// to legacy `$HERMES_HOME/` paths. Callers must not delete the legacy database.
 pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>) -> PathBuf {
     if hermes_home.is_file() {
         return hermes_home.to_path_buf();
     }
     let runtime_home = hermes_home.join(RUNTIME_BACKING);
-    let mut candidates = state_db_candidates(&runtime_home, hermes_profile);
-    let authoritative = candidates
-        .first()
-        .cloned()
-        .unwrap_or_else(|| runtime_home.join("state.db"));
+    let runtime_active = runtime_home.join(RUNTIME_READY).is_file();
+    let mut candidates = if runtime_active {
+        state_db_candidates(&runtime_home, hermes_profile)
+    } else {
+        Vec::new()
+    };
+    let authoritative = candidates.first().cloned().unwrap_or_else(|| {
+        if runtime_active {
+            runtime_home.join("state.db")
+        } else {
+            hermes_home.join("state.db")
+        }
+    });
     let configured_nested_profile = hermes_profile
         .filter(|profile| !profile.trim().is_empty())
         .map(str::trim)
@@ -79,7 +88,14 @@ pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>)
                 && !runtime_direct.is_dir()
                 && !legacy_direct.is_file()
         })
-        .map(|profile| runtime_home.join("profiles").join(profile).join("state.db"));
+        .map(|profile| {
+            let root = if runtime_active {
+                &runtime_home
+            } else {
+                hermes_home
+            };
+            root.join("profiles").join(profile).join("state.db")
+        });
     candidates.extend(state_db_candidates(hermes_home, hermes_profile));
     candidates
         .into_iter()
@@ -316,6 +332,33 @@ fn runtime_backing_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
     )
 }
 
+#[cfg(unix)]
+fn activate_runtime_generation(runtime_home_fd: &File) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    let name = std::ffi::CString::new(RUNTIME_READY).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime activation marker name is invalid",
+        )
+    })?;
+    // SAFETY: `runtime_home_fd` is a live directory descriptor and `name` is one component.
+    let fd = unsafe {
+        libc::openat(
+            runtime_home_fd.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
+    drop(unsafe { File::from_raw_fd(fd) });
+    Ok(())
+}
+
 pub(super) fn add_hermes_runtime_paths(
     filesystem: FilesystemCapability,
     home: Option<&Path>,
@@ -450,6 +493,7 @@ pub(super) fn add_hermes_runtime_paths(
             });
             if name_lossy == "logs"
                 || name_lossy == RUNTIME_BACKING
+                || name_lossy == RUNTIME_READY
                 || name_lossy == ".csa-sqlite-generation.lock"
                 || name_lossy == ".csa-reserved-name.lock"
                 || name_lossy == ".csa-sqlite-staging"
@@ -508,6 +552,12 @@ pub(super) fn add_hermes_runtime_paths(
             ));
         }
         readable_paths.extend(protected);
+        activate_runtime_generation(&runtime_home_fd).map_err(|error| {
+            runtime_backing_error(
+                &hermes_home.join(RUNTIME_BACKING).join(RUNTIME_READY),
+                error,
+            )
+        })?;
     }
     #[cfg(not(unix))]
     {
