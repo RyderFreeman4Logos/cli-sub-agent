@@ -1,5 +1,6 @@
 //! Resource-aware scheduling with simple threshold checks.
 
+pub mod bounded_command;
 pub mod bwrap;
 pub mod cgroup;
 pub mod filesystem_sandbox;

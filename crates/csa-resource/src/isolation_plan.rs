@@ -12,6 +12,8 @@ pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 mod claude_paths;
 #[path = "isolation_plan_codex.rs"]
 mod codex_paths;
+#[path = "isolation_plan_hermes.rs"]
+mod hermes_paths;
 #[path = "isolation_plan_readable.rs"]
 mod readable;
 #[path = "isolation_plan_runtime_path.rs"]
@@ -20,6 +22,7 @@ mod runtime_path;
 mod rust_env;
 #[path = "isolation_plan_validation.rs"]
 mod validation;
+pub use hermes_paths::resolve_hermes_state_db;
 pub use readable::ReadablePath;
 #[cfg(test)]
 use runtime_path::is_xdg_runtime_child_path;
@@ -132,6 +135,9 @@ pub struct IsolationPlanBuilder {
     memory_monitor_interval_seconds: Option<u64>,
     user_daemon_ipc: bool,
     required_writable_dirs: Vec<codex_paths::RequiredWritableDir>,
+    execution_env: Option<HashMap<String, String>>,
+    preflight_error: Option<anyhow::Error>,
+    pending_hermes_runtime: Option<hermes_paths::PendingRuntimeActivation>,
 }
 
 impl IsolationPlanBuilder {
@@ -155,6 +161,9 @@ impl IsolationPlanBuilder {
             memory_monitor_interval_seconds: None,
             user_daemon_ipc: false,
             required_writable_dirs: Vec::new(),
+            execution_env: None,
+            preflight_error: None,
+            pending_hermes_runtime: None,
         }
     }
 
@@ -189,6 +198,12 @@ impl IsolationPlanBuilder {
     /// filesystem `Required`.
     pub fn with_filesystem_enforcement(mut self, mode: EnforcementMode) -> Self {
         self.fs_enforcement_mode = Some(mode);
+        self
+    }
+
+    /// Set the effective child environment used to resolve tool runtime paths.
+    pub fn with_execution_env(mut self, execution_env: Option<&HashMap<String, String>>) -> Self {
+        self.execution_env = execution_env.cloned();
         self
     }
 
@@ -440,6 +455,20 @@ impl IsolationPlanBuilder {
                 _ => {}
             }
         }
+
+        if tool_name == "hermes" {
+            match hermes_paths::add_hermes_runtime_paths(
+                self.filesystem,
+                home_dir().as_deref(),
+                self.execution_env.as_ref(),
+                &mut self.writable_paths,
+                &mut self.readable_paths,
+                &mut self.required_writable_dirs,
+            ) {
+                Ok(pending) => self.pending_hermes_runtime = pending,
+                Err(error) => self.preflight_error = Some(error),
+            }
+        }
     }
 
     /// Consume the builder and produce an [`IsolationPlan`].
@@ -449,6 +478,9 @@ impl IsolationPlanBuilder {
     /// Returns an error when filesystem enforcement is `Required` but the
     /// filesystem capability is `None`.
     pub fn build(mut self) -> anyhow::Result<IsolationPlan> {
+        if let Some(error) = self.preflight_error.take() {
+            return Err(error);
+        }
         // Filesystem enforcement: use dedicated override if set, otherwise
         // inherit from the resource enforcement mode.
         let fs_mode = self.fs_enforcement_mode.unwrap_or(self.enforcement_mode);
@@ -485,19 +517,12 @@ impl IsolationPlanBuilder {
             }
         }
 
-        // Landlock operates in the calling thread via pre_exec. That makes it
-        // incompatible with CgroupV2's `systemd-run --scope` wrapper: applying
-        // Landlock there would sandbox the wrapper itself and break its D-Bus
-        // connection to the user manager. Prefer Setrlimit so the actual tool
-        // process still receives filesystem isolation.
-        if self.resource == ResourceCapability::CgroupV2
-            && self.filesystem == FilesystemCapability::Landlock
-        {
-            self.resource = ResourceCapability::Setrlimit;
-            self.degraded_reasons.push(
-                "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
-            );
-        }
+        readable::downgrade_incompatible_cgroup_filesystem(
+            &mut self.resource,
+            self.filesystem,
+            &self.readable_paths,
+            &mut self.degraded_reasons,
+        );
 
         if self.filesystem != FilesystemCapability::None
             && !self.readonly_project_root
@@ -519,6 +544,11 @@ impl IsolationPlanBuilder {
             self.filesystem,
             &self.required_writable_dirs,
             &self.writable_paths,
+        )?;
+        hermes_paths::finish_plan(
+            self.filesystem,
+            &self.readable_paths,
+            self.pending_hermes_runtime.take(),
         )?;
 
         Ok(IsolationPlan {
@@ -553,7 +583,7 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) -> bool {
 }
 
 #[cfg(test)]
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 #[path = "isolation_plan_tests.rs"]

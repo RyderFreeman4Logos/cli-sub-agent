@@ -34,25 +34,10 @@ fn resolve_state_db_path(
         base_dirs.home_dir().join(".hermes")
     };
 
-    if home.is_file() {
-        return Ok(home);
-    }
-
-    let Some(profile) = hermes_profile.filter(|value| !value.trim().is_empty()) else {
-        return Ok(home.join("state.db"));
-    };
-
-    let profile = profile.trim();
-    let candidates = [
-        home.join(profile).join("state.db"),
-        home.join("profiles").join(profile).join("state.db"),
-        home.join(format!("state.{profile}.db")),
-    ];
-    Ok(candidates
-        .iter()
-        .find(|path| path.exists())
-        .cloned()
-        .unwrap_or_else(|| candidates[0].clone()))
+    Ok(csa_resource::isolation_plan::resolve_hermes_state_db(
+        &home,
+        hermes_profile,
+    ))
 }
 
 pub(super) fn open_state_db(path: &Path) -> Result<Connection> {

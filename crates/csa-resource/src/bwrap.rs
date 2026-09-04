@@ -56,8 +56,12 @@ impl BwrapCommandBuilder {
             path.requested() != Path::new("/tmp"),
             "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
         );
+        #[cfg(unix)]
+        let has_pinned_source = path.pinned_source_file().is_some();
+        #[cfg(not(unix))]
+        let has_pinned_source = false;
         assert!(
-            path.requested().exists() || path.bind_source().exists(),
+            path.requested().exists() || path.bind_source().exists() || has_pinned_source,
             "readable sandbox path must exist: {}",
             path.requested().display()
         );
@@ -97,81 +101,40 @@ impl BwrapCommandBuilder {
         // Bind after the fresh virtual filesystems. A writable path below a
         // replaced mount must keep its logical destination; otherwise its
         // canonical destination is hidden once the mount is installed.
-        let tmp_prefix = Path::new("/tmp");
+        // Runtime writes nested under a later read-only overlay (Hermes logs /
+        // SQLite sidecars) must follow that overlay or the overlay hides them.
         for path in &self.writable_paths {
-            let resolved = resolve_for_bind(path);
-            let s = resolved.to_string_lossy();
-            let fresh_mount_root = fresh_writable_mount_root(path);
-            // Elsewhere, bind at the resolved destination: bwrap cannot
-            // create a mount target by walking a state-path symlink into an
-            // autofs-backed CSA session-state root.
-            let dest_path = if fresh_mount_root.is_some() {
-                path.as_path()
-            } else {
-                resolved.as_path()
-            };
-            let dest = dest_path.to_string_lossy();
-            if let Some(mount_root) = fresh_mount_root {
-                let mount_root = Path::new(mount_root);
-                if path == mount_root {
-                    cmd.args(["--bind", &s, &dest]);
-                    continue;
-                }
-                if let Some(parent) = path.parent()
-                    && parent != mount_root
-                {
-                    let p = parent.to_string_lossy();
-                    cmd.args(["--dir", &p]);
-                }
-                if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
-                    cmd.args(["--dir", &dest]);
-                }
-                cmd.args(["--bind", &s, &dest]);
-            } else {
-                // Ensure the resolved destination parent exists inside the
-                // sandbox. Creating the logical parent can fail when it is a
-                // symlink into an autofs-backed CSA session-state root.
-                if let Some(parent) = dest_path.parent()
-                    && parent != Path::new("/")
-                {
-                    cmd.args(["--dir", &parent.to_string_lossy()]);
-                }
-                cmd.args(["--bind", &s, &dest]);
+            if !self.writable_nested_under_readonly_overlay(path) {
+                Self::bind_writable_path(&mut cmd, path, self.pinned_writable_file(path));
             }
         }
 
         // Read-only readable paths. Writable grants already imply readability;
         // adding an overlapping read-only bind afterward would downgrade the
         // writable mount.
+        #[cfg(unix)]
+        let overlay_files: Vec<std::sync::Arc<std::fs::File>> =
+            sandbox_bind_files_from_paths(&self.readable_paths);
         for path in &self.readable_paths {
-            if self.is_covered_by_writable_path(path) {
+            if path.writable_bind()
+                || self.is_covered_by_writable_path(path)
+                || self.is_late_readonly_overlay(path)
+            {
                 continue;
             }
-            // Use the bind source pinned at validation/add time. Re-resolving
-            // here would reopen the #3102 TOCTOU after a symlink replacement.
-            let resolved = path.bind_source();
-            let s = resolved.to_string_lossy();
-            assert!(
-                path.requested() != tmp_prefix,
-                "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
-            );
-            // Under a fresh virtual filesystem (/tmp) the resolved destination
-            // is hidden by the overlay, so keep the logical destination and
-            // create its parents explicitly. Elsewhere bind at the resolved
-            // destination: creating the logical parent can fail when it is a
-            // symlink into an autofs-backed CSA session-state root (#3075).
-            let dest_path = if fresh_writable_mount_root(path.requested()).is_some() {
-                path.requested()
-            } else {
-                resolved
-            };
-            if let Some(parent) = dest_path.parent()
-                && parent != tmp_prefix
-                && parent != Path::new("/")
-            {
-                cmd.args(["--dir", &parent.to_string_lossy()]);
+            Self::bind_readonly_path(&mut cmd, path);
+        }
+
+        for path in &self.writable_paths {
+            if self.writable_nested_under_readonly_overlay(path) {
+                Self::bind_writable_path(&mut cmd, path, self.pinned_writable_file(path));
             }
-            cmd.args(["--ro-bind", &s, &dest_path.to_string_lossy()]);
+        }
+
+        for path in &self.readable_paths {
+            if self.is_late_readonly_overlay(path) {
+                Self::bind_readonly_path(&mut cmd, path);
+            }
         }
 
         // Extra read-only bind mounts.  When the dest path differs from src
@@ -211,6 +174,24 @@ impl BwrapCommandBuilder {
         cmd.arg(&self.tool_binary);
         cmd.args(&self.tool_args);
 
+        #[cfg(unix)]
+        if !overlay_files.is_empty() {
+            use std::os::fd::AsRawFd;
+            use std::os::unix::process::CommandExt;
+            // SAFETY: the closure only clears FD_CLOEXEC on descriptors this
+            // command already holds so bwrap can inherit `--ro-bind-fd` sources.
+            unsafe {
+                cmd.pre_exec(move || {
+                    for file in &overlay_files {
+                        if libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+        }
+
         cmd
     }
 
@@ -218,6 +199,9 @@ impl BwrapCommandBuilder {
         &self,
         readable_path: &crate::isolation_plan::ReadablePath,
     ) -> bool {
+        if readable_path.overrides_writable_mount() {
+            return false;
+        }
         let readable_dest = if fresh_writable_mount_root(readable_path.requested()).is_some() {
             readable_path.requested().to_path_buf()
         } else {
@@ -227,6 +211,138 @@ impl BwrapCommandBuilder {
             let writable_dest = effective_mount_destination(writable_path);
             readable_dest == writable_dest || readable_dest.starts_with(&writable_dest)
         })
+    }
+
+    fn is_late_readonly_overlay(&self, path: &crate::isolation_plan::ReadablePath) -> bool {
+        path.overrides_writable_mount()
+            && self.writable_paths.iter().any(|writable| {
+                path.requested().starts_with(writable)
+                    && path.requested() != writable
+                    && self.writable_nested_under_readonly_overlay(writable)
+            })
+    }
+
+    fn bind_readonly_path(cmd: &mut Command, path: &crate::isolation_plan::ReadablePath) {
+        // Use the bind source pinned at validation/add time. Re-resolving here
+        // would reopen the #3102 TOCTOU after a symlink replacement.
+        let resolved = path.bind_source();
+        let tmp_prefix = Path::new("/tmp");
+        assert!(
+            path.requested() != tmp_prefix,
+            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
+        );
+        let dest_path = if path.overrides_writable_mount()
+            || fresh_writable_mount_root(path.requested()).is_some()
+        {
+            path.requested()
+        } else {
+            resolved
+        };
+        if let Some(parent) = dest_path.parent()
+            && parent != tmp_prefix
+            && parent != Path::new("/")
+        {
+            cmd.args(["--dir", &parent.to_string_lossy()]);
+        }
+        #[cfg(unix)]
+        if path.overrides_writable_mount()
+            && let Some(file) = path.pinned_source_file()
+        {
+            use std::os::fd::AsRawFd;
+            cmd.args([
+                "--ro-bind-fd",
+                &file.as_raw_fd().to_string(),
+                &dest_path.to_string_lossy(),
+            ]);
+            return;
+        }
+        cmd.args([
+            "--ro-bind",
+            &resolved.to_string_lossy(),
+            &dest_path.to_string_lossy(),
+        ]);
+    }
+
+    fn writable_nested_under_readonly_overlay(&self, path: &Path) -> bool {
+        self.readable_paths.iter().any(|readable| {
+            readable.overrides_writable_mount() && path.starts_with(readable.requested())
+        })
+    }
+
+    fn pinned_writable_file(&self, path: &Path) -> Option<std::sync::Arc<std::fs::File>> {
+        #[cfg(unix)]
+        {
+            self.readable_paths.iter().find_map(|readable| {
+                (readable.writable_bind() && readable.requested() == path)
+                    .then(|| readable.pinned_source_file())
+                    .flatten()
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            None
+        }
+    }
+
+    fn bind_writable_path(
+        cmd: &mut Command,
+        path: &Path,
+        pinned: Option<std::sync::Arc<std::fs::File>>,
+    ) {
+        #[cfg(unix)]
+        if let Some(file) = pinned {
+            use std::os::fd::AsRawFd;
+            let dest = path.to_string_lossy();
+            if let Some(parent) = path.parent()
+                && parent != Path::new("/")
+            {
+                cmd.args(["--dir", &parent.to_string_lossy()]);
+            }
+            cmd.args(["--bind-fd", &file.as_raw_fd().to_string(), &dest]);
+            return;
+        }
+        #[cfg(not(unix))]
+        let _ = pinned;
+        let resolved = resolve_for_bind(path);
+        let s = resolved.to_string_lossy();
+        let fresh_mount_root = fresh_writable_mount_root(path);
+        // Elsewhere, bind at the resolved destination: bwrap cannot
+        // create a mount target by walking a state-path symlink into an
+        // autofs-backed CSA session-state root.
+        let dest_path = if fresh_mount_root.is_some() {
+            path
+        } else {
+            resolved.as_path()
+        };
+        let dest = dest_path.to_string_lossy();
+        if let Some(mount_root) = fresh_mount_root {
+            let mount_root = Path::new(mount_root);
+            if path == mount_root {
+                cmd.args(["--bind", &s, &dest]);
+                return;
+            }
+            if let Some(parent) = path.parent()
+                && parent != mount_root
+            {
+                let p = parent.to_string_lossy();
+                cmd.args(["--dir", &p]);
+            }
+            if !(path.is_file() || (!path.exists() && path.extension().is_some())) {
+                cmd.args(["--dir", &dest]);
+            }
+            cmd.args(["--bind", &s, &dest]);
+        } else if let Some(parent) = dest_path.parent()
+            && parent != Path::new("/")
+        {
+            // Ensure the resolved destination parent exists inside the
+            // sandbox. Creating the logical parent can fail when it is a
+            // symlink into an autofs-backed CSA session-state root.
+            cmd.args(["--dir", &parent.to_string_lossy()]);
+            cmd.args(["--bind", &s, &dest]);
+        } else {
+            cmd.args(["--bind", &s, &dest]);
+        }
     }
 
     fn sandbox_home(&self, host_home: Option<&Path>) -> Option<PathBuf> {
@@ -310,6 +426,98 @@ pub fn from_isolation_plan(
     }
 
     Some(builder.build())
+}
+
+/// Number of overlay/writable bind descriptors the sandbox command must inherit.
+pub fn sandbox_bind_fd_count(plan: &IsolationPlan) -> usize {
+    sandbox_bind_files(plan).len()
+}
+
+pub(crate) fn readable_bind_fd_count(
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+) -> usize {
+    sandbox_bind_files_from_paths(readable_paths).len()
+}
+
+#[cfg(unix)]
+fn sandbox_bind_files_from_paths(
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+) -> Vec<std::sync::Arc<std::fs::File>> {
+    readable_paths
+        .iter()
+        .filter(|path| path.overrides_writable_mount() || path.writable_bind())
+        .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
+        .collect()
+}
+
+#[cfg(unix)]
+fn sandbox_bind_files(plan: &IsolationPlan) -> Vec<std::sync::Arc<std::fs::File>> {
+    sandbox_bind_files_from_paths(&plan.readable_paths)
+}
+
+#[cfg(not(unix))]
+fn sandbox_bind_files(_plan: &IsolationPlan) -> Vec<()> {
+    Vec::new()
+}
+
+#[cfg(not(unix))]
+fn sandbox_bind_files_from_paths(
+    _readable_paths: &[crate::isolation_plan::ReadablePath],
+) -> Vec<()> {
+    Vec::new()
+}
+
+/// Keep `--ro-bind-fd` / `--bind-fd` descriptors open across `exec`.
+///
+/// ACP and cgroup paths reconstruct a command from program+args and must call
+/// this on the final spawn command.
+pub fn inherit_sandbox_bind_fds(cmd: &mut Command, plan: &IsolationPlan) {
+    #[cfg(unix)]
+    {
+        let files = sandbox_bind_files(plan);
+        if files.is_empty() {
+            return;
+        }
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure only clears FD_CLOEXEC on descriptors the plan
+        // still holds so bwrap can inherit `--ro-bind-fd` / `--bind-fd` sources.
+        unsafe {
+            cmd.pre_exec(move || {
+                for file in &files {
+                    if libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (cmd, plan);
+    }
+}
+
+/// Inherit bind FDs, or fail closed when the reconstructed command cannot.
+pub fn try_inherit_sandbox_bind_fds(
+    cmd: &mut Command,
+    plan: &IsolationPlan,
+) -> std::io::Result<()> {
+    if sandbox_bind_fd_count(plan) == 0 {
+        return Ok(());
+    }
+    let program = Path::new(cmd.get_program());
+    if program == Path::new("systemd-run")
+        || program.file_name() == Some(std::ffi::OsStr::new("systemd-run"))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "bwrap bind-fd cannot pass through systemd-run; overlay --ro-bind-fd would be dropped",
+        ));
+    }
+    inherit_sandbox_bind_fds(cmd, plan);
+    Ok(())
 }
 
 /// Resolve the destination used for a bind mount. Fresh virtual filesystems

@@ -1,21 +1,47 @@
 #[cfg(unix)]
 use std::ffi::CString;
+#[cfg(not(unix))]
+use std::fs;
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
+
+#[cfg(test)]
+use std::cell::Cell;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 #[cfg(unix)]
 use std::sync::Arc;
 
 use crate::filesystem_sandbox::FilesystemCapability;
+use crate::sandbox::ResourceCapability;
 
 use super::runtime_path;
+
+#[cfg(unix)]
+#[path = "isolation_plan_readable_atomic.rs"]
+mod atomic;
+#[cfg(all(test, unix))]
+pub(crate) use atomic::{
+    AFTER_ATOMIC_COPY_IDENTITY, AFTER_ATOMIC_COPY_WRITTEN, AFTER_REMOVE_FILE_IDENTITY,
+    FAIL_ATOMIC_COPY, remove_file_if_same,
+};
+#[cfg(unix)]
+pub(crate) use atomic::{copy_pinned_file_atomic, open_pinned_regular_at};
+#[cfg(unix)]
+#[path = "isolation_plan_readable_recovery.rs"]
+mod recovery;
+#[cfg(all(test, unix))]
+pub(crate) use recovery::AFTER_RESERVED_LEAF_CREATED;
+#[cfg(unix)]
+pub(super) use recovery::recover_reserved_names_at;
+#[cfg(all(test, unix))]
+use recovery::run_after_reserved_leaf_created;
 
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).
@@ -23,13 +49,18 @@ use super::runtime_path;
 pub struct ReadablePath {
     requested: PathBuf,
     bind_source: PathBuf,
+    overrides_writable_mount: bool,
+    writable_bind: bool,
     #[cfg(unix)]
     source_file: Option<Arc<File>>,
 }
 
 impl PartialEq for ReadablePath {
     fn eq(&self, other: &Self) -> bool {
-        self.requested == other.requested && self.bind_source == other.bind_source
+        self.requested == other.requested
+            && self.bind_source == other.bind_source
+            && self.overrides_writable_mount == other.overrides_writable_mount
+            && self.writable_bind == other.writable_bind
     }
 }
 
@@ -44,6 +75,20 @@ impl ReadablePath {
     /// Bind source pinned when the path was validated or first added.
     pub fn bind_source(&self) -> &Path {
         &self.bind_source
+    }
+
+    pub(crate) fn overrides_writable_mount(&self) -> bool {
+        self.overrides_writable_mount
+    }
+
+    pub(crate) fn writable_bind(&self) -> bool {
+        self.writable_bind
+    }
+
+    /// Clone the file or directory descriptor pinned during overlay validation.
+    #[cfg(unix)]
+    pub(crate) fn pinned_source_file(&self) -> Option<Arc<File>> {
+        self.source_file.clone()
     }
 
     /// Clone the descriptor held since validation for a regular-file snapshot.
@@ -71,6 +116,8 @@ impl ReadablePath {
         Self {
             requested,
             bind_source,
+            overrides_writable_mount: false,
+            writable_bind: false,
             #[cfg(unix)]
             source_file,
         }
@@ -83,14 +130,109 @@ impl ReadablePath {
         Ok(Self {
             requested,
             bind_source,
+            overrides_writable_mount: false,
+            writable_bind: false,
+            #[cfg(unix)]
+            source_file,
+        })
+    }
+
+    #[cfg(unix)]
+    pub(super) fn pinned_readonly_overlay(
+        requested: PathBuf,
+        bind_source: PathBuf,
+        file: File,
+    ) -> Self {
+        Self {
+            requested,
+            bind_source,
+            overrides_writable_mount: true,
+            writable_bind: false,
+            source_file: Some(Arc::new(file)),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn pinned_writable(requested: PathBuf, file: File) -> Self {
+        Self::pinned_writable_from(requested.clone(), requested, file)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn pinned_writable_from(
+        requested: PathBuf,
+        bind_source: PathBuf,
+        file: File,
+    ) -> Self {
+        Self {
+            requested,
+            bind_source,
+            overrides_writable_mount: false,
+            writable_bind: true,
+            source_file: Some(Arc::new(file)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn try_pinned_readonly_overlay(path: PathBuf) -> std::io::Result<Self> {
+        Self::try_pinned_readonly_overlay_from(path.clone(), path)
+    }
+
+    pub(super) fn try_pinned_readonly_overlay_from(
+        requested: PathBuf,
+        bind_source: PathBuf,
+    ) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        let source_file = open_pinned_overlay_source(&bind_source)?;
+        #[cfg(not(unix))]
+        if fs::symlink_metadata(&bind_source)?.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "read-only overlay cannot protect a symlink directory entry",
+            ));
+        }
+
+        Ok(Self {
+            requested,
+            bind_source,
+            overrides_writable_mount: true,
+            writable_bind: false,
             #[cfg(unix)]
             source_file,
         })
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static AFTER_READONLY_OVERLAY_METADATA: Cell<Option<fn(&Path)>> =
+        const { Cell::new(None) };
+    pub(super) static READDIR_ERROR_AFTER: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+fn run_after_readonly_overlay_metadata(path: &Path) {
+    AFTER_READONLY_OVERLAY_METADATA.with(|hook| {
+        if let Some(inject) = hook.get() {
+            inject(path);
+        }
+    });
+}
+
 #[cfg(unix)]
 fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> {
+    pin_readable_source(bind_source, false)
+}
+
+#[cfg(unix)]
+fn open_pinned_overlay_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> {
+    pin_readable_source(bind_source, true)
+}
+
+#[cfg(unix)]
+fn pin_readable_source(
+    bind_source: &Path,
+    reject_symlink: bool,
+) -> std::io::Result<Option<Arc<File>>> {
     let mut components = bind_source.components();
     if !matches!(components.next(), Some(Component::RootDir)) {
         return Err(std::io::Error::new(
@@ -124,7 +266,27 @@ fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> 
             "pinned readable source contains a non-normal final component",
         ));
     };
-    let expected = stat_at(&parent, name)?;
+    let mut expected = stat_at(&parent, name)?;
+    #[cfg(test)]
+    if reject_symlink {
+        run_after_readonly_overlay_metadata(bind_source);
+    }
+    if reject_symlink {
+        expected = stat_at(&parent, name)?;
+    }
+
+    if reject_symlink && expected.st_mode & libc::S_IFMT == libc::S_IFLNK {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a symlink directory entry",
+        ));
+    }
+
+    if expected.st_mode & libc::S_IFMT == libc::S_IFDIR && reject_symlink {
+        let file = open_directory_at(&parent, name)?;
+        confirm_opened_identity(&file, &expected)?;
+        return Ok(Some(Arc::new(file)));
+    }
 
     // Non-regular paths remain path-bound for sandbox mounting. In particular,
     // never read-open FIFOs, sockets, directories, or devices just to classify
@@ -134,6 +296,19 @@ fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> 
     }
 
     let file = open_regular_at(&parent, name)?;
+    confirm_opened_identity(&file, &expected)?;
+    Ok(Some(Arc::new(file)))
+}
+
+#[cfg(unix)]
+pub(super) fn same_file(left: &File, right: &File) -> std::io::Result<bool> {
+    let left = left.metadata()?;
+    let right = right.metadata()?;
+    Ok((left.dev(), left.ino()) == (right.dev(), right.ino()))
+}
+
+#[cfg(unix)]
+fn confirm_opened_identity(file: &File, expected: &libc::stat) -> std::io::Result<()> {
     let mut actual = std::mem::MaybeUninit::<libc::stat>::zeroed();
     // SAFETY: `file` is a live descriptor and `actual` points to writable
     // storage for the kernel's stat result.
@@ -149,8 +324,7 @@ fn open_pinned_source(bind_source: &Path) -> std::io::Result<Option<Arc<File>>> 
             "pinned readable file changed while being opened",
         ));
     }
-
-    Ok(Some(Arc::new(file)))
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -172,7 +346,7 @@ fn path_component(name: &std::ffi::OsStr) -> std::io::Result<CString> {
 }
 
 #[cfg(unix)]
-fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+pub(super) fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
     let name = path_component(name)?;
     // SAFETY: `parent` is a live directory descriptor and `name` is a valid
     // NUL-terminated path component.
@@ -195,7 +369,7 @@ fn open_directory_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<F
 }
 
 #[cfg(unix)]
-fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat> {
+pub(super) fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat> {
     let name = path_component(name)?;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
     // SAFETY: `parent` is a live directory descriptor; `name` is a valid path
@@ -216,7 +390,7 @@ fn stat_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<libc::stat>
 }
 
 #[cfg(unix)]
-fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+pub(super) fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
     let name = path_component(name)?;
     // SAFETY: `parent` is a live directory descriptor and `name` is a valid
     // NUL-terminated path component.
@@ -232,6 +406,216 @@ fn open_regular_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<Fil
     }
     // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn errno_location() -> *mut libc::c_int {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: libc exposes the calling thread's live errno slot.
+    return unsafe { libc::__errno_location() };
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    // SAFETY: libc exposes the calling thread's live errno slot.
+    return unsafe { libc::__error() };
+}
+
+#[cfg(unix)]
+fn set_errno(value: libc::c_int) {
+    // SAFETY: libc exposes the calling thread's writable errno slot.
+    unsafe { *errno_location() = value };
+}
+
+#[cfg(unix)]
+fn read_directory_entry(dirp: *mut libc::DIR) -> *mut libc::dirent {
+    #[cfg(test)]
+    if READDIR_ERROR_AFTER.with(|after| match after.get() {
+        Some(0) => true,
+        Some(remaining) => {
+            after.set(Some(remaining - 1));
+            false
+        }
+        None => false,
+    }) {
+        set_errno(libc::EIO);
+        return std::ptr::null_mut();
+    }
+    // SAFETY: callers provide a live DIR* and consume the entry before the next call.
+    unsafe { libc::readdir(dirp) }
+}
+
+#[cfg(unix)]
+pub(super) fn directory_entry_names(dir: &File) -> std::io::Result<Vec<std::ffi::OsString>> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::fd::IntoRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dup = dir.try_clone()?;
+    // SAFETY: dup is a live directory descriptor; SEEK_SET 0 rewinds the shared offset.
+    if unsafe { libc::lseek(dup.as_raw_fd(), 0, libc::SEEK_SET) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let raw = dup.into_raw_fd();
+    // SAFETY: fdopendir takes ownership of `raw`.
+    let dirp = unsafe { libc::fdopendir(raw) };
+    if dirp.is_null() {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: fdopendir failed, so this function still owns `raw`.
+        unsafe {
+            libc::close(raw);
+        }
+        return Err(error);
+    }
+    let mut names = Vec::new();
+    let result = loop {
+        set_errno(0);
+        let entry = read_directory_entry(dirp);
+        if entry.is_null() {
+            let error = std::io::Error::last_os_error();
+            break if error.raw_os_error() == Some(0) {
+                Ok(names)
+            } else {
+                Err(error)
+            };
+        }
+        // SAFETY: readdir returned a dirent with a NUL-terminated d_name.
+        let c_name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let name = OsStr::from_bytes(c_name.to_bytes());
+        if name == "." || name == ".." {
+            continue;
+        }
+        names.push(name.to_os_string());
+    };
+    // SAFETY: closedir releases the DIR* and the duplicated descriptor.
+    let closed = unsafe { libc::closedir(dirp) };
+    if closed != 0 && result.is_ok() {
+        return Err(std::io::Error::last_os_error());
+    }
+    result
+}
+
+#[cfg(unix)]
+pub(super) fn create_unlinked_overlay_leaf_at(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> std::io::Result<File> {
+    let _lock = recovery::acquire_reserved_name_lock(parent)?;
+    let name = path_component(name)?;
+    if directory {
+        // SAFETY: parent is live and name is a unique, validated component.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        #[cfg(test)]
+        run_after_reserved_leaf_created(parent, std::ffi::OsStr::from_bytes(name.to_bytes()));
+        let file = match open_directory_at(parent, std::ffi::OsStr::from_bytes(name.to_bytes())) {
+            Ok(file) => file,
+            Err(error) => {
+                // SAFETY: parent is live and name identifies the placeholder created above.
+                unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+                return Err(error);
+            }
+        };
+        // SAFETY: remove the private placeholder name while retaining its open fd.
+        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(file);
+    }
+    // SAFETY: parent is live; O_EXCL prevents aliasing an attacker-controlled leaf.
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is uniquely owned; unlink removes the alternate writable pathname.
+    let file = unsafe { File::from_raw_fd(fd) };
+    #[cfg(test)]
+    run_after_reserved_leaf_created(parent, std::ffi::OsStr::from_bytes(name.to_bytes()));
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+pub(super) fn open_overlay_leaf_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<File> {
+    let stat = stat_at(parent, name)?;
+    match stat.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a symlink directory entry",
+        )),
+        libc::S_IFDIR => open_directory_at(parent, name),
+        libc::S_IFREG => open_regular_at(parent, name),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "read-only overlay cannot protect a non-file overlay leaf",
+        )),
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn reject_symlink_leaf_at(parent: &File, name: &std::ffi::OsStr) -> std::io::Result<()> {
+    match stat_at(parent, name) {
+        Ok(stat) if stat.st_mode & libc::S_IFMT == libc::S_IFLNK => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "runtime path is a symlink",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+pub(super) fn open_or_create_writable_dir_at(
+    parent: &File,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<File> {
+    let c_name = path_component(name)?;
+    // SAFETY: `parent` is a live directory descriptor and `c_name` is a valid
+    // NUL-terminated path component.
+    let mkdir = unsafe { libc::mkdirat(parent.as_raw_fd(), c_name.as_ptr(), 0o700) };
+    if mkdir != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EEXIST) {
+            return Err(error);
+        }
+    }
+    let directory = open_directory_at(parent, name)?;
+    use std::os::unix::fs::PermissionsExt;
+    if directory.metadata()?.permissions().mode() & 0o222 == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "directory has no write permission bits",
+        ));
+    }
+    recover_reserved_names_at(&directory)?;
+    for attempt in 0..16 {
+        let probe = format!(".csa-write-probe-{}-{attempt}", std::process::id());
+        match create_unlinked_overlay_leaf_at(&directory, probe.as_ref(), false) {
+            Ok(_) => return Ok(directory),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique write probe",
+    ))
 }
 
 impl From<PathBuf> for ReadablePath {
@@ -325,4 +709,36 @@ fn path_already_exposed(
         || writable_paths
             .iter()
             .any(|candidate| path.starts_with(candidate))
+}
+
+pub(super) fn downgrade_incompatible_cgroup_filesystem(
+    resource: &mut ResourceCapability,
+    filesystem: FilesystemCapability,
+    readable_paths: &[ReadablePath],
+    degraded_reasons: &mut Vec<String>,
+) {
+    if *resource != ResourceCapability::CgroupV2 {
+        return;
+    }
+    if filesystem == FilesystemCapability::Landlock {
+        *resource = ResourceCapability::Setrlimit;
+        degraded_reasons.push(
+            "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
+        );
+        return;
+    }
+    #[cfg(unix)]
+    if filesystem == FilesystemCapability::Bwrap
+        && readable_paths.iter().any(|path| {
+            (path.overrides_writable_mount() || path.writable_bind())
+                && path.pinned_source_file().is_some()
+        })
+    {
+        *resource = ResourceCapability::Setrlimit;
+        degraded_reasons.push(
+            "bwrap bind-fd cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = readable_paths;
 }

@@ -61,6 +61,25 @@ fn has_bwrap() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Check that bwrap supports the descriptor-backed bind options emitted by
+/// [`crate::bwrap::BwrapCommandBuilder`].
+pub(crate) fn has_bwrap_bind_fd_options() -> bool {
+    crate::bounded_command::output_with_timeout(
+        {
+            let mut command = Command::new("bwrap");
+            command.arg("--help").stdin(std::process::Stdio::null());
+            command
+        },
+        std::time::Duration::from_secs(5),
+        crate::bounded_command::MAX_OUTPUT_BYTES,
+    )
+    .is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("--ro-bind-fd")
+            && String::from_utf8_lossy(&output.stdout).contains("--bind-fd")
+    })
+}
+
 /// Check whether unprivileged user namespaces are functional.
 ///
 /// Two checks are performed:
@@ -101,8 +120,68 @@ fn has_landlock() -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    struct PathGuard(Option<std::ffi::OsString>);
+
+    #[cfg(unix)]
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            // SAFETY: crate ENV_LOCK serializes process-environment mutation.
+            unsafe {
+                match &self.0 {
+                    Some(path) => std::env::set_var("PATH", path),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_bwrap_without_bind_fd_options_is_still_capable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("unshare-ran");
+        let bwrap = temp.path().join("bwrap");
+        std::fs::write(
+            &bwrap,
+            "#!/bin/sh\n[ \"$1\" = --help ] && { echo 'usage: bwrap --ro-bind SRC DEST --bind SRC DEST'; exit 0; }\nexit 64\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let unshare = temp.path().join("unshare");
+        std::fs::write(
+            &unshare,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&unshare, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH");
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            old_path.as_deref().unwrap_or_default().to_string_lossy()
+        );
+        let _path = PathGuard(old_path);
+        // SAFETY: crate ENV_LOCK serializes process-environment mutation.
+        unsafe { std::env::set_var("PATH", path) };
+
+        assert_eq!(probe_capability(), FilesystemCapability::Bwrap);
+        assert!(
+            marker.exists(),
+            "baseline bwrap detection must still probe user namespaces"
+        );
+        assert!(
+            !has_bwrap_bind_fd_options(),
+            "legacy bwrap must not report descriptor-bind support"
+        );
+    }
+
     #[test]
     fn test_detect_bwrap_available() {
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // Integration-style: verify detection logic is consistent with
         // the individual probe functions on this host.
         let bwrap_ok = has_bwrap() && has_usable_user_namespaces();
@@ -124,6 +203,7 @@ mod tests {
 
     #[test]
     fn test_detect_landlock_fallback() {
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // When bwrap is not usable, Landlock should be the fallback if
         // the kernel supports it.
         let bwrap_ok = has_bwrap() && has_usable_user_namespaces();
@@ -147,6 +227,7 @@ mod tests {
 
     #[test]
     fn test_capability_caching() {
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         let first = detect_filesystem_capability();
         let second = detect_filesystem_capability();
         assert_eq!(first, second, "cached result must be stable across calls");
@@ -171,5 +252,35 @@ mod tests {
                 "missing sysctl should not be treated as restricted"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn endless_bwrap_help_probe_fails_closed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let bwrap = temp.path().join("bwrap");
+        std::fs::write(
+            &bwrap,
+            "#!/bin/sh\nwhile :; do printf endless-output; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH");
+        let path = format!(
+            "{}:{}",
+            temp.path().display(),
+            old_path.as_deref().unwrap_or_default().to_string_lossy()
+        );
+        let _path = PathGuard(old_path);
+        // SAFETY: crate ENV_LOCK serializes process-environment mutation.
+        unsafe { std::env::set_var("PATH", path) };
+
+        assert!(
+            !has_bwrap_bind_fd_options(),
+            "endless bwrap --help output must fail closed"
+        );
     }
 }
