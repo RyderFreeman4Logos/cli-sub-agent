@@ -254,3 +254,107 @@ fn runtime_ready_hardlink_does_not_truncate_runtime_database_for_all_layouts() {
         );
     }
 }
+
+#[cfg(unix)]
+struct DirectoryFsyncFailure;
+
+#[cfg(unix)]
+impl DirectoryFsyncFailure {
+    fn set() -> Self {
+        super::super::super::super::hermes_paths::FAIL_DIRECTORY_FSYNC
+            .with(|failure| failure.set(true));
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DirectoryFsyncFailure {
+    fn drop(&mut self) {
+        super::super::super::super::hermes_paths::FAIL_DIRECTORY_FSYNC
+            .with(|failure| failure.set(false));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_fsync_failure_does_not_publish_runtime_ready_for_all_layouts() {
+    use std::os::unix::fs::MetadataExt;
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let layouts: [(&str, Option<&str>, &str); 4] = [
+        ("root", None, "state.db"),
+        ("flat", Some("flat"), "state.flat.db"),
+        ("direct", Some("direct"), "direct/state.db"),
+        ("nested", Some("nested"), "profiles/nested/state.db"),
+    ];
+    for (label, profile, legacy_rel) in layouts {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("hermes-ready-fsync-{label}-"))
+            .tempdir_in("/var/tmp")
+            .unwrap();
+        let (_home, _env) = isolated_home(&temp);
+        let hermes_home = temp.path().join("hermes-home");
+        std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+        if let Some(parent) = hermes_home.join(legacy_rel).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
+        if label == "direct" {
+            std::fs::write(hermes_home.join("direct/config.yaml"), "direct: true\n").unwrap();
+        }
+        if label == "nested" {
+            std::fs::write(
+                hermes_home.join("profiles/nested/config.yaml"),
+                "nested: true\n",
+            )
+            .unwrap();
+        }
+        let legacy_db = hermes_home.join(legacy_rel);
+        let source = live_sqlite_database(&legacy_db, label);
+        let marker = hermes_home.join(".csa-runtime").join(".csa-runtime-ready");
+
+        {
+            let _failure = DirectoryFsyncFailure::set();
+            let error = hermes_plan(&hermes_home).expect_err(label);
+            assert!(
+                error
+                    .to_string()
+                    .contains("runtime activation marker is not writable"),
+                "{label} directory fsync failure must fail closed: {error:#}"
+            );
+        }
+        assert!(
+            std::fs::symlink_metadata(&marker)
+                .map(|meta| !meta.file_type().is_file())
+                .unwrap_or(true),
+            "{label} absent marker must stay absent after directory fsync failure"
+        );
+        assert_eq!(
+            crate::isolation_plan::resolve_hermes_state_db(&hermes_home, profile),
+            legacy_db,
+            "{label} must keep legacy authoritative when directory fsync fails before first publish"
+        );
+
+        hermes_plan(&hermes_home).expect(label);
+        let prior = std::fs::metadata(&marker).expect(label);
+        let prior_ino = prior.ino();
+        let prior_bytes = std::fs::read(&marker).expect(label);
+
+        {
+            let _failure = DirectoryFsyncFailure::set();
+            hermes_plan(&hermes_home).expect_err(label);
+        }
+        let after = std::fs::metadata(&marker).expect(label);
+        assert_eq!(
+            after.ino(),
+            prior_ino,
+            "{label} existing marker inode must survive directory fsync failure"
+        );
+        assert_eq!(
+            std::fs::read(&marker).expect(label),
+            prior_bytes,
+            "{label} existing marker contents must survive directory fsync failure"
+        );
+        drop(source);
+    }
+}

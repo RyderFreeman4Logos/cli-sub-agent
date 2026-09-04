@@ -32,6 +32,8 @@ mod hermes_runtime_ready;
 mod hermes_sqlite;
 
 #[cfg(all(unix, test))]
+pub(crate) use hermes_runtime_ready::FAIL_DIRECTORY_FSYNC;
+#[cfg(all(unix, test))]
 pub(crate) use hermes_sqlite::acquire_sqlite_generation_lock;
 #[cfg(unix)]
 pub(super) use hermes_sqlite::migrate_sqlite_generation;

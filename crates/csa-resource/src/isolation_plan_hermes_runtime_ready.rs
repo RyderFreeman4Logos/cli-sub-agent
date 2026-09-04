@@ -1,11 +1,18 @@
 //! Exclusive-inode publication for the Hermes runtime-ready marker.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 
 use super::RUNTIME_READY;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAIL_DIRECTORY_FSYNC: Cell<bool> = const { Cell::new(false) };
+}
 
 pub(super) fn activate_runtime_generation(
     runtime_home_fd: &File,
@@ -24,6 +31,7 @@ pub(super) fn activate_runtime_generation(
             writeln!(file, "{}", path.display())?;
         }
         file.sync_all()?;
+        fsync_runtime_directory(runtime_home_fd)?;
         Ok(())
     })() {
         let _ = unsafe { libc::unlinkat(runtime_home_fd.as_raw_fd(), staging.as_ptr(), 0) };
@@ -42,6 +50,14 @@ pub(super) fn activate_runtime_generation(
         let error = std::io::Error::last_os_error();
         let _ = unsafe { libc::unlinkat(runtime_home_fd.as_raw_fd(), staging.as_ptr(), 0) };
         return Err(error);
+    }
+    Ok(())
+}
+
+fn fsync_runtime_directory(runtime_home_fd: &File) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_DIRECTORY_FSYNC.with(Cell::get) {
+        return Err(std::io::Error::from_raw_os_error(libc::EIO));
     }
     // SAFETY: `runtime_home_fd` remains the live runtime directory descriptor.
     if unsafe { libc::fsync(runtime_home_fd.as_raw_fd()) } != 0 {
