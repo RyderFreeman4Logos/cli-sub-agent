@@ -451,6 +451,7 @@ pub(super) fn add_hermes_runtime_paths(
             if name_lossy == "logs"
                 || name_lossy == RUNTIME_BACKING
                 || name_lossy == ".csa-sqlite-generation.lock"
+                || name_lossy == ".csa-reserved-name.lock"
                 || name_lossy == ".csa-sqlite-staging"
                 || name_lossy.starts_with("state.db")
                 || is_flat_profile_generation

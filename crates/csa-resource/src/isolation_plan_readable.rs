@@ -505,6 +505,7 @@ pub(super) fn create_unlinked_overlay_leaf_at(
     name: &std::ffi::OsStr,
     directory: bool,
 ) -> std::io::Result<File> {
+    let _lock = recovery::acquire_reserved_name_lock(parent)?;
     let name = path_component(name)?;
     if directory {
         // SAFETY: parent is live and name is a unique, validated component.

@@ -46,6 +46,37 @@ impl AtomicCopyFailure {
     }
 }
 
+#[cfg(unix)]
+struct KillOnDropChild {
+    child: Option<std::process::Child>,
+}
+
+#[cfg(unix)]
+impl KillOnDropChild {
+    fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn kill_and_reap(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    fn wait_success(&mut self) {
+        let mut child = self.child.take().expect("child already reaped");
+        assert!(child.wait().unwrap().success(), "migration child failed");
+    }
+}
+
+#[cfg(unix)]
+impl Drop for KillOnDropChild {
+    fn drop(&mut self) {
+        self.kill_and_reap();
+    }
+}
+
 impl Drop for AtomicCopyFailure {
     fn drop(&mut self) {
         super::super::super::readable::FAIL_ATOMIC_COPY.with(|failure| failure.set(false));
@@ -205,7 +236,7 @@ fn sqlite_migration_is_owned_across_processes() {
             .env("CSA_SQLITE_CHILD_VALUE", value)
             .env("CSA_SQLITE_CHILD_DESTINATION", &destination)
             .env("CSA_SQLITE_PUBLICATION_BARRIER", &barrier);
-        children.push(command.spawn().unwrap());
+        children.push(KillOnDropChild::new(command.spawn().unwrap()));
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -221,7 +252,7 @@ fn sqlite_migration_is_owned_across_processes() {
     }
     std::fs::File::create(barrier.join("release")).unwrap();
     for mut child in children {
-        assert!(child.wait().unwrap().success(), "migration child failed");
+        child.wait_success();
     }
 
     let migrated = rusqlite::Connection::open(destination.join("state.db")).unwrap();

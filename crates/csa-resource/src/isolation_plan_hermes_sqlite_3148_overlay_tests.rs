@@ -308,14 +308,16 @@ fn reserved_name_process_death_recovers(prefix: &str, setup: impl Fn(&Path)) {
         }
         _ => panic!("unexpected reserved prefix {prefix}"),
     };
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .arg("--exact")
-        .arg(test_name)
-        .arg("--nocapture")
-        .env("CSA_RESERVED_NAME_DEATH_ROOT", temp.path())
-        .env("CSA_RESERVED_NAME_DEATH_PREFIX", prefix)
-        .spawn()
-        .unwrap();
+    let mut child = super::KillOnDropChild::new(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env("CSA_RESERVED_NAME_DEATH_ROOT", temp.path())
+            .env("CSA_RESERVED_NAME_DEATH_PREFIX", prefix)
+            .spawn()
+            .unwrap(),
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if temp.path().join("named-created").exists() {
@@ -332,8 +334,7 @@ fn reserved_name_process_death_recovers(prefix: &str, setup: impl Fn(&Path)) {
         !visible.is_empty(),
         "{prefix} reserved name must still be visible before kill: {visible:?}"
     );
-    child.kill().unwrap();
-    child.wait().unwrap();
+    child.kill_and_reap();
     assert!(
         !reserved_names(&hermes_home, prefix).is_empty(),
         "{prefix} process death must leave the reserved name"
@@ -365,4 +366,121 @@ fn reserved_name_process_death_recovers_write_probe() {
         std::fs::write(hermes_home.join("config.yaml"), "model: test\n").unwrap();
         std::fs::create_dir(hermes_home.join("profiles")).unwrap();
     });
+}
+
+#[cfg(unix)]
+fn wait_for_marker(path: &Path, deadline: std::time::Instant, label: &str) {
+    loop {
+        if path.exists() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{label} marker must appear: {}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reserved_name_recovery_preserves_live_owner_then_recovers_after_death() {
+    const PREFIX: &str = ".csa-absent-config.yaml-";
+    const TEST_NAME: &str = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_overlay_tests::reserved_name_recovery_preserves_live_owner_then_recovers_after_death";
+    if let Some(root) = std::env::var_os("CSA_RESERVED_NAME_LIVE_ROOT") {
+        let root = PathBuf::from(root);
+        match std::env::var("CSA_RESERVED_NAME_LIVE_ROLE").as_deref() {
+            Ok("owner") => {
+                let _hook = ReservedLeafCreatedHook::set(mark_reserved_leaf_created);
+                let _ = hermes_plan(&root.join("hermes-home"));
+            }
+            Ok("recoverer") => {
+                let release = root.join("recover-release");
+                wait_for_marker(
+                    &release,
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    "recoverer release",
+                );
+                std::fs::write(root.join("recoverer-entered"), []).unwrap();
+                hermes_plan(&root.join("hermes-home"))
+                    .unwrap_or_else(|error| panic!("recoverer preflight must succeed: {error:#}"));
+                std::fs::write(root.join("recoverer-done"), []).unwrap();
+            }
+            other => panic!("unexpected live reserved-name role: {other:?}"),
+        }
+        return;
+    }
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("hermes-reserved-live-owner-")
+        .tempdir_in("/var/tmp")
+        .unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let hermes_home = temp.path().join("hermes-home");
+    std::fs::create_dir_all(hermes_home.join("logs")).unwrap();
+    let mut owner = super::KillOnDropChild::new(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(TEST_NAME)
+            .arg("--nocapture")
+            .env("CSA_RESERVED_NAME_LIVE_ROOT", temp.path())
+            .env("CSA_RESERVED_NAME_LIVE_ROLE", "owner")
+            .env("CSA_RESERVED_NAME_DEATH_ROOT", temp.path())
+            .env("CSA_RESERVED_NAME_DEATH_PREFIX", PREFIX)
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_marker(
+        &temp.path().join("named-created"),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "owner reserved name",
+    );
+    assert!(
+        !reserved_names(&hermes_home, PREFIX).is_empty(),
+        "live owner reserved name must be visible"
+    );
+
+    let mut recoverer = super::KillOnDropChild::new(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(TEST_NAME)
+            .arg("--nocapture")
+            .env("CSA_RESERVED_NAME_LIVE_ROOT", temp.path())
+            .env("CSA_RESERVED_NAME_LIVE_ROLE", "recoverer")
+            .spawn()
+            .unwrap(),
+    );
+    std::fs::write(temp.path().join("recover-release"), []).unwrap();
+    wait_for_marker(
+        &temp.path().join("recoverer-entered"),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "recoverer entered",
+    );
+    let steal_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < steal_deadline {
+        assert!(
+            !temp.path().join("recoverer-done").exists(),
+            "recovery must not finish while a live owner still holds the reserved name"
+        );
+        assert!(
+            !reserved_names(&hermes_home, PREFIX).is_empty(),
+            "recovery must not unlink a live owner's reserved name"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    owner.kill_and_reap();
+    wait_for_marker(
+        &temp.path().join("recoverer-done"),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        "recoverer done after owner death",
+    );
+    recoverer.kill_and_reap();
+    assert!(
+        reserved_names(&hermes_home, PREFIX).is_empty(),
+        "recovery after process death must remove the reserved name"
+    );
+    hermes_plan(&hermes_home)
+        .unwrap_or_else(|error| panic!("subsequent preflight must succeed: {error:#}"));
 }

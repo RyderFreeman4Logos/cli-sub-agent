@@ -400,14 +400,16 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
         let (temp, source, destination) = layout_dirs(&format!("process-death-{label}"), dest_rel);
         drop(live_sqlite_database(&source.join(base), label));
         let test_name = "isolation_plan::tests::hermes_review_3148_tests::sqlite_3148_tests::sqlite_3148_class_tests::sqlite_snapshot_process_death_leaves_no_named_snapshot";
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg(test_name)
-            .arg("--nocapture")
-            .env("CSA_SQLITE_SNAPSHOT_DEATH_ROOT", temp.path())
-            .env("CSA_SQLITE_SNAPSHOT_DEATH_BASE", base)
-            .spawn()
-            .unwrap();
+        let mut child = super::KillOnDropChild::new(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(test_name)
+                .arg("--nocapture")
+                .env("CSA_SQLITE_SNAPSHOT_DEATH_ROOT", temp.path())
+                .env("CSA_SQLITE_SNAPSHOT_DEATH_BASE", base)
+                .spawn()
+                .unwrap(),
+        );
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         loop {
             if temp.path().join("named-created").exists() {
@@ -424,8 +426,7 @@ fn sqlite_snapshot_process_death_leaves_no_named_snapshot() {
             !visible.is_empty(),
             "{label} reserved snapshot name must still be visible before kill: {visible:?}"
         );
-        child.kill().unwrap();
-        child.wait().unwrap();
+        child.kill_and_reap();
         let leftover = staging_snapshot_names(&source);
         assert!(
             !leftover.is_empty(),
