@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 use std::cell::Cell;
+#[cfg(unix)]
+use std::ffi::CString;
 #[cfg(test)]
 use std::fs;
 #[cfg(unix)]
@@ -36,7 +38,9 @@ fn sqlite_file_page_count(file: &File) -> std::io::Result<u64> {
     let mut file = file.try_clone()?;
     file.seek(SeekFrom::Start(16))?;
     let mut encoded_page_size = [0; 2];
-    file.read_exact(&mut encoded_page_size)?;
+    if file.read(&mut encoded_page_size)? < 2 {
+        return Ok(0);
+    }
     let page_size = match u16::from_be_bytes(encoded_page_size) {
         1 => 65_536,
         512..=u16::MAX => u64::from(u16::from_be_bytes(encoded_page_size)),
@@ -94,6 +98,61 @@ fn sqlite_pinned_path(file: &File) -> PathBuf {
 }
 
 #[cfg(unix)]
+fn create_named_sqlite_snapshot(staging: &File) -> anyhow::Result<(File, PathBuf, String)> {
+    let staging_path = std::fs::read_link(sqlite_pinned_path(staging))?;
+    for attempt in 0..16 {
+        let name = format!(".csa-sqlite-snapshot-{}-{attempt}", std::process::id());
+        let c_name = CString::new(name.clone())
+            .map_err(|_| anyhow::anyhow!("snapshot name contains a null byte"))?;
+        // SAFETY: staging is a live directory; name is one exclusive component.
+        let fd = unsafe {
+            libc::openat(
+                staging.as_raw_fd(),
+                c_name.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                continue;
+            }
+            return Err(error.into());
+        }
+        // SAFETY: fd is the uniquely owned descriptor returned by openat.
+        let file = unsafe { File::from_raw_fd(fd) };
+        return Ok((file, staging_path.join(&name), name));
+    }
+    anyhow::bail!("could not allocate a unique SQLite snapshot name")
+}
+
+#[cfg(unix)]
+fn unlink_sqlite_snapshot_name(staging: &File, name: &str) -> std::io::Result<()> {
+    let c_name = CString::new(name).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "snapshot name contains a null byte",
+        )
+    })?;
+    // SAFETY: staging is a live directory; name is one component created above.
+    let result = unsafe { libc::unlinkat(staging.as_raw_fd(), c_name.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn unlink_sqlite_snapshot_leaf(staging: &File, name: &str) {
+    let _ = unlink_sqlite_snapshot_name(staging, name);
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let _ = unlink_sqlite_snapshot_name(staging, &format!("{name}{suffix}"));
+    }
+}
+
+#[cfg(unix)]
 fn sqlite_snapshot(
     source_parent: &File,
     staging_root: &File,
@@ -104,22 +163,25 @@ fn sqlite_snapshot(
         staging_root,
         std::ffi::OsStr::new(SQLITE_STAGING_DIR),
     )?;
-    let current_directory = b".\0";
-    // SAFETY: staging is live and O_TMPFILE creates an unnamed inode in it.
-    let fd = unsafe {
-        libc::openat(
-            staging.as_raw_fd(),
-            current_directory.as_ptr().cast(),
-            libc::O_RDWR | libc::O_TMPFILE | libc::O_CLOEXEC,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // SAFETY: fd is the uniquely owned descriptor returned by openat.
-    let snapshot_file = unsafe { File::from_raw_fd(fd) };
+    let (snapshot_file, snapshot_path, snapshot_name) = create_named_sqlite_snapshot(&staging)?;
     let result = (|| {
+        let mut destination = match Connection::open(&snapshot_path) {
+            Ok(connection) => connection,
+            Err(error) => {
+                unlink_sqlite_snapshot_leaf(&staging, &snapshot_name);
+                return Err(error.into());
+            }
+        };
+        destination.busy_timeout(Duration::ZERO)?;
+        destination.execute_batch("PRAGMA journal_mode=OFF;")?;
+        unlink_sqlite_snapshot_name(&staging, &snapshot_name)?;
+        for suffix in ["-wal", "-shm", "-journal"] {
+            match unlink_sqlite_snapshot_name(&staging, &format!("{snapshot_name}{suffix}")) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         #[cfg(test)]
         if readable::FAIL_ATOMIC_COPY.with(Cell::get) {
             anyhow::bail!("injected atomic SQLite copy failure");
@@ -142,12 +204,6 @@ fn sqlite_snapshot(
         {
             anyhow::bail!("SQLite source exceeds snapshot ceiling");
         }
-        let mut destination = Connection::open_with_flags(
-            sqlite_pinned_path(&snapshot_file),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        destination.busy_timeout(Duration::ZERO)?;
-        destination.execute_batch("PRAGMA journal_mode=OFF;")?;
         let backup = Backup::new(&source, &mut destination)?;
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         loop {
@@ -171,6 +227,9 @@ fn sqlite_snapshot(
         run_after_sqlite_snapshot_created(&sqlite_pinned_path(&snapshot_file));
         Ok::<(), anyhow::Error>(())
     })();
+    if result.is_err() {
+        unlink_sqlite_snapshot_leaf(&staging, &snapshot_name);
+    }
     result.map(|()| snapshot_file)
 }
 
