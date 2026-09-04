@@ -1,41 +1,25 @@
 #[cfg(test)]
 use std::cell::Cell;
 #[cfg(unix)]
-use std::ffi::CString;
-#[cfg(unix)]
 use std::fs::File;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(all(test, unix))]
 use std::path::PathBuf;
 
 #[cfg(unix)]
-pub(super) const RESERVED_NAME_LOCK: &str = ".csa-reserved-name.lock";
-
-#[cfg(unix)]
 pub(super) fn acquire_reserved_name_lock(parent: &File) -> std::io::Result<File> {
-    let name = CString::new(RESERVED_NAME_LOCK).expect("reserved-name lock is a valid CString");
-    // SAFETY: parent is a live directory descriptor and name is one component.
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: fd is the uniquely owned descriptor returned by openat.
-    let lock = unsafe { File::from_raw_fd(fd) };
+    // Reopen the directory so flock uses an independent file description, not
+    // `parent` itself. A named lock file would remain in snapshot staging and
+    // on Hermes overlays after the flock is dropped.
+    let lock = super::open_directory_at(parent, std::ffi::OsStr::new("."))?;
     loop {
-        // SAFETY: lock is an independent file description. Keep ownership
-        // cross-process so a live creator's name-visible window serializes
-        // against recovery. ponytail: blocking per-directory flock; add a
-        // deadline if wedged preflights stall later launches.
+        // SAFETY: lock is an independent file description for `parent`. Keep
+        // ownership cross-process so a live creator's name-visible window
+        // serializes against recovery. ponytail: blocking per-directory flock;
+        // add a deadline if wedged preflights stall later launches.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0 {
             return Ok(lock);
         }
