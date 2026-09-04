@@ -529,6 +529,8 @@ fn sqlite_migration_keeps_wal_generation_coherent_after_path_replacement() {
     );
 }
 
+#[path = "isolation_plan_hermes_sqlite_3148_activation_tests.rs"]
+mod sqlite_3148_activation_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_class_tests.rs"]
 mod sqlite_3148_class_tests;
 #[path = "isolation_plan_hermes_sqlite_3148_generation_tests.rs"]

@@ -39,7 +39,7 @@ pub fn detect_filesystem_capability() -> FilesystemCapability {
 
 /// Perform the actual detection (called at most once).
 fn probe_capability() -> FilesystemCapability {
-    if has_bwrap() && has_bwrap_bind_fd_options() && has_usable_user_namespaces() {
+    if has_bwrap() && has_usable_user_namespaces() {
         return FilesystemCapability::Bwrap;
     }
 
@@ -63,7 +63,7 @@ fn has_bwrap() -> bool {
 
 /// Check that bwrap supports the descriptor-backed bind options emitted by
 /// [`crate::bwrap::BwrapCommandBuilder`].
-fn has_bwrap_bind_fd_options() -> bool {
+pub(crate) fn has_bwrap_bind_fd_options() -> bool {
     crate::bounded_command::output_with_timeout(
         {
             let mut command = Command::new("bwrap");
@@ -138,7 +138,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn tier4_bwrap_without_bind_fd_options_is_not_capable() {
+    fn legacy_bwrap_without_bind_fd_options_is_still_capable() {
         use std::os::unix::fs::PermissionsExt;
 
         let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
@@ -168,10 +168,14 @@ mod tests {
         // SAFETY: crate ENV_LOCK serializes process-environment mutation.
         unsafe { std::env::set_var("PATH", path) };
 
-        assert_ne!(probe_capability(), FilesystemCapability::Bwrap);
+        assert_eq!(probe_capability(), FilesystemCapability::Bwrap);
         assert!(
-            !marker.exists(),
-            "bind-FD rejection must short-circuit before any namespace probe"
+            marker.exists(),
+            "baseline bwrap detection must still probe user namespaces"
+        );
+        assert!(
+            !has_bwrap_bind_fd_options(),
+            "legacy bwrap must not report descriptor-bind support"
         );
     }
 
@@ -180,7 +184,7 @@ mod tests {
         let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // Integration-style: verify detection logic is consistent with
         // the individual probe functions on this host.
-        let bwrap_ok = has_bwrap() && has_bwrap_bind_fd_options() && has_usable_user_namespaces();
+        let bwrap_ok = has_bwrap() && has_usable_user_namespaces();
         let result = probe_capability();
         if bwrap_ok {
             assert_eq!(
@@ -202,7 +206,7 @@ mod tests {
         let _lock = crate::isolation_plan::ENV_LOCK.lock().unwrap();
         // When bwrap is not usable, Landlock should be the fallback if
         // the kernel supports it.
-        let bwrap_ok = has_bwrap() && has_bwrap_bind_fd_options() && has_usable_user_namespaces();
+        let bwrap_ok = has_bwrap() && has_usable_user_namespaces();
         let landlock_ok = has_landlock();
         let result = probe_capability();
 
@@ -274,9 +278,8 @@ mod tests {
         // SAFETY: crate ENV_LOCK serializes process-environment mutation.
         unsafe { std::env::set_var("PATH", path) };
 
-        assert_ne!(
-            probe_capability(),
-            FilesystemCapability::Bwrap,
+        assert!(
+            !has_bwrap_bind_fd_options(),
             "endless bwrap --help output must fail closed"
         );
     }

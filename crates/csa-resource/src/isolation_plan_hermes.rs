@@ -60,7 +60,7 @@ pub fn resolve_hermes_state_db(hermes_home: &Path, hermes_profile: Option<&str>)
         return hermes_home.to_path_buf();
     }
     let runtime_home = hermes_home.join(RUNTIME_BACKING);
-    let runtime_active = runtime_home.join(RUNTIME_READY).is_file();
+    let runtime_active = runtime_ready(&runtime_home.join(RUNTIME_READY));
     let mut candidates = if runtime_active {
         state_db_candidates(&runtime_home, hermes_profile)
     } else {
@@ -333,7 +333,11 @@ fn runtime_backing_error(leaf: &Path, error: std::io::Error) -> anyhow::Error {
 }
 
 #[cfg(unix)]
-fn activate_runtime_generation(runtime_home_fd: &File) -> std::io::Result<()> {
+fn activate_runtime_generation(
+    runtime_home_fd: &File,
+    database_paths: &[PathBuf],
+) -> std::io::Result<()> {
+    use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd};
 
     let name = std::ffi::CString::new(RUNTIME_READY).map_err(|_| {
@@ -347,7 +351,7 @@ fn activate_runtime_generation(runtime_home_fd: &File) -> std::io::Result<()> {
         libc::openat(
             runtime_home_fd.as_raw_fd(),
             name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             0o600,
         )
     };
@@ -355,9 +359,67 @@ fn activate_runtime_generation(runtime_home_fd: &File) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     // SAFETY: `fd` is the uniquely owned descriptor returned by openat.
-    drop(unsafe { File::from_raw_fd(fd) });
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    for path in database_paths {
+        writeln!(file, "{}", path.display())?;
+    }
+    file.sync_all()?;
     Ok(())
 }
+
+fn runtime_ready(marker: &Path) -> bool {
+    std::fs::symlink_metadata(marker).is_ok_and(|meta| meta.file_type().is_file())
+}
+
+pub(super) fn finish_plan(
+    filesystem: FilesystemCapability,
+    readable_paths: &[ReadablePath],
+    pending: Option<PendingRuntimeActivation>,
+) -> anyhow::Result<()> {
+    if filesystem == FilesystemCapability::Bwrap
+        && crate::bwrap::readable_bind_fd_count(readable_paths) > 0
+        && !crate::filesystem_sandbox::has_bwrap_bind_fd_options()
+    {
+        anyhow::bail!(
+            "sandbox preflight failed: bwrap bind-fd required but --ro-bind-fd/--bind-fd are unavailable"
+        );
+    }
+    #[cfg(unix)]
+    if let (FilesystemCapability::Bwrap, Some(pending)) = (filesystem, pending) {
+        pending.publish().map_err(|error| {
+            anyhow::anyhow!(
+                "hermes sandbox preflight failed: runtime activation marker is not writable: {error}"
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = pending;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+pub(super) struct PendingRuntimeActivation {
+    runtime_home_fd: File,
+    marker_path: PathBuf,
+    database_paths: Vec<PathBuf>,
+}
+
+#[cfg(unix)]
+impl PendingRuntimeActivation {
+    pub(super) fn publish(self) -> std::io::Result<()> {
+        activate_runtime_generation(&self.runtime_home_fd, &self.database_paths).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("{}: {error}", self.marker_path.display()),
+            )
+        })
+    }
+}
+
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub(super) struct PendingRuntimeActivation;
 
 pub(super) fn add_hermes_runtime_paths(
     filesystem: FilesystemCapability,
@@ -366,7 +428,7 @@ pub(super) fn add_hermes_runtime_paths(
     writable_paths: &mut Vec<PathBuf>,
     readable_paths: &mut Vec<ReadablePath>,
     required_writable_dirs: &mut Vec<RequiredWritableDir>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<PendingRuntimeActivation>> {
     if filesystem == FilesystemCapability::Landlock {
         anyhow::bail!(
             "hermes sandbox preflight failed: Landlock cannot protect read-only Hermes configuration below writable runtime paths"
@@ -382,7 +444,7 @@ pub(super) fn add_hermes_runtime_paths(
     } else if let Some(home) = home {
         (home.join(".hermes"), "HOME/.hermes")
     } else {
-        return Ok(());
+        return Ok(None);
     };
     if !hermes_home.is_absolute() {
         anyhow::bail!("hermes sandbox preflight failed: {source} must be an absolute path");
@@ -400,7 +462,7 @@ pub(super) fn add_hermes_runtime_paths(
     });
 
     if filesystem != FilesystemCapability::Bwrap {
-        return Ok(());
+        return Ok(None);
     }
 
     let writable_start = writable_paths.len();
@@ -464,6 +526,12 @@ pub(super) fn add_hermes_runtime_paths(
             .map_err(|error| overlay_enumeration_error(&hermes_home, error))?;
         let migrated_profiles =
             migrate_legacy_sqlite(&home_fd, &runtime_home_fd, &names, &hermes_home)?;
+        let mut database_paths = vec![hermes_home.join(RUNTIME_BACKING).join("state.db")];
+        database_paths.extend(
+            migrated_profiles
+                .iter()
+                .map(|(_, bind_source, _)| bind_source.join("state.db")),
+        );
         let migrated_profile_requests: Vec<PathBuf> = migrated_profiles
             .iter()
             .map(|(requested, _, _)| requested.clone())
@@ -552,12 +620,11 @@ pub(super) fn add_hermes_runtime_paths(
             ));
         }
         readable_paths.extend(protected);
-        activate_runtime_generation(&runtime_home_fd).map_err(|error| {
-            runtime_backing_error(
-                &hermes_home.join(RUNTIME_BACKING).join(RUNTIME_READY),
-                error,
-            )
-        })?;
+        Ok(Some(PendingRuntimeActivation {
+            runtime_home_fd,
+            marker_path: hermes_home.join(RUNTIME_BACKING).join(RUNTIME_READY),
+            database_paths,
+        }))
     }
     #[cfg(not(unix))]
     {
@@ -566,5 +633,4 @@ pub(super) fn add_hermes_runtime_paths(
             "hermes sandbox preflight failed: pinning writable Hermes runtime leaves requires unix"
         );
     }
-    Ok(())
 }

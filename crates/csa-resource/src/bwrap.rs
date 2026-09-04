@@ -433,6 +433,12 @@ pub fn sandbox_bind_fd_count(plan: &IsolationPlan) -> usize {
     sandbox_bind_files(plan).len()
 }
 
+pub(crate) fn readable_bind_fd_count(
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+) -> usize {
+    sandbox_bind_files_from_paths(readable_paths).len()
+}
+
 #[cfg(unix)]
 fn sandbox_bind_files_from_paths(
     readable_paths: &[crate::isolation_plan::ReadablePath],

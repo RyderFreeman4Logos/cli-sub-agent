@@ -137,6 +137,7 @@ pub struct IsolationPlanBuilder {
     required_writable_dirs: Vec<codex_paths::RequiredWritableDir>,
     execution_env: Option<HashMap<String, String>>,
     preflight_error: Option<anyhow::Error>,
+    pending_hermes_runtime: Option<hermes_paths::PendingRuntimeActivation>,
 }
 
 impl IsolationPlanBuilder {
@@ -162,6 +163,7 @@ impl IsolationPlanBuilder {
             required_writable_dirs: Vec::new(),
             execution_env: None,
             preflight_error: None,
+            pending_hermes_runtime: None,
         }
     }
 
@@ -454,17 +456,18 @@ impl IsolationPlanBuilder {
             }
         }
 
-        if tool_name == "hermes"
-            && let Err(error) = hermes_paths::add_hermes_runtime_paths(
+        if tool_name == "hermes" {
+            match hermes_paths::add_hermes_runtime_paths(
                 self.filesystem,
                 home_dir().as_deref(),
                 self.execution_env.as_ref(),
                 &mut self.writable_paths,
                 &mut self.readable_paths,
                 &mut self.required_writable_dirs,
-            )
-        {
-            self.preflight_error = Some(error);
+            ) {
+                Ok(pending) => self.pending_hermes_runtime = pending,
+                Err(error) => self.preflight_error = Some(error),
+            }
         }
     }
 
@@ -541,6 +544,11 @@ impl IsolationPlanBuilder {
             self.filesystem,
             &self.required_writable_dirs,
             &self.writable_paths,
+        )?;
+        hermes_paths::finish_plan(
+            self.filesystem,
+            &self.readable_paths,
+            self.pending_hermes_runtime.take(),
         )?;
 
         Ok(IsolationPlan {
