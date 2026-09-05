@@ -337,3 +337,33 @@ fn test_builder_best_effort_with_bwrap() {
     assert_eq!(plan.filesystem, FilesystemCapability::Bwrap);
     assert!(plan.degraded_reasons.is_empty());
 }
+
+#[test]
+fn non_bwrap_ordinary_readable_does_not_inherit_unused_descriptors() {
+    use std::os::fd::AsRawFd;
+    let temp = tempfile::tempdir().unwrap();
+    for filesystem in [FilesystemCapability::None, FilesystemCapability::Landlock] {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(filesystem)
+            .with_readable_path(temp.path().to_path_buf())
+            .build()
+            .unwrap();
+        let file = plan.readable_paths[0].pinned_source_file().unwrap();
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "test ! -e \"$1\"", "probe"])
+            .arg(format!("/proc/self/fd/{}", file.as_raw_fd()));
+        crate::bwrap::try_inherit_sandbox_bind_fds(&mut command, &plan).unwrap();
+        let output = crate::bounded_command::output_with_timeout(
+            command,
+            std::time::Duration::from_secs(5),
+            crate::bounded_command::MAX_OUTPUT_BYTES,
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{filesystem} must keep unused pins CLOEXEC"
+        );
+        assert_eq!(crate::bwrap::sandbox_bind_fd_count(&plan), 0);
+    }
+}

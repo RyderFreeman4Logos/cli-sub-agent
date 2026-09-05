@@ -515,6 +515,10 @@ fn sandbox_bind_files_from_paths(
 
 #[cfg(unix)]
 fn sandbox_bind_files(plan: &IsolationPlan) -> Vec<std::sync::Arc<std::fs::File>> {
+    // Only bwrap consumes bind descriptors; other backends keep pins CLOEXEC.
+    if plan.filesystem != FilesystemCapability::Bwrap {
+        return Vec::new();
+    }
     sandbox_bind_files_from_paths(&plan.readable_paths)
 }
 

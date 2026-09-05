@@ -522,3 +522,47 @@ fn acp_extra_bind_survives_actual_preparation_and_reconstruction() {
     );
     assert_eq!(output.stdout, b"accepted");
 }
+
+#[tokio::test]
+async fn non_bwrap_ordinary_readable_allows_acp_cgroup_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("readable");
+    std::fs::write(&source, "accepted").unwrap();
+    let systemd = temp.path().join("systemd-run");
+    std::fs::write(&systemd, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&systemd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = csa_resource::IsolationPlanBuilder::new(csa_resource::EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::None)
+        .with_resource_capability(ResourceCapability::CgroupV2)
+        .with_readable_path(source)
+        .build()
+        .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::CgroupV2);
+    let env = HashMap::from([("PATH".into(), temp.path().display().to_string())]);
+    let (connection, _handle) = AcpConnection::spawn_sandboxed(
+        AcpSpawnRequest {
+            command: "/bin/true",
+            args: &[],
+            working_dir: temp.path(),
+            env: &env,
+            options: AcpConnectionOptions::default(),
+        },
+        Some(AcpSandboxRequest {
+            isolation_plan: &plan,
+            tool_name: "codex",
+            session_id: "01NONBWRAP",
+            env_overrides: None,
+        }),
+    )
+    .await
+    .expect("ordinary readable must not reject a non-bwrap ACP cgroup spawn");
+    let mut child = connection.child.borrow_mut().take().unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
+}

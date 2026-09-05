@@ -278,3 +278,38 @@ async fn extra_only_binds_reject_systemd_before_spawning_tool() {
     );
     assert!(!marker.exists());
 }
+
+#[tokio::test]
+async fn non_bwrap_ordinary_readable_allows_cgroup_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("readable");
+    std::fs::write(&source, "accepted").unwrap();
+    let systemd = temp.path().join("systemd-run");
+    std::fs::write(&systemd, "#!/bin/sh\nprintf cgroup-started\n").unwrap();
+    std::fs::set_permissions(&systemd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = csa_resource::IsolationPlanBuilder::new(csa_resource::EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::None)
+        .with_resource_capability(ResourceCapability::CgroupV2)
+        .with_readable_path(source)
+        .build()
+        .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::CgroupV2);
+    let mut original = Command::new("/bin/true");
+    original.env("PATH", temp.path());
+    let (child, _handle) = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01NONBWRAP",
+    )
+    .await
+    .expect("ordinary readable must not reject a non-bwrap cgroup spawn");
+    let result = crate::wait_and_capture(child, crate::StreamMode::BufferOnly)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.output, "cgroup-started");
+}
