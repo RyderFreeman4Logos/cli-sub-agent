@@ -3,6 +3,9 @@
 use super::*;
 use std::path::Path;
 
+#[path = "isolation_plan_emitted_bind_tests.rs"]
+mod emitted_bind_tests;
+
 #[cfg(unix)]
 struct PathGuard(Option<std::ffi::OsString>);
 

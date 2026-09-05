@@ -648,7 +648,7 @@ fn path_already_exposed(
 pub(super) fn downgrade_incompatible_cgroup_filesystem(
     resource: &mut ResourceCapability,
     filesystem: FilesystemCapability,
-    readable_paths: &[ReadablePath],
+    bind_fd_count: usize,
     degraded_reasons: &mut Vec<String>,
 ) {
     if *resource != ResourceCapability::CgroupV2 {
@@ -661,17 +661,10 @@ pub(super) fn downgrade_incompatible_cgroup_filesystem(
         );
         return;
     }
-    #[cfg(unix)]
-    if filesystem == FilesystemCapability::Bwrap
-        && readable_paths
-            .iter()
-            .any(|path| path.pinned_source_file().is_some())
-    {
+    if filesystem == FilesystemCapability::Bwrap && bind_fd_count > 0 {
         *resource = ResourceCapability::Setrlimit;
         degraded_reasons.push(
             "bwrap bind-fd cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
         );
     }
-    #[cfg(not(unix))]
-    let _ = readable_paths;
 }

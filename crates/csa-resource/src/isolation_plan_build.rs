@@ -78,10 +78,21 @@ impl IsolationPlanBuilder {
                 )?);
         }
 
+        let bind_fd_count = if self.filesystem == FilesystemCapability::Bwrap {
+            crate::bwrap::readable_bind_fd_count(
+                &self.readable_paths,
+                &self.writable_paths,
+                self.project_root
+                    .as_deref()
+                    .filter(|_| self.readonly_project_root),
+            )
+        } else {
+            0
+        };
         readable::downgrade_incompatible_cgroup_filesystem(
             &mut self.resource,
             self.filesystem,
-            &self.readable_paths,
+            bind_fd_count,
             &mut self.degraded_reasons,
         );
 
@@ -92,7 +103,7 @@ impl IsolationPlanBuilder {
         )?;
         hermes_paths::finish_plan(
             self.filesystem,
-            &self.readable_paths,
+            bind_fd_count,
             self.pending_hermes_runtime.take(),
         )?;
 

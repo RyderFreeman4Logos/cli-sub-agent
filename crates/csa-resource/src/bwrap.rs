@@ -110,31 +110,16 @@ impl BwrapCommandBuilder {
         // adding an overlapping read-only bind afterward would downgrade the
         // writable mount.
         #[cfg(unix)]
-        let overlay_files: Vec<std::sync::Arc<std::fs::File>> = {
-            // Retain only pins consumed by emitted mounts. An ordinary readable
-            // covered by a writable grant does not require bind-FD support.
-            let mut files: Vec<_> = self
-                .readable_paths
+        let mut overlay_files =
+            sandbox_bind_files_from_paths(&self.readable_paths, &self.writable_paths, None);
+        #[cfg(unix)]
+        overlay_files.extend(
+            extra_ro_binds
                 .iter()
-                .filter(|path| {
-                    if path.writable_bind() {
-                        self.writable_paths.iter().any(|p| p == path.requested())
-                    } else {
-                        !self.is_covered_by_writable_path(path)
-                    }
-                })
-                .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
-                .collect();
-            files.extend(
-                extra_ro_binds
-                    .iter()
-                    .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file),
-            );
-            files
-        };
+                .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file),
+        );
         for path in &self.readable_paths {
-            if path.writable_bind()
-                || self.is_covered_by_writable_path(path)
+            if !emits_readonly_bind(path, self.writable_paths.iter())
                 || self.is_late_readonly_overlay(path)
             {
                 continue;
@@ -205,24 +190,6 @@ impl BwrapCommandBuilder {
         }
 
         Ok(cmd)
-    }
-
-    fn is_covered_by_writable_path(
-        &self,
-        readable_path: &crate::isolation_plan::ReadablePath,
-    ) -> bool {
-        if readable_path.overrides_writable_mount() {
-            return false;
-        }
-        let readable_dest = if fresh_writable_mount_root(readable_path.requested()).is_some() {
-            readable_path.requested().to_path_buf()
-        } else {
-            readable_path.bind_source().to_path_buf()
-        };
-        self.writable_paths.iter().any(|writable_path| {
-            let writable_dest = effective_mount_destination(writable_path);
-            readable_dest == writable_dest || readable_dest.starts_with(&writable_dest)
-        })
     }
 
     fn is_late_readonly_overlay(&self, path: &crate::isolation_plan::ReadablePath) -> bool {
@@ -300,11 +267,7 @@ impl BwrapCommandBuilder {
     fn pinned_writable_file(&self, path: &Path) -> Option<std::sync::Arc<std::fs::File>> {
         #[cfg(unix)]
         {
-            self.readable_paths.iter().find_map(|readable| {
-                (readable.writable_bind() && readable.requested() == path)
-                    .then(|| readable.pinned_source_file())
-                    .flatten()
-            })
+            pinned_writable_file(&self.readable_paths, path)
         }
         #[cfg(not(unix))]
         {
@@ -513,24 +476,69 @@ pub fn from_isolation_plan(
     builder.build_with_home(None).map(Some)
 }
 
-/// Number of descriptors for all planned bind mounts, including extra mounts.
+/// Number of descriptors consumed by emitted bind mounts, not snapshot owners.
 pub fn sandbox_bind_fd_count(plan: &IsolationPlan) -> usize {
     sandbox_bind_files(plan).len()
 }
 
 pub(crate) fn readable_bind_fd_count(
     readable_paths: &[crate::isolation_plan::ReadablePath],
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
 ) -> usize {
-    sandbox_bind_files_from_paths(readable_paths).len()
+    sandbox_bind_files_from_paths(readable_paths, writable_paths, readonly_project).len()
+}
+
+// Writable grants imply readability, except for explicit overlays/extra binds.
+// Use this same selection for command emission and descriptor admission.
+fn emits_readonly_bind<'a>(
+    path: &crate::isolation_plan::ReadablePath,
+    mut writable_paths: impl Iterator<Item = &'a PathBuf>,
+) -> bool {
+    if path.writable_bind() {
+        return false;
+    }
+    if path.is_extra_bind() || path.overrides_writable_mount() {
+        return true;
+    }
+    let dest = if fresh_writable_mount_root(path.requested()).is_some() {
+        path.requested()
+    } else {
+        path.bind_source()
+    };
+    !writable_paths.any(|writable| dest.starts_with(effective_mount_destination(writable)))
+}
+
+#[cfg(unix)]
+fn pinned_writable_file(
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+    path: &Path,
+) -> Option<std::sync::Arc<std::fs::File>> {
+    readable_paths.iter().find_map(|readable| {
+        (readable.writable_bind() && readable.requested() == path)
+            .then(|| readable.pinned_source_file())
+            .flatten()
+    })
 }
 
 #[cfg(unix)]
 fn sandbox_bind_files_from_paths(
     readable_paths: &[crate::isolation_plan::ReadablePath],
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
 ) -> Vec<std::sync::Arc<std::fs::File>> {
+    let writable = writable_paths
+        .iter()
+        .filter(|path| readonly_project != Some(path.as_path()));
     readable_paths
         .iter()
+        .filter(|path| emits_readonly_bind(path, writable.clone()))
         .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
+        .chain(
+            writable
+                .clone()
+                .filter_map(|path| pinned_writable_file(readable_paths, path)),
+        )
         .collect()
 }
 
@@ -540,7 +548,13 @@ fn sandbox_bind_files(plan: &IsolationPlan) -> Vec<std::sync::Arc<std::fs::File>
     if plan.filesystem != FilesystemCapability::Bwrap {
         return Vec::new();
     }
-    sandbox_bind_files_from_paths(&plan.readable_paths)
+    sandbox_bind_files_from_paths(
+        &plan.readable_paths,
+        &plan.writable_paths,
+        plan.project_root
+            .as_deref()
+            .filter(|_| plan.readonly_project_root),
+    )
 }
 
 #[cfg(not(unix))]
@@ -551,6 +565,8 @@ fn sandbox_bind_files(_plan: &IsolationPlan) -> Vec<()> {
 #[cfg(not(unix))]
 fn sandbox_bind_files_from_paths(
     _readable_paths: &[crate::isolation_plan::ReadablePath],
+    _writable_paths: &[PathBuf],
+    _readonly_project: Option<&Path>,
 ) -> Vec<()> {
     Vec::new()
 }
