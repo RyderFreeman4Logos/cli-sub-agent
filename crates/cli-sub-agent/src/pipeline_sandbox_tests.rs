@@ -566,7 +566,9 @@ enforcement_mode = "best-effort"
 
 #[test]
 fn clean_room_sandbox_plan_is_strict_readonly_and_has_exact_exposures() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let temp = tempfile::tempdir().expect("tempdir");
+    let _home = ScopedEnvVarRestore::set("HOME", temp.path());
     let project = temp.path().join("project");
     let session = temp.path().join("state/session");
     let evidence = temp.path().join("evidence.md");
@@ -602,7 +604,7 @@ enforcement_mode = "off"
 
     assert!(!sandbox.best_effort);
     assert!(plan.readonly_project_root);
-    assert_eq!(plan.project_root.as_deref(), Some(project.as_path()));
+    assert_eq!(plan.project_root, Some(project.canonicalize().unwrap()));
     assert!(!plan.user_daemon_ipc);
     assert!(plan.degraded_reasons.is_empty());
     assert!(plan.env_overrides.is_empty());
@@ -611,8 +613,15 @@ enforcement_mode = "off"
             .iter()
             .map(|path| path.requested().to_path_buf())
             .collect::<Vec<_>>(),
-        vec![evidence.canonicalize().unwrap()]
+        vec![
+            evidence.canonicalize().unwrap(),
+            project.canonicalize().unwrap()
+        ]
     );
+    assert_eq!(csa_resource::bwrap::sandbox_bind_fd_count(&plan), 2);
+    csa_resource::from_isolation_plan(&plan, "/bin/true", &[])
+        .expect("clean-room read-only binds are pinned before command construction")
+        .expect("required bwrap command");
     assert_eq!(
         plan.writable_paths,
         vec![
