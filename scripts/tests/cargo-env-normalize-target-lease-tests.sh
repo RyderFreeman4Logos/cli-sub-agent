@@ -43,7 +43,7 @@ run_normalizer() {
 }
 
 run_normalizer_with_default_install_root() {
-    env \
+    env -u CARGO_INSTALL_ROOT \
         PATH="$bin:/usr/bin:/bin" \
         HOME="$home" \
         CSA_TEST_REPO_ROOT="$repo" \
@@ -114,6 +114,9 @@ set -e
     echo "FAIL pre-lease install-root mutation status=$install_root_rc log=$(cat "$log")"; exit 1;
 }
 [ ! -e "$repo/target" ] || { echo "FAIL target mutated before lease helper"; exit 1; }
+[ "$(cat "$log")" = "lease <--> </bin/sh> <-c> <mkdir -p \"\$CARGO_INSTALL_ROOT\"; exec \"\$@\"> <cargo-env-normalize> <cargo> <metadata> target=<$mirror$repo/target>" ] || {
+    echo "FAIL default install-root lease argv=$(cat \"$log\")"; exit 1;
+}
 
 # PATH discovery is enabled once the lexical canonical parent exists.
 mkdir -p "$mirror$repo"
