@@ -13,6 +13,7 @@ use super::clean_room::{
     CleanRoomWorkspace, CleanupFailureLedger, DetachedWorkspaceLease,
     DetachedWorkspaceLeaseContext, LeaseAcquireFault, WorkspaceCleanup,
 };
+use super::clean_room_tests::physical_temp_path;
 use super::workspace_lease_fs::DetachedWorkspaceLeaseStore;
 
 #[derive(Default)]
@@ -44,7 +45,7 @@ fn context(root: &std::path::Path) -> DetachedWorkspaceLeaseContext {
     DetachedWorkspaceLeaseContext::new(
         CampaignId::generate(),
         1,
-        DetachedWorkspaceLeaseStore::open(root).unwrap(),
+        DetachedWorkspaceLeaseStore::open(&physical_temp_path(root)).unwrap(),
     )
     .unwrap()
 }
@@ -88,23 +89,24 @@ fn lease_recovery_state(fault: LeaseAcquireFault) -> LeaseRecoveryState {
 #[test]
 fn rejects_symlink_and_cross_filesystem_roots() {
     let temp = tempfile::tempdir().unwrap();
-    let target = temp.path().join("target");
-    let link = temp.path().join("link");
+    let temp_root = physical_temp_path(temp.path());
+    let target = temp_root.join("target");
+    let link = temp_root.join("link");
     fs::create_dir(&target).unwrap();
     symlink(&target, &link).unwrap();
     assert!(
-        context(temp.path())
+        context(&temp_root)
             .acquire(&workspace(link))
             .unwrap_err()
             .to_string()
             .contains("symlink")
     );
     assert_ne!(
-        fs::metadata(temp.path()).unwrap().dev(),
+        fs::metadata(&temp_root).unwrap().dev(),
         fs::metadata("/proc").unwrap().dev()
     );
     assert!(
-        context(temp.path())
+        context(&temp_root)
             .acquire(&workspace(PathBuf::from("/proc")))
             .unwrap_err()
             .to_string()
@@ -115,9 +117,10 @@ fn rejects_symlink_and_cross_filesystem_roots() {
 #[test]
 fn rejects_concurrent_and_replaced_workspace_roots() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("workspace");
+    let temp_root = physical_temp_path(temp.path());
+    let root = temp_root.join("workspace");
     fs::create_dir(&root).unwrap();
-    let lease_context = context(temp.path());
+    let lease_context = context(&temp_root);
     let lease = acquire(&lease_context, workspace(root.clone()));
     assert!(
         lease_context
@@ -126,7 +129,7 @@ fn rejects_concurrent_and_replaced_workspace_roots() {
             .to_string()
             .contains("already leased")
     );
-    fs::rename(&root, temp.path().join("moved")).unwrap();
+    fs::rename(&root, temp_root.join("moved")).unwrap();
     fs::create_dir(&root).unwrap();
     assert!(
         lease
@@ -140,9 +143,10 @@ fn rejects_concurrent_and_replaced_workspace_roots() {
 #[test]
 fn rejects_changed_nonce_before_cleanup() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("workspace");
+    let temp_root = physical_temp_path(temp.path());
+    let root = temp_root.join("workspace");
     fs::create_dir(&root).unwrap();
-    let lease = acquire(&context(temp.path()), workspace(root));
+    let lease = acquire(&context(&temp_root), workspace(root));
     let id = lease.identity();
     let changed = WorkspaceLeaseIdentity::new(
         id.campaign_id().clone(),
@@ -177,9 +181,10 @@ fn lease_create_fault_matrix_never_grants_an_unconfirmed_workspace() {
         LeaseAcquireFault::AfterFileSync,
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("workspace");
+        let temp_root = physical_temp_path(temp.path());
+        let root = temp_root.join("workspace");
         fs::create_dir(&root).unwrap();
-        let context = context(temp.path());
+        let context = context(&temp_root);
         let room = workspace(root.clone());
 
         assert!(context.acquire_with_fault(&room, fault).is_err());
@@ -200,9 +205,10 @@ fn lease_create_fault_matrix_never_grants_an_unconfirmed_workspace() {
 #[tokio::test]
 async fn owned_lease_survives_await_and_explicit_release_allows_reacquisition() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("workspace");
+    let temp_root = physical_temp_path(temp.path());
+    let root = temp_root.join("workspace");
     fs::create_dir(&root).unwrap();
-    let context = context(temp.path());
+    let context = context(&temp_root);
     let lease = acquire(&context, workspace(root.clone()));
     tokio::task::yield_now().await;
     assert!(lease.validate_current().is_ok());
@@ -214,9 +220,10 @@ async fn owned_lease_survives_await_and_explicit_release_allows_reacquisition() 
 #[test]
 fn failed_close_and_future_drop_leave_a_fenced_nonreusable_lease() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("workspace");
+    let temp_root = physical_temp_path(temp.path());
+    let root = temp_root.join("workspace");
     fs::create_dir(&root).unwrap();
-    let lease_context = context(temp.path());
+    let lease_context = context(&temp_root);
     let failure_ledger = CleanupFailureLedger::default();
     let lease = acquire_with(
         &lease_context,
@@ -230,9 +237,9 @@ fn failed_close_and_future_drop_leave_a_fenced_nonreusable_lease() {
     assert!(!failure_ledger.failures().is_empty());
     assert!(lease_context.acquire(&workspace(root)).is_err());
 
-    let drop_root = temp.path().join("dropped-workspace");
+    let drop_root = temp_root.join("dropped-workspace");
     fs::create_dir(&drop_root).unwrap();
-    let drop_context = context(temp.path());
+    let drop_context = context(&temp_root);
     let drop_failures = CleanupFailureLedger::default();
     let dropped = acquire_with(
         &drop_context,

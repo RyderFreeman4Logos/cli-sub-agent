@@ -18,7 +18,7 @@ use super::clean_room::{
 use super::clean_room_provider::{
     AdmittedProviderSessionFactory, ExactProviderPrompt, ProviderSessionDriver,
 };
-use super::clean_room_tests::{epoch, factory, lease_context};
+use super::clean_room_tests::{epoch, factory, lease_context, physical_temp_path};
 use super::provider_command_authority::{
     ProviderCommandAuthority, ProviderEnvironmentInputs, SystemProviderProgramResolver,
 };
@@ -88,15 +88,16 @@ fn write_executable(path: &std::path::Path, body: &str) {
 #[test]
 fn provider_request_preserves_exact_prompt_and_evidence_bundle() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let frozen = epoch();
     let (mut factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     let guard = factory
         .create(
-            &temp.path().join("source"),
-            &temp.path().join("room"),
-            &temp.path().join("bundle"),
+            &temp_root.join("source"),
+            &temp_root.join("room"),
+            &temp_root.join("bundle"),
             frozen,
             &lease_context,
         )
@@ -139,15 +140,16 @@ fn provider_request_preserves_exact_prompt_and_evidence_bundle() {
 #[test]
 fn provider_request_rejects_non_xhigh_strongest_identity() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let frozen = epoch();
     let (mut factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     let guard = factory
         .create(
-            &temp.path().join("source"),
-            &temp.path().join("room"),
-            &temp.path().join("bundle"),
+            &temp_root.join("source"),
+            &temp_root.join("room"),
+            &temp_root.join("bundle"),
             frozen,
             &lease_context,
         )
@@ -210,15 +212,16 @@ impl ProviderSessionFactory for RecordingProviderFactory {
 #[tokio::test]
 async fn async_provider_port_propagates_success_and_error_with_a_fake_only() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
     let guard = workspace_factory
         .create(
-            &temp.path().join("source"),
-            &temp.path().join("room"),
-            &temp.path().join("bundle"),
+            &temp_root.join("source"),
+            &temp_root.join("room"),
+            &temp_root.join("bundle"),
             frozen,
             &lease_context,
         )
@@ -257,7 +260,8 @@ async fn async_provider_port_propagates_success_and_error_with_a_fake_only() {
 #[tokio::test]
 async fn production_adapter_executes_only_fingerprinted_fake_with_exact_contract() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let mut sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&temp).await;
     sandbox.track_env("CSA_CLEAN_ROOM_PARENT_SENTINEL");
     unsafe {
@@ -267,11 +271,11 @@ async fn production_adapter_executes_only_fingerprinted_fake_with_exact_contract
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
-    let root = temp.path().join("clean-room");
-    let bundle = temp.path().join("evidence.md");
+    let root = temp_root.join("clean-room");
+    let bundle = temp_root.join("evidence.md");
     let guard = workspace_factory
         .create(
-            &temp.path().join("source"),
+            &temp_root.join("source"),
             &root,
             &bundle,
             frozen,
@@ -365,15 +369,16 @@ printf '%s' "$last"
 #[tokio::test]
 async fn production_adapter_rejects_stale_executor_request_and_program_before_execution() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
-    let root = temp.path().join("clean-room");
-    let bundle = temp.path().join("evidence.md");
+    let root = temp_root.join("clean-room");
+    let bundle = temp_root.join("evidence.md");
     let guard = workspace_factory
         .create(
-            &temp.path().join("source"),
+            &temp_root.join("source"),
             &root,
             &bundle,
             frozen,
@@ -475,15 +480,16 @@ async fn production_adapter_rejects_stale_executor_request_and_program_before_ex
 async fn production_adapter_propagates_fingerprinted_fake_nonzero_exit() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _sandbox = crate::test_session_sandbox::ScopedSessionSandbox::new(&temp).await;
-    let lease_context = lease_context(temp.path());
+    let temp_root = physical_temp_path(temp.path());
+    let lease_context = lease_context(&temp_root);
     let frozen = epoch();
     let (mut workspace_factory, _plans, _cleanup_calls, _ledger) =
         factory(frozen.head_oid().as_str().to_string(), false);
-    let root = temp.path().join("clean-room");
-    let bundle = temp.path().join("evidence.md");
+    let root = temp_root.join("clean-room");
+    let bundle = temp_root.join("evidence.md");
     let guard = workspace_factory
         .create(
-            &temp.path().join("source"),
+            &temp_root.join("source"),
             &root,
             &bundle,
             frozen,

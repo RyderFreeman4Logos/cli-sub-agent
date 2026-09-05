@@ -33,6 +33,10 @@ mkdir -p \
   "${fixture}/crates/cli-sub-agent/src" \
   "${fixture}/crates/weave/src"
 git -C "${tmp}" init -q fixture
+# Git show-toplevel canonicalizes through a host TMPDIR symlink. Rebind so
+# --repo/--output-dir match production's repo identity without weakening the
+# exact-build symlink rejection or canonicalizing untrusted production input.
+fixture="$(git -C "${fixture}" rev-parse --show-toplevel)"
 git -C "${fixture}" config user.name "Exact Build Test"
 git -C "${fixture}" config user.email "exact-build@example.invalid"
 
