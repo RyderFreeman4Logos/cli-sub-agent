@@ -367,3 +367,88 @@ fn non_bwrap_ordinary_readable_does_not_inherit_unused_descriptors() {
         assert_eq!(crate::bwrap::sandbox_bind_fd_count(&plan), 0);
     }
 }
+
+#[test]
+fn public_bwrap_builder_checks_pinned_bind_capability() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let _path = install_legacy_bwrap(&temp);
+    let file = root.join("file");
+    let directory = root.join("directory");
+    std::fs::write(&file, "accepted").unwrap();
+    std::fs::create_dir(&directory).unwrap();
+    for supported in [false, true] {
+        if supported {
+            std::fs::write(
+                temp.path().join("bwrap"),
+                "#!/bin/sh\necho '--ro-bind-fd FD DEST --bind-fd FD DEST'\n",
+            )
+            .unwrap();
+        }
+        for source in [&file, &directory] {
+            for extra in [false, true] {
+                let mut builder = crate::BwrapCommandBuilder::new("/bin/true", &[]);
+                if extra {
+                    builder.with_ro_bind(source, source);
+                } else {
+                    builder.with_readable_path(source);
+                }
+                let result = builder.build();
+                if supported {
+                    let command = result.expect("modern bwrap supports pinned binds");
+                    assert!(command.get_args().any(|arg| arg == "--ro-bind-fd"));
+                } else {
+                    let error = result.expect_err("legacy bwrap must fail before command return");
+                    assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+                }
+            }
+        }
+        // Public plans can bypass plan-builder admission; command construction
+        // must still enforce the same capability contract.
+        let mut plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::None)
+            .with_readable_path(&file)
+            .build()
+            .unwrap();
+        plan.filesystem = FilesystemCapability::Bwrap;
+        let result = crate::from_isolation_plan(&plan, "/bin/true", &[]);
+        if supported {
+            assert!(result.unwrap().is_some());
+        } else {
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+        }
+    }
+}
+
+#[test]
+fn public_bwrap_builder_preserves_no_bind_compatibility_and_path_errors() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (_home, _env) = isolated_home(&temp);
+    let _path = install_legacy_bwrap(&temp);
+    let file = root.join("readable");
+    std::fs::write(&file, "accepted").unwrap();
+    let socket = root.join("control.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let mut builder = crate::BwrapCommandBuilder::new("/bin/true", &[]);
+    assert!(
+        builder.build().is_ok(),
+        "no binds need no new bwrap options"
+    );
+    builder.with_writable_path(&root).with_readable_path(&file);
+    let command = builder.build().expect("covered readable emits no FD mount");
+    assert!(!command.get_args().any(|arg| arg == "--ro-bind-fd"));
+    builder.with_ro_bind(&socket, &socket);
+    assert!(
+        builder.build().is_ok(),
+        "nonregular pathname binds remain supported"
+    );
+    builder.with_ro_bind(&root.join("missing"), &root.join("missing"));
+    assert_eq!(
+        builder.build().unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}

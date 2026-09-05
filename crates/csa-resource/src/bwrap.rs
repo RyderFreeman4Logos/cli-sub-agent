@@ -67,6 +67,8 @@ impl BwrapCommandBuilder {
     }
 
     /// Produce a ready-to-spawn command, or return a path validation/pinning error.
+    /// Returns [`std::io::ErrorKind::Unsupported`] if pinned mounts need bind-FD
+    /// options unavailable in the installed bwrap.
     pub fn build(&self) -> std::io::Result<Command> {
         self.build_with_home(std::env::var_os("HOME").as_deref().map(Path::new))
     }
@@ -109,7 +111,20 @@ impl BwrapCommandBuilder {
         // writable mount.
         #[cfg(unix)]
         let overlay_files: Vec<std::sync::Arc<std::fs::File>> = {
-            let mut files = sandbox_bind_files_from_paths(&self.readable_paths);
+            // Retain only pins consumed by emitted mounts. An ordinary readable
+            // covered by a writable grant does not require bind-FD support.
+            let mut files: Vec<_> = self
+                .readable_paths
+                .iter()
+                .filter(|path| {
+                    if path.writable_bind() {
+                        self.writable_paths.iter().any(|p| p == path.requested())
+                    } else {
+                        !self.is_covered_by_writable_path(path)
+                    }
+                })
+                .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
+                .collect();
             files.extend(
                 extra_ro_binds
                     .iter()
@@ -167,6 +182,12 @@ impl BwrapCommandBuilder {
 
         #[cfg(unix)]
         if !overlay_files.is_empty() {
+            if !crate::filesystem_sandbox::has_bwrap_bind_fd_options() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "bwrap bind-fd required but --ro-bind-fd/--bind-fd are unavailable",
+                ));
+            }
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
             // SAFETY: the closure only clears FD_CLOEXEC on descriptors this
