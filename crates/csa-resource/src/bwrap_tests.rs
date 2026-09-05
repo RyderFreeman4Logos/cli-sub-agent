@@ -357,22 +357,16 @@ fn test_bwrap_readonly_project_root() {
         .join("project");
     std::fs::create_dir(&project).expect("create project root");
     let project_str = project.to_string_lossy().into_owned();
-    let plan = IsolationPlan {
-        resource: ResourceCapability::None,
-        filesystem: FilesystemCapability::Bwrap,
-        writable_paths: vec![project.clone(), PathBuf::from("/tmp/session")],
-        readable_paths: Vec::new(),
-        env_overrides: HashMap::new(),
-        degraded_reasons: Vec::new(),
-        memory_max_mb: None,
-        memory_swap_max_mb: None,
-        pids_max: None,
-        readonly_project_root: true,
-        project_root: Some(project.clone()),
-        soft_limit_percent: None,
-        memory_monitor_interval_seconds: None,
-        user_daemon_ipc: false,
-    };
+    let plan = crate::isolation_plan::IsolationPlanBuilder::new(
+        crate::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_writable_path(project.clone())
+    .with_writable_path(PathBuf::from("/tmp/session"))
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .expect("pinned readonly project plan");
 
     let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[])
         .expect("valid bind paths")

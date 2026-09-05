@@ -465,3 +465,60 @@ fn scrub_inherited_child_env_removes_git_push_authorization_for_wrapper_commands
         );
     }
 }
+
+#[test]
+fn acp_extra_bind_survives_actual_preparation_and_reconstruction() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("payload"), "accepted").unwrap();
+    let plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_writable_path(project.clone())
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .unwrap();
+    let env = HashMap::new();
+    let sandbox = AcpSandboxRequest {
+        isolation_plan: &plan,
+        tool_name: "codex",
+        session_id: "01TEST",
+        env_overrides: None,
+    };
+    let prepared = AcpConnection::prepare_sandbox_command(
+        AcpSpawnRequest {
+            command: "/bin/true",
+            args: &[],
+            working_dir: &project,
+            env: &env,
+            options: AcpConnectionOptions::default(),
+        },
+        &sandbox,
+    )
+    .unwrap();
+    let fd = prepared
+        .effective_args
+        .windows(3)
+        .find(|args| args[0] == "--ro-bind-fd" && args[2] == project.to_string_lossy())
+        .unwrap()[1]
+        .clone();
+    std::fs::rename(&project, project.with_extension("old")).unwrap();
+    let mut probe = Command::new("/bin/cat");
+    probe.arg(format!("/proc/self/fd/{fd}/payload"));
+    inherit_plan_bind_fds(&mut probe, &plan).unwrap();
+    let output = csa_resource::bounded_command::output_with_timeout(
+        probe.into_std(),
+        Duration::from_secs(5),
+        csa_resource::bounded_command::MAX_OUTPUT_BYTES,
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"accepted");
+}

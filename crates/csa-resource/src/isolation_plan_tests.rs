@@ -72,19 +72,6 @@ fn isolated_home(temp: &tempfile::TempDir) -> (PathBuf, [ScopedEnvVar; 6]) {
 }
 
 #[test]
-fn test_builder_best_effort_with_bwrap() {
-    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-        .with_resource_capability(ResourceCapability::CgroupV2)
-        .with_filesystem_capability(FilesystemCapability::Bwrap)
-        .build()
-        .expect("BestEffort with Bwrap should succeed");
-
-    assert_eq!(plan.resource, ResourceCapability::CgroupV2);
-    assert_eq!(plan.filesystem, FilesystemCapability::Bwrap);
-    assert!(plan.degraded_reasons.is_empty());
-}
-
-#[test]
 fn test_builder_degrades_cgroup_landlock_to_setrlimit() {
     let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
         .with_resource_capability(ResourceCapability::CgroupV2)

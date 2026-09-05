@@ -236,3 +236,45 @@ async fn bad_readonly_bind_returns_error_without_spawning_tool() {
     );
     assert!(!marker.exists());
 }
+
+#[tokio::test]
+async fn extra_only_binds_reject_systemd_before_spawning_tool() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let marker = project.join("child-started");
+    let mut plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_resource_capability(ResourceCapability::CgroupV2)
+    .with_writable_path(project.clone())
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::Setrlimit);
+    // Even a caller that forces cgroup after planning must fail closed.
+    plan.resource = ResourceCapability::CgroupV2;
+    let mut original = Command::new("/usr/bin/touch");
+    original.arg(&marker);
+    let result = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01TEST",
+    )
+    .await;
+    let error = result
+        .err()
+        .expect("systemd cannot carry extra bind descriptors");
+    assert!(
+        error
+            .to_string()
+            .contains("bind-fd cannot pass through systemd-run"),
+        "{error:#}"
+    );
+    assert!(!marker.exists());
+}

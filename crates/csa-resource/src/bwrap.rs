@@ -387,16 +387,41 @@ impl BwrapCommandBuilder {
                 || self.ro_binds.iter().any(|existing| {
                     existing.bind_source() == gh_aider || existing.requested() == sandbox_gh_aider
                 });
-            if gh_aider.exists() && !already_visible {
-                ro_binds.push(crate::isolation_plan::ReadablePath::pinned_extra(
-                    sandbox_gh_aider,
-                    gh_aider,
-                ));
+            let absent = std::fs::symlink_metadata(&gh_aider)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if !absent && !already_visible {
+                ro_binds.push(
+                    crate::isolation_plan::ReadablePath::pinned_home_config(gh_aider)
+                        .for_sandbox_home(self.sandbox_home(Some(home)).as_deref()),
+                );
             }
         }
 
         ro_binds.into_iter()
     }
+}
+
+/// Capture every extra source before capability checks and executor projection.
+/// The returned ReadablePaths use the same descriptor owners as ordinary binds.
+pub(crate) fn plan_extra_readonly_paths(
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
+    home: Option<&Path>,
+) -> std::io::Result<Vec<crate::isolation_plan::ReadablePath>> {
+    let mut builder = BwrapCommandBuilder::new("", &[]);
+    for path in writable_paths {
+        if readonly_project == Some(path.as_path()) {
+            builder.with_ro_bind(path, path);
+        } else {
+            builder.with_writable_path(path);
+        }
+    }
+    let implicit: Vec<_> = builder.implicit_ro_binds(home).collect();
+    builder.ro_binds.extend(implicit);
+    for path in &builder.ro_binds {
+        validate_readonly_path(path)?;
+    }
+    Ok(builder.ro_binds)
 }
 
 fn validate_readonly_path(path: &crate::isolation_plan::ReadablePath) -> std::io::Result<()> {
@@ -430,14 +455,29 @@ pub fn from_isolation_plan(
         // read-only instead of read-write.
         let is_project_root = plan.project_root.as_ref().is_some_and(|root| path == root);
         if plan.readonly_project_root && is_project_root {
-            builder.with_ro_bind(path, path);
+            if !plan
+                .readable_paths
+                .iter()
+                .any(|readable| readable.is_extra_bind() && readable.requested() == path)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "read-only project bind must be pinned by IsolationPlanBuilder",
+                ));
+            }
         } else {
             builder.with_writable_path(path);
         }
     }
 
     for path in &plan.readable_paths {
-        builder.with_readable_path(path.clone());
+        if path.is_extra_bind() {
+            builder
+                .ro_binds
+                .push(path.for_sandbox_home(plan.env_overrides.get("HOME").map(Path::new)));
+        } else {
+            builder.with_readable_path(path.clone());
+        }
     }
 
     let mut env_overrides = plan.env_overrides.clone();
@@ -447,10 +487,12 @@ pub fn from_isolation_plan(
         builder.with_env(key, value);
     }
 
-    builder.build().map(Some)
+    // Implicit sources were captured in the plan. Reopening them here would
+    // detach their FDs from capability checks and reconstructed spawn commands.
+    builder.build_with_home(None).map(Some)
 }
 
-/// Number of overlay/writable bind descriptors the sandbox command must inherit.
+/// Number of descriptors for all planned bind mounts, including extra mounts.
 pub fn sandbox_bind_fd_count(plan: &IsolationPlan) -> usize {
     sandbox_bind_files(plan).len()
 }

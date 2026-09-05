@@ -44,6 +44,14 @@ pub(super) use recovery::{
     recover_reserved_names_at, reject_symlink_leaf_at,
 };
 
+/// Extra mounts retain their position after ordinary mounts; host GitHub
+/// credentials additionally follow the final sandbox HOME without reopening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtraBind {
+    Exact,
+    HomeConfig,
+}
+
 /// Validated readable bind: requested destination plus the source pinned at
 /// validation time so later replacement cannot change the bind (#3102).
 #[derive(Debug, Clone)]
@@ -52,6 +60,7 @@ pub struct ReadablePath {
     bind_source: PathBuf,
     overrides_writable_mount: bool,
     writable_bind: bool,
+    extra_bind: Option<ExtraBind>,
     #[cfg(unix)]
     source_file: Result<Option<Arc<File>>, Arc<std::io::Error>>,
 }
@@ -62,6 +71,7 @@ impl PartialEq for ReadablePath {
             && self.bind_source == other.bind_source
             && self.overrides_writable_mount == other.overrides_writable_mount
             && self.writable_bind == other.writable_bind
+            && self.extra_bind == other.extra_bind
     }
 }
 
@@ -131,13 +141,37 @@ impl ReadablePath {
             bind_source,
             overrides_writable_mount: false,
             writable_bind: false,
+            extra_bind: None,
             #[cfg(unix)]
             source_file,
         }
     }
 
     pub(crate) fn pinned_extra(requested: PathBuf, bind_source: PathBuf) -> Self {
-        Self::pinned(requested, bind_source)
+        let mut path = Self::pinned(requested, bind_source);
+        path.extra_bind = Some(ExtraBind::Exact);
+        path
+    }
+
+    pub(crate) fn pinned_home_config(source: PathBuf) -> Self {
+        let mut path = Self::pinned_extra(source.clone(), source);
+        path.extra_bind = Some(ExtraBind::HomeConfig);
+        path
+    }
+
+    pub(crate) fn is_extra_bind(&self) -> bool {
+        self.extra_bind.is_some()
+    }
+
+    /// Remap only the destination; clones share the already pinned source FD.
+    pub(crate) fn for_sandbox_home(&self, home: Option<&Path>) -> Self {
+        let mut path = self.clone();
+        if self.extra_bind == Some(ExtraBind::HomeConfig)
+            && let Some(home) = home.filter(|home| home.is_absolute())
+        {
+            path.requested = home.join(".config/gh-aider");
+        }
+        path
     }
 
     pub(crate) fn try_pinned(requested: PathBuf, bind_source: PathBuf) -> std::io::Result<Self> {
@@ -149,6 +183,7 @@ impl ReadablePath {
             bind_source,
             overrides_writable_mount: false,
             writable_bind: false,
+            extra_bind: None,
             #[cfg(unix)]
             source_file: Ok(source_file),
         })
@@ -165,6 +200,7 @@ impl ReadablePath {
             bind_source,
             overrides_writable_mount: true,
             writable_bind: false,
+            extra_bind: None,
             source_file: Ok(Some(Arc::new(file))),
         }
     }
@@ -185,6 +221,7 @@ impl ReadablePath {
             bind_source,
             overrides_writable_mount: false,
             writable_bind: true,
+            extra_bind: None,
             source_file: Ok(Some(Arc::new(file))),
         }
     }
@@ -213,6 +250,7 @@ impl ReadablePath {
             bind_source,
             overrides_writable_mount: true,
             writable_bind: false,
+            extra_bind: None,
             #[cfg(unix)]
             source_file: Ok(source_file),
         })

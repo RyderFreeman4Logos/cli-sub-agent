@@ -8,6 +8,8 @@ use crate::sandbox::ResourceCapability;
 
 pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
 
+#[path = "isolation_plan_build.rs"]
+mod build;
 #[path = "isolation_plan_claude.rs"]
 mod claude_paths;
 #[path = "isolation_plan_codex.rs"]
@@ -60,7 +62,7 @@ pub struct IsolationPlan {
     pub filesystem: FilesystemCapability,
     /// Paths the sandboxed process is allowed to write to.
     pub writable_paths: Vec<PathBuf>,
-    /// Paths the sandboxed process may read via read-only bind mounts.
+    /// Validated bind sources, including extra read-only mounts and their FD owners.
     pub readable_paths: Vec<ReadablePath>,
     /// Extra environment variables injected into the child process.
     pub env_overrides: HashMap<String, String>,
@@ -469,104 +471,6 @@ impl IsolationPlanBuilder {
                 Err(error) => self.preflight_error = Some(error),
             }
         }
-    }
-
-    /// Consume the builder and produce an [`IsolationPlan`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when filesystem enforcement is `Required` but the
-    /// filesystem capability is `None`.
-    pub fn build(mut self) -> anyhow::Result<IsolationPlan> {
-        if let Some(error) = self.preflight_error.take() {
-            return Err(error);
-        }
-        // Filesystem enforcement: use dedicated override if set, otherwise
-        // inherit from the resource enforcement mode.
-        let fs_mode = self.fs_enforcement_mode.unwrap_or(self.enforcement_mode);
-
-        match fs_mode {
-            EnforcementMode::Off => {
-                self.filesystem = FilesystemCapability::None;
-            }
-            EnforcementMode::Required => {
-                if self.filesystem == FilesystemCapability::None {
-                    anyhow::bail!("filesystem isolation required but no capability detected");
-                }
-            }
-            EnforcementMode::BestEffort => {
-                if self.filesystem == FilesystemCapability::None {
-                    self.degraded_reasons
-                        .push("no filesystem isolation available; proceeding without".into());
-                }
-            }
-        }
-
-        // Resource enforcement: handled separately.
-        match self.enforcement_mode {
-            EnforcementMode::BestEffort => {
-                if self.resource == ResourceCapability::None {
-                    self.degraded_reasons
-                        .push("no resource isolation available; proceeding without".into());
-                }
-            }
-            EnforcementMode::Off | EnforcementMode::Required => {
-                // Required for resources is checked upstream in pipeline_sandbox.
-                // Off is a no-op for the resource axis (capabilities are kept as-is
-                // because cgroup limits don't need explicit disabling here).
-            }
-        }
-
-        readable::downgrade_incompatible_cgroup_filesystem(
-            &mut self.resource,
-            self.filesystem,
-            &self.readable_paths,
-            &mut self.degraded_reasons,
-        );
-
-        if self.filesystem != FilesystemCapability::None
-            && !self.readonly_project_root
-            && let Some(project_root) = self.project_root.as_deref()
-            && let Some([git_dir, common_dir]) =
-                runtime_path::linked_worktree_git_admin_dirs(project_root)?
-        {
-            self.writable_paths.extend([common_dir, git_dir]);
-        }
-
-        readable::push_runtime_daemon_socket_readable_paths(
-            self.filesystem,
-            self.user_daemon_ipc,
-            &self.writable_paths,
-            &mut self.readable_paths,
-        );
-
-        codex_paths::validate_required_writable_dirs(
-            self.filesystem,
-            &self.required_writable_dirs,
-            &self.writable_paths,
-        )?;
-        hermes_paths::finish_plan(
-            self.filesystem,
-            &self.readable_paths,
-            self.pending_hermes_runtime.take(),
-        )?;
-
-        Ok(IsolationPlan {
-            resource: self.resource,
-            filesystem: self.filesystem,
-            writable_paths: self.writable_paths,
-            readable_paths: self.readable_paths,
-            env_overrides: self.env_overrides,
-            degraded_reasons: self.degraded_reasons,
-            memory_max_mb: self.memory_max_mb,
-            memory_swap_max_mb: self.memory_swap_max_mb,
-            pids_max: self.pids_max,
-            readonly_project_root: self.readonly_project_root,
-            project_root: self.project_root,
-            soft_limit_percent: self.soft_limit_percent,
-            memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
-            user_daemon_ipc: self.user_daemon_ipc,
-        })
     }
 
     #[allow(dead_code)]
