@@ -15,7 +15,7 @@ pub struct BwrapCommandBuilder {
     tool_args: Vec<String>,
     writable_paths: Vec<PathBuf>,
     readable_paths: Vec<crate::isolation_plan::ReadablePath>,
-    ro_binds: Vec<(PathBuf, PathBuf)>,
+    ro_binds: Vec<crate::isolation_plan::ReadablePath>,
     env_vars: Vec<(String, String)>,
 }
 
@@ -57,6 +57,10 @@ impl BwrapCommandBuilder {
             "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
         );
         #[cfg(unix)]
+        if let Some(error) = path.pin_error() {
+            panic!("readable sandbox path could not be pinned: {}", error);
+        }
+        #[cfg(unix)]
         let has_pinned_source = path.pinned_source_file().is_some();
         #[cfg(not(unix))]
         let has_pinned_source = false;
@@ -71,7 +75,11 @@ impl BwrapCommandBuilder {
 
     /// Add an extra read-only bind mount beyond the default `/ → /`.
     pub fn with_ro_bind(&mut self, src: &Path, dest: &Path) -> &mut Self {
-        self.ro_binds.push((src.to_path_buf(), dest.to_path_buf()));
+        self.ro_binds
+            .push(crate::isolation_plan::ReadablePath::pinned_extra(
+                dest.to_path_buf(),
+                src.to_path_buf(),
+            ));
         self
     }
 
@@ -88,6 +96,12 @@ impl BwrapCommandBuilder {
 
     fn build_with_home(&self, home: Option<&Path>) -> Command {
         let mut cmd = Command::new("bwrap");
+        let extra_ro_binds: Vec<_> = self
+            .ro_binds
+            .iter()
+            .cloned()
+            .chain(self.implicit_ro_binds(home))
+            .collect();
 
         // Read-only root filesystem
         cmd.args(["--ro-bind", "/", "/"]);
@@ -113,8 +127,15 @@ impl BwrapCommandBuilder {
         // adding an overlapping read-only bind afterward would downgrade the
         // writable mount.
         #[cfg(unix)]
-        let overlay_files: Vec<std::sync::Arc<std::fs::File>> =
-            sandbox_bind_files_from_paths(&self.readable_paths);
+        let overlay_files: Vec<std::sync::Arc<std::fs::File>> = {
+            let mut files = sandbox_bind_files_from_paths(&self.readable_paths);
+            files.extend(
+                extra_ro_binds
+                    .iter()
+                    .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file),
+            );
+            files
+        };
         for path in &self.readable_paths {
             if path.writable_bind()
                 || self.is_covered_by_writable_path(path)
@@ -141,19 +162,8 @@ impl BwrapCommandBuilder {
         // (remapped HOME), the mount target may not exist inside the sandbox
         // (e.g. Gemini runtime home only seeds gemini-cli config, not gh-aider).
         // Emit --dir for the dest parent so bubblewrap can create the mount point.
-        for (src, dest) in self
-            .ro_binds
-            .iter()
-            .cloned()
-            .chain(self.implicit_ro_binds(home))
-        {
-            let src = resolve_for_bind(&src);
-            if src != dest
-                && let Some(parent) = dest.parent()
-            {
-                cmd.args(["--dir", &parent.to_string_lossy()]);
-            }
-            cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
+        for path in &extra_ro_binds {
+            Self::bind_extra_readonly_path(&mut cmd, path);
         }
 
         // Namespace configuration
@@ -245,9 +255,11 @@ impl BwrapCommandBuilder {
             cmd.args(["--dir", &parent.to_string_lossy()]);
         }
         #[cfg(unix)]
-        if path.overrides_writable_mount()
-            && let Some(file) = path.pinned_source_file()
-        {
+        if let Some(error) = path.pin_error() {
+            panic!("readable sandbox path could not be pinned: {}", error);
+        }
+        #[cfg(unix)]
+        if let Some(file) = path.pinned_source_file() {
             use std::os::fd::AsRawFd;
             cmd.args([
                 "--ro-bind-fd",
@@ -261,6 +273,32 @@ impl BwrapCommandBuilder {
             &resolved.to_string_lossy(),
             &dest_path.to_string_lossy(),
         ]);
+    }
+
+    fn bind_extra_readonly_path(cmd: &mut Command, path: &crate::isolation_plan::ReadablePath) {
+        let dest = path.requested();
+        if path.bind_source() != dest
+            && let Some(parent) = dest.parent()
+            && parent != Path::new("/")
+        {
+            cmd.args(["--dir", &parent.to_string_lossy()]);
+        }
+        #[cfg(unix)]
+        if let Some(error) = path.pin_error() {
+            panic!("read-only bind source could not be pinned: {}", error);
+        }
+        #[cfg(unix)]
+        if let Some(file) = path.pinned_source_file() {
+            use std::os::fd::AsRawFd;
+            cmd.args([
+                "--ro-bind-fd",
+                &file.as_raw_fd().to_string(),
+                &dest.to_string_lossy(),
+            ]);
+            return;
+        }
+        let src = resolve_for_bind(path.bind_source());
+        cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
     }
 
     fn writable_nested_under_readonly_overlay(&self, path: &Path) -> bool {
@@ -357,7 +395,10 @@ impl BwrapCommandBuilder {
             .or_else(|| host_home.map(Path::to_path_buf))
     }
 
-    fn implicit_ro_binds(&self, home: Option<&Path>) -> impl Iterator<Item = (PathBuf, PathBuf)> {
+    fn implicit_ro_binds(
+        &self,
+        home: Option<&Path>,
+    ) -> impl Iterator<Item = crate::isolation_plan::ReadablePath> {
         let mut ro_binds = Vec::new();
 
         if let Some(home) = home {
@@ -374,12 +415,14 @@ impl BwrapCommandBuilder {
                 .writable_paths
                 .iter()
                 .any(|existing| existing == &gh_aider || gh_aider.starts_with(existing))
-                || self
-                    .ro_binds
-                    .iter()
-                    .any(|(src, dest)| src == &gh_aider || dest == &sandbox_gh_aider);
+                || self.ro_binds.iter().any(|existing| {
+                    existing.bind_source() == gh_aider || existing.requested() == sandbox_gh_aider
+                });
             if gh_aider.exists() && !already_visible {
-                ro_binds.push((gh_aider, sandbox_gh_aider));
+                ro_binds.push(crate::isolation_plan::ReadablePath::pinned_extra(
+                    sandbox_gh_aider,
+                    gh_aider,
+                ));
             }
         }
 
@@ -445,7 +488,6 @@ fn sandbox_bind_files_from_paths(
 ) -> Vec<std::sync::Arc<std::fs::File>> {
     readable_paths
         .iter()
-        .filter(|path| path.overrides_writable_mount() || path.writable_bind())
         .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
         .collect()
 }

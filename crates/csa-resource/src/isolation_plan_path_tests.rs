@@ -2,6 +2,24 @@ use super::*;
 use std::ffi::OsString;
 use std::path::Path;
 
+#[test]
+fn pinned_readonly_rejects_regular_file_identity_race() {
+    fn replace(path: &Path) {
+        std::fs::rename(path, path.with_extension("old")).unwrap();
+        std::fs::write(path, "replacement").unwrap();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    std::fs::write(&source, "accepted").unwrap();
+    readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(Some(replace)));
+    let result = ReadablePath::try_pinned_readonly_overlay(source);
+    readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(None));
+    assert!(
+        result.is_err(),
+        "replacement between stat and open must fail closed"
+    );
+}
+
 struct ScopedEnvVar {
     key: &'static str,
     previous: Option<OsString>,

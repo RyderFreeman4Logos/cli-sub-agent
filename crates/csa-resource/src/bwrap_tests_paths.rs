@@ -1,5 +1,12 @@
 use super::*;
 
+fn ro_bind_destination(args: &[String], destination: &str) -> Option<usize> {
+    args.windows(3).position(|window| {
+        (window[0] == "--ro-bind" && window[2] == destination)
+            || (window[0] == "--ro-bind-fd" && window[2] == destination)
+    })
+}
+
 #[test]
 fn test_bwrap_command_with_readable_tmp_file() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -16,12 +23,8 @@ fn test_bwrap_command_with_readable_tmp_file() {
         .iter()
         .position(|arg| arg == "--tmpfs")
         .expect("--tmpfs must be present");
-    let ro_bind_pos = args
-        .windows(3)
-        .position(|window| {
-            window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
-        })
-        .expect("--ro-bind readable path must be present");
+    let ro_bind_pos = ro_bind_destination(&args, &readable_str)
+        .expect("read-only FD bind readable path must be present");
 
     assert_eq!(args[tmpfs_pos + 1], "/tmp");
     assert!(
@@ -58,12 +61,8 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
         .windows(3)
         .position(|window| window[0] == "--bind" && window[1] == "/tmp/work")
         .expect("writable bind should be present");
-    let readable_bind_pos = args
-        .windows(3)
-        .position(|window| {
-            window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
-        })
-        .expect("readable ro-bind should be present");
+    let readable_bind_pos = ro_bind_destination(&args, &readable_str)
+        .expect("read-only FD bind readable path must be present");
 
     assert!(
         tmpfs_pos < writable_bind_pos,
@@ -180,11 +179,7 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
     let args = command_args(&cmd);
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind"
-                && window[1] == gh_aider.to_string_lossy()
-                && window[2] == gh_aider.to_string_lossy()
-        }),
+        ro_bind_destination(&args, &gh_aider.to_string_lossy()).is_some(),
         "~/.config/gh-aider should be explicitly re-bound read-only so sandboxed gh commands can still read the aider auth config; args: {args:?}"
     );
 }
@@ -234,11 +229,7 @@ fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
     );
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind"
-                && window[1] == canonical_source.to_string_lossy()
-                && window[2] == logical_destination.to_string_lossy()
-        }),
+        ro_bind_destination(&args, &logical_destination.to_string_lossy()).is_some(),
         "readable bind must use the canonical source at the /tmp logical destination; args: {args:?}"
     );
 }
@@ -341,15 +332,11 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
     let resolved_str = resolved.to_string_lossy();
     let logical_str = logical_file.to_string_lossy();
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind" && window[1] == resolved_str && window[2] == resolved_str
-        }),
-        "readable bind must use the resolved dest so bwrap never sees the missing logical parents; args: {args:?}"
+        ro_bind_destination(&args, &resolved_str).is_some(),
+        "readable bind must use the resolved destination so bwrap never sees the missing logical parents; args: {args:?}"
     );
     assert!(
-        !args.windows(3).any(|window| window[0] == "--ro-bind"
-            && window[1] == logical_str
-            && window[2] == logical_str),
+        ro_bind_destination(&args, &logical_str).is_none(),
         "readable bind must not target the logical dest; args: {args:?}"
     );
 }
@@ -409,20 +396,17 @@ fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
     let args = command_args(
         &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
     );
-    let validated = validated_target.to_string_lossy();
     let replaced = replaced_target.to_string_lossy();
     let dest = readable_symlink.to_string_lossy();
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind" && window[1] == validated && window[2] == dest
-        }),
-        "bind source must stay the validated target after symlink replacement; args: {args:?}"
+        ro_bind_destination(&args, &dest).is_some(),
+        "bind must retain the validated descriptor at the requested destination; args: {args:?}"
     );
     assert!(
         !args
             .windows(3)
-            .any(|window| window[0] == "--ro-bind" && window[1] == replaced),
+            .any(|window| { window[0] == "--ro-bind" && window[1] == replaced }),
         "replaced symlink target must not become the bind source; args: {args:?}"
     );
 }

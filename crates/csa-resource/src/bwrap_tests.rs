@@ -18,6 +18,9 @@ fn command_args(cmd: &Command) -> Vec<String> {
 #[path = "bwrap_tests_virtual.rs"]
 mod virtual_filesystem;
 
+#[path = "bwrap_tests_pinning.rs"]
+mod pinning;
+
 #[test]
 fn test_bwrap_command_basic() {
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &["--flag".into(), "arg".into()]);
@@ -182,8 +185,7 @@ fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
     let args = command_args(&cmd);
 
     let found_bind = args.windows(3).any(|window| {
-        window[0] == "--ro-bind"
-            && window[1] == gh_aider.to_string_lossy()
+        (window[0] == "--ro-bind" || window[0] == "--ro-bind-fd")
             && window[2] == "/sandbox/runtime-home/.config/gh-aider"
     });
 
@@ -230,8 +232,7 @@ fn test_bwrap_gh_aider_bind_not_skipped_when_session_dir_writable() {
     let args = command_args(&cmd);
 
     let found_bind = args.windows(3).any(|window| {
-        window[0] == "--ro-bind"
-            && window[1] == gh_aider.to_string_lossy()
+        (window[0] == "--ro-bind" || window[0] == "--ro-bind-fd")
             && window[2] == sandbox_home.join(".config/gh-aider").to_string_lossy()
     });
 
@@ -339,10 +340,14 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
 
 #[test]
 fn test_bwrap_readonly_project_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).expect("create project root");
+    let project_str = project.to_string_lossy().into_owned();
     let plan = IsolationPlan {
         resource: ResourceCapability::None,
         filesystem: FilesystemCapability::Bwrap,
-        writable_paths: vec![PathBuf::from("/project"), PathBuf::from("/tmp/session")],
+        writable_paths: vec![project.clone(), PathBuf::from("/tmp/session")],
         readable_paths: Vec::new(),
         env_overrides: HashMap::new(),
         degraded_reasons: Vec::new(),
@@ -350,7 +355,7 @@ fn test_bwrap_readonly_project_root() {
         memory_swap_max_mb: None,
         pids_max: None,
         readonly_project_root: true,
-        project_root: Some(PathBuf::from("/project")),
+        project_root: Some(project.clone()),
         soft_limit_percent: None,
         memory_monitor_interval_seconds: None,
         user_daemon_ipc: false,
@@ -359,19 +364,13 @@ fn test_bwrap_readonly_project_root() {
     let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
     let args = command_args(&cmd);
 
-    // /project should appear after --ro-bind (not --bind)
-    let ro_bind_positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| *a == "--ro-bind")
-        .map(|(i, _)| i)
-        .collect();
-    let project_after_ro = ro_bind_positions
-        .iter()
-        .any(|&pos| args.get(pos + 1).map(|s| s.as_str()) == Some("/project"));
+    // The project root should be mounted read-only through its retained FD.
+    let project_after_ro_fd = args
+        .windows(3)
+        .any(|window| window[0] == "--ro-bind-fd" && window[2] == project_str);
     assert!(
-        project_after_ro,
-        "/project should be --ro-bind when readonly_project_root is true; args: {args:?}"
+        project_after_ro_fd,
+        "project root should be --ro-bind-fd when readonly_project_root is true; args: {args:?}"
     );
 
     // /tmp/session should still be --bind (writable)
