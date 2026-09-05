@@ -92,9 +92,13 @@ impl ReadablePath {
         self.source_file.as_ref().ok().cloned().flatten()
     }
 
-    #[cfg(unix)]
-    pub(crate) fn pin_error(&self) -> Option<&std::io::Error> {
-        self.source_file.as_ref().err().map(Arc::as_ref)
+    /// Report a retained pin failure without discarding its I/O error provenance.
+    pub(crate) fn validate_pin(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Err(error) = &self.source_file {
+            return Err(std::io::Error::new(error.kind(), error.clone()));
+        }
+        Ok(())
     }
 
     /// Clone the descriptor held since validation for a regular-file snapshot.

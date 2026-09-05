@@ -46,30 +46,7 @@ impl BwrapCommandBuilder {
         &mut self,
         path: impl Into<crate::isolation_plan::ReadablePath>,
     ) -> &mut Self {
-        let path = path.into();
-        assert!(
-            path.requested().is_absolute(),
-            "readable sandbox path must be absolute: {}",
-            path.requested().display()
-        );
-        assert!(
-            path.requested() != Path::new("/tmp"),
-            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
-        );
-        #[cfg(unix)]
-        if let Some(error) = path.pin_error() {
-            panic!("readable sandbox path could not be pinned: {}", error);
-        }
-        #[cfg(unix)]
-        let has_pinned_source = path.pinned_source_file().is_some();
-        #[cfg(not(unix))]
-        let has_pinned_source = false;
-        assert!(
-            path.requested().exists() || path.bind_source().exists() || has_pinned_source,
-            "readable sandbox path must exist: {}",
-            path.requested().display()
-        );
-        self.readable_paths.push(path);
+        self.readable_paths.push(path.into());
         self
     }
 
@@ -89,12 +66,12 @@ impl BwrapCommandBuilder {
         self
     }
 
-    /// Consume the builder and produce a ready-to-spawn [`Command`].
-    pub fn build(&self) -> Command {
+    /// Produce a ready-to-spawn command, or return a path validation/pinning error.
+    pub fn build(&self) -> std::io::Result<Command> {
         self.build_with_home(std::env::var_os("HOME").as_deref().map(Path::new))
     }
 
-    fn build_with_home(&self, home: Option<&Path>) -> Command {
+    fn build_with_home(&self, home: Option<&Path>) -> std::io::Result<Command> {
         let mut cmd = Command::new("bwrap");
         let extra_ro_binds: Vec<_> = self
             .ro_binds
@@ -102,6 +79,10 @@ impl BwrapCommandBuilder {
             .cloned()
             .chain(self.implicit_ro_binds(home))
             .collect();
+
+        for path in self.readable_paths.iter().chain(&extra_ro_binds) {
+            validate_readonly_path(path)?;
+        }
 
         // Read-only root filesystem
         cmd.args(["--ro-bind", "/", "/"]);
@@ -202,7 +183,7 @@ impl BwrapCommandBuilder {
             }
         }
 
-        cmd
+        Ok(cmd)
     }
 
     fn is_covered_by_writable_path(
@@ -237,10 +218,6 @@ impl BwrapCommandBuilder {
         // would reopen the #3102 TOCTOU after a symlink replacement.
         let resolved = path.bind_source();
         let tmp_prefix = Path::new("/tmp");
-        assert!(
-            path.requested() != tmp_prefix,
-            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
-        );
         let dest_path = if path.overrides_writable_mount()
             || fresh_writable_mount_root(path.requested()).is_some()
         {
@@ -253,10 +230,6 @@ impl BwrapCommandBuilder {
             && parent != Path::new("/")
         {
             cmd.args(["--dir", &parent.to_string_lossy()]);
-        }
-        #[cfg(unix)]
-        if let Some(error) = path.pin_error() {
-            panic!("readable sandbox path could not be pinned: {}", error);
         }
         #[cfg(unix)]
         if let Some(file) = path.pinned_source_file() {
@@ -282,10 +255,6 @@ impl BwrapCommandBuilder {
             && parent != Path::new("/")
         {
             cmd.args(["--dir", &parent.to_string_lossy()]);
-        }
-        #[cfg(unix)]
-        if let Some(error) = path.pin_error() {
-            panic!("read-only bind source could not be pinned: {}", error);
         }
         #[cfg(unix)]
         if let Some(file) = path.pinned_source_file() {
@@ -430,18 +399,28 @@ impl BwrapCommandBuilder {
     }
 }
 
+fn validate_readonly_path(path: &crate::isolation_plan::ReadablePath) -> std::io::Result<()> {
+    if !path.requested().is_absolute() || path.requested() == Path::new("/tmp") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "readable sandbox path must be absolute and must not be /tmp itself",
+        ));
+    }
+    path.validate_pin()
+}
+
 /// Build a bwrap [`Command`] from an [`IsolationPlan`] if the plan calls
 /// for bubblewrap filesystem isolation.
 ///
 /// Returns `Some(Command)` when `plan.filesystem == FilesystemCapability::Bwrap`,
-/// `None` otherwise.
+/// `None` otherwise. Invalid or unpinnable read-only sources return an error.
 pub fn from_isolation_plan(
     plan: &IsolationPlan,
     tool_binary: &str,
     tool_args: &[String],
-) -> Option<Command> {
+) -> std::io::Result<Option<Command>> {
     if plan.filesystem != FilesystemCapability::Bwrap {
-        return None;
+        return Ok(None);
     }
 
     let mut builder = BwrapCommandBuilder::new(tool_binary, tool_args);
@@ -468,7 +447,7 @@ pub fn from_isolation_plan(
         builder.with_env(key, value);
     }
 
-    Some(builder.build())
+    builder.build().map(Some)
 }
 
 /// Number of overlay/writable bind descriptors the sandbox command must inherit.

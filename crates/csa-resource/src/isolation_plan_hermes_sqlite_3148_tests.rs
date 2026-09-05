@@ -24,6 +24,7 @@ fn live_sqlite_database(path: &Path, value: &str) -> rusqlite::Connection {
 
 fn command_args(plan: &IsolationPlan) -> Vec<String> {
     crate::from_isolation_plan(plan, "/usr/bin/tool", &[])
+        .expect("valid bind paths")
         .expect("planned Hermes sandbox must produce a bwrap command")
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())

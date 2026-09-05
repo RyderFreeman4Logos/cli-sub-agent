@@ -93,6 +93,7 @@ fn try_pinned_readonly_overlay_fails_closed_when_leaf_replaced_with_symlink() {
     let raced_target = config.with_file_name("overlay-toctou-target");
     let args = command_args(
         &crate::from_isolation_plan(&overlay_bind_plan(overlay), "/usr/bin/tool", &[])
+            .expect("valid bind paths")
             .expect("pinned overlay must still produce a bwrap command"),
     );
     assert_overlay_bind_uses_pinned_identity(&args, &config, &raced_target);
@@ -129,6 +130,7 @@ fn hermes_preflight_fails_closed_when_overlay_leaf_replaced_with_symlink() {
     let raced_target = config.with_file_name("overlay-toctou-target");
     let args = command_args(
         &crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
             .expect("pinned Hermes overlay must still produce a bwrap command"),
     );
     assert_overlay_bind_uses_pinned_identity(&args, &config, &raced_target);
@@ -151,6 +153,7 @@ fn try_pinned_readonly_overlay_fails_closed_when_directory_replaced_with_symlink
     let raced_target = profiles.with_file_name("overlay-toctou-dir-target");
     let args = command_args(
         &crate::from_isolation_plan(&overlay_bind_plan(overlay), "/usr/bin/tool", &[])
+            .expect("valid bind paths")
             .expect("pinned overlay directory must still produce a bwrap command"),
     );
     assert_overlay_bind_uses_pinned_identity(&args, &profiles, &raced_target);

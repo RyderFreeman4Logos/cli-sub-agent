@@ -99,6 +99,7 @@ fn hermes_runtime_leaf_replaced_with_symlink_after_plan_does_not_bind_outside() 
         replace_path_with_outside_symlink(&hermes_home.join(leaf), &outside);
         let args = command_args(
             &crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+                .expect("valid bind paths")
                 .expect("planned Hermes sandbox must still produce a bwrap command"),
         );
         assert_no_outside_writable_bind(&args, &outside, leaf);
@@ -128,6 +129,7 @@ fn hermes_home_replaced_with_symlink_after_plan_does_not_bind_outside() {
         .expect("replace Hermes home with outside symlink");
     let args = command_args(
         &crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
             .expect("planned Hermes sandbox must still produce a bwrap command"),
     );
     assert_no_outside_writable_bind(&args, &outside, "HERMES_HOME");

@@ -179,7 +179,7 @@ pub async fn spawn_tool_sandboxed(
     let mut landlock_paths: Option<Vec<std::path::PathBuf>> = None;
 
     let cmd = match plan.filesystem {
-        FilesystemCapability::Bwrap => wrap_command_with_bwrap(cmd, plan),
+        FilesystemCapability::Bwrap => wrap_command_with_bwrap(cmd, plan)?,
         FilesystemCapability::Landlock => {
             debug!("Landlock filesystem isolation will be applied in pre_exec");
             // Filter out project_root when readonly_project_root is set,
@@ -408,7 +408,7 @@ fn apply_plan_env_overrides(target: &mut Command, plan: &IsolationPlan) {
     }
 }
 
-fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
+fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Result<Command> {
     let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
     let tool_args: Vec<String> = cmd
         .as_std()
@@ -417,7 +417,7 @@ fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
         .collect();
 
     if let Some(bwrap_cmd) =
-        csa_resource::bwrap::from_isolation_plan(plan, &tool_binary, &tool_args)
+        csa_resource::bwrap::from_isolation_plan(plan, &tool_binary, &tool_args)?
     {
         let mut wrapped = Command::from(bwrap_cmd);
         csa_core::env::scrub_subtree_contract_env_tokio(&mut wrapped);
@@ -427,10 +427,10 @@ fn wrap_command_with_bwrap(cmd: Command, plan: &IsolationPlan) -> Command {
             wrapped.current_dir(dir);
         }
         debug!("wrapped tool command with bwrap filesystem sandbox");
-        wrapped
+        Ok(wrapped)
     } else {
         warn!("bwrap requested but from_isolation_plan returned None; proceeding without");
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -450,8 +450,9 @@ pub(crate) fn wrap_command_with_bwrap_required(
         .get("HOME")
         .map(|home| std::iter::once(("HOME".to_string(), home.clone())).collect())
         .unwrap_or_default();
-    let wrapped = csa_resource::bwrap::from_isolation_plan(&wrapper_plan, &tool_binary, &tool_args)
-        .ok_or_else(|| anyhow::anyhow!("required bwrap wrapper could not be constructed"))?;
+    let wrapped =
+        csa_resource::bwrap::from_isolation_plan(&wrapper_plan, &tool_binary, &tool_args)?
+            .ok_or_else(|| anyhow::anyhow!("required bwrap wrapper could not be constructed"))?;
     let mut wrapped = Command::from(wrapped);
     if let Some(directory) = cmd.as_std().get_current_dir() {
         wrapped.current_dir(directory);

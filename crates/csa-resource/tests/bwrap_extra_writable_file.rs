@@ -15,7 +15,7 @@ fn command_args(cmd: &Command) -> Vec<String> {
 fn bwrap_extra_writable_tmp_file_does_not_create_directory_target() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/e2e-test-state.json"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(
@@ -38,7 +38,7 @@ fn bwrap_extra_writable_tmp_file_does_not_create_directory_target() {
 fn bwrap_extra_writable_nested_tmp_file_creates_parent_only() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/csa/state.json"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(

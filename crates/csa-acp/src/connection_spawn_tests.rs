@@ -292,7 +292,8 @@ fn prepare_sandbox_command_merges_runtime_env_overrides_into_bwrap_invocation() 
         env_overrides: Some(&sandbox_env_overrides),
     };
 
-    let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
+    let prepared =
+        AcpConnection::prepare_sandbox_command(request, &sandbox).expect("valid sandbox");
 
     assert_eq!(prepared.effective_command, "bwrap");
     assert_eq!(
@@ -404,7 +405,8 @@ fn prepare_sandbox_command_scrubs_subtree_contract_from_bwrap_env_overrides() {
         env_overrides: Some(&sandbox_env_overrides),
     };
 
-    let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
+    let prepared =
+        AcpConnection::prepare_sandbox_command(request, &sandbox).expect("valid sandbox");
 
     for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
         assert!(

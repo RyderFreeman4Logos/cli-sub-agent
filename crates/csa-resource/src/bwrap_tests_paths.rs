@@ -15,7 +15,7 @@ fn test_bwrap_command_with_readable_tmp_file() {
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(&readable);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
     let readable_str = readable.to_string_lossy().into_owned();
 
@@ -34,10 +34,16 @@ fn test_bwrap_command_with_readable_tmp_file() {
 }
 
 #[test]
-#[should_panic(expected = "must not be /tmp itself")]
 fn test_bwrap_readable_tmp_root_rejected() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(Path::new("/tmp"));
+    assert!(
+        builder
+            .build_with_home(None)
+            .unwrap_err()
+            .to_string()
+            .contains("must not be /tmp itself")
+    );
 }
 
 #[test]
@@ -49,7 +55,7 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/work"));
     builder.with_readable_path(&readable);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
     let readable_str = readable.to_string_lossy().into_owned();
 
@@ -83,7 +89,7 @@ fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(path);
     builder.with_readable_path(path);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(
@@ -103,7 +109,7 @@ fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
 fn test_bwrap_nested_tmp_path_creates_intermediate_dirs() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/deep/nested/dir"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Must have --dir for intermediate parent
@@ -145,7 +151,7 @@ fn test_bwrap_bare_tmp_is_bind_mounted_when_explicitly_writable() {
     // /tmp is an explicit config grant, not a request for empty tmpfs.
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // --tmpfs /tmp must exist
@@ -175,7 +181,9 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider dir");
 
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
-    let cmd = builder.build_with_home(Some(home.path()));
+    let cmd = builder
+        .build_with_home(Some(home.path()))
+        .expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(
@@ -225,7 +233,9 @@ fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
 
     assert!(
@@ -269,7 +279,9 @@ fn from_isolation_plan_does_not_remount_writable_canonical_child_readonly_throug
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
     let canonical = canonical_file.to_string_lossy();
 
@@ -326,7 +338,7 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(&logical_file);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     let resolved_str = resolved.to_string_lossy();
@@ -394,7 +406,9 @@ fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
     let replaced = replaced_target.to_string_lossy();
     let dest = readable_symlink.to_string_lossy();

@@ -22,7 +22,7 @@ fn test_bwrap_binds_non_tmp_symlink_writable_path_at_canonical_destination() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(&logical_writable);
 
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     let bind_idx = args
@@ -67,7 +67,7 @@ fn test_bwrap_keeps_dev_shm_symlink_writable_path_at_logical_destination() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(&link);
 
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
     let bind_idx = args
         .windows(3)

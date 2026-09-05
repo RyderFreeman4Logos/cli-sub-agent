@@ -94,7 +94,7 @@ async fn non_bwrap_spawn_applies_plan_env_overrides_over_explicit_env() {
 #[test]
 fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
     let original = Command::new("/usr/bin/tool");
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
@@ -109,7 +109,7 @@ fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
 #[test]
 fn bwrap_wrapper_scrubs_ambient_git_push_authorization_env() {
     let original = Command::new("/usr/bin/tool");
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
@@ -126,7 +126,7 @@ fn bwrap_wrapper_preserves_explicit_typed_git_push_authorization() {
     let mut original = Command::new("/usr/bin/tool");
     original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
 
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     assert_eq!(
@@ -211,4 +211,28 @@ fn cgroup_wrapper_preserves_explicit_typed_git_push_authorization() {
         Some(&None),
         "internal git-push marker must remain stripped"
     );
+}
+
+#[tokio::test]
+async fn bad_readonly_bind_returns_error_without_spawning_tool() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("child-started");
+    let mut original = Command::new("/usr/bin/touch");
+    original.arg(&marker);
+    let mut plan = bwrap_plan();
+    plan.readable_paths.push(temp.path().join("missing").into());
+    let result = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01TEST",
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "invalid read-only bind must fail before spawning"
+    );
+    assert!(!marker.exists());
 }

@@ -121,7 +121,7 @@ impl AcpConnection {
     fn prepare_sandbox_command(
         request: AcpSpawnRequest<'_>,
         sandbox: &AcpSandboxRequest<'_>,
-    ) -> PreparedSandboxCommand {
+    ) -> AcpResult<PreparedSandboxCommand> {
         let plan = sandbox.isolation_plan;
         let effective_env = Self::merge_sandbox_env(request.env, sandbox.env_overrides);
 
@@ -138,7 +138,9 @@ impl AcpConnection {
                     &bwrap_plan,
                     request.command,
                     &tool_args,
-                ) {
+                )
+                .map_err(|error| AcpError::ConfigError(error.to_string()))?
+                {
                     let program = bwrap_cmd.get_program().to_string_lossy().to_string();
                     let args: Vec<String> = bwrap_cmd
                         .get_args()
@@ -174,13 +176,13 @@ impl AcpConnection {
             }
         };
 
-        PreparedSandboxCommand {
+        Ok(PreparedSandboxCommand {
             effective_command,
             effective_args,
             effective_env,
             landlock_paths,
             has_bwrap,
-        }
+        })
     }
 
     /// Spawn an ACP process without resource sandboxing.
@@ -257,7 +259,7 @@ impl AcpConnection {
             effective_env,
             mut landlock_paths,
             has_bwrap,
-        } = Self::prepare_sandbox_command(request, &sandbox);
+        } = Self::prepare_sandbox_command(request, &sandbox)?;
 
         // --- Resource axis: apply resource isolation ---
         match plan.resource {

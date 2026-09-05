@@ -121,7 +121,8 @@ enforcement_mode = "best-effort"
     );
 
     // Bwrap construction must not panic on the resolved paths (#3074).
-    let cmd = csa_resource::from_isolation_plan(plan, "/usr/bin/tool", &[]);
+    let cmd =
+        csa_resource::from_isolation_plan(plan, "/usr/bin/tool", &[]).expect("valid bind paths");
     assert!(cmd.is_some(), "Bwrap plan should produce a command");
 }
 

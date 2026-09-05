@@ -111,6 +111,7 @@ fn acp_style_reconstruction_keeps_overlay_ro_bind_fd_usable() {
         .expect("regular overlay leaf must pin");
     let plan = overlay_bind_plan(overlay);
     let built = crate::from_isolation_plan(&plan, "/bin/cat", &[dest.to_string_lossy().into()])
+        .expect("valid bind paths")
         .expect("pinned overlay must produce a bwrap command");
     let args: Vec<String> = built
         .get_args()
@@ -140,6 +141,7 @@ fn cgroup_style_reconstruction_fail_closed_or_keeps_overlay_ro_bind_fd() {
     plan.resource = ResourceCapability::CgroupV2;
 
     let built = crate::from_isolation_plan(&plan, "/bin/cat", &[dest.to_string_lossy().into()])
+        .expect("valid bind paths")
         .expect("pinned overlay must produce a bwrap command");
     let args: Vec<String> = built
         .get_args()
