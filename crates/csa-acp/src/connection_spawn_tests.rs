@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "connection_spawn_selection_tests.rs"]
+mod temporal_selection;
+
 #[test]
 fn append_stderr_tail_bounds_retained_memory_to_tail_window() {
     let mut stderr = "a".repeat(1024 * 1024);
@@ -292,7 +295,8 @@ fn prepare_sandbox_command_merges_runtime_env_overrides_into_bwrap_invocation() 
         env_overrides: Some(&sandbox_env_overrides),
     };
 
-    let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
+    let prepared =
+        AcpConnection::prepare_sandbox_command(request, &sandbox).expect("valid sandbox");
 
     assert_eq!(prepared.effective_command, "bwrap");
     assert_eq!(
@@ -404,7 +408,8 @@ fn prepare_sandbox_command_scrubs_subtree_contract_from_bwrap_env_overrides() {
         env_overrides: Some(&sandbox_env_overrides),
     };
 
-    let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
+    let prepared =
+        AcpConnection::prepare_sandbox_command(request, &sandbox).expect("valid sandbox");
 
     for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
         assert!(
@@ -462,4 +467,105 @@ fn scrub_inherited_child_env_removes_git_push_authorization_for_wrapper_commands
             "wrapper command must env_remove inherited git-push authorization key {key}"
         );
     }
+}
+
+#[test]
+fn acp_extra_bind_survives_actual_preparation_and_reconstruction() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("payload"), "accepted").unwrap();
+    let plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_writable_path(project.clone())
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .unwrap();
+    let env = HashMap::new();
+    let sandbox = AcpSandboxRequest {
+        isolation_plan: &plan,
+        tool_name: "codex",
+        session_id: "01TEST",
+        env_overrides: None,
+    };
+    let prepared = AcpConnection::prepare_sandbox_command(
+        AcpSpawnRequest {
+            command: "/bin/true",
+            args: &[],
+            working_dir: &project,
+            env: &env,
+            options: AcpConnectionOptions::default(),
+        },
+        &sandbox,
+    )
+    .unwrap();
+    let fd = prepared
+        .effective_args
+        .windows(3)
+        .find(|args| args[0] == "--ro-bind-fd" && args[2] == project.to_string_lossy())
+        .unwrap()[1]
+        .clone();
+    std::fs::rename(&project, project.with_extension("old")).unwrap();
+    let mut probe = Command::new("/bin/cat");
+    probe.arg(format!("/proc/self/fd/{fd}/payload"));
+    inherit_plan_bind_fds(&mut probe, &plan).unwrap();
+    let output = csa_resource::bounded_command::output_with_timeout(
+        probe.into_std(),
+        Duration::from_secs(5),
+        csa_resource::bounded_command::MAX_OUTPUT_BYTES,
+    )
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"accepted");
+}
+
+#[tokio::test]
+async fn non_bwrap_ordinary_readable_allows_acp_cgroup_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("readable");
+    std::fs::write(&source, "accepted").unwrap();
+    let systemd = temp.path().join("systemd-run");
+    std::fs::write(&systemd, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&systemd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = csa_resource::IsolationPlanBuilder::new(csa_resource::EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::None)
+        .with_resource_capability(ResourceCapability::CgroupV2)
+        .with_readable_path(source)
+        .build()
+        .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::CgroupV2);
+    let env = HashMap::from([("PATH".into(), temp.path().display().to_string())]);
+    let (connection, _handle) = AcpConnection::spawn_sandboxed(
+        AcpSpawnRequest {
+            command: "/bin/true",
+            args: &[],
+            working_dir: temp.path(),
+            env: &env,
+            options: AcpConnectionOptions::default(),
+        },
+        Some(AcpSandboxRequest {
+            isolation_plan: &plan,
+            tool_name: "codex",
+            session_id: "01NONBWRAP",
+            env_overrides: None,
+        }),
+    )
+    .await
+    .expect("ordinary readable must not reject a non-bwrap ACP cgroup spawn");
+    let mut child = connection.child.borrow_mut().take().unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
 }

@@ -43,7 +43,7 @@ impl Drop for ScopedEnvVar {
 fn tool_defaults_do_not_expose_usr_local_as_rust_state_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(home.join(".cargo")).unwrap();
     std::fs::create_dir_all(home.join(".rustup")).unwrap();
     let _home = ScopedEnvVar::set("HOME", &home);
@@ -70,7 +70,7 @@ fn tool_defaults_do_not_expose_usr_local_as_rust_state_home() {
 fn tool_defaults_override_cargo_home_env_when_usr_local_is_readonly() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(home.join(".cargo")).unwrap();
     std::fs::create_dir_all(home.join(".rustup")).unwrap();
     let _home = ScopedEnvVar::set("HOME", &home);
@@ -105,7 +105,7 @@ fn tool_defaults_override_cargo_home_env_when_usr_local_is_readonly() {
 fn tool_defaults_redirect_mise_cargo_home_to_sandbox_owned_cache() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(home.join(".cargo")).unwrap();
     let _home = ScopedEnvVar::set("HOME", &home);
     let _xdg = ScopedEnvVar::unset("XDG_STATE_HOME");

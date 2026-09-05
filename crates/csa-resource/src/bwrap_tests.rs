@@ -18,10 +18,13 @@ fn command_args(cmd: &Command) -> Vec<String> {
 #[path = "bwrap_tests_virtual.rs"]
 mod virtual_filesystem;
 
+#[path = "bwrap_tests_pinning.rs"]
+mod pinning;
+
 #[test]
 fn test_bwrap_command_basic() {
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &["--flag".into(), "arg".into()]);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Program is bwrap
@@ -48,7 +51,7 @@ fn test_bwrap_command_with_writable_paths() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/home/user/project"));
     builder.with_writable_path(Path::new("/tmp/session"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Count --bind occurrences (writable bind mounts)
@@ -76,7 +79,7 @@ fn test_bwrap_non_tmp_writable_path_creates_parent_dir_before_bind() {
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new(path));
-    let args = command_args(&builder.build());
+    let args = command_args(&builder.build().expect("valid bind paths"));
 
     let dir_pos = args
         .windows(2)
@@ -112,7 +115,8 @@ fn test_bwrap_from_isolation_plan_bwrap() {
         user_daemon_ipc: false,
     };
 
-    let result = from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]);
+    let result =
+        from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]).expect("valid bind paths");
     assert!(result.is_some(), "Bwrap plan should produce Some(Command)");
 
     let cmd = result.unwrap();
@@ -140,14 +144,14 @@ fn test_bwrap_from_isolation_plan_none() {
         user_daemon_ipc: false,
     };
 
-    let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]);
+    let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("valid bind paths");
     assert!(result.is_none(), "Non-Bwrap plan should produce None");
 }
 
 #[test]
 fn test_bwrap_env_passthrough() {
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Find --setenv CSA_FS_SANDBOXED 1 sequence
@@ -172,18 +176,19 @@ fn test_bwrap_env_passthrough() {
 #[test]
 fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let host_home = temp.path().join("host-home");
+    let host_home = temp.path().canonicalize().unwrap().join("host-home");
     let gh_aider = host_home.join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_env("HOME", "/sandbox/runtime-home");
-    let cmd = builder.build_with_home(Some(&host_home));
+    let cmd = builder
+        .build_with_home(Some(&host_home))
+        .expect("valid bind paths");
     let args = command_args(&cmd);
 
     let found_bind = args.windows(3).any(|window| {
-        window[0] == "--ro-bind"
-            && window[1] == gh_aider.to_string_lossy()
+        (window[0] == "--ro-bind" || window[0] == "--ro-bind-fd")
             && window[2] == "/sandbox/runtime-home/.config/gh-aider"
     });
 
@@ -214,7 +219,7 @@ fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
 #[test]
 fn test_bwrap_gh_aider_bind_not_skipped_when_session_dir_writable() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let host_home = temp.path().join("host-home");
+    let host_home = temp.path().canonicalize().unwrap().join("host-home");
     let gh_aider = host_home.join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
 
@@ -226,12 +231,13 @@ fn test_bwrap_gh_aider_bind_not_skipped_when_session_dir_writable() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_env("HOME", &sandbox_home.to_string_lossy());
     builder.writable_paths.push(session_dir);
-    let cmd = builder.build_with_home(Some(&host_home));
+    let cmd = builder
+        .build_with_home(Some(&host_home))
+        .expect("valid bind paths");
     let args = command_args(&cmd);
 
     let found_bind = args.windows(3).any(|window| {
-        window[0] == "--ro-bind"
-            && window[1] == gh_aider.to_string_lossy()
+        (window[0] == "--ro-bind" || window[0] == "--ro-bind-fd")
             && window[2] == sandbox_home.join(".config/gh-aider").to_string_lossy()
     });
 
@@ -262,7 +268,9 @@ fn test_bwrap_from_isolation_plan_sets_tmpdir_override() {
         user_daemon_ipc: false,
     };
 
-    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
+    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[])
+        .expect("valid bind paths")
+        .expect("should produce command");
     let args = command_args(&cmd);
     let found_tmpdir_env = args
         .windows(3)
@@ -311,7 +319,9 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
         user_daemon_ipc: false,
     };
 
-    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
+    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[])
+        .expect("valid bind paths")
+        .expect("should produce command");
     let args = command_args(&cmd);
 
     assert!(
@@ -339,39 +349,37 @@ fn test_bwrap_from_isolation_plan_scrubs_subtree_contract_env_overrides() {
 
 #[test]
 fn test_bwrap_readonly_project_root() {
-    let plan = IsolationPlan {
-        resource: ResourceCapability::None,
-        filesystem: FilesystemCapability::Bwrap,
-        writable_paths: vec![PathBuf::from("/project"), PathBuf::from("/tmp/session")],
-        readable_paths: Vec::new(),
-        env_overrides: HashMap::new(),
-        degraded_reasons: Vec::new(),
-        memory_max_mb: None,
-        memory_swap_max_mb: None,
-        pids_max: None,
-        readonly_project_root: true,
-        project_root: Some(PathBuf::from("/project")),
-        soft_limit_percent: None,
-        memory_monitor_interval_seconds: None,
-        user_daemon_ipc: false,
-    };
+    let temp = tempfile::tempdir().expect("tempdir");
+    let project = temp
+        .path()
+        .canonicalize()
+        .expect("resolve fixture root")
+        .join("project");
+    std::fs::create_dir(&project).expect("create project root");
+    let project_str = project.to_string_lossy().into_owned();
+    let plan = crate::isolation_plan::IsolationPlanBuilder::new(
+        crate::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_writable_path(project.clone())
+    .with_writable_path(PathBuf::from("/tmp/session"))
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .expect("pinned readonly project plan");
 
-    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
+    let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[])
+        .expect("valid bind paths")
+        .expect("should produce command");
     let args = command_args(&cmd);
 
-    // /project should appear after --ro-bind (not --bind)
-    let ro_bind_positions: Vec<_> = args
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| *a == "--ro-bind")
-        .map(|(i, _)| i)
-        .collect();
-    let project_after_ro = ro_bind_positions
-        .iter()
-        .any(|&pos| args.get(pos + 1).map(|s| s.as_str()) == Some("/project"));
+    // The project root should be mounted read-only through its retained FD.
+    let project_after_ro_fd = args
+        .windows(3)
+        .any(|window| window[0] == "--ro-bind-fd" && window[2] == project_str);
     assert!(
-        project_after_ro,
-        "/project should be --ro-bind when readonly_project_root is true; args: {args:?}"
+        project_after_ro_fd,
+        "project root should be --ro-bind-fd when readonly_project_root is true; args: {args:?}"
     );
 
     // /tmp/session should still be --bind (writable)
@@ -395,7 +403,7 @@ fn test_bwrap_extra_writable_under_tmp_ordering() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/home/user/project"));
     builder.with_writable_path(Path::new("/tmp/foo"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Locate key positions

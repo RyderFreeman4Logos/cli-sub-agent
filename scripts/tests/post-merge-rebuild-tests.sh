@@ -180,7 +180,7 @@ order_lease="$tmp_lease/order"
 : >"$order_lease"
 setup_fake_tools "$tmp_lease/tools" 0 0
 set +e
-env -u CSA_SESSION_ID -u CSA_SESSION_DIR \
+env -u CSA_SESSION_ID -u CSA_SESSION_DIR -u CARGO_INSTALL_ROOT \
     CSA_TEST_ORDER_FILE="$order_lease" \
     CSA_POST_MERGE_INSTALL_DIR="$install_dir_lease" \
     CSA_POST_MERGE_JUST="$tmp_lease/tools/just" \

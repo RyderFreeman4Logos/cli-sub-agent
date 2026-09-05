@@ -94,7 +94,7 @@ async fn non_bwrap_spawn_applies_plan_env_overrides_over_explicit_env() {
 #[test]
 fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
     let original = Command::new("/usr/bin/tool");
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     for key in csa_core::env::STARTUP_SUBTREE_ENV_KEYS {
@@ -109,7 +109,7 @@ fn bwrap_wrapper_scrubs_ambient_subtree_contract_env() {
 #[test]
 fn bwrap_wrapper_scrubs_ambient_git_push_authorization_env() {
     let original = Command::new("/usr/bin/tool");
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     for key in csa_core::env::GIT_PUSH_AUTHORIZATION_ENV_KEYS {
@@ -126,7 +126,7 @@ fn bwrap_wrapper_preserves_explicit_typed_git_push_authorization() {
     let mut original = Command::new("/usr/bin/tool");
     original.env(csa_core::env::CSA_GIT_PUSH_ALLOWED_ENV_KEY, "true");
 
-    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan());
+    let wrapped = wrap_command_with_bwrap(original, &bwrap_plan()).expect("valid sandbox");
     let env = recorded_env(&wrapped);
 
     assert_eq!(
@@ -211,4 +211,105 @@ fn cgroup_wrapper_preserves_explicit_typed_git_push_authorization() {
         Some(&None),
         "internal git-push marker must remain stripped"
     );
+}
+
+#[tokio::test]
+async fn bad_readonly_bind_returns_error_without_spawning_tool() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("child-started");
+    let mut original = Command::new("/usr/bin/touch");
+    original.arg(&marker);
+    let mut plan = bwrap_plan();
+    plan.readable_paths.push(temp.path().join("missing").into());
+    let result = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01TEST",
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "invalid read-only bind must fail before spawning"
+    );
+    assert!(!marker.exists());
+}
+
+#[tokio::test]
+async fn extra_only_binds_reject_systemd_before_spawning_tool() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let marker = project.join("child-started");
+    let mut plan = csa_resource::isolation_plan::IsolationPlanBuilder::new(
+        csa_resource::isolation_plan::EnforcementMode::BestEffort,
+    )
+    .with_filesystem_capability(FilesystemCapability::Bwrap)
+    .with_resource_capability(ResourceCapability::CgroupV2)
+    .with_writable_path(project.clone())
+    .with_project_root(&project)
+    .with_readonly_project_root(true)
+    .build()
+    .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::Setrlimit);
+    // Even a caller that forces cgroup after planning must fail closed.
+    plan.resource = ResourceCapability::CgroupV2;
+    let mut original = Command::new("/usr/bin/touch");
+    original.arg(&marker);
+    let result = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01TEST",
+    )
+    .await;
+    let error = result
+        .err()
+        .expect("systemd cannot carry extra bind descriptors");
+    assert!(
+        error
+            .to_string()
+            .contains("bind-fd cannot pass through systemd-run"),
+        "{error:#}"
+    );
+    assert!(!marker.exists());
+}
+
+#[tokio::test]
+async fn non_bwrap_ordinary_readable_allows_cgroup_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("readable");
+    std::fs::write(&source, "accepted").unwrap();
+    let systemd = temp.path().join("systemd-run");
+    std::fs::write(&systemd, "#!/bin/sh\nprintf cgroup-started\n").unwrap();
+    std::fs::set_permissions(&systemd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = csa_resource::IsolationPlanBuilder::new(csa_resource::EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::None)
+        .with_resource_capability(ResourceCapability::CgroupV2)
+        .with_readable_path(source)
+        .build()
+        .unwrap();
+    assert_eq!(plan.resource, ResourceCapability::CgroupV2);
+    let mut original = Command::new("/bin/true");
+    original.env("PATH", temp.path());
+    let (child, _handle) = spawn_tool_sandboxed(
+        original,
+        None,
+        SpawnOptions::default(),
+        Some(&plan),
+        "codex",
+        "01NONBWRAP",
+    )
+    .await
+    .expect("ordinary readable must not reject a non-bwrap cgroup spawn");
+    let result = crate::wait_and_capture(child, crate::StreamMode::BufferOnly)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.output, "cgroup-started");
 }

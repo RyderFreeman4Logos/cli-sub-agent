@@ -343,11 +343,11 @@ fn runtime_ready(marker: &Path) -> bool {
 
 pub(super) fn finish_plan(
     filesystem: FilesystemCapability,
-    readable_paths: &[ReadablePath],
+    bind_fd_count: usize,
     pending: Option<PendingRuntimeActivation>,
 ) -> anyhow::Result<()> {
     if filesystem == FilesystemCapability::Bwrap
-        && crate::bwrap::readable_bind_fd_count(readable_paths) > 0
+        && bind_fd_count > 0
         && !crate::filesystem_sandbox::has_bwrap_bind_fd_options()
     {
         anyhow::bail!(

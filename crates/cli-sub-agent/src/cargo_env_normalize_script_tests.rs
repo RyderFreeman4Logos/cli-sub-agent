@@ -224,6 +224,7 @@ printf '%s\n' "$@" >"${CSA_CAPTURE_ARGS:?}"
         .current_dir(repo.path())
         .env("CSA_CAPTURE_ARGS", &capture)
         .env("CSA_CARGO_TARGET_LEASE", &lease)
+        .env("CARGO_INSTALL_ROOT", repo.path().join("cargo-install-root"))
         .output()
         .expect("normalizer should execute lease helper");
 
@@ -235,6 +236,41 @@ printf '%s\n' "$@" >"${CSA_CAPTURE_ARGS:?}"
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
         "--\ncargo\nmetadata\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn cargo_env_normalize_delegates_default_install_root_creation_to_target_lease() {
+    let repo = TempDir::new().expect("create temp repo");
+    let capture = repo.path().join("lease.argv");
+    let lease = repo.path().join("cargo-target-lease");
+    install_executable(
+        &lease,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"${CSA_CAPTURE_ARGS:?}"
+"#,
+    );
+
+    let output = Command::new("bash")
+        .arg(workspace_root().join("scripts/cargo-env-normalize.sh"))
+        .args(["cargo", "metadata"])
+        .current_dir(repo.path())
+        .env("CSA_CAPTURE_ARGS", &capture)
+        .env("CSA_CARGO_TARGET_LEASE", &lease)
+        .env("CARGO_INSTALL_ROOT", "")
+        .output()
+        .expect("normalizer should execute lease helper");
+
+    assert!(
+        output.status.success(),
+        "normalizer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(capture).unwrap(),
+        "--\n/bin/sh\n-c\nmkdir -p \"$CARGO_INSTALL_ROOT\"; exec \"$@\"\ncargo-env-normalize\ncargo\nmetadata\n"
     );
 }
 

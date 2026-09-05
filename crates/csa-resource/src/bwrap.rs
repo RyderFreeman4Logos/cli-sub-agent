@@ -6,16 +6,21 @@ use std::process::Command;
 use crate::filesystem_sandbox::FilesystemCapability;
 use crate::isolation_plan::IsolationPlan;
 
+#[path = "bwrap_inherit.rs"]
+mod inherit;
+pub use inherit::{inherit_sandbox_bind_fds, try_inherit_sandbox_bind_fds};
+
 /// Environment variable set inside the sandbox to signal filesystem isolation.
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
 
 /// Builder for constructing a `bwrap` command with explicit read/write binds.
+#[derive(Clone)]
 pub struct BwrapCommandBuilder {
     tool_binary: String,
     tool_args: Vec<String>,
     writable_paths: Vec<PathBuf>,
     readable_paths: Vec<crate::isolation_plan::ReadablePath>,
-    ro_binds: Vec<(PathBuf, PathBuf)>,
+    ro_binds: Vec<crate::isolation_plan::ReadablePath>,
     env_vars: Vec<(String, String)>,
 }
 
@@ -46,32 +51,17 @@ impl BwrapCommandBuilder {
         &mut self,
         path: impl Into<crate::isolation_plan::ReadablePath>,
     ) -> &mut Self {
-        let path = path.into();
-        assert!(
-            path.requested().is_absolute(),
-            "readable sandbox path must be absolute: {}",
-            path.requested().display()
-        );
-        assert!(
-            path.requested() != Path::new("/tmp"),
-            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
-        );
-        #[cfg(unix)]
-        let has_pinned_source = path.pinned_source_file().is_some();
-        #[cfg(not(unix))]
-        let has_pinned_source = false;
-        assert!(
-            path.requested().exists() || path.bind_source().exists() || has_pinned_source,
-            "readable sandbox path must exist: {}",
-            path.requested().display()
-        );
-        self.readable_paths.push(path);
+        self.readable_paths.push(path.into());
         self
     }
 
     /// Add an extra read-only bind mount beyond the default `/ → /`.
     pub fn with_ro_bind(&mut self, src: &Path, dest: &Path) -> &mut Self {
-        self.ro_binds.push((src.to_path_buf(), dest.to_path_buf()));
+        self.ro_binds
+            .push(crate::isolation_plan::ReadablePath::pinned_extra(
+                dest.to_path_buf(),
+                src.to_path_buf(),
+            ));
         self
     }
 
@@ -81,13 +71,32 @@ impl BwrapCommandBuilder {
         self
     }
 
-    /// Consume the builder and produce a ready-to-spawn [`Command`].
-    pub fn build(&self) -> Command {
+    /// Produce a ready-to-spawn command, or return a path validation/pinning error.
+    /// Returns [`std::io::ErrorKind::Unsupported`] if pinned mounts need bind-FD
+    /// options unavailable in the installed bwrap.
+    pub fn build(&self) -> std::io::Result<Command> {
         self.build_with_home(std::env::var_os("HOME").as_deref().map(Path::new))
     }
 
-    fn build_with_home(&self, home: Option<&Path>) -> Command {
+    fn build_with_home(&self, home: Option<&Path>) -> std::io::Result<Command> {
+        let mut builder = self.clone();
+        builder.ro_binds.extend(self.implicit_ro_binds(home));
+        resolve_writable_mount_destinations(
+            &mut builder.writable_paths,
+            &builder.readable_paths,
+            None,
+        );
+        builder.build_resolved()
+    }
+
+    // All selection predicates below consume resolved destinations, never live aliases.
+    fn build_resolved(&self) -> std::io::Result<Command> {
         let mut cmd = Command::new("bwrap");
+        let extra_ro_binds = &self.ro_binds;
+
+        for path in self.readable_paths.iter().chain(extra_ro_binds) {
+            validate_readonly_path(path)?;
+        }
 
         // Read-only root filesystem
         cmd.args(["--ro-bind", "/", "/"]);
@@ -113,11 +122,22 @@ impl BwrapCommandBuilder {
         // adding an overlapping read-only bind afterward would downgrade the
         // writable mount.
         #[cfg(unix)]
-        let overlay_files: Vec<std::sync::Arc<std::fs::File>> =
-            sandbox_bind_files_from_paths(&self.readable_paths);
+        let mut overlay_files =
+            sandbox_bind_files_from_paths(&self.readable_paths, &self.writable_paths, None);
+        #[cfg(unix)]
+        overlay_files.extend(
+            extra_ro_binds
+                .iter()
+                .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file),
+        );
+        #[cfg(test)]
+        AFTER_BIND_FILE_COLLECTION.with(|hook| {
+            if let Some(inject) = hook.take() {
+                inject();
+            }
+        });
         for path in &self.readable_paths {
-            if path.writable_bind()
-                || self.is_covered_by_writable_path(path)
+            if !emits_readonly_bind(path, self.writable_paths.iter())
                 || self.is_late_readonly_overlay(path)
             {
                 continue;
@@ -141,19 +161,8 @@ impl BwrapCommandBuilder {
         // (remapped HOME), the mount target may not exist inside the sandbox
         // (e.g. Gemini runtime home only seeds gemini-cli config, not gh-aider).
         // Emit --dir for the dest parent so bubblewrap can create the mount point.
-        for (src, dest) in self
-            .ro_binds
-            .iter()
-            .cloned()
-            .chain(self.implicit_ro_binds(home))
-        {
-            let src = resolve_for_bind(&src);
-            if src != dest
-                && let Some(parent) = dest.parent()
-            {
-                cmd.args(["--dir", &parent.to_string_lossy()]);
-            }
-            cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
+        for path in extra_ro_binds {
+            Self::bind_extra_readonly_path(&mut cmd, path);
         }
 
         // Namespace configuration
@@ -176,6 +185,12 @@ impl BwrapCommandBuilder {
 
         #[cfg(unix)]
         if !overlay_files.is_empty() {
+            if !crate::filesystem_sandbox::has_bwrap_bind_fd_options() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "bwrap bind-fd required but --ro-bind-fd/--bind-fd are unavailable",
+                ));
+            }
             use std::os::fd::AsRawFd;
             use std::os::unix::process::CommandExt;
             // SAFETY: the closure only clears FD_CLOEXEC on descriptors this
@@ -192,25 +207,7 @@ impl BwrapCommandBuilder {
             }
         }
 
-        cmd
-    }
-
-    fn is_covered_by_writable_path(
-        &self,
-        readable_path: &crate::isolation_plan::ReadablePath,
-    ) -> bool {
-        if readable_path.overrides_writable_mount() {
-            return false;
-        }
-        let readable_dest = if fresh_writable_mount_root(readable_path.requested()).is_some() {
-            readable_path.requested().to_path_buf()
-        } else {
-            readable_path.bind_source().to_path_buf()
-        };
-        self.writable_paths.iter().any(|writable_path| {
-            let writable_dest = effective_mount_destination(writable_path);
-            readable_dest == writable_dest || readable_dest.starts_with(&writable_dest)
-        })
+        Ok(cmd)
     }
 
     fn is_late_readonly_overlay(&self, path: &crate::isolation_plan::ReadablePath) -> bool {
@@ -227,10 +224,6 @@ impl BwrapCommandBuilder {
         // would reopen the #3102 TOCTOU after a symlink replacement.
         let resolved = path.bind_source();
         let tmp_prefix = Path::new("/tmp");
-        assert!(
-            path.requested() != tmp_prefix,
-            "readable sandbox path must not be /tmp itself; expose a specific sub-path instead"
-        );
         let dest_path = if path.overrides_writable_mount()
             || fresh_writable_mount_root(path.requested()).is_some()
         {
@@ -245,9 +238,7 @@ impl BwrapCommandBuilder {
             cmd.args(["--dir", &parent.to_string_lossy()]);
         }
         #[cfg(unix)]
-        if path.overrides_writable_mount()
-            && let Some(file) = path.pinned_source_file()
-        {
+        if let Some(file) = path.pinned_source_file() {
             use std::os::fd::AsRawFd;
             cmd.args([
                 "--ro-bind-fd",
@@ -263,6 +254,28 @@ impl BwrapCommandBuilder {
         ]);
     }
 
+    fn bind_extra_readonly_path(cmd: &mut Command, path: &crate::isolation_plan::ReadablePath) {
+        let dest = path.requested();
+        if path.bind_source() != dest
+            && let Some(parent) = dest.parent()
+            && parent != Path::new("/")
+        {
+            cmd.args(["--dir", &parent.to_string_lossy()]);
+        }
+        #[cfg(unix)]
+        if let Some(file) = path.pinned_source_file() {
+            use std::os::fd::AsRawFd;
+            cmd.args([
+                "--ro-bind-fd",
+                &file.as_raw_fd().to_string(),
+                &dest.to_string_lossy(),
+            ]);
+            return;
+        }
+        let src = resolve_for_bind(path.bind_source());
+        cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
+    }
+
     fn writable_nested_under_readonly_overlay(&self, path: &Path) -> bool {
         self.readable_paths.iter().any(|readable| {
             readable.overrides_writable_mount() && path.starts_with(readable.requested())
@@ -272,11 +285,7 @@ impl BwrapCommandBuilder {
     fn pinned_writable_file(&self, path: &Path) -> Option<std::sync::Arc<std::fs::File>> {
         #[cfg(unix)]
         {
-            self.readable_paths.iter().find_map(|readable| {
-                (readable.writable_bind() && readable.requested() == path)
-                    .then(|| readable.pinned_source_file())
-                    .flatten()
-            })
+            pinned_writable_file(&self.readable_paths, path)
         }
         #[cfg(not(unix))]
         {
@@ -307,14 +316,9 @@ impl BwrapCommandBuilder {
         let resolved = resolve_for_bind(path);
         let s = resolved.to_string_lossy();
         let fresh_mount_root = fresh_writable_mount_root(path);
-        // Elsewhere, bind at the resolved destination: bwrap cannot
-        // create a mount target by walking a state-path symlink into an
-        // autofs-backed CSA session-state root.
-        let dest_path = if fresh_mount_root.is_some() {
-            path
-        } else {
-            resolved.as_path()
-        };
+        // The destination was frozen before admission/FD collection. Resolving
+        // a pathname-backed source must not change that destination or coverage.
+        let dest_path = path;
         let dest = dest_path.to_string_lossy();
         if let Some(mount_root) = fresh_mount_root {
             let mount_root = Path::new(mount_root);
@@ -357,7 +361,10 @@ impl BwrapCommandBuilder {
             .or_else(|| host_home.map(Path::to_path_buf))
     }
 
-    fn implicit_ro_binds(&self, home: Option<&Path>) -> impl Iterator<Item = (PathBuf, PathBuf)> {
+    fn implicit_ro_binds(
+        &self,
+        home: Option<&Path>,
+    ) -> impl Iterator<Item = crate::isolation_plan::ReadablePath> {
         let mut ro_binds = Vec::new();
 
         if let Some(home) = home {
@@ -374,12 +381,16 @@ impl BwrapCommandBuilder {
                 .writable_paths
                 .iter()
                 .any(|existing| existing == &gh_aider || gh_aider.starts_with(existing))
-                || self
-                    .ro_binds
-                    .iter()
-                    .any(|(src, dest)| src == &gh_aider || dest == &sandbox_gh_aider);
-            if gh_aider.exists() && !already_visible {
-                ro_binds.push((gh_aider, sandbox_gh_aider));
+                || self.ro_binds.iter().any(|existing| {
+                    existing.bind_source() == gh_aider || existing.requested() == sandbox_gh_aider
+                });
+            let absent = std::fs::symlink_metadata(&gh_aider)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if !absent && !already_visible {
+                ro_binds.push(
+                    crate::isolation_plan::ReadablePath::pinned_home_config(gh_aider)
+                        .for_sandbox_home(self.sandbox_home(Some(home)).as_deref()),
+                );
             }
         }
 
@@ -387,18 +398,51 @@ impl BwrapCommandBuilder {
     }
 }
 
+/// Capture every extra source before capability checks and executor projection.
+/// The returned ReadablePaths use the same descriptor owners as ordinary binds.
+pub(crate) fn plan_extra_readonly_paths(
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
+    home: Option<&Path>,
+) -> std::io::Result<Vec<crate::isolation_plan::ReadablePath>> {
+    let mut builder = BwrapCommandBuilder::new("", &[]);
+    for path in writable_paths {
+        if readonly_project == Some(path.as_path()) {
+            builder.with_ro_bind(path, path);
+        } else {
+            builder.with_writable_path(path);
+        }
+    }
+    let implicit: Vec<_> = builder.implicit_ro_binds(home).collect();
+    builder.ro_binds.extend(implicit);
+    for path in &builder.ro_binds {
+        validate_readonly_path(path)?;
+    }
+    Ok(builder.ro_binds)
+}
+
+fn validate_readonly_path(path: &crate::isolation_plan::ReadablePath) -> std::io::Result<()> {
+    if !path.requested().is_absolute() || path.requested() == Path::new("/tmp") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "readable sandbox path must be absolute and must not be /tmp itself",
+        ));
+    }
+    path.validate_pin()
+}
+
 /// Build a bwrap [`Command`] from an [`IsolationPlan`] if the plan calls
 /// for bubblewrap filesystem isolation.
 ///
 /// Returns `Some(Command)` when `plan.filesystem == FilesystemCapability::Bwrap`,
-/// `None` otherwise.
+/// `None` otherwise. Invalid or unpinnable read-only sources return an error.
 pub fn from_isolation_plan(
     plan: &IsolationPlan,
     tool_binary: &str,
     tool_args: &[String],
-) -> Option<Command> {
+) -> std::io::Result<Option<Command>> {
     if plan.filesystem != FilesystemCapability::Bwrap {
-        return None;
+        return Ok(None);
     }
 
     let mut builder = BwrapCommandBuilder::new(tool_binary, tool_args);
@@ -408,14 +452,29 @@ pub fn from_isolation_plan(
         // read-only instead of read-write.
         let is_project_root = plan.project_root.as_ref().is_some_and(|root| path == root);
         if plan.readonly_project_root && is_project_root {
-            builder.with_ro_bind(path, path);
+            if !plan
+                .readable_paths
+                .iter()
+                .any(|readable| readable.is_extra_bind() && readable.requested() == path)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "read-only project bind must be pinned by IsolationPlanBuilder",
+                ));
+            }
         } else {
             builder.with_writable_path(path);
         }
     }
 
     for path in &plan.readable_paths {
-        builder.with_readable_path(path.clone());
+        if path.is_extra_bind() {
+            builder
+                .ro_binds
+                .push(path.for_sandbox_home(plan.env_overrides.get("HOME").map(Path::new)));
+        } else {
+            builder.with_readable_path(path.clone());
+        }
     }
 
     let mut env_overrides = plan.env_overrides.clone();
@@ -425,34 +484,90 @@ pub fn from_isolation_plan(
         builder.with_env(key, value);
     }
 
-    Some(builder.build())
+    // Implicit sources were captured in the plan. Reopening them here would
+    // detach their FDs from capability checks and reconstructed spawn commands.
+    builder.build_resolved().map(Some)
 }
 
-/// Number of overlay/writable bind descriptors the sandbox command must inherit.
+/// Number of descriptors consumed by emitted bind mounts, not snapshot owners.
 pub fn sandbox_bind_fd_count(plan: &IsolationPlan) -> usize {
     sandbox_bind_files(plan).len()
 }
 
 pub(crate) fn readable_bind_fd_count(
     readable_paths: &[crate::isolation_plan::ReadablePath],
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
 ) -> usize {
-    sandbox_bind_files_from_paths(readable_paths).len()
+    sandbox_bind_files_from_paths(readable_paths, writable_paths, readonly_project).len()
+}
+
+// Writable grants imply readability, except for explicit overlays/extra binds.
+// Use this same selection for command emission and descriptor admission.
+fn emits_readonly_bind<'a>(
+    path: &crate::isolation_plan::ReadablePath,
+    mut writable_paths: impl Iterator<Item = &'a PathBuf>,
+) -> bool {
+    if path.writable_bind() {
+        return false;
+    }
+    if path.is_extra_bind() || path.overrides_writable_mount() {
+        return true;
+    }
+    let dest = if fresh_writable_mount_root(path.requested()).is_some() {
+        path.requested()
+    } else {
+        path.bind_source()
+    };
+    !writable_paths.any(|writable| dest.starts_with(writable))
+}
+
+#[cfg(unix)]
+fn pinned_writable_file(
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+    path: &Path,
+) -> Option<std::sync::Arc<std::fs::File>> {
+    readable_paths.iter().find_map(|readable| {
+        (readable.writable_bind() && readable.requested() == path)
+            .then(|| readable.pinned_source_file())
+            .flatten()
+    })
 }
 
 #[cfg(unix)]
 fn sandbox_bind_files_from_paths(
     readable_paths: &[crate::isolation_plan::ReadablePath],
+    writable_paths: &[PathBuf],
+    readonly_project: Option<&Path>,
 ) -> Vec<std::sync::Arc<std::fs::File>> {
+    let writable = writable_paths
+        .iter()
+        .filter(|path| readonly_project != Some(path.as_path()));
     readable_paths
         .iter()
-        .filter(|path| path.overrides_writable_mount() || path.writable_bind())
+        .filter(|path| emits_readonly_bind(path, writable.clone()))
         .filter_map(crate::isolation_plan::ReadablePath::pinned_source_file)
+        .chain(
+            writable
+                .clone()
+                .filter_map(|path| pinned_writable_file(readable_paths, path)),
+        )
         .collect()
 }
 
 #[cfg(unix)]
 fn sandbox_bind_files(plan: &IsolationPlan) -> Vec<std::sync::Arc<std::fs::File>> {
-    sandbox_bind_files_from_paths(&plan.readable_paths)
+    // Only bwrap consumes bind descriptors; other backends keep pins CLOEXEC.
+    if plan.filesystem != FilesystemCapability::Bwrap {
+        return Vec::new();
+    }
+    sandbox_bind_files_from_paths(
+        &plan.readable_paths,
+        &plan.writable_paths,
+        plan.project_root
+            .as_deref()
+            .filter(|_| plan.readonly_project_root),
+    )
 }
 
 #[cfg(not(unix))]
@@ -463,70 +578,31 @@ fn sandbox_bind_files(_plan: &IsolationPlan) -> Vec<()> {
 #[cfg(not(unix))]
 fn sandbox_bind_files_from_paths(
     _readable_paths: &[crate::isolation_plan::ReadablePath],
+    _writable_paths: &[PathBuf],
+    _readonly_project: Option<&Path>,
 ) -> Vec<()> {
     Vec::new()
 }
 
-/// Keep `--ro-bind-fd` / `--bind-fd` descriptors open across `exec`.
-///
-/// ACP and cgroup paths reconstruct a command from program+args and must call
-/// this on the final spawn command.
-pub fn inherit_sandbox_bind_fds(cmd: &mut Command, plan: &IsolationPlan) {
-    #[cfg(unix)]
-    {
-        let files = sandbox_bind_files(plan);
-        if files.is_empty() {
-            return;
-        }
-        use std::os::fd::AsRawFd;
-        use std::os::unix::process::CommandExt;
-        // SAFETY: the closure only clears FD_CLOEXEC on descriptors the plan
-        // still holds so bwrap can inherit `--ro-bind-fd` / `--bind-fd` sources.
-        unsafe {
-            cmd.pre_exec(move || {
-                for file in &files {
-                    if libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
-            });
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (cmd, plan);
-    }
-}
-
-/// Inherit bind FDs, or fail closed when the reconstructed command cannot.
-pub fn try_inherit_sandbox_bind_fds(
-    cmd: &mut Command,
-    plan: &IsolationPlan,
-) -> std::io::Result<()> {
-    if sandbox_bind_fd_count(plan) == 0 {
-        return Ok(());
-    }
-    let program = Path::new(cmd.get_program());
-    if program == Path::new("systemd-run")
-        || program.file_name() == Some(std::ffi::OsStr::new("systemd-run"))
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "bwrap bind-fd cannot pass through systemd-run; overlay --ro-bind-fd would be dropped",
-        ));
-    }
-    inherit_sandbox_bind_fds(cmd, plan);
-    Ok(())
-}
-
 /// Resolve the destination used for a bind mount. Fresh virtual filesystems
 /// keep their logical paths because their resolved host paths are hidden.
-fn effective_mount_destination(path: &Path) -> PathBuf {
-    if fresh_writable_mount_root(path).is_some() {
-        path.to_path_buf()
-    } else {
-        resolve_for_bind(path)
+/// Pinned writable overlays also mount at their retained logical destination.
+/// Mutate the existing path list once: counts, argv and reconstructed commands
+/// must not observe a writable alias again after this admission boundary.
+pub(crate) fn resolve_writable_mount_destinations(
+    writable_paths: &mut [PathBuf],
+    readable_paths: &[crate::isolation_plan::ReadablePath],
+    readonly_project: Option<&Path>,
+) {
+    for path in writable_paths {
+        if readonly_project != Some(path.as_path())
+            && fresh_writable_mount_root(path).is_none()
+            && !readable_paths
+                .iter()
+                .any(|readable| readable.writable_bind() && readable.requested() == path)
+        {
+            *path = resolve_for_bind(path);
+        }
     }
 }
 
@@ -545,6 +621,12 @@ fn fresh_writable_mount_root(path: &Path) -> Option<&'static str> {
     ["/tmp", "/dev"]
         .into_iter()
         .find(|mount_root| path.starts_with(Path::new(mount_root)))
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static AFTER_BIND_FILE_COLLECTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(all(test, target_os = "linux"))]

@@ -387,7 +387,10 @@ writable_paths = ["/tmp/restricted-only"]
 
 #[test]
 fn test_extra_readable_appended_to_isolation_plan() {
+    let _env_lock = TEST_ENV_LOCK.blocking_lock();
     let project_root = tempfile::tempdir().expect("project root tempdir");
+    let project_path = project_root.path().canonicalize().expect("resolve fixture root");
+    let _claude_home = ScopedEnvVarRestore::set("CLAUDE_CONFIG_DIR", project_root.path().join("claude"));
     let cfg = parse_project_config(
         r#"
 [resources]
@@ -403,12 +406,12 @@ enforcement_mode = "best-effort"
     std::fs::write(&second, "bar").expect("write second readable file");
     let readable = vec![first.clone(), second.clone()];
 
-    let result = resolve_sandbox_options_with_capabilities(
+    let resolve = |exposed: &[PathBuf]| resolve_sandbox_options_with_capabilities(
         SandboxResolveInput {
             config: Some(&cfg),
             tool_name: "claude-code",
             session_id: "test-session",
-            project_root: project_root.path(),
+            project_root: &project_path,
             stream_mode: StreamMode::BufferOnly,
             idle_timeout_seconds: 120,
             liveness_dead_seconds: 600,
@@ -417,7 +420,7 @@ enforcement_mode = "best-effort"
             allow_user_daemon_ipc: false,
             readonly_project_root: false,
             extra_writable: &[],
-            extra_readable: &readable,
+            extra_readable: exposed,
             execution_env: None,
         },
         RunResourceOverrides::absent(),
@@ -425,16 +428,21 @@ enforcement_mode = "best-effort"
         csa_resource::FilesystemCapability::Bwrap,
     );
 
-    let SandboxResolution::Ok(opts) = result else {
-        panic!("Expected SandboxResolution::Ok");
+    let baseline_count = match resolve(&[]) {
+        SandboxResolution::Ok(opts) => opts.sandbox.expect("baseline sandbox").isolation_plan.readable_paths.len(),
+        SandboxResolution::RequiredButUnavailable(message) => panic!("baseline rejected: {message}"),
+    };
+    let opts = match resolve(&readable) {
+        SandboxResolution::Ok(opts) => opts,
+        SandboxResolution::RequiredButUnavailable(message) => panic!("sandbox rejected: {message}"),
     };
 
     let sandbox = opts.sandbox.expect("expected deterministic sandbox context");
 
     assert_eq!(
         sandbox.isolation_plan.readable_paths.len(),
-        2,
-        "expected two readable paths in the isolation plan"
+        baseline_count + 2,
+        "expected exactly two additional readable paths in the isolation plan"
     );
     assert!(sandbox
         .isolation_plan

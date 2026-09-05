@@ -58,6 +58,7 @@ fn test_tool_defaults_hermes_writes_runtime_but_protects_configuration() {
     );
 
     let command = crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+        .expect("valid bind paths")
         .expect("Bubblewrap plan should produce a command");
     let args = command
         .get_args()
@@ -347,7 +348,9 @@ fn test_tool_defaults_hermes_rejects_runtime_logs_symlink_outside_home() {
         .build();
 
     if let Ok(plan) = &result {
-        if let Some(command) = crate::from_isolation_plan(plan, "/usr/bin/tool", &[]) {
+        if let Some(command) =
+            crate::from_isolation_plan(plan, "/usr/bin/tool", &[]).expect("valid bind paths")
+        {
             let args = command
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -472,7 +475,7 @@ fn test_tool_defaults_hermes_rejects_relative_environment_paths() {
         let message = match built {
             Err(error) => error.to_string(),
             Ok(plan) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::from_isolation_plan(&plan, "/usr/bin/tool", &[])
+                crate::from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("valid bind paths")
             })) {
                 Ok(_) => "produced a sandbox command".to_string(),
                 Err(_) => "panicked at bwrap absolute-path assertion".to_string(),

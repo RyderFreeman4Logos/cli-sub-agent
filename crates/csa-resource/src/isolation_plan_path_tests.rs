@@ -2,6 +2,24 @@ use super::*;
 use std::ffi::OsString;
 use std::path::Path;
 
+#[test]
+fn pinned_readonly_rejects_regular_file_identity_race() {
+    fn replace(path: &Path) {
+        std::fs::rename(path, path.with_extension("old")).unwrap();
+        std::fs::write(path, "replacement").unwrap();
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    std::fs::write(&source, "accepted").unwrap();
+    readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(Some(replace)));
+    let result = ReadablePath::try_pinned_readonly_overlay(source);
+    readable::AFTER_READONLY_OVERLAY_METADATA.with(|hook| hook.set(None));
+    assert!(
+        result.is_err(),
+        "replacement between stat and open must fail closed"
+    );
+}
+
 struct ScopedEnvVar {
     key: &'static str,
     previous: Option<OsString>,
@@ -32,7 +50,7 @@ impl Drop for ScopedEnvVar {
 #[test]
 fn test_resolve_writable_relative_path_against_project_root() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     let drafts = project.join("drafts");
     std::fs::create_dir_all(&drafts).expect("create drafts dir");
 
@@ -48,7 +66,7 @@ fn test_resolve_writable_symlink_inside_project_to_external_target() {
     use std::os::unix::fs::symlink;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     let external = tmp.path().join("external-drafts");
     std::fs::create_dir_all(&project).expect("create project dir");
     std::fs::create_dir_all(&external).expect("create external dir");
@@ -66,7 +84,7 @@ fn test_resolve_writable_symlink_inside_project_to_external_target() {
 #[test]
 fn test_resolve_writable_allows_nonexistent_path_with_existing_parent() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project).expect("create project dir");
 
     let resolved = resolve_writable_paths(&[PathBuf::from("drafts/new")], &project)
@@ -80,8 +98,8 @@ fn test_resolve_writable_allows_nonexistent_path_with_existing_parent() {
 
 #[test]
 fn test_validate_readable_paths_accepts_project_local_relative_path() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let tmp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     let context_file = project.join(".csa").join("review-context.md");
     std::fs::create_dir_all(context_file.parent().expect("context parent dir"))
         .expect("create .csa dir");
@@ -108,7 +126,7 @@ fn test_validate_readable_paths_accepts_project_local_relative_path() {
 #[test]
 fn test_resolve_writable_accepts_config_path_outside_default_roots() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     let external = tmp.path().join("external-data");
     std::fs::create_dir_all(&project).expect("create project dir");
     std::fs::create_dir_all(&external).expect("create external dir");
@@ -158,8 +176,11 @@ fn validate_readable_paths_accepts_unix_socket_without_read_opening() {
     let socket = fixture.path().join("review.sock");
     let _listener = UnixListener::bind(&socket).expect("bind Unix socket");
 
-    let readable = validate_readable_paths(std::slice::from_ref(&socket), fixture.path())
-        .expect("Unix socket should remain a path-bound readable source");
+    let readable = validate_readable_paths(
+        std::slice::from_ref(&socket),
+        &fixture.path().canonicalize().unwrap(),
+    )
+    .expect("Unix socket should remain a path-bound readable source");
     assert_eq!(readable.len(), 1);
     assert_eq!(readable[0].bind_source(), socket.canonicalize().unwrap());
     assert!(
@@ -180,8 +201,11 @@ fn validate_readable_paths_accepts_fifo_without_read_opening() {
     // SAFETY: `fifo_name` is NUL-free and remains alive for the call.
     assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
 
-    let readable = validate_readable_paths(std::slice::from_ref(&fifo), fixture.path())
-        .expect("FIFO should remain a path-bound readable source");
+    let readable = validate_readable_paths(
+        std::slice::from_ref(&fifo),
+        &fixture.path().canonicalize().unwrap(),
+    )
+    .expect("FIFO should remain a path-bound readable source");
     assert_eq!(readable.len(), 1);
     assert_eq!(readable[0].bind_source(), fifo.canonicalize().unwrap());
     assert!(
@@ -197,7 +221,7 @@ fn test_validate_readable_paths_allows_ssd_mirror_of_home_and_project() {
 
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     let project = temp.path().join("project");
     let mirror_root = temp.path().join("mirror-rootfs");
     let mirror_home = mirror_root.join(home.strip_prefix("/").expect("absolute home"));
@@ -227,7 +251,7 @@ fn test_validate_readable_paths_allows_ssd_mirror_of_home_and_project() {
 fn test_validate_readable_paths_rejects_unrelated_and_sensitive_paths_with_ssd_mirror() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     let project = home.join("project");
     let mirror_root = temp.path().join("mirror-rootfs");
     let unrelated = PathBuf::from("/var");
@@ -294,7 +318,7 @@ fn test_validate_readable_paths_rejects_mnt_ssd_mirror_alias() {
 fn test_validate_writable_paths_rejects_ssd_mirror_exception() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     let project = home.join("project");
     let mirror_home =
         Path::new("/ssd/mirror-rootfs").join(home.strip_prefix("/").expect("absolute home"));
@@ -309,8 +333,8 @@ fn test_validate_writable_paths_rejects_ssd_mirror_exception() {
 fn test_validate_writable_allows_xdg_runtime_child_but_rejects_root() {
     let _guard = ENV_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
-    let runtime_root = tmp.path().join("run/user/1001");
+    let project = tmp.path().canonicalize().unwrap().join("project");
+    let runtime_root = tmp.path().canonicalize().unwrap().join("run/user/1001");
     let runtime_child = runtime_root.join("just");
     std::fs::create_dir_all(&project).expect("create project dir");
     std::fs::create_dir_all(&runtime_child).expect("create runtime child dir");
@@ -342,7 +366,7 @@ fn test_xdg_runtime_child_helper_keeps_run_user_scope_narrow() {
 fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
     let _guard = ENV_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let runtime_root = tmp.path().join("run/user/1001");
+    let runtime_root = tmp.path().canonicalize().unwrap().join("run/user/1001");
     let runtime_child = runtime_root.join("cli-sub-agent");
     let bus_socket = runtime_root.join("bus");
     let systemd_socket = runtime_root.join("systemd/private");
@@ -371,7 +395,7 @@ fn test_user_daemon_ipc_exposes_daemon_sockets_readonly() {
 fn test_daemon_sockets_not_exposed_without_user_daemon_ipc() {
     let _guard = ENV_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().expect("tempdir");
-    let runtime_root = tmp.path().join("run/user/1001");
+    let runtime_root = tmp.path().canonicalize().unwrap().join("run/user/1001");
     let bus_socket = runtime_root.join("bus");
     std::fs::create_dir_all(&runtime_root).expect("create runtime root");
     std::fs::write(&bus_socket, "").expect("create bus socket placeholder");
@@ -391,7 +415,7 @@ fn test_writable_validation_error_includes_original_and_resolved_path() {
     use std::os::unix::fs::symlink;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project).expect("create project dir");
     symlink("/etc", project.join("etc-link")).expect("create symlink");
 
@@ -410,7 +434,7 @@ fn test_writable_validation_error_includes_original_and_resolved_path() {
 fn test_claude_tool_defaults_precreate_claude_dir_for_session_env() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().expect("tempdir");
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).expect("create home");
     let _home_env = ScopedEnvVar::set("HOME", &home);
 

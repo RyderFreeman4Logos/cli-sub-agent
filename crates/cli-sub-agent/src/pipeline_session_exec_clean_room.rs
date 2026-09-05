@@ -114,7 +114,7 @@ pub(crate) fn resolve_clean_room_sandbox_options_with_capabilities(
                 pids_max,
             )
         };
-    let mut plan = IsolationPlanBuilder::new(resource_enforcement)
+    let plan = IsolationPlanBuilder::new(resource_enforcement)
         .with_filesystem_enforcement(ResourceEnforcementMode::Required)
         .with_resource_capability(resource_capability)
         .with_filesystem_capability(filesystem_capability)
@@ -123,11 +123,11 @@ pub(crate) fn resolve_clean_room_sandbox_options_with_capabilities(
         .with_writable_path(session_dir.clone())
         .with_readable_path(evidence_bundle.clone())
         .with_readonly_project_root(true)
+        .with_project_root(&project_root)
         .with_soft_limit_percent(resources.soft_limit_percent)
         .with_memory_monitor_interval(resources.memory_monitor_interval_seconds)
         .build()
         .context("build strict clean-room isolation plan")?;
-    plan.project_root = Some(project_root);
     if !plan.degraded_reasons.is_empty() {
         bail!(
             "clean-room isolation may not degrade: {}",

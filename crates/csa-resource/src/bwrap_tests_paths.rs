@@ -1,14 +1,21 @@
 use super::*;
 
+fn ro_bind_destination(args: &[String], destination: &str) -> Option<usize> {
+    args.windows(3).position(|window| {
+        (window[0] == "--ro-bind" && window[2] == destination)
+            || (window[0] == "--ro-bind-fd" && window[2] == destination)
+    })
+}
+
 #[test]
 fn test_bwrap_command_with_readable_tmp_file() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let readable = temp.path().join("foo.json");
     std::fs::write(&readable, "{}").expect("write readable file");
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(&readable);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
     let readable_str = readable.to_string_lossy().into_owned();
 
@@ -16,12 +23,8 @@ fn test_bwrap_command_with_readable_tmp_file() {
         .iter()
         .position(|arg| arg == "--tmpfs")
         .expect("--tmpfs must be present");
-    let ro_bind_pos = args
-        .windows(3)
-        .position(|window| {
-            window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
-        })
-        .expect("--ro-bind readable path must be present");
+    let ro_bind_pos = ro_bind_destination(&args, &readable_str)
+        .expect("read-only FD bind readable path must be present");
 
     assert_eq!(args[tmpfs_pos + 1], "/tmp");
     assert!(
@@ -31,22 +34,28 @@ fn test_bwrap_command_with_readable_tmp_file() {
 }
 
 #[test]
-#[should_panic(expected = "must not be /tmp itself")]
 fn test_bwrap_readable_tmp_root_rejected() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(Path::new("/tmp"));
+    assert!(
+        builder
+            .build_with_home(None)
+            .unwrap_err()
+            .to_string()
+            .contains("must not be /tmp itself")
+    );
 }
 
 #[test]
 fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let readable = temp.path().join("bar.txt");
     std::fs::write(&readable, "hello").expect("write readable file");
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/work"));
     builder.with_readable_path(&readable);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
     let readable_str = readable.to_string_lossy().into_owned();
 
@@ -58,12 +67,8 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
         .windows(3)
         .position(|window| window[0] == "--bind" && window[1] == "/tmp/work")
         .expect("writable bind should be present");
-    let readable_bind_pos = args
-        .windows(3)
-        .position(|window| {
-            window[0] == "--ro-bind" && window[1] == readable_str && window[2] == readable_str
-        })
-        .expect("readable ro-bind should be present");
+    let readable_bind_pos = ro_bind_destination(&args, &readable_str)
+        .expect("read-only FD bind readable path must be present");
 
     assert!(
         tmpfs_pos < writable_bind_pos,
@@ -77,14 +82,14 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
 
 #[test]
 fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let path = temp.path();
     let path_str = path.to_string_lossy().into_owned();
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(path);
     builder.with_readable_path(path);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(
@@ -104,7 +109,7 @@ fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
 fn test_bwrap_nested_tmp_path_creates_intermediate_dirs() {
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp/deep/nested/dir"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // Must have --dir for intermediate parent
@@ -146,7 +151,7 @@ fn test_bwrap_bare_tmp_is_bind_mounted_when_explicitly_writable() {
     // /tmp is an explicit config grant, not a request for empty tmpfs.
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_writable_path(Path::new("/tmp"));
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     // --tmpfs /tmp must exist
@@ -171,20 +176,18 @@ fn test_bwrap_bare_tmp_is_bind_mounted_when_explicitly_writable() {
 
 #[test]
 fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
-    let home = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let gh_aider = home.path().join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider dir");
 
     let builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
-    let cmd = builder.build_with_home(Some(home.path()));
+    let cmd = builder
+        .build_with_home(Some(home.path()))
+        .expect("valid bind paths");
     let args = command_args(&cmd);
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind"
-                && window[1] == gh_aider.to_string_lossy()
-                && window[2] == gh_aider.to_string_lossy()
-        }),
+        ro_bind_destination(&args, &gh_aider.to_string_lossy()).is_some(),
         "~/.config/gh-aider should be explicitly re-bound read-only so sandboxed gh commands can still read the aider auth config; args: {args:?}"
     );
 }
@@ -194,7 +197,7 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
 fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let canonical_source = temp.path().join("canonical-source.json");
     let logical_destination = temp.path().join("logical-readable.json");
     std::fs::write(&canonical_source, "{}").expect("write canonical source");
@@ -230,15 +233,13 @@ fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind"
-                && window[1] == canonical_source.to_string_lossy()
-                && window[2] == logical_destination.to_string_lossy()
-        }),
+        ro_bind_destination(&args, &logical_destination.to_string_lossy()).is_some(),
         "readable bind must use the canonical source at the /tmp logical destination; args: {args:?}"
     );
 }
@@ -278,7 +279,9 @@ fn from_isolation_plan_does_not_remount_writable_canonical_child_readonly_throug
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
     let canonical = canonical_file.to_string_lossy();
 
@@ -335,21 +338,17 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
 
     let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
     builder.with_readable_path(&logical_file);
-    let cmd = builder.build();
+    let cmd = builder.build().expect("valid bind paths");
     let args = command_args(&cmd);
 
     let resolved_str = resolved.to_string_lossy();
     let logical_str = logical_file.to_string_lossy();
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind" && window[1] == resolved_str && window[2] == resolved_str
-        }),
-        "readable bind must use the resolved dest so bwrap never sees the missing logical parents; args: {args:?}"
+        ro_bind_destination(&args, &resolved_str).is_some(),
+        "readable bind must use the resolved destination so bwrap never sees the missing logical parents; args: {args:?}"
     );
     assert!(
-        !args.windows(3).any(|window| window[0] == "--ro-bind"
-            && window[1] == logical_str
-            && window[2] == logical_str),
+        ro_bind_destination(&args, &logical_str).is_none(),
         "readable bind must not target the logical dest; args: {args:?}"
     );
 }
@@ -359,7 +358,7 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
 fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let validated_target = temp.path().join("validated-target.json");
     let replaced_target = temp.path().join("replaced-target.json");
     let readable_symlink = temp.path().join("readable-link.json");
@@ -407,22 +406,21 @@ fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
         user_daemon_ipc: false,
     };
     let args = command_args(
-        &from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("bwrap isolation plan"),
+        &from_isolation_plan(&plan, "/usr/bin/tool", &[])
+            .expect("valid bind paths")
+            .expect("bwrap isolation plan"),
     );
-    let validated = validated_target.to_string_lossy();
     let replaced = replaced_target.to_string_lossy();
     let dest = readable_symlink.to_string_lossy();
 
     assert!(
-        args.windows(3).any(|window| {
-            window[0] == "--ro-bind" && window[1] == validated && window[2] == dest
-        }),
-        "bind source must stay the validated target after symlink replacement; args: {args:?}"
+        ro_bind_destination(&args, &dest).is_some(),
+        "bind must retain the validated descriptor at the requested destination; args: {args:?}"
     );
     assert!(
         !args
             .windows(3)
-            .any(|window| window[0] == "--ro-bind" && window[1] == replaced),
+            .any(|window| { window[0] == "--ro-bind" && window[1] == replaced }),
         "replaced symlink target must not become the bind source; args: {args:?}"
     );
 }
