@@ -5,7 +5,7 @@ use std::os::unix::fs::symlink;
 
 fn admission_retarget(covered: bool, modern: bool, filesystem: FilesystemCapability) {
     let _lock = ENV_LOCK.lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in("/var/tmp").unwrap();
     let (home, _env) = isolated_home(&temp);
     let root = home.canonicalize().unwrap();
     assert!(!root.starts_with("/tmp") && !root.starts_with("/dev"));
@@ -72,7 +72,7 @@ fn admission_retarget(covered: bool, modern: bool, filesystem: FilesystemCapabil
 #[test]
 fn temporal_selection_added_writable_alias_keeps_its_destination() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in("/var/tmp").unwrap();
     let root = temp.path().canonicalize().unwrap();
     let (_home, _env) = isolated_home(&temp);
     let _path = install_legacy_bwrap(&temp);
@@ -118,7 +118,7 @@ fn temporal_selection_admission_non_bwrap_alias_retarget() {
 
 fn public_collection_retarget(covered: bool) {
     let _lock = ENV_LOCK.lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in("/var/tmp").unwrap();
     let root = temp.path().canonicalize().unwrap();
     let (_home, _env) = isolated_home(&temp);
     let _path = install_legacy_bwrap(&temp);

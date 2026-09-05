@@ -4,7 +4,7 @@ use super::*;
 use std::os::unix::fs::{MetadataExt, symlink};
 
 fn ordinary_bind_reconstruction(covered: bool, retarget: bool) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in("/var/tmp").unwrap();
     let root = temp.path().canonicalize().unwrap();
     // Outside /tmp and /dev: these mounts intentionally keep logical destinations.
     assert!(!root.starts_with("/tmp") && !root.starts_with("/dev"));
