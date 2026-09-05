@@ -74,7 +74,12 @@ fn test_bwrap_keeps_dev_shm_symlink_writable_path_at_logical_destination() {
         .position(|window| window[0] == "--bind")
         .expect("--bind not found");
     let logical_parent = dev_shm.path().to_string_lossy().to_string();
-    let canonical_source = source.path().to_string_lossy().to_string();
+    let canonical_source = source
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     let logical_destination = link.to_string_lossy().to_string();
     let logical_parent_dir_idx = args
         .windows(2)

@@ -58,7 +58,7 @@ impl Drop for ScopedEnvVar {
 fn test_tool_defaults_claude_code_rejects_unwritable_claude_home() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home_env = ScopedEnvVar::set("HOME", &home);
 
@@ -126,7 +126,7 @@ fn test_tool_defaults_claude_code_rejects_unwritable_claude_home() {
 fn test_tool_defaults_claude_code_honors_tool_state_dirs_config() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home_env = ScopedEnvVar::set("HOME", &home);
     let _claude_home_env = ScopedEnvVar::unset("CLAUDE_CONFIG_DIR");
@@ -175,7 +175,7 @@ fn test_tool_defaults_claude_code_honors_tool_state_dirs_config() {
 fn test_peer_tool_exposes_claude_home_without_probe() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home_env = ScopedEnvVar::set("HOME", &home);
     // Use the default ~/.claude layout (no override) for the peer path.
@@ -241,7 +241,7 @@ fn test_peer_tool_exposes_claude_home_without_probe() {
 fn test_codex_parent_exposes_writable_claude_home_nested_erofs_regression() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home_env = ScopedEnvVar::set("HOME", &home);
     let _claude_home_env = ScopedEnvVar::unset("CLAUDE_CONFIG_DIR");

@@ -176,7 +176,7 @@ fn test_bwrap_env_passthrough() {
 #[test]
 fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let host_home = temp.path().join("host-home");
+    let host_home = temp.path().canonicalize().unwrap().join("host-home");
     let gh_aider = host_home.join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
 
@@ -219,7 +219,7 @@ fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
 #[test]
 fn test_bwrap_gh_aider_bind_not_skipped_when_session_dir_writable() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let host_home = temp.path().join("host-home");
+    let host_home = temp.path().canonicalize().unwrap().join("host-home");
     let gh_aider = host_home.join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
 

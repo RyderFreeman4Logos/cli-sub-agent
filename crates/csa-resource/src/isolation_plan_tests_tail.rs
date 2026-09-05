@@ -92,7 +92,7 @@ fn test_parent_tool_defaults_expose_existing_codex_home_for_nested_csa() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let (_home, _env) = isolated_home(&temp);
-    let codex_home = temp.path().join("codex-home");
+    let codex_home = temp.path().canonicalize().unwrap().join("codex-home");
     std::fs::create_dir(&codex_home).unwrap();
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
 

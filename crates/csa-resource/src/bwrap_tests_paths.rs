@@ -9,7 +9,7 @@ fn ro_bind_destination(args: &[String], destination: &str) -> Option<usize> {
 
 #[test]
 fn test_bwrap_command_with_readable_tmp_file() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let readable = temp.path().join("foo.json");
     std::fs::write(&readable, "{}").expect("write readable file");
 
@@ -48,7 +48,7 @@ fn test_bwrap_readable_tmp_root_rejected() {
 
 #[test]
 fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let readable = temp.path().join("bar.txt");
     std::fs::write(&readable, "hello").expect("write readable file");
 
@@ -82,7 +82,7 @@ fn test_bwrap_readable_and_writable_paths_after_tmpfs() {
 
 #[test]
 fn test_bwrap_duplicate_readable_writable_path_keeps_writable_bind() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let path = temp.path();
     let path_str = path.to_string_lossy().into_owned();
 
@@ -176,7 +176,7 @@ fn test_bwrap_bare_tmp_is_bind_mounted_when_explicitly_writable() {
 
 #[test]
 fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
-    let home = tempfile::tempdir().expect("tempdir");
+    let home = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let gh_aider = home.path().join(".config/gh-aider");
     std::fs::create_dir_all(&gh_aider).expect("create gh-aider dir");
 
@@ -197,7 +197,7 @@ fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
 fn from_isolation_plan_keeps_tmp_symlink_logical_readable_destination() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let canonical_source = temp.path().join("canonical-source.json");
     let logical_destination = temp.path().join("logical-readable.json");
     std::fs::write(&canonical_source, "{}").expect("write canonical source");
@@ -358,7 +358,7 @@ fn test_bwrap_readable_path_binds_resolved_dest_when_logical_parents_missing() {
 fn from_isolation_plan_pins_validated_readable_symlink_bind_source() {
     use std::os::unix::fs::symlink;
 
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = tempfile::tempdir_in("/tmp").expect("/tmp fixture");
     let validated_target = temp.path().join("validated-target.json");
     let replaced_target = temp.path().join("replaced-target.json");
     let readable_symlink = temp.path().join("readable-link.json");

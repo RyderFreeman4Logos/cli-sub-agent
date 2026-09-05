@@ -61,6 +61,8 @@ pub struct IsolationPlan {
     /// Filesystem-level capability (bwrap / landlock / none).
     pub filesystem: FilesystemCapability,
     /// Paths the sandboxed process is allowed to write to.
+    /// Bwrap plans retain effective mount destinations resolved at admission;
+    /// use the builder rather than inserting unresolved writable aliases.
     pub writable_paths: Vec<PathBuf>,
     /// Validated bind sources, including extra read-only mounts and their FD owners.
     pub readable_paths: Vec<ReadablePath>,
@@ -98,7 +100,18 @@ impl IsolationPlan {
     /// Add a writable directory, pre-creating it when its parent exists so
     /// bwrap bind sources are present on cold start.
     pub fn add_writable_dir_or_creatable_parent(&mut self, dir: &Path) -> bool {
-        add_dir_or_creatable_parent(&mut self.writable_paths, dir)
+        let previous_len = self.writable_paths.len();
+        let added = add_dir_or_creatable_parent(&mut self.writable_paths, dir);
+        if self.filesystem == FilesystemCapability::Bwrap {
+            crate::bwrap::resolve_writable_mount_destinations(
+                &mut self.writable_paths[previous_len..],
+                &self.readable_paths,
+                self.project_root
+                    .as_deref()
+                    .filter(|_| self.readonly_project_root),
+            );
+        }
+        added
     }
 }
 

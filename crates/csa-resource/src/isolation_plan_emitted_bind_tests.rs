@@ -1,6 +1,9 @@
 //! Emitted binds, not retained snapshot pins, determine FD admission (#3174).
 
 use super::*;
+
+#[path = "isolation_plan_temporal_selection_tests.rs"]
+mod temporal_selection;
 use std::os::fd::AsRawFd;
 use std::process::Command;
 

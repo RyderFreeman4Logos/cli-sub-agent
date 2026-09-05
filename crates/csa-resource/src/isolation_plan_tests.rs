@@ -56,7 +56,7 @@ impl Drop for ScopedEnvVar {
 }
 
 fn isolated_home(temp: &tempfile::TempDir) -> (PathBuf, [ScopedEnvVar; 6]) {
-    let home = temp.path().join("home");
+    let home = temp.path().canonicalize().unwrap().join("home");
     std::fs::create_dir_all(&home).expect("create isolated HOME");
     (
         home.clone(),
@@ -246,7 +246,7 @@ fn test_submodule_detection_adds_superproject_root() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _guard = ENV_LOCK.lock().unwrap();
     let (_home, _env) = isolated_home(&tmp);
-    let superproject = tmp.path().join("monorepo");
+    let superproject = tmp.path().canonicalize().unwrap().join("monorepo");
     let submodule = superproject.join("crates").join("sub-crate");
 
     // Superproject has a .git directory
@@ -259,7 +259,7 @@ fn test_submodule_detection_adds_superproject_root() {
     )
     .expect("write .git file");
 
-    let session = tmp.path().join("session");
+    let session = tmp.path().canonicalize().unwrap().join("session");
     std::fs::create_dir_all(&session).expect("create session dir");
 
     let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
@@ -284,12 +284,12 @@ fn test_non_submodule_does_not_add_superproject() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let _guard = ENV_LOCK.lock().unwrap();
     let (_home, _env) = isolated_home(&tmp);
-    let project = tmp.path().join("project");
+    let project = tmp.path().canonicalize().unwrap().join("project");
 
     // Normal repo: .git is a directory
     std::fs::create_dir_all(project.join(".git")).expect("create .git dir");
 
-    let session = tmp.path().join("session");
+    let session = tmp.path().canonicalize().unwrap().join("session");
     std::fs::create_dir_all(&session).expect("create session dir");
 
     let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
@@ -329,7 +329,7 @@ fn test_tool_defaults_codex() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let (_home, _env) = isolated_home(&temp);
-    let codex_home = temp.path().join("codex-home");
+    let codex_home = temp.path().canonicalize().unwrap().join("codex-home");
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
@@ -363,7 +363,11 @@ fn test_tool_defaults_codex_honors_codex_home_env() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let (_home, _env) = isolated_home(&temp);
-    let codex_home = temp.path().join("custom-codex-home");
+    let codex_home = temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("custom-codex-home");
     let _codex_home_env = ScopedEnvVar::set("CODEX_HOME", &codex_home);
 
     let project = PathBuf::from("/tmp/project");

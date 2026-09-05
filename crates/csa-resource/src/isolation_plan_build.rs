@@ -78,6 +78,20 @@ impl IsolationPlanBuilder {
                 )?);
         }
 
+        codex_paths::validate_required_writable_dirs(
+            self.filesystem,
+            &self.required_writable_dirs,
+            &self.writable_paths,
+        )?;
+        if self.filesystem == FilesystemCapability::Bwrap {
+            crate::bwrap::resolve_writable_mount_destinations(
+                &mut self.writable_paths,
+                &self.readable_paths,
+                self.project_root
+                    .as_deref()
+                    .filter(|_| self.readonly_project_root),
+            );
+        }
         let bind_fd_count = if self.filesystem == FilesystemCapability::Bwrap {
             crate::bwrap::readable_bind_fd_count(
                 &self.readable_paths,
@@ -96,11 +110,6 @@ impl IsolationPlanBuilder {
             &mut self.degraded_reasons,
         );
 
-        codex_paths::validate_required_writable_dirs(
-            self.filesystem,
-            &self.required_writable_dirs,
-            &self.writable_paths,
-        )?;
         hermes_paths::finish_plan(
             self.filesystem,
             bind_fd_count,

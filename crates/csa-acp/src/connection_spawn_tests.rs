@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "connection_spawn_selection_tests.rs"]
+mod temporal_selection;
+
 #[test]
 fn append_stderr_tail_bounds_retained_memory_to_tail_window() {
     let mut stderr = "a".repeat(1024 * 1024);
